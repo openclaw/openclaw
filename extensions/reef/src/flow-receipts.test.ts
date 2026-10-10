@@ -89,8 +89,14 @@ function createReceiptNotifier(
           rejection.recipient,
           noticeState,
         ),
-      complete: (rejection, noticeState) => {
-        if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+      complete: async (rejection, noticeState) => {
+        if (
+          !(await trusted.store.completeOutboundRejection(
+            rejection.peer,
+            rejection.id,
+            noticeState,
+          ))
+        ) {
           throw new Error(`missing rejection ${rejection.id}`);
         }
       },

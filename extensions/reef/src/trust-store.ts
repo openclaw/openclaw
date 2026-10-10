@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { z } from "zod";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { normalizeReefTarget } from "./config-schema.js";
@@ -67,8 +67,8 @@ type ReefOutboundDeliveryBinding = z.infer<typeof ReefOutboundDeliveryBindingSch
 type ReefOutboundDelivery = z.infer<typeof ReefOutboundDeliverySchema>;
 
 type ReefTrustStores = {
-  peers: PluginStateSyncKeyedStore<ReefPeerStateSnapshot>;
-  deliveries: PluginStateSyncKeyedStore<z.infer<typeof ReefOutboundDeliverySchema>>;
+  peers: PluginStateKeyedStore<ReefPeerStateSnapshot, 2>;
+  deliveries: PluginStateKeyedStore<z.infer<typeof ReefOutboundDeliverySchema>, 2>;
 };
 
 function requirePeer(raw: string): string {
@@ -106,21 +106,31 @@ export function isReefPairingApprovalToken(raw: string): boolean {
   return raw.trim().startsWith(REEF_PAIRING_APPROVAL_PREFIX);
 }
 
-function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): ReefTrustStores {
+function openStores(
+  openStore: PluginRuntime["state"]["openKeyedStoreV2"],
+  assertCurrent?: () => void,
+): ReefTrustStores {
+  const authority = assertCurrent ? { assertCurrent } : undefined;
   return {
-    peers: openStore<ReefPeerStateSnapshot>({
-      namespace: REEF_TRUST_STORE_NAMESPACE,
-      maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    }),
+    peers: openStore<ReefPeerStateSnapshot>(
+      {
+        namespace: REEF_TRUST_STORE_NAMESPACE,
+        maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      },
+      authority,
+    ),
     // The envelope and its receipt can each spend 30 days queued. Keep a
     // boundary margin so a delayed receipt still finds its exact send binding.
-    deliveries: openStore<z.infer<typeof ReefOutboundDeliverySchema>>({
-      namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-      maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-      defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
-    }),
+    deliveries: openStore<z.infer<typeof ReefOutboundDeliverySchema>>(
+      {
+        namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
+        maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
+      },
+      authority,
+    ),
   };
 }
 
@@ -131,23 +141,40 @@ export class ReefTrustStore {
 
   constructor(
     readonly stores: ReefTrustStores,
-    config: ReefChannelConfig,
+    readonly config: ReefChannelConfig,
+    readonly readPeerAuthority: (key: string) => ReefPeerStateSnapshot | undefined,
+    readonly openStoresWithAuthority: (assertCurrent: () => void) => ReefTrustStores,
   ) {
     this.#identityScope = resolveReefIdentityScope(config);
     this.#prefix = `${this.#identityScope}:`;
   }
 
-  snapshot(peer: string): ReefPeerStateSnapshot {
-    return this.#parseState(this.stores.peers.lookup(this.#key(peer)));
+  withAuthority(assertCurrent: () => void): ReefTrustStore {
+    return new ReefTrustStore(
+      this.openStoresWithAuthority(assertCurrent),
+      this.config,
+      this.readPeerAuthority,
+      this.openStoresWithAuthority,
+    );
   }
 
-  get(peer: string): ReefPeerTrust | undefined {
-    return this.snapshot(peer).trust;
+  async snapshot(peer: string): Promise<ReefPeerStateSnapshot> {
+    return this.#parseState(await this.stores.peers.lookup(this.#key(peer)));
   }
 
-  list(): Array<{ peer: string; trust: ReefPeerTrust }> {
-    return this.stores.peers
-      .entries()
+  async get(peer: string): Promise<ReefPeerTrust | undefined> {
+    return (await this.snapshot(peer)).trust;
+  }
+
+  // Raw released SDK writers can still revoke trust without publishing facts.
+  // Keep only the final effect guard native until those writers retire.
+  currentPeerForDelivery(peer: string, expected: ReefPeerIdentity): ReefPeerTrust | undefined {
+    const current = this.#parseState(this.readPeerAuthority(this.#key(peer))).trust;
+    return matchesReefPeerIdentity(current, expected) ? current : undefined;
+  }
+
+  async list(): Promise<Array<{ peer: string; trust: ReefPeerTrust }>> {
+    return (await this.stores.peers.entries())
       .filter((entry) => entry.key.startsWith(this.#prefix))
       .flatMap((entry) => {
         const state = ReefPeerStateSchema.parse(entry.value);
@@ -163,16 +190,16 @@ export class ReefTrustStore {
       .toSorted((left, right) => (left.peer === right.peer ? 0 : left.peer < right.peer ? -1 : 1));
   }
 
-  set(peer: string, trust: ReefPeerTrust): void {
+  async set(peer: string, trust: ReefPeerTrust): Promise<void> {
     const parsedTrust = ReefPeerTrustSchema.parse(trust);
-    this.#requireUpdate()(this.#key(peer), (value) => {
+    await updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       return { ...current, revision: current.revision + 1, trust: parsedTrust };
     });
   }
 
-  remove(peer: string): boolean {
-    return this.#requireUpdate()(this.#key(peer), (value) => {
+  remove(peer: string): Promise<boolean> {
+    return updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       // Keep a revision tombstone: a reconcile that started before this local
       // revocation must never recreate trust from its stale relay snapshot.
@@ -180,10 +207,10 @@ export class ReefTrustStore {
     });
   }
 
-  setAutonomy(peer: string, autonomy: ReefAutonomy): void {
+  async setAutonomy(peer: string, autonomy: ReefAutonomy): Promise<void> {
     const normalizedAutonomy = ReefAutonomySchema.parse(autonomy);
     const key = this.#key(peer);
-    const changed = this.#requireUpdate()(key, (value) => {
+    const changed = await updateObserved(this.stores.peers, key, (value) => {
       const current = this.#parseState(value);
       if (!current.trust) {
         return undefined;
@@ -198,8 +225,8 @@ export class ReefTrustStore {
     }
   }
 
-  markSafetyNumberChanged(peer: string, expectedRevision: number): boolean {
-    return this.#requireUpdate()(this.#key(peer), (value) => {
+  markSafetyNumberChanged(peer: string, expectedRevision: number): Promise<boolean> {
+    return updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       if (current.revision !== expectedRevision || !current.trust) {
         return undefined;
@@ -216,9 +243,9 @@ export class ReefTrustStore {
     friend: RelayFriend,
     options: { expectedRevision: number; expectedOutboundRequestId?: string },
     approvedAt = Date.now(),
-  ): boolean {
+  ): Promise<boolean> {
     const peer = requirePeer(friend.peer);
-    return this.#requireUpdate()(this.#key(peer), (value) => {
+    return updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       if (
         current.revision !== options.expectedRevision ||
@@ -242,11 +269,9 @@ export class ReefTrustStore {
     });
   }
 
-  createPairingApproval(
-    friend: RelayFriend,
-    trustRevision = this.snapshot(friend.peer).revision,
-  ): string {
-    return `${REEF_PAIRING_APPROVAL_PREFIX}${this.#identityScope}:${requirePeer(friend.peer)}:${friend.key_epoch}:${trustRevision}:${resolvePairingKeyDigest(friend, trustRevision)}`;
+  async createPairingApproval(friend: RelayFriend, trustRevision?: number): Promise<string> {
+    const revision = trustRevision ?? (await this.snapshot(friend.peer)).revision;
+    return `${REEF_PAIRING_APPROVAL_PREFIX}${this.#identityScope}:${requirePeer(friend.peer)}:${friend.key_epoch}:${revision}:${resolvePairingKeyDigest(friend, revision)}`;
   }
 
   parsePairingApproval(
@@ -278,13 +303,13 @@ export class ReefTrustStore {
     return { peer, keyEpoch, trustRevision };
   }
 
-  matchesPairingApproval(raw: string, friend: RelayFriend): boolean {
-    return raw.trim() === this.createPairingApproval(friend);
+  async matchesPairingApproval(raw: string, friend: RelayFriend): Promise<boolean> {
+    return raw.trim() === (await this.createPairingApproval(friend));
   }
 
-  recordOutboundRequest(peer: string, requestedAt = Date.now()): string {
+  async recordOutboundRequest(peer: string, requestedAt = Date.now()): Promise<string> {
     const requestId = randomUUID();
-    const recorded = this.#requireUpdate()(this.#key(peer), (value) => {
+    const recorded = await updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       return {
         ...current,
@@ -297,20 +322,23 @@ export class ReefTrustStore {
     return requestId;
   }
 
-  hasOutboundRequest(peer: string): boolean {
-    return Object.keys(this.snapshot(peer).outboundRequests ?? {}).length > 0;
+  async hasOutboundRequest(peer: string): Promise<boolean> {
+    return Object.keys((await this.snapshot(peer)).outboundRequests ?? {}).length > 0;
   }
 
-  outboundRequestStatus(peer: string, requestId: string): "current" | "superseded" | "revoked" {
-    const current = this.snapshot(peer);
+  async outboundRequestStatus(
+    peer: string,
+    requestId: string,
+  ): Promise<"current" | "superseded" | "revoked"> {
+    const current = await this.snapshot(peer);
     if (current.outboundRequests?.[requestId] !== undefined) {
       return "current";
     }
     return current.trust || this.#hasOutboundRequests(current) ? "superseded" : "revoked";
   }
 
-  removeOutboundRequest(peer: string, requestId?: string): boolean {
-    return this.#requireUpdate()(this.#key(peer), (value) => {
+  removeOutboundRequest(peer: string, requestId?: string): Promise<boolean> {
+    return updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       if (!this.#hasOutboundRequests(current)) {
         return undefined;
@@ -331,16 +359,42 @@ export class ReefTrustStore {
     });
   }
 
-  recordOutboundDelivery(
+  async recordOutboundDelivery(
     peer: string,
     id: string,
     binding: ReefOutboundDeliveryBinding,
     options: { resendDisabled?: true } = {},
-  ): void {
+  ): Promise<void> {
     const key = this.#deliveryKey(peer, id);
     const value = ReefOutboundDeliverySchema.parse({ ...binding, ...options, sentAt: Date.now() });
-    if (!this.stores.deliveries.registerIfAbsent(key, value)) {
-      throw new Error(`Duplicate outbound Reef delivery id ${id}`);
+    for (;;) {
+      const [trust, delivery] = await Promise.all([
+        this.stores.peers.observe(this.#key(peer)),
+        this.stores.deliveries.observe(key),
+      ]);
+      if (!matchesReefPeerIdentity(this.#parseState(trust.value).trust, value.recipient)) {
+        throw new Error(`Reef peer @${requirePeer(peer)} changed keys before delivery`);
+      }
+      if (delivery.value !== undefined) {
+        throw new Error(`Duplicate outbound Reef delivery id ${id}`);
+      }
+      const result = await this.stores.deliveries.compareAndApply(
+        key,
+        delivery.comparison,
+        { operation: "update", action: "set", value },
+        {
+          conditions: [
+            {
+              namespace: REEF_TRUST_STORE_NAMESPACE,
+              key: this.#key(peer),
+              comparison: trust.comparison,
+            },
+          ],
+        },
+      );
+      if (result.status !== "conflict") {
+        return;
+      }
     }
   }
 
@@ -348,13 +402,12 @@ export class ReefTrustStore {
    * Sends that never produced any receipt. Rejections have their own notice
    * path, and each delivery is reported overdue at most once.
    */
-  overdueOutboundDeliveries(
+  async overdueOutboundDeliveries(
     olderThanMs: number,
     now: number = Date.now(),
-  ): Array<{ peer: string; id: string; sentAt: number }> {
-    const peers = new Map<string, ReefPeerTrust | undefined>();
-    return this.stores.deliveries
-      .entries()
+  ): Promise<Array<{ peer: string; id: string; sentAt: number }>> {
+    const peers = new Map((await this.list()).map(({ peer, trust }) => [peer, trust]));
+    return (await this.stores.deliveries.entries())
       .filter((entry) => entry.key.startsWith(this.#prefix))
       .flatMap((entry) => {
         const parsed = ReefOutboundDeliverySchema.safeParse(entry.value);
@@ -372,7 +425,7 @@ export class ReefTrustStore {
         const id = entry.key.slice(separator + 1);
         if (
           !MESSAGE_ID_PATTERN.test(id) ||
-          !matchesReefPeerIdentity(this.#peerForScan(peer, peers), parsed.data.recipient)
+          !matchesReefPeerIdentity(peers.get(peer), parsed.data.recipient)
         ) {
           return [];
         }
@@ -380,12 +433,8 @@ export class ReefTrustStore {
       });
   }
 
-  markOutboundDeliveryOverdueNotified(peer: string, id: string): boolean {
-    const update = this.stores.deliveries.update;
-    if (!update) {
-      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
-    }
-    return update(this.#deliveryKey(peer, id), (value) => {
+  markOutboundDeliveryOverdueNotified(peer: string, id: string): Promise<boolean> {
+    return updateObserved(this.stores.deliveries, this.#deliveryKey(peer, id), (value) => {
       const parsed = ReefOutboundDeliverySchema.safeParse(value);
       if (!parsed.success || parsed.data.rejection || parsed.data.overdueNotifiedAt !== undefined) {
         return undefined;
@@ -394,21 +443,21 @@ export class ReefTrustStore {
     });
   }
 
-  outboundDelivery(
+  async outboundDelivery(
     peer: string,
     id: string,
-  ): z.infer<typeof ReefOutboundDeliverySchema> | undefined {
-    const value = this.stores.deliveries.lookup(this.#deliveryKey(peer, id));
+  ): Promise<z.infer<typeof ReefOutboundDeliverySchema> | undefined> {
+    const value = await this.stores.deliveries.lookup(this.#deliveryKey(peer, id));
     return value === undefined ? undefined : ReefOutboundDeliverySchema.parse(value);
   }
 
-  consumeOutboundDelivery(peer: string, id: string, binding: ReefOutboundDeliveryBinding): boolean {
+  consumeOutboundDelivery(
+    peer: string,
+    id: string,
+    binding: ReefOutboundDeliveryBinding,
+  ): Promise<boolean> {
     const expected = this.#parseDeliveryBinding(binding);
-    const deleteIf = this.stores.deliveries.deleteIf;
-    if (!deleteIf) {
-      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
-    }
-    return deleteIf(this.#deliveryKey(peer, id), (current) => {
+    return deleteObserved(this.stores.deliveries, this.#deliveryKey(peer, id), (current) => {
       const parsed = ReefOutboundDeliverySchema.safeParse(current);
       return (
         parsed.success &&
@@ -418,38 +467,34 @@ export class ReefTrustStore {
     });
   }
 
-  discardOutboundDelivery(peer: string, id: string, binding: ReefOutboundDeliveryBinding): boolean {
+  discardOutboundDelivery(
+    peer: string,
+    id: string,
+    binding: ReefOutboundDeliveryBinding,
+  ): Promise<boolean> {
     const expected = this.#parseDeliveryBinding(binding);
-    const deleteIf = this.stores.deliveries.deleteIf;
-    if (!deleteIf) {
-      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
-    }
-    return deleteIf(this.#deliveryKey(peer, id), (current) => {
+    return deleteObserved(this.stores.deliveries, this.#deliveryKey(peer, id), (current) => {
       const parsed = ReefOutboundDeliverySchema.safeParse(current);
       return parsed.success && this.#matchesDeliveryBinding(parsed.data, expected);
     });
   }
 
-  recordOutboundRejection(
+  async recordOutboundRejection(
     peer: string,
     id: string,
     binding: ReefOutboundDeliveryBinding,
     category?: string,
-  ): boolean {
+  ): Promise<boolean> {
     const key = this.#deliveryKey(peer, id);
     const expected = this.#parseDeliveryBinding(binding);
-    const current = this.outboundDelivery(peer, id);
+    const current = await this.outboundDelivery(peer, id);
     if (!current || !this.#matchesDeliveryBinding(current, expected)) {
       return false;
     }
     if (current.rejection) {
       return true;
     }
-    const update = this.stores.deliveries.update;
-    if (!update) {
-      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
-    }
-    return update(key, (value) => {
+    return updateObserved(this.stores.deliveries, key, (value) => {
       const parsed = ReefOutboundDeliverySchema.safeParse(value);
       if (!parsed.success || !this.#matchesDeliveryBinding(parsed.data, expected)) {
         return undefined;
@@ -465,10 +510,9 @@ export class ReefTrustStore {
     });
   }
 
-  pendingOutboundRejections(): ReefDeliveryRejection[] {
-    const peers = new Map<string, ReefPeerTrust | undefined>();
-    return this.stores.deliveries
-      .entries()
+  async pendingOutboundRejections(): Promise<ReefDeliveryRejection[]> {
+    const peers = new Map((await this.list()).map(({ peer, trust }) => [peer, trust]));
+    return (await this.stores.deliveries.entries())
       .filter((entry) => entry.key.startsWith(this.#prefix))
       .flatMap((entry) => {
         const delivery = ReefOutboundDeliverySchema.parse(entry.value);
@@ -480,7 +524,7 @@ export class ReefTrustStore {
         const id = entry.key.slice(separator + 1);
         if (
           !MESSAGE_ID_PATTERN.test(id) ||
-          !matchesReefPeerIdentity(this.#peerForScan(peer, peers), delivery.recipient)
+          !matchesReefPeerIdentity(peers.get(peer), delivery.recipient)
         ) {
           return [];
         }
@@ -498,56 +542,66 @@ export class ReefTrustStore {
       .toSorted((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1));
   }
 
-  reserveOutboundRejectionNotice(
+  async reserveOutboundRejectionNotice(
     peer: string,
     id: string,
     recipient: ReefPeerIdentity,
     state: ReefRejectionNoticeState,
-  ): { kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState } {
-    const update = this.stores.deliveries.update;
-    if (!update) {
-      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
-    }
+  ): Promise<{ kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState }> {
     const expectedRecipient = ReefPeerIdentitySchema.parse(recipient);
-    if (!matchesReefPeerIdentity(this.get(peer), expectedRecipient)) {
-      throw new Error(`Reef peer @${requirePeer(peer)} changed keys before rejection recovery`);
-    }
     const noticeState = ReefRejectionNoticeStateSchema.parse(state);
-    let outcome:
-      | { kind: "reserved" }
-      | { kind: "existing"; state: ReefRejectionNoticeState }
-      | undefined;
-    const updated = update(this.#deliveryKey(peer, id), (value) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+    const key = this.#deliveryKey(peer, id);
+    for (;;) {
+      const [trust, delivery] = await Promise.all([
+        this.stores.peers.observe(this.#key(peer)),
+        this.stores.deliveries.observe(key),
+      ]);
+      if (!matchesReefPeerIdentity(this.#parseState(trust.value).trust, expectedRecipient)) {
+        throw new Error(`Reef peer @${requirePeer(peer)} changed keys before rejection recovery`);
+      }
+      const parsed = ReefOutboundDeliverySchema.safeParse(delivery.value);
       if (
         !parsed.success ||
         !parsed.data.rejection ||
         !sameReefPeerIdentity(parsed.data.recipient, expectedRecipient)
       ) {
-        return undefined;
+        throw new Error(`Reef rejection ${id} lost its durable delivery state`);
       }
-      if (parsed.data.rejection.notice) {
-        outcome = { kind: "existing", state: parsed.data.rejection.notice };
-        return parsed.data;
-      }
-      outcome = { kind: "reserved" };
-      return {
+      const existing = parsed.data.rejection.notice;
+      const value = {
         ...parsed.data,
         rejection: {
           ...parsed.data.rejection,
-          notice: noticeState,
+          notice: existing ?? noticeState,
         },
       };
-    });
-    if (!updated || !outcome) {
-      throw new Error(`Reef rejection ${id} lost its durable delivery state`);
+      const result = await this.stores.deliveries.compareAndApply(
+        key,
+        delivery.comparison,
+        { operation: "update", action: "set", value },
+        {
+          conditions: [
+            {
+              namespace: REEF_TRUST_STORE_NAMESPACE,
+              key: this.#key(peer),
+              comparison: trust.comparison,
+            },
+          ],
+        },
+      );
+      if (result.status !== "conflict") {
+        return existing ? { kind: "existing", state: existing } : { kind: "reserved" };
+      }
     }
-    return outcome;
   }
 
-  completeOutboundRejection(peer: string, id: string, state: ReefRejectionNoticeState): boolean {
+  async completeOutboundRejection(
+    peer: string,
+    id: string,
+    state: ReefRejectionNoticeState,
+  ): Promise<boolean> {
     const noticeState = ReefRejectionNoticeStateSchema.parse(state);
-    this.#requireUpdate()(this.#key(peer), (value) => {
+    await updateObserved(this.stores.peers, this.#key(peer), (value) => {
       const current = this.#parseState(value);
       const previous = current.rejectionNotice;
       const hasResendAt =
@@ -565,29 +619,15 @@ export class ReefTrustStore {
       };
     });
     const key = this.#deliveryKey(peer, id);
-    const deleteIf = this.stores.deliveries.deleteIf;
-    if (!deleteIf) {
-      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
-    }
-    const deleted = deleteIf(key, (value) => {
+    const deleted = await deleteObserved(this.stores.deliveries, key, (value) => {
       const parsed = ReefOutboundDeliverySchema.safeParse(value);
       return parsed.success && parsed.data.rejection?.notice !== undefined;
     });
-    return deleted || this.stores.deliveries.lookup(key) === undefined;
+    return deleted || (await this.stores.deliveries.lookup(key)) === undefined;
   }
 
-  rejectionNoticeState(peer: string): ReefRejectionNoticeState | undefined {
-    return this.snapshot(peer).rejectionNotice;
-  }
-
-  #peerForScan(
-    peer: string,
-    peers: Map<string, ReefPeerTrust | undefined>,
-  ): ReefPeerTrust | undefined {
-    if (!peers.has(peer)) {
-      peers.set(peer, this.get(peer));
-    }
-    return peers.get(peer);
+  async rejectionNoticeState(peer: string): Promise<ReefRejectionNoticeState | undefined> {
+    return (await this.snapshot(peer)).rejectionNotice;
   }
 
   #key(peer: string): string {
@@ -627,13 +667,45 @@ export class ReefTrustStore {
   #hasOutboundRequests(state: ReefPeerStateSnapshot): boolean {
     return Object.keys(state.outboundRequests ?? {}).length > 0;
   }
+}
 
-  #requireUpdate(): NonNullable<PluginStateSyncKeyedStore<ReefPeerStateSnapshot>["update"]> {
-    const update = this.stores.peers.update;
-    if (!update) {
-      throw new Error("Reef peer trust requires atomic plugin-state updates");
+async function updateObserved<T>(
+  store: PluginStateKeyedStore<T, 2>,
+  key: string,
+  prepare: (value: T | undefined) => T | undefined,
+): Promise<boolean> {
+  let observation = await store.observe(key);
+  for (;;) {
+    const value = prepare(observation.value);
+    const result = await store.compareAndApply(
+      key,
+      observation.comparison,
+      value === undefined
+        ? { operation: "update", action: "keep" }
+        : { operation: "update", action: "set", value },
+    );
+    if (result.status !== "conflict") {
+      return result.status === "applied";
     }
-    return update;
+    observation = result.current;
+  }
+}
+
+async function deleteObserved<T>(
+  store: PluginStateKeyedStore<T, 2>,
+  key: string,
+  matches: (value: T) => boolean,
+): Promise<boolean> {
+  let observation = await store.observe(key);
+  for (;;) {
+    const result = await store.compareAndApply(key, observation.comparison, {
+      operation: "delete",
+      action: observation.value !== undefined && matches(observation.value) ? "delete" : "keep",
+    });
+    if (result.status !== "conflict") {
+      return result.status === "applied";
+    }
+    observation = result.current;
   }
 }
 
@@ -641,5 +713,18 @@ export function openReefTrustStore(
   runtime: PluginRuntime,
   config: ReefChannelConfig,
 ): ReefTrustStore {
-  return new ReefTrustStore(openStores(runtime.state.openSyncKeyedStore), config);
+  let readPeerAuthority: ((key: string) => ReefPeerStateSnapshot | undefined) | undefined;
+  return new ReefTrustStore(
+    openStores(runtime.state.openKeyedStoreV2),
+    config,
+    (key) => {
+      readPeerAuthority ??= runtime.state.openSyncKeyedStore<ReefPeerStateSnapshot>({
+        namespace: REEF_TRUST_STORE_NAMESPACE,
+        maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      }).lookup;
+      return readPeerAuthority(key);
+    },
+    (assertCurrent) => openStores(runtime.state.openKeyedStoreV2, assertCurrent),
+  );
 }

@@ -31,7 +31,7 @@ function createNoticeStore() {
   >();
   const key = (value: ReefDeliveryRejection) => `${value.peer}:${value.id}`;
   const store: ConstructorParameters<typeof ReefReceiptNotifier>[1] = {
-    loadState: (peer) => {
+    loadState: async (peer) => {
       let latest: ReefRejectionNoticeState | undefined;
       for (const record of records.values()) {
         if (record.peer !== peer) {
@@ -50,7 +50,7 @@ function createNoticeStore() {
       }
       return latest;
     },
-    reserve: (value, state) => {
+    reserve: async (value, state) => {
       const existing = records.get(key(value));
       if (existing) {
         return { kind: "existing", state: existing.state };
@@ -62,7 +62,7 @@ function createNoticeStore() {
       });
       return { kind: "reserved" };
     },
-    complete: (value, state) => {
+    complete: async (value, state) => {
       const recordKey = key(value);
       const existing = records.get(recordKey);
       if (!existing) {
@@ -254,7 +254,7 @@ describe("ReefReceiptNotifier", () => {
     });
     await first.notifyRejections([rejection("alice", "01JZ0000000000000000000105")]);
 
-    expect(notices.store.loadState("alice")).toEqual({
+    expect(await notices.store.loadState("alice")).toEqual({
       lastRejectionAt: 10_000,
       lastResendAt: 10_000,
     });
@@ -273,7 +273,7 @@ describe("ReefReceiptNotifier", () => {
     const notices = createNoticeStore();
     const recovered = rejection("alice", "01JZ0000000000000000000111");
     const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    notices.store.reserve(recovered, reservedNotice);
+    await notices.store.reserve(recovered, reservedNotice);
     const notify = vi.fn(consumeNotice);
     const notifier = new ReefReceiptNotifier(notify, notices.store, {
       scheduler: createScheduler(),
@@ -294,7 +294,7 @@ describe("ReefReceiptNotifier", () => {
     const notices = createNoticeStore();
     const recovered = rejection("alice", "01JZ0000000000000000000116");
     const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    notices.store.reserve(recovered, reservedNotice);
+    await notices.store.reserve(recovered, reservedNotice);
     const loadError = new Error("state unavailable");
     vi.spyOn(notices.store, "loadState").mockImplementationOnce(() => {
       throw loadError;
@@ -321,8 +321,8 @@ describe("ReefReceiptNotifier", () => {
   it("keeps cached cooldown time monotonic after a backward clock adjustment", async () => {
     const notices = createNoticeStore();
     const previous = rejection("alice", "01JZ0000000000000000000113", "deterministic_deny");
-    notices.store.reserve(previous, { lastRejectionAt: 1_000_000 });
-    notices.store.complete(previous, { lastRejectionAt: 1_000_000 });
+    await notices.store.reserve(previous, { lastRejectionAt: 1_000_000 });
+    await notices.store.complete(previous, { lastRejectionAt: 1_000_000 });
     const notify = vi.fn(consumeNotice);
     let now = 900_000;
     const notifier = new ReefReceiptNotifier(notify, notices.store, {
@@ -388,7 +388,7 @@ describe("ReefReceiptNotifier", () => {
     const notices = createNoticeStore();
     const pending = rejection("alice", "01JZ0000000000000000000125");
     const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    notices.store.reserve(pending, reservedNotice);
+    await notices.store.reserve(pending, reservedNotice);
     const notify = vi
       .fn(consumeNotice)
       .mockRejectedValueOnce(new Error("dispatch unavailable"))
@@ -473,7 +473,7 @@ describe("ReefReceiptNotifier", () => {
       scheduler: createScheduler(),
       now: () => 11_000,
     });
-    const reservedNotice = notices.store.loadState(pending.peer);
+    const reservedNotice = await notices.store.loadState(pending.peer);
     expect(reservedNotice).toBeDefined();
     await restarted.notifyRejections([{ ...pending, reservedNotice: reservedNotice! }]);
 
@@ -487,8 +487,10 @@ describe("notifyOverdueReefDeliveries", () => {
     const marked = new Set<string>();
     return {
       marked,
-      overdueOutboundDeliveries: vi.fn(() => overdue.filter((entry) => !marked.has(entry.id))),
-      markOutboundDeliveryOverdueNotified: vi.fn((_peer: string, id: string) => {
+      overdueOutboundDeliveries: vi.fn(async () =>
+        overdue.filter((entry) => !marked.has(entry.id)),
+      ),
+      markOutboundDeliveryOverdueNotified: vi.fn(async (_peer: string, id: string) => {
         if (marked.has(id)) {
           return false;
         }

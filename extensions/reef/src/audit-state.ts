@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "@noble/hashes/utils.js";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Import from the defining module, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
 import {
@@ -119,8 +120,9 @@ class ReefSqliteAuditStore implements AuditStore {
   readonly #auditKey: Uint8Array;
   readonly #rng: (length: number) => Uint8Array;
   readonly #maxEntries: number;
-  readonly #store: PluginStateSyncKeyedStore<ReefAuditStateRecord>;
-  readonly #headStore: PluginStateSyncKeyedStore<ReefAuditHeadRecord>;
+  readonly #store: PluginStateKeyedStore<ReefAuditStateRecord, 2>;
+  readonly #headStore: PluginStateKeyedStore<ReefAuditHeadRecord, 2>;
+  readonly #enqueue = createAsyncLock();
 
   constructor(
     runtime: PluginRuntime,
@@ -134,70 +136,102 @@ class ReefSqliteAuditStore implements AuditStore {
     this.#auditKey = auditKey.slice();
     this.#rng = rng;
     this.#maxEntries = maxEntries;
-    const migration = runtime.state.openSyncKeyedStore<{ pending: true }>({
-      namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
-      maxEntries: REEF_AUDIT_MIGRATION_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    if (migration.lookup(REEF_AUDIT_MIGRATION_KEY)) {
-      throw new Error(
-        "Reef audit migration is incomplete; repair audit.jsonl and rerun openclaw doctor --fix",
-      );
-    }
-    this.#store = runtime.state.openSyncKeyedStore<ReefAuditStateRecord>({
+    this.#store = runtime.state.openKeyedStoreV2<ReefAuditStateRecord>({
       namespace: REEF_AUDIT_NAMESPACE,
       maxEntries: maxEntries + 1,
       overflowPolicy: "reject-new",
     });
-    this.#headStore = runtime.state.openSyncKeyedStore<ReefAuditHeadRecord>({
+    this.#headStore = runtime.state.openKeyedStoreV2<ReefAuditHeadRecord>({
       namespace: REEF_AUDIT_HEAD_NAMESPACE,
       maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     });
   }
 
-  async appendEvent(
+  async #editHead(
+    decide: (head: ReefAuditHeadRecord) => ReefAuditHeadRecord,
+  ): Promise<ReefAuditHeadRecord> {
+    let observation = await this.#headStore.observe(REEF_AUDIT_HEAD_KEY);
+    for (;;) {
+      const value = decide(parseReefAuditHead(observation.value));
+      const result = await this.#headStore.compareAndApply(
+        REEF_AUDIT_HEAD_KEY,
+        observation.comparison,
+        { operation: "update", action: "set", value },
+      );
+      if (result.status !== "conflict") {
+        return value;
+      }
+      observation = result.current;
+    }
+  }
+
+  async #editEntry(
+    key: string,
+    acceptsHead: (head: ReefAuditHeadRecord) => boolean,
+    decide: (entry: ReefAuditStateRecord | undefined) => ReefAuditStateRecord | undefined,
+  ): Promise<void> {
+    for (;;) {
+      const head = await this.#headStore.observe(REEF_AUDIT_HEAD_KEY);
+      if (!acceptsHead(parseReefAuditHead(head.value))) {
+        throw new Error("Reef audit append lease was lost before entry mutation");
+      }
+      const observation = await this.#store.observe(key);
+      const value = decide(observation.value);
+      const result = await this.#store.compareAndApply(
+        key,
+        observation.comparison,
+        value === undefined
+          ? { operation: "delete", action: "delete" }
+          : { operation: "update", action: "set", value },
+        {
+          conditions: [
+            {
+              namespace: REEF_AUDIT_HEAD_NAMESPACE,
+              key: REEF_AUDIT_HEAD_KEY,
+              comparison: head.comparison,
+            },
+          ],
+        },
+      );
+      if (result.status !== "conflict") {
+        return;
+      }
+    }
+  }
+
+  appendEvent(
     type: string,
     payload: unknown,
     ts = Math.floor(Date.now() / 1000),
   ): Promise<AuditEntry> {
-    const update = this.#headStore.update;
-    const updateEntry = this.#store.update;
-    if (!update || !updateEntry) {
-      throw new Error("Reef audit state requires atomic plugin-state updates");
-    }
+    return this.#enqueue(() => this.#appendEvent(type, payload, ts));
+  }
+
+  async #appendEvent(type: string, payload: unknown, ts: number): Promise<AuditEntry> {
     const owner = randomUUID();
+    const ownsHead = (head: ReefAuditHeadRecord) => head.pending?.owner === owner;
     for (let attempt = 0; attempt < REEF_AUDIT_APPEND_ATTEMPTS; attempt++) {
-      let acquired = false;
-      let staleEntryKey: string | undefined;
-      let head: ReefAuditHeadRecord = { kind: "head", hash: "", seq: 0, oldestHash: "" };
-      update(REEF_AUDIT_HEAD_KEY, (current) => {
-        const latest = parseReefAuditHead(current);
+      const acquired = await this.#editHead((latest) => {
         if (latest.pending && latest.pending.expiresAt > Date.now()) {
           return latest;
         }
-        acquired = true;
-        staleEntryKey = latest.pending?.entryKey;
-        head = {
-          kind: "head",
-          hash: latest.hash,
-          seq: latest.seq,
-          oldestHash: latest.oldestHash,
-          ...(latest.garbageEntryKey ? { garbageEntryKey: latest.garbageEntryKey } : {}),
-        };
         return {
-          ...head,
+          ...latest,
           pending: {
             owner,
             expiresAt: Date.now() + REEF_AUDIT_APPEND_LEASE_MS,
-            ...(staleEntryKey ? { entryKey: staleEntryKey } : {}),
+            ...(latest.pending?.entryKey ? { entryKey: latest.pending.entryKey } : {}),
           },
         };
       });
-      if (!acquired) {
+      if (!ownsHead(acquired)) {
         await sleep(REEF_AUDIT_APPEND_RETRY_MS);
         continue;
       }
+      let staleEntryKey = acquired.pending?.entryKey;
+      const { pending: _acquiredPending, ...committedHead } = acquired;
+      let head = committedHead;
 
       let entryKey: string | undefined;
       let entryHash: string | undefined;
@@ -210,7 +244,7 @@ class ReefSqliteAuditStore implements AuditStore {
           }
           const staleEntryHash = staleEntryKey.slice("entry:".length);
           if (head.hash) {
-            updateEntry(reefAuditEntryKey(head.hash), (current) => {
+            await this.#editEntry(reefAuditEntryKey(head.hash), ownsHead, (current) => {
               const previous = parseAuditStateRecord(current);
               if (previous.nextHash !== staleEntryHash) {
                 return previous;
@@ -219,9 +253,8 @@ class ReefSqliteAuditStore implements AuditStore {
               return unlinked;
             });
           }
-          this.#store.delete(staleEntryKey);
-          update(REEF_AUDIT_HEAD_KEY, (current) => {
-            const latest = parseReefAuditHead(current);
+          await this.#editEntry(staleEntryKey, ownsHead, () => undefined);
+          await this.#editHead((latest) => {
             if (latest.pending?.owner !== owner || latest.pending.entryKey !== staleEntryKey) {
               return latest;
             }
@@ -237,9 +270,8 @@ class ReefSqliteAuditStore implements AuditStore {
           staleEntryKey = undefined;
         }
         if (head.garbageEntryKey) {
-          this.#store.delete(head.garbageEntryKey);
-          update(REEF_AUDIT_HEAD_KEY, (current) => {
-            const latest = parseReefAuditHead(current);
+          await this.#editEntry(head.garbageEntryKey, ownsHead, () => undefined);
+          await this.#editHead((latest) => {
             if (latest.pending?.owner !== owner) {
               return latest;
             }
@@ -252,35 +284,28 @@ class ReefSqliteAuditStore implements AuditStore {
         const entry = createAuditEntry(type, payload, ts, this.#auditKey, head, this.#rng);
         entryHash = entry.entryHash;
         entryKey = reefAuditEntryKey(entry.entryHash);
-        let staged = false;
-        update(REEF_AUDIT_HEAD_KEY, (current) => {
-          const latest = parseReefAuditHead(current);
+        await this.#editHead((latest) => {
           if (
             latest.hash !== head.hash ||
             latest.seq !== head.seq ||
             latest.pending?.owner !== owner
           ) {
-            return latest;
+            throw new Error("Reef audit append lease was lost before staging");
           }
-          staged = true;
           return { ...latest, pending: { ...latest.pending, entryKey } };
         });
-        if (!staged) {
-          throw new Error("Reef audit append lease was lost before staging");
-        }
-        inserted = this.#store.registerIfAbsent(entryKey, { kind: "entry", entry });
-        if (!inserted) {
-          throw new Error("Reef audit entry already exists before head advancement");
-        }
+        await this.#editEntry(entryKey, ownsHead, (current) => {
+          if (current) {
+            throw new Error("Reef audit entry already exists before head advancement");
+          }
+          return { kind: "entry", entry };
+        });
+        inserted = true;
         if (head.hash) {
-          updateEntry(reefAuditEntryKey(head.hash), (current) => {
+          await this.#editEntry(reefAuditEntryKey(head.hash), ownsHead, (current) => {
             const previous = parseAuditStateRecord(current);
             if (previous.entry.entryHash !== head.hash) {
               throw new Error("Reef audit head entry differs before linking append");
-            }
-            const latestHead = parseReefAuditHead(this.#headStore.lookup(REEF_AUDIT_HEAD_KEY));
-            if (latestHead.pending?.owner !== owner) {
-              throw new Error("Reef audit append lease was lost before linking");
             }
             if (previous.nextHash === entry.entryHash) {
               return previous;
@@ -295,7 +320,7 @@ class ReefSqliteAuditStore implements AuditStore {
         let garbageEntryKey: string | undefined;
         if (head.seq >= this.#maxEntries) {
           const oldest = parseAuditStateRecord(
-            this.#store.lookup(reefAuditEntryKey(head.oldestHash)),
+            await this.#store.lookup(reefAuditEntryKey(head.oldestHash)),
           );
           if (!oldest.nextHash) {
             throw new Error("Reef audit retention pointer is missing");
@@ -303,18 +328,15 @@ class ReefSqliteAuditStore implements AuditStore {
           oldestHash = oldest.nextHash;
           garbageEntryKey = reefAuditEntryKey(head.oldestHash);
         }
-        let advanced = false;
-        update(REEF_AUDIT_HEAD_KEY, (current) => {
-          const latest = parseReefAuditHead(current);
+        await this.#editHead((latest) => {
           if (
             latest.hash !== head.hash ||
             latest.seq !== head.seq ||
             latest.pending?.owner !== owner ||
             latest.pending.entryKey !== entryKey
           ) {
-            return latest;
+            throw new Error("Reef audit append lease was lost before commit");
           }
-          advanced = true;
           return {
             kind: "head",
             hash: entry.entryHash,
@@ -323,14 +345,15 @@ class ReefSqliteAuditStore implements AuditStore {
             ...(garbageEntryKey ? { garbageEntryKey } : {}),
           };
         });
-        if (!advanced) {
-          throw new Error("Reef audit append lease was lost before commit");
-        }
         if (garbageEntryKey) {
           try {
-            this.#store.delete(garbageEntryKey);
-            update(REEF_AUDIT_HEAD_KEY, (current) => {
-              const latest = parseReefAuditHead(current);
+            await this.#editEntry(
+              garbageEntryKey,
+              (latest) =>
+                latest.hash === entry.entryHash && latest.garbageEntryKey === garbageEntryKey,
+              () => undefined,
+            );
+            await this.#editHead((latest) => {
               if (latest.hash !== entry.entryHash || latest.garbageEntryKey !== garbageEntryKey) {
                 return latest;
               }
@@ -344,16 +367,16 @@ class ReefSqliteAuditStore implements AuditStore {
         }
         return structuredClone(entry);
       } catch (error) {
-        const latestHead = parseReefAuditHead(this.#headStore.lookup(REEF_AUDIT_HEAD_KEY));
+        const latestHead = parseReefAuditHead(await this.#headStore.lookup(REEF_AUDIT_HEAD_KEY));
         const entryOwnedElsewhere =
           entryKey !== undefined &&
           ((latestHead.hash === entryHash && latestHead.seq === head.seq + 1) ||
             (latestHead.pending?.owner !== owner && latestHead.pending?.entryKey === entryKey));
-        if (inserted && entryKey && !entryOwnedElsewhere) {
-          this.#store.delete(entryKey);
+        if (inserted && entryKey && !entryOwnedElsewhere && ownsHead(latestHead)) {
+          await this.#editEntry(entryKey, ownsHead, () => undefined);
         }
-        if (entryKey && head.hash && !entryOwnedElsewhere) {
-          updateEntry(reefAuditEntryKey(head.hash), (current) => {
+        if (entryKey && head.hash && !entryOwnedElsewhere && ownsHead(latestHead)) {
+          await this.#editEntry(reefAuditEntryKey(head.hash), ownsHead, (current) => {
             const previous = parseAuditStateRecord(current);
             if (previous.nextHash !== entryHash) {
               return previous;
@@ -362,8 +385,7 @@ class ReefSqliteAuditStore implements AuditStore {
             return unlinked;
           });
         }
-        update(REEF_AUDIT_HEAD_KEY, (current) => {
-          const latest = parseReefAuditHead(current);
+        await this.#editHead((latest) => {
           if (latest.pending?.owner !== owner) {
             return latest;
           }
@@ -387,32 +409,55 @@ class ReefSqliteAuditStore implements AuditStore {
   }
 
   async entries(): Promise<AuditEntry[]> {
-    const head = parseReefAuditHead(this.#headStore.lookup(REEF_AUDIT_HEAD_KEY));
-    if (head.seq === 0) {
-      return [];
-    }
-    const reversed: AuditEntry[] = [];
-    let hash = head.hash;
-    for (let seq = head.seq; seq > 0 && reversed.length < this.#maxEntries; seq--) {
-      const record = this.#store.lookup(reefAuditEntryKey(hash));
-      if (!record) {
-        break;
+    for (;;) {
+      const observed = await this.#headStore.observe(REEF_AUDIT_HEAD_KEY);
+      const rows = await this.#store.entries();
+      const checked = await this.#headStore.compareAndApply(
+        REEF_AUDIT_HEAD_KEY,
+        observed.comparison,
+        { operation: "delete", action: "keep" },
+      );
+      if (checked.status === "conflict") {
+        continue;
       }
-      const entry = parseAuditEntryRecord(record);
-      if (entry.entryHash !== hash || entry.event.seq !== seq) {
-        throw new Error("invalid Reef audit chain state");
+      const head = parseReefAuditHead(observed.value);
+      if (head.seq === 0) {
+        return [];
       }
-      reversed.push(entry);
-      hash = entry.prevHash;
+      const records = new Map(rows.map((row) => [row.key, row.value]));
+      const reversed: AuditEntry[] = [];
+      let hash = head.hash;
+      for (let seq = head.seq; seq > 0 && reversed.length < this.#maxEntries; seq--) {
+        const record = records.get(reefAuditEntryKey(hash));
+        if (!record) {
+          break;
+        }
+        const entry = parseAuditEntryRecord(record);
+        if (entry.entryHash !== hash || entry.event.seq !== seq) {
+          throw new Error("invalid Reef audit chain state");
+        }
+        reversed.push(entry);
+        hash = entry.prevHash;
+      }
+      return structuredClone(verifyReefAuditWindow(reversed, head, this.#maxEntries));
     }
-    return structuredClone(verifyReefAuditWindow(reversed, head, this.#maxEntries));
   }
 }
 
-export function openReefAuditStore(
+export async function openReefAuditStore(
   runtime: PluginRuntime,
   auditKey: Uint8Array,
   maxEntries?: number,
-): AuditStore {
+): Promise<AuditStore> {
+  const migration = runtime.state.openKeyedStoreV2<{ pending: true }>({
+    namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
+    maxEntries: REEF_AUDIT_MIGRATION_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  if (await migration.lookup(REEF_AUDIT_MIGRATION_KEY)) {
+    throw new Error(
+      "Reef audit migration is incomplete; repair audit.jsonl and rerun openclaw doctor --fix",
+    );
+  }
   return new ReefSqliteAuditStore(runtime, auditKey, randomBytes, maxEntries);
 }

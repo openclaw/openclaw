@@ -3,9 +3,10 @@ import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -23,7 +24,12 @@ import {
 } from "../protocol/index.js";
 import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
-import { sameReefPeerIdentity, type ReefPeerIdentity, type ReefPeerTrust } from "./friend-types.js";
+import {
+  matchesReefPeerIdentity,
+  sameReefPeerIdentity,
+  type ReefPeerIdentity,
+  type ReefPeerTrust,
+} from "./friend-types.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { ReefTrustStore } from "./trust-store.js";
@@ -50,11 +56,18 @@ export function flowStores(deliveredMaxEntries?: number) {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
+    createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+      authority ?? { assertCurrent() {} },
+    );
   return {
     runtime,
     stateDir,
@@ -141,8 +154,25 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
     deliveries,
     rejectionNotices,
     store: {
-      get: (peer: string) => values.get(peer),
-      recordOutboundDelivery: (
+      withAuthority(assertCurrent: () => void): ReefTrustStore {
+        assertCurrent();
+        return {
+          ...this,
+          recordOutboundDelivery: async (
+            ...args: Parameters<ReefTrustStore["recordOutboundDelivery"]>
+          ) => {
+            assertCurrent();
+            await this.recordOutboundDelivery(...args);
+            assertCurrent();
+          },
+        } as unknown as ReefTrustStore;
+      },
+      get: async (peer: string) => values.get(peer),
+      currentPeerForDelivery: (peer: string, expected: ReefPeerIdentity) => {
+        const current = values.get(peer);
+        return matchesReefPeerIdentity(current, expected) ? current : undefined;
+      },
+      recordOutboundDelivery: async (
         peer: string,
         id: string,
         binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
@@ -154,8 +184,8 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
         }
         deliveries.set(key, { ...binding, ...options });
       },
-      outboundDelivery: (peer: string, id: string) => deliveries.get(`${peer}:${id}`),
-      consumeOutboundDelivery: (
+      outboundDelivery: async (peer: string, id: string) => deliveries.get(`${peer}:${id}`),
+      consumeOutboundDelivery: async (
         peer: string,
         id: string,
         binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
@@ -172,7 +202,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
         }
         return deliveries.delete(key);
       },
-      discardOutboundDelivery: (
+      discardOutboundDelivery: async (
         peer: string,
         id: string,
         binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
@@ -188,7 +218,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
         }
         return deliveries.delete(key);
       },
-      recordOutboundRejection: (
+      recordOutboundRejection: async (
         peer: string,
         id: string,
         binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
@@ -215,7 +245,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
         });
         return true;
       },
-      reserveOutboundRejectionNotice: (
+      reserveOutboundRejectionNotice: async (
         peer: string,
         id: string,
         recipient: ReefPeerIdentity,
@@ -238,7 +268,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
         });
         return { kind: "reserved" as const };
       },
-      completeOutboundRejection: (
+      completeOutboundRejection: async (
         peer: string,
         id: string,
         noticeState: ReefRejectionNoticeState,
@@ -262,7 +292,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
         }
         return deliveries.delete(key);
       },
-      rejectionNoticeState: (peer: string) => rejectionNotices.get(peer),
+      rejectionNoticeState: async (peer: string) => rejectionNotices.get(peer),
     } as unknown as ReefTrustStore,
   };
 }

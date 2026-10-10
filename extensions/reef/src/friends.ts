@@ -67,7 +67,14 @@ export class ReefFriendManager {
       // Persist owner intent before the relay side effect. Once the peer
       // accepts, this marker authorizes pinning without a second approval.
       assertOwnerCurrent?.();
-      const requestId = this.trust.recordOutboundRequest(normalized);
+      const requestId = await this.trust
+        .withAuthority(() => {
+          signal?.throwIfAborted();
+          assertOwnerCurrent?.();
+        })
+        .recordOutboundRequest(normalized);
+      signal?.throwIfAborted();
+      assertOwnerCurrent?.();
       let result: { status: string };
       try {
         result = await this.transport.requestFriend(normalized, code, signal);
@@ -78,8 +85,8 @@ export class ReefFriendManager {
           error.status < 500 &&
           error.status !== 409;
         if (definitiveRejection) {
-          this.trust.removeOutboundRequest(normalized, requestId);
-        } else if (this.trust.outboundRequestStatus(normalized, requestId) === "revoked") {
+          await this.trust.removeOutboundRequest(normalized, requestId);
+        } else if ((await this.trust.outboundRequestStatus(normalized, requestId)) === "revoked") {
           try {
             await this.transport.removeFriend(normalized);
           } catch (cleanupError) {
@@ -93,7 +100,7 @@ export class ReefFriendManager {
         }
         throw error;
       }
-      if (this.trust.outboundRequestStatus(normalized, requestId) === "revoked") {
+      if ((await this.trust.outboundRequestStatus(normalized, requestId)) === "revoked") {
         await this.transport.removeFriend(normalized);
         throw new Error(`Reef friend request to @${normalized} was concurrently revoked`);
       }
@@ -102,14 +109,19 @@ export class ReefFriendManager {
   }
 
   remove(peer: string, assertOwnerCurrent?: () => void): Promise<void> {
-    return this.#serialize(async () => {
+    return this.#serialize(async (signal) => {
       const normalized = normalizeReefTarget(peer);
       if (!normalized) {
         throw new Error(`Invalid Reef peer handle: ${peer}`);
       }
       // Once trust is revoked, finish cleanup even if the account closes.
       assertOwnerCurrent?.();
-      this.trust.remove(normalized);
+      await this.trust
+        .withAuthority(() => {
+          signal?.throwIfAborted();
+          assertOwnerCurrent?.();
+        })
+        .remove(normalized);
       const results = await Promise.allSettled([
         this.#removePairingApprovalsForPeer(normalized),
         this.#removeRelayAndRefence(normalized),
@@ -137,16 +149,22 @@ export class ReefFriendManager {
     autonomy: ReefAutonomy,
     assertOwnerCurrent?: () => void,
   ): Promise<void> {
-    return this.#serialize(() => {
+    return this.#serialize((signal) => {
       assertOwnerCurrent?.();
-      this.trust.setAutonomy(peer, autonomy);
+      return this.trust
+        .withAuthority(() => {
+          signal?.throwIfAborted();
+          assertOwnerCurrent?.();
+        })
+        .setAutonomy(peer, autonomy);
     });
   }
 
   async list(): Promise<ListedReefFriend[]> {
     const signal = this.authoritySignal;
     signal?.throwIfAborted();
-    const local = new Map(this.trust.list().map((entry) => [entry.peer, entry.trust]));
+    const local = new Map((await this.trust.list()).map((entry) => [entry.peer, entry.trust]));
+    signal?.throwIfAborted();
     const { friendships } = await this.transport.listFriends(signal);
     signal?.throwIfAborted();
     const listed: ListedReefFriend[] = [];
@@ -171,7 +189,8 @@ export class ReefFriendManager {
         if (friend.status === "blocked") {
           continue;
         }
-        const snapshot = this.trust.snapshot(friend.peer);
+        const snapshot = await this.trust.snapshot(friend.peer);
+        signal?.throwIfAborted();
         const approval = approvals.get(friend.peer);
         if (approval?.trustRevision === snapshot.revision) {
           continue;
@@ -193,12 +212,13 @@ export class ReefFriendManager {
         if (!inboundPending && !missingLocalApproval && !needsReapproval) {
           continue;
         }
+        const approvalToken = await this.trust.createPairingApproval(friend, snapshot.revision);
         signal?.throwIfAborted();
         await issue({
           peer: friend.peer,
           fingerprint: fingerprint(friend.ed25519_pub, friend.x25519_pub),
           code: friend.peer,
-          approvalToken: this.trust.createPairingApproval(friend, snapshot.revision),
+          approvalToken,
         });
       }
     }, lifecycleSignal);
@@ -206,6 +226,7 @@ export class ReefFriendManager {
 
   reconcile(lifecycleSignal?: AbortSignal): Promise<string[]> {
     return this.#serialize(async (signal) => {
+      const trustedMutation = this.trust.withAuthority(() => signal?.throwIfAborted());
       const { friendships } = await this.transport.listFriends(signal);
       signal?.throwIfAborted();
       const approvals = await this.#loadPairingApprovals(friendships);
@@ -216,7 +237,8 @@ export class ReefFriendManager {
         if (friend.status === "blocked") {
           continue;
         }
-        const snapshot = this.trust.snapshot(friend.peer);
+        const snapshot = await this.trust.snapshot(friend.peer);
+        signal?.throwIfAborted();
         const local = snapshot.trust;
         const loadedApproval = approvals.get(friend.peer);
         const approval =
@@ -232,7 +254,7 @@ export class ReefFriendManager {
         if (changedKeys && local && !approved) {
           if (
             !local.safetyNumberChanged &&
-            this.trust.markSafetyNumberChanged(friend.peer, snapshot.revision)
+            (await trustedMutation.markSafetyNumberChanged(friend.peer, snapshot.revision))
           ) {
             changed.add(friend.peer);
           }
@@ -252,7 +274,7 @@ export class ReefFriendManager {
 
         if (!needsPin) {
           if (friend.status === "active" && local && outboundRequestId !== undefined) {
-            this.trust.removeOutboundRequest(friend.peer);
+            await trustedMutation.removeOutboundRequest(friend.peer);
           }
           if (approvalEntry !== undefined && local && !changedKeys && !local.safetyNumberChanged) {
             await this.pairing.remove(approvalEntry);
@@ -281,7 +303,7 @@ export class ReefFriendManager {
           signal?.throwIfAborted();
         }
 
-        const committed = this.trust.commitPeerTrust(friend, {
+        const committed = await trustedMutation.commitPeerTrust(friend, {
           expectedRevision: snapshot.revision,
           ...(selfInitiated && outboundRequestId !== undefined
             ? { expectedOutboundRequestId: outboundRequestId }
@@ -292,7 +314,7 @@ export class ReefFriendManager {
           continue;
         }
 
-        const current = this.trust.snapshot(friend.peer);
+        const current = await this.trust.snapshot(friend.peer);
         if (
           current.revision > snapshot.revision &&
           !current.trust &&
@@ -323,7 +345,7 @@ export class ReefFriendManager {
       if (
         !remote ||
         remote.status === "blocked" ||
-        !this.trust.matchesPairingApproval(entry, remote)
+        !(await this.trust.matchesPairingApproval(entry, remote))
       ) {
         await this.pairing.remove(entry);
         continue;
@@ -346,7 +368,7 @@ export class ReefFriendManager {
     await this.transport.removeFriend(peer);
     // The relay delete linearizes removal. Reapply the tombstone afterwards so
     // a request or pin committed while DELETE was in flight cannot outlive it.
-    this.trust.remove(peer);
+    await this.trust.remove(peer);
   }
 
   #serialize<T>(

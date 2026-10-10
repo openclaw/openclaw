@@ -5,11 +5,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -50,6 +50,7 @@ import {
   ReefDeliveredStore,
   ReefInboxCursorStore,
   REEF_DELIVERED_TTL_MS,
+  REEF_KEYS_NAMESPACE,
   REEF_REVIEWS_NAMESPACE,
   releaseReefIdentityReservation,
   reserveReefIdentityBinding,
@@ -85,23 +86,25 @@ function reviewRequest(id = receiptId, approvalDigest = "b".repeat(64)): ReviewR
   };
 }
 
-function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" = "worker") {
+function createRuntime(stateDir: string) {
   const runtime = createPluginRuntimeMock();
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    if (registrationHost === "legacy") {
-      const { observe: _observe, compareAndApply: _compareAndApply, ...legacy } = store;
-      return legacy;
-    }
-    return store;
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) => {
+    return createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+      authority ?? { assertCurrent() {} },
+    );
   };
   return runtime;
 }
@@ -212,38 +215,38 @@ describe("Reef SQLite state", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
     const keys = reefKeys();
-    await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit.appendEvent(
-      "initial",
-      { id: 1 },
-      10,
-    );
-    const competing = openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit;
+    await (
+      await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 })
+    ).audit.appendEvent("initial", { id: 1 }, 10);
+    const competing = (await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }))
+      .audit;
     const runtime = createRuntime(stateDir);
-    const openSyncKeyedStore = runtime.state.openSyncKeyedStore;
+    const openKeyedStore = runtime.state.openKeyedStoreV2;
     let triggerCompetingWriter = true;
     let competingAppend: Promise<unknown> | undefined;
-    runtime.state.openSyncKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
-    ): PluginStateSyncKeyedStore<T> => {
-      const store = openSyncKeyedStore<T>(options);
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = openKeyedStore<T>(options, authority);
       if (options.namespace !== "audit") {
         return store;
       }
       return {
         ...store,
-        registerIfAbsent(key, value, opts) {
-          const inserted = store.registerIfAbsent(key, value, opts);
-          if (triggerCompetingWriter && inserted) {
+        async compareAndApply(...args) {
+          if (triggerCompetingWriter) {
             triggerCompetingWriter = false;
             vi.advanceTimersByTime(31_000);
             competingAppend = competing.appendEvent("winner", { id: 2 }, 12);
+            await competingAppend;
           }
-          return inserted;
+          return store.compareAndApply(...args);
         },
       };
     };
 
-    const expired = openStores(runtime, keys, { auditMaxEntries: 2 }).audit.appendEvent(
+    const expired = (await openStores(runtime, keys, { auditMaxEntries: 2 })).audit.appendEvent(
       "expired",
       { id: 3 },
       11,
@@ -258,60 +261,61 @@ describe("Reef SQLite state", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
     const keys = reefKeys();
-    await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit.appendEvent(
-      "initial",
-      { id: 1 },
-      10,
-    );
+    await (
+      await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 })
+    ).audit.appendEvent("initial", { id: 1 }, 10);
 
     const takeoverRuntime = createRuntime(stateDir);
-    const takeoverOpenStore = takeoverRuntime.state.openSyncKeyedStore;
+    const takeoverOpenStore = takeoverRuntime.state.openKeyedStoreV2;
     let failCleanup = true;
-    takeoverRuntime.state.openSyncKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
-    ): PluginStateSyncKeyedStore<T> => {
-      const store = takeoverOpenStore<T>(options);
+    takeoverRuntime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = takeoverOpenStore<T>(options, authority);
       if (options.namespace !== "audit") {
         return store;
       }
       return {
         ...store,
-        delete(key) {
-          const deleted = store.delete(key);
-          if (failCleanup) {
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (failCleanup && args[2].action === "delete" && result.status !== "conflict") {
             failCleanup = false;
             throw new Error("simulated cleanup interruption");
           }
-          return deleted;
+          return result;
         },
       };
     };
-    const takeover = openStores(takeoverRuntime, keys, { auditMaxEntries: 2 }).audit;
+    const takeover = (await openStores(takeoverRuntime, keys, { auditMaxEntries: 2 })).audit;
     const stalledRuntime = createRuntime(stateDir);
-    const stalledOpenStore = stalledRuntime.state.openSyncKeyedStore;
+    const stalledOpenStore = stalledRuntime.state.openKeyedStoreV2;
     let takeoverAppend: Promise<unknown> | undefined;
-    stalledRuntime.state.openSyncKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
-    ): PluginStateSyncKeyedStore<T> => {
-      const store = stalledOpenStore<T>(options);
+    stalledRuntime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = stalledOpenStore<T>(options, authority);
       if (options.namespace !== "audit") {
         return store;
       }
       return {
         ...store,
-        registerIfAbsent(key, value, opts) {
-          const inserted = store.registerIfAbsent(key, value, opts);
-          if (inserted && !takeoverAppend) {
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (result.status !== "conflict" && !takeoverAppend) {
             vi.advanceTimersByTime(31_000);
             takeoverAppend = takeover.appendEvent("interrupted-takeover", { id: 2 }, 12);
+            await takeoverAppend.catch(() => {});
           }
-          return inserted;
+          return result;
         },
       };
     };
 
     await expect(
-      openStores(stalledRuntime, keys, { auditMaxEntries: 2 }).audit.appendEvent(
+      (await openStores(stalledRuntime, keys, { auditMaxEntries: 2 })).audit.appendEvent(
         "stalled",
         { id: 3 },
         11,
@@ -319,15 +323,17 @@ describe("Reef SQLite state", () => {
     ).rejects.toThrow();
     await expect(takeoverAppend).rejects.toThrow("simulated cleanup interruption");
     await expect(
-      openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit.appendEvent(
+      (await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 })).audit.appendEvent(
         "recovered",
         { id: 4 },
         13,
       ),
     ).resolves.toBeDefined();
-    const retained = await openStores(createRuntime(stateDir), keys, {
-      auditMaxEntries: 2,
-    }).audit.entries();
+    const retained = await (
+      await openStores(createRuntime(stateDir), keys, {
+        auditMaxEntries: 2,
+      })
+    ).audit.entries();
     expect(retained.map((entry) => entry.event.type)).toEqual(["initial", "recovered"]);
   });
 
@@ -358,138 +364,158 @@ describe("Reef SQLite state", () => {
     expect(fs.existsSync(path.join(stateDir, "data", "reef"))).toBe(false);
   });
 
-  it.each(["worker", "legacy"] as const)(
-    "atomically rejects redirecting stored identity keys to another handle (%s)",
-    async (registrationHost) => {
-      const runtime = createRuntime(stateDir, registrationHost);
-      await bindIdentity(runtime, "molty");
+  it("atomically rejects redirecting stored identity keys to another handle", async () => {
+    const runtime = createRuntime(stateDir);
+    await bindIdentity(runtime, "molty");
 
-      await expect(
-        reserveReefIdentityBinding(runtime, {
-          handle: "other",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-      expect(await loadReefIdentityBinding(runtime)).toEqual({
-        handle: "molty",
+    await expect(
+      reserveReefIdentityBinding(runtime, {
+        handle: "other",
         relayUrl: "https://reefwire.ai",
-      });
-      await expect(
-        assertReefIdentityBinding(runtime, {
-          handle: "other",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-    },
-  );
-
-  it.each(["worker", "legacy"] as const)(
-    "conditionally releases or finalizes an identity reservation (%s)",
-    async (registrationHost) => {
-      const runtime = createRuntime(stateDir, registrationHost);
-      const released = await reserveReefIdentityBinding(runtime, {
-        handle: "first",
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+    expect(await loadReefIdentityBinding(runtime)).toEqual({
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    await expect(
+      assertReefIdentityBinding(runtime, {
+        handle: "other",
         relayUrl: "https://reefwire.ai",
-      });
-      await releaseReefIdentityReservation(runtime, released);
-      expect(await loadReefIdentityBinding(runtime)).toBeUndefined();
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+  });
 
-      const finalized = await reserveReefIdentityBinding(runtime, {
-        handle: "second",
-        relayUrl: "https://reefwire.ai",
-      });
-      await finalizeReefIdentityBinding(runtime, finalized);
-      await releaseReefIdentityReservation(runtime, finalized);
-      expect(await loadReefIdentityBinding(runtime)).toEqual({
-        handle: "second",
-        relayUrl: "https://reefwire.ai",
-      });
-    },
-  );
-
-  it.each(["worker", "legacy"] as const)(
-    "does not transfer a live reservation to a concurrent retry (%s)",
-    async (registrationHost) => {
-      const runtime = createRuntime(stateDir, registrationHost);
-      const reservation = await reserveReefIdentityBinding(runtime, {
-        handle: "molty",
-        relayUrl: "https://reefwire.ai",
-      });
-
-      await expect(
-        reserveReefIdentityBinding(runtime, {
-          handle: "molty",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-      await finalizeReefIdentityBinding(runtime, reservation);
-      expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
-    },
-  );
-
-  it.each(["worker", "legacy"] as const)(
-    "allows only the same binding to take over an expired reservation (%s)",
-    async (registrationHost) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
-      const runtime = createRuntime(stateDir, registrationHost);
-      const original = await reserveReefIdentityBinding(runtime, {
-        handle: "molty",
-        relayUrl: "https://reefwire.ai",
-      });
-      vi.advanceTimersByTime(10 * 60_000 + 1);
-
-      await expect(
-        reserveReefIdentityBinding(runtime, {
-          handle: "other",
-          relayUrl: "https://reefwire.ai",
-        }),
-      ).rejects.toThrow("already holds the Reef identity @molty");
-      const retry = await reserveReefIdentityBinding(runtime, {
-        handle: "molty",
-        relayUrl: "https://reefwire.ai",
-      });
-      await releaseReefIdentityReservation(runtime, original);
-      await expect(finalizeReefIdentityBinding(runtime, original)).rejects.toThrow(
-        "reservation was replaced",
-      );
-      await finalizeReefIdentityBinding(runtime, retry);
-      expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
-    },
-  );
-
-  it.each(["worker", "legacy"] as const)(
-    "reserves only one identity when registrations overlap (%s)",
-    async (registrationHost) => {
-      const outcomes = await Promise.allSettled(
-        ["first", "second"].map((handle) =>
-          reserveReefIdentityBinding(createRuntime(stateDir, registrationHost), {
-            handle,
-            relayUrl: "https://reefwire.ai",
-          }),
-        ),
-      );
-      expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
-      expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-      const winner = outcomes.find((outcome) => outcome.status === "fulfilled");
-      if (winner?.status !== "fulfilled") {
-        throw new Error("expected one registration to reserve the identity");
+  it("does not generate replacement keys when an identity is bound during the worker write", async () => {
+    const runtime = createRuntime(stateDir);
+    const open = runtime.state.openKeyedStoreV2;
+    let bindBeforeWrite = true;
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = open<T>(options, authority);
+      if (options.namespace !== REEF_KEYS_NAMESPACE) {
+        return store;
       }
-      await finalizeReefIdentityBinding(createRuntime(stateDir, registrationHost), winner.value);
-      expect(await loadReefIdentityBinding(createRuntime(stateDir, registrationHost))).toEqual(
-        winner.value.binding,
-      );
-    },
-  );
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          if (bindBeforeWrite) {
+            bindBeforeWrite = false;
+            await bindIdentity(runtime, "existing");
+          }
+          return store.compareAndApply(...args);
+        },
+      };
+    };
+
+    await expect(generateAndStoreKeys(runtime)).rejects.toThrow(
+      "has no canonical keys; restore the original keys",
+    );
+    await expect(loadKeys(runtime)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(loadReefIdentityBinding(runtime)).resolves.toEqual({
+      handle: "existing",
+      relayUrl: "https://reefwire.ai",
+    });
+  });
+
+  it("conditionally releases or finalizes an identity reservation", async () => {
+    const runtime = createRuntime(stateDir);
+    const released = await reserveReefIdentityBinding(runtime, {
+      handle: "first",
+      relayUrl: "https://reefwire.ai",
+    });
+    await releaseReefIdentityReservation(runtime, released);
+    expect(await loadReefIdentityBinding(runtime)).toBeUndefined();
+
+    const finalized = await reserveReefIdentityBinding(runtime, {
+      handle: "second",
+      relayUrl: "https://reefwire.ai",
+    });
+    await finalizeReefIdentityBinding(runtime, finalized);
+    await releaseReefIdentityReservation(runtime, finalized);
+    expect(await loadReefIdentityBinding(runtime)).toEqual({
+      handle: "second",
+      relayUrl: "https://reefwire.ai",
+    });
+  });
+
+  it("does not transfer a live reservation to a concurrent retry", async () => {
+    const runtime = createRuntime(stateDir);
+    const reservation = await reserveReefIdentityBinding(runtime, {
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+
+    await expect(
+      reserveReefIdentityBinding(runtime, {
+        handle: "molty",
+        relayUrl: "https://reefwire.ai",
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+    await finalizeReefIdentityBinding(runtime, reservation);
+    expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
+  });
+
+  it("allows only the same binding to take over an expired reservation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
+    const runtime = createRuntime(stateDir);
+    const original = await reserveReefIdentityBinding(runtime, {
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+
+    await expect(
+      reserveReefIdentityBinding(runtime, {
+        handle: "other",
+        relayUrl: "https://reefwire.ai",
+      }),
+    ).rejects.toThrow("already holds the Reef identity @molty");
+    const retry = await reserveReefIdentityBinding(runtime, {
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    await releaseReefIdentityReservation(runtime, original);
+    await expect(finalizeReefIdentityBinding(runtime, original)).rejects.toThrow(
+      "reservation was replaced",
+    );
+    await finalizeReefIdentityBinding(runtime, retry);
+    expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
+  });
+
+  it("reserves only one identity when registrations overlap", async () => {
+    const outcomes = await Promise.allSettled(
+      ["first", "second"].map((handle) =>
+        reserveReefIdentityBinding(createRuntime(stateDir), {
+          handle,
+          relayUrl: "https://reefwire.ai",
+        }),
+      ),
+    );
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    const winner = outcomes.find((outcome) => outcome.status === "fulfilled");
+    if (winner?.status !== "fulfilled") {
+      throw new Error("expected one registration to reserve the identity");
+    }
+    await finalizeReefIdentityBinding(createRuntime(stateDir), winner.value);
+    expect(await loadReefIdentityBinding(createRuntime(stateDir))).toEqual(winner.value.binding);
+  });
 
   it.each(["observe", "compareAndApply"] as const)(
     "does not switch to native callbacks when worker %s fails",
     async (method) => {
       const runtime = createRuntime(stateDir);
       const failure = new Error("registration worker unavailable");
-      const open = runtime.state.openKeyedStore;
-      runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => ({
-        ...open<T>(options),
+      const open = runtime.state.openKeyedStoreV2;
+      runtime.state.openKeyedStoreV2 = <T>(
+        options: OpenAsyncKeyedStoreOptions,
+        authority?: PluginStateActionAuthority,
+      ) => ({
+        ...open<T>(options, authority),
         [method]: async () => {
           throw failure;
         },
@@ -507,31 +533,54 @@ describe("Reef SQLite state", () => {
 
   it("appends and reopens a verified audit chain", async () => {
     const keys = reefKeys();
-    const first = openStores(createRuntime(stateDir), keys);
+    const first = await openStores(createRuntime(stateDir), keys);
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
         first.audit.appendEvent("test", { id: index }, 10 + index),
       ),
     );
 
-    const reopened = await openStores(createRuntime(stateDir), keys).audit.entries();
+    const reopened = await (await openStores(createRuntime(stateDir), keys)).audit.entries();
     expect(reopened).toHaveLength(20);
     expect(verifyChain(reopened)).toBe(true);
   });
 
-  it("retains a verifiable audit suffix after bounded eviction", async () => {
+  it("retains a verifiable audit suffix when bounded eviction races a read", async () => {
     const keys = reefKeys();
-    const store = openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit;
+    const store = (await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 })).audit;
     await store.appendEvent("one", { id: 1 }, 10);
     await store.appendEvent("two", { id: 2 }, 11);
     await store.appendEvent("three", { id: 3 }, 12);
 
-    const retained = await store.entries();
-    expect(retained.map((entry) => entry.event.seq)).toEqual([2, 3]);
+    const runtime = createRuntime(stateDir);
+    const open = runtime.state.openKeyedStoreV2;
+    let evictDuringRead = true;
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const rows = open<T>(options, authority);
+      return options.namespace === "audit"
+        ? {
+            ...rows,
+            async entries() {
+              const snapshot = await rows.entries();
+              if (evictDuringRead) {
+                evictDuringRead = false;
+                await store.appendEvent("four", { id: 4 }, 13);
+              }
+              return snapshot;
+            },
+          }
+        : rows;
+    };
+    const reader = (await openStores(runtime, keys, { auditMaxEntries: 2 })).audit;
+    const retained = await reader.entries();
+    expect(retained.map((entry) => entry.event.seq)).toEqual([3, 4]);
     expect(
       verifyChainSegment(retained, {
         previousHash: retained[0]!.prevHash,
-        previousSeq: 1,
+        previousSeq: 2,
         head: retained[1]!.entryHash,
       }),
     ).toBe(true);
@@ -539,62 +588,61 @@ describe("Reef SQLite state", () => {
 
   it("does not evict committed audit history when head advancement fails", async () => {
     const keys = reefKeys();
-    const initial = openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit;
+    const initial = (await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 })).audit;
     await initial.appendEvent("one", { id: 1 }, 10);
     await initial.appendEvent("two", { id: 2 }, 11);
 
     const runtime = createRuntime(stateDir);
-    const openSyncKeyedStore = runtime.state.openSyncKeyedStore;
+    const openKeyedStore = runtime.state.openKeyedStoreV2;
     let failAdvance = true;
-    runtime.state.openSyncKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
-    ): PluginStateSyncKeyedStore<T> => {
-      const store = openSyncKeyedStore<T>(options);
-      if (options.namespace !== "audit-head" || !store.update) {
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = openKeyedStore<T>(options, authority);
+      if (options.namespace !== "audit-head") {
         return store;
       }
-      const update = store.update;
       return {
         ...store,
-        update(key, updateValue, opts) {
-          return update(
-            key,
-            (current) => {
-              const next = updateValue(current);
-              const head = next as { seq?: number; pending?: unknown } | undefined;
-              if (failAdvance && head?.seq === 3 && head.pending === undefined) {
-                failAdvance = false;
-                throw new Error("simulated head write failure");
-              }
-              return next;
-            },
-            opts,
-          );
+        async compareAndApply(...args) {
+          const intent = args[2];
+          const head =
+            intent.action === "set"
+              ? (intent.value as { seq?: number; pending?: unknown })
+              : undefined;
+          if (failAdvance && head?.seq === 3 && head.pending === undefined) {
+            failAdvance = false;
+            throw new Error("simulated head write failure");
+          }
+          return store.compareAndApply(...args);
         },
       };
     };
 
-    const failing = openStores(runtime, keys, { auditMaxEntries: 2 }).audit;
+    const failing = (await openStores(runtime, keys, { auditMaxEntries: 2 })).audit;
     await expect(failing.appendEvent("three", { id: 3 }, 12)).rejects.toThrow();
-    const unchanged = await openStores(createRuntime(stateDir), keys, {
-      auditMaxEntries: 2,
-    }).audit.entries();
+    const unchanged = await (
+      await openStores(createRuntime(stateDir), keys, {
+        auditMaxEntries: 2,
+      })
+    ).audit.entries();
     expect(unchanged.map((entry) => entry.event.type)).toEqual(["one", "two"]);
 
-    await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit.appendEvent(
-      "three",
-      { id: 3 },
-      12,
-    );
-    const recovered = await openStores(createRuntime(stateDir), keys, {
-      auditMaxEntries: 2,
-    }).audit.entries();
+    await (
+      await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 })
+    ).audit.appendEvent("three", { id: 3 }, 12);
+    const recovered = await (
+      await openStores(createRuntime(stateDir), keys, {
+        auditMaxEntries: 2,
+      })
+    ).audit.entries();
     expect(recovered.map((entry) => entry.event.type)).toEqual(["two", "three"]);
   });
 
   it("roundtrips encrypted replay completions and durable dedupe state", async () => {
     const keys = reefKeys();
-    const stores = openStores(createRuntime(stateDir), keys);
+    const stores = await openStores(createRuntime(stateDir), keys);
     const receipt = signReceipt(
       {
         id: receiptId,
@@ -608,7 +656,7 @@ describe("Reef SQLite state", () => {
 
     await expect(stores.replay.claim("alice", receiptId, "c".repeat(64))).resolves.toBe("new");
     await stores.replay.complete("alice", receiptId, receipt, body);
-    const reopened = openStores(createRuntime(stateDir), keys).replay;
+    const reopened = (await openStores(createRuntime(stateDir), keys)).replay;
     await expect(reopened.claim("alice", receiptId, "c".repeat(64))).resolves.toBe("duplicate");
     await expect(reopened.completed("alice", receiptId)).resolves.toEqual({ receipt, body });
     await expect(reopened.claim("alice", receiptId, "d".repeat(64))).resolves.toBe("mismatch");
@@ -650,7 +698,7 @@ describe("Reef SQLite state", () => {
       claimExpiresAt: Date.now() + 5 * 60_000,
     });
 
-    const replay = openStores(runtime, keys).replay;
+    const replay = (await openStores(runtime, keys)).replay;
     await expect(replay.claim("alice", receiptId, "c".repeat(64))).resolves.toBe("in_flight");
     expect(raw.lookup(key)?.claimOwner).toBe("other-process");
 
@@ -675,7 +723,7 @@ describe("Reef SQLite state", () => {
 
   it("persists review decisions and delivered ids", async () => {
     const keys = reefKeys();
-    const stores = openStores(createRuntime(stateDir), keys);
+    const stores = await openStores(createRuntime(stateDir), keys);
     const review = reviewRequest();
 
     await expect(stores.reviews.request(review)).resolves.toBeUndefined();
@@ -706,7 +754,7 @@ describe("Reef SQLite state", () => {
     await expect(stores.reviews.decide("c".repeat(64), true)).resolves.toBeUndefined();
     const pendingReview = { ...review, id: "pending", approvalDigest: "d".repeat(64) };
     await stores.reviews.request(pendingReview);
-    const reopened = openStores(createRuntime(stateDir), keys);
+    const reopened = await openStores(createRuntime(stateDir), keys);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const observation = observeHostDataSql();
@@ -739,7 +787,7 @@ describe("Reef SQLite state", () => {
     });
     await stores.delivered.confirm(receiptId);
     await expect(
-      openStores(createRuntime(stateDir), keys).delivered.status(receiptId),
+      (await openStores(createRuntime(stateDir), keys)).delivered.status(receiptId),
     ).resolves.toBe("delivered");
   });
 
@@ -754,7 +802,7 @@ describe("Reef SQLite state", () => {
         await finish.promise;
         return method === "lookup" ? { approved: true } : [];
       });
-      runtime.state.openKeyedStore = vi.fn().mockReturnValue({ [method]: read });
+      runtime.state.openKeyedStoreV2 = vi.fn().mockReturnValue({ [method]: read });
       const controller = new AbortController();
       const authority = createReefRuntimeAuthority(controller.signal);
       const reviews = new ReviewApprovalStore(runtime, undefined, authority.signal);
@@ -794,7 +842,7 @@ describe("Reef SQLite state", () => {
       runtime.state.openSyncKeyedStore = vi.fn().mockReturnValue(native);
       const value = method === "lookup" ? { approved: false } : [];
       const read = vi.fn().mockResolvedValue(value);
-      runtime.state.openKeyedStore = vi.fn().mockReturnValue({ [method]: read });
+      runtime.state.openKeyedStoreV2 = vi.fn().mockReturnValue({ [method]: read });
       const reviews = new ReviewApprovalStore(runtime);
       const run = () => (method === "lookup" ? reviews.lookupDecision("digest") : reviews.list());
       await expect(run()).resolves.toEqual(method === "lookup" ? { approved: false } : []);
@@ -808,7 +856,7 @@ describe("Reef SQLite state", () => {
 
   it("fails closed instead of evicting live replay and delivered state", async () => {
     const keys = reefKeys();
-    const stores = openStores(createRuntime(stateDir), keys, {
+    const stores = await openStores(createRuntime(stateDir), keys, {
       replayMaxEntries: 1,
       deliveredMaxEntries: 1,
     });
@@ -840,13 +888,14 @@ describe("Reef SQLite state", () => {
 
   it("fails when a pending review claim does not persist", async () => {
     const runtime = createRuntime(stateDir);
-    const openSyncKeyedStore = runtime.state.openSyncKeyedStore;
-    runtime.state.openSyncKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
-    ): PluginStateSyncKeyedStore<T> => {
-      const store = openSyncKeyedStore<T>(options);
+    const openKeyedStore = runtime.state.openKeyedStoreV2;
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = openKeyedStore<T>(options, authority);
       return options.namespace === REEF_REVIEWS_NAMESPACE
-        ? { ...store, registerIfAbsent: () => false }
+        ? { ...store, registerIfAbsent: async () => false }
         : store;
     };
     const review = reviewRequest();
@@ -859,35 +908,39 @@ describe("Reef SQLite state", () => {
   it("fails when a delivered marker claim does not persist", async () => {
     const keys = reefKeys();
     const runtime = createRuntime(stateDir);
-    const openKeyedStore = runtime.state.openKeyedStore;
-    runtime.state.openKeyedStore = <T>(
+    const openKeyedStore = runtime.state.openKeyedStoreV2;
+    runtime.state.openKeyedStoreV2 = <T>(
       options: OpenAsyncKeyedStoreOptions,
-    ): PluginStateKeyedStore<T> => {
-      const store = openKeyedStore<T>(options);
+      authority?: PluginStateActionAuthority,
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = openKeyedStore<T>(options, authority);
       return options.namespace === REEF_DELIVERED_NAMESPACE
         ? { ...store, registerIfAbsent: async () => false }
         : store;
     };
 
-    await expect(openStores(runtime, keys).delivered.confirm(receiptId)).rejects.toThrow(
+    await expect((await openStores(runtime, keys)).delivered.confirm(receiptId)).rejects.toThrow(
       "Failed persisting Reef delivered marker",
     );
   });
 
-  it("evicts completed review decisions before rejecting new pending work", async () => {
+  it("deduplicates concurrent pending reviews and evicts only completed decisions at capacity", async () => {
     const runtime = createRuntime(stateDir);
-    const store = new ReviewApprovalStore(runtime, 2);
+    const store = new ReviewApprovalStore(runtime, 1);
 
     const first = reviewRequest("first", "1".repeat(64));
     const second = reviewRequest("second", "2".repeat(64));
     const third = reviewRequest("third", "3".repeat(64));
 
-    await store.request(first);
+    await expect(Promise.all([store.request(first), store.request(first)])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
     await store.decide(first.approvalDigest, false);
     await store.request(second);
-    await store.request(third);
+    await expect(store.request(third)).rejects.toThrow("Reef pending review capacity is exhausted");
 
-    await expect(store.list()).resolves.toEqual([second, third]);
+    await expect(store.list()).resolves.toEqual([second]);
   });
 });
 
@@ -932,7 +985,7 @@ describe("Reef delivered markers", () => {
   });
 
   it("surfaces capacity as PLUGIN_STATE_LIMIT_EXCEEDED from confirm without touching existing markers", async () => {
-    const stores = openStores(createRuntime(stateDir), testKeys(), {
+    const stores = await openStores(createRuntime(stateDir), testKeys(), {
       deliveredMaxEntries: 1,
     });
     await stores.delivered.confirm("first"); // delivered namespace full
@@ -948,7 +1001,7 @@ describe("Reef delivered markers", () => {
 
   it("reads legacy delivered markers without a state as delivered", async () => {
     const runtime = createRuntime(stateDir);
-    const stores = openStores(runtime, testKeys());
+    const stores = await openStores(runtime, testKeys());
     const legacy = runtime.state.openSyncKeyedStore<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
       maxEntries: REEF_DELIVERED_MAX_ENTRIES,

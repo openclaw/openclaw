@@ -4,7 +4,7 @@ import type {
   OpenKeyedStoreOptions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -32,14 +32,17 @@ describe("Reef inbox cursor persistence", () => {
     resetPluginStateStoreForTests();
   });
 
-  function createRuntime(legacy = false) {
+  function createRuntime() {
     const runtime = createPluginRuntimeMock();
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreForTests<T>("reef", {
-        ...storeOptions,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
-      return legacy ? { ...store, observe: undefined, compareAndApply: undefined } : store;
+    runtime.state.openKeyedStoreV2 = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
+      return createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        {
+          ...storeOptions,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        },
+        { assertCurrent() {} },
+      );
     };
     runtime.state.openSyncKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) =>
       createPluginStateSyncKeyedStoreForTests<T>("reef", {
@@ -53,9 +56,9 @@ describe("Reef inbox cursor persistence", () => {
     runtime: ReturnType<typeof createRuntime>,
     change: () => Promise<void>,
   ) {
-    const open = runtime.state.openKeyedStore;
+    const open = runtime.state.openKeyedStoreV2;
     let changed = false;
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
+    runtime.state.openKeyedStoreV2 = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
       const store = open<T>(storeOptions);
       const compareAndApply = store.compareAndApply!;
       return {
@@ -71,8 +74,8 @@ describe("Reef inbox cursor persistence", () => {
     };
   }
 
-  it.each([false, true])("preserves monotonic progress on an older host: %s", async (legacy) => {
-    const runtime = createRuntime(legacy);
+  it("preserves monotonic progress across worker handles", async () => {
+    const runtime = createRuntime();
     const first = new ReefInboxCursorStore(runtime, binding);
     const second = new ReefInboxCursorStore(runtime, binding);
     await Promise.all([first.advance(12), second.advance(7), second.advance(20)]);
@@ -96,7 +99,7 @@ describe("Reef inbox cursor persistence", () => {
     "revalidates a conflicting %s before advancing",
     async (conflict) => {
       const runtime = createRuntime();
-      const competing = runtime.state.openKeyedStore(options);
+      const competing = runtime.state.openKeyedStoreV2(options);
       beforeFirstComparison(runtime, async () => {
         await competing.register("current", {
           ...binding,
@@ -120,7 +123,7 @@ describe("Reef inbox cursor persistence", () => {
 
   it("revalidates a repaired row instead of publishing a stale binding error", async () => {
     const runtime = createRuntime();
-    const competing = runtime.state.openKeyedStore(options);
+    const competing = runtime.state.openKeyedStoreV2(options);
     await competing.register("current", { ...binding, handle: "clawd", cursor: 3 });
     beforeFirstComparison(runtime, async () => {
       await competing.register("current", { ...binding, cursor: 5 });
@@ -130,30 +133,21 @@ describe("Reef inbox cursor persistence", () => {
     await expect(store.load()).resolves.toBe(12);
   });
 
-  it.each([false, true])("refuses invalid stored state on an older host: %s", async (legacy) => {
-    const runtime = createRuntime(legacy);
-    const raw = runtime.state.openKeyedStore(options);
+  it("refuses invalid stored state without changing it", async () => {
+    const runtime = createRuntime();
+    const raw = runtime.state.openKeyedStoreV2(options);
     await raw.register("current", { ...binding, cursor: "invalid" });
     const store = new ReefInboxCursorStore(runtime, binding);
     await expect(store.load()).rejects.toThrow("invalid Reef inbox cursor state");
-    if (legacy) {
-      await expect(store.advance(12)).rejects.toMatchObject({
-        code: "PLUGIN_STATE_WRITE_FAILED",
-        operation: "register",
-        message: "Failed to update plugin state entry.",
-        cause: expect.objectContaining({ message: "invalid Reef inbox cursor state" }),
-      });
-    } else {
-      await expect(store.advance(12)).rejects.toThrow("invalid Reef inbox cursor state");
-    }
+    await expect(store.advance(12)).rejects.toThrow("invalid Reef inbox cursor state");
     await expect(raw.lookup("current")).resolves.toEqual({ ...binding, cursor: "invalid" });
   });
 
   it("propagates a failed comparison without falling back to native writes", async () => {
     const runtime = createRuntime();
-    const open = runtime.state.openKeyedStore;
+    const open = runtime.state.openKeyedStoreV2;
     const failure = new Error("comparison unavailable");
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => ({
+    runtime.state.openKeyedStoreV2 = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => ({
       ...open<T>(storeOptions),
       compareAndApply: async () => {
         throw failure;
