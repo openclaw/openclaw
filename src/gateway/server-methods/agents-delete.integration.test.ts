@@ -36,10 +36,7 @@ import { CronService } from "../../cron/service.js";
 import { startCronReceiptAuthorityHost } from "../../cron/store/receipt-authority-owner.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import {
-  createPluginStateKeyedStore,
-  createPluginStateSyncKeyedStore,
-} from "../../plugin-state/plugin-state-store.js";
+import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
 import { registerMemoryCapability } from "../../plugins/memory-state.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
@@ -349,19 +346,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               });
               const native = nativeApi.createNativeBindingDeletionFixture(
                 createPluginRuntimeMock({
-                  state: {
-                    openSyncKeyedStore: <Value>(
-                      options: Parameters<typeof createPluginStateSyncKeyedStore>[1],
-                    ) =>
-                      createPluginStateSyncKeyedStore<Value>("codex", {
-                        ...options,
-                        env: state.env,
-                      }),
-                    openKeyedStore: <Value>(
-                      options: Parameters<typeof createPluginStateKeyedStore>[1],
-                    ) =>
-                      createPluginStateKeyedStore<Value>("codex", { ...options, env: state.env }),
-                  },
+                  state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
                 }),
                 { agentId, sessionId, sessionKey },
               );
