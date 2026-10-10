@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import {
   countMigrationSources,
+  isTest,
   readInventorySources,
   type MigrationMetrics,
 } from "./control-ui-solid-inventory.mts";
@@ -22,10 +23,6 @@ const METRICS = [
   "tasks",
   "todoSolid2",
 ] as const satisfies readonly (keyof MigrationMetrics)[];
-
-function isTest(file: string) {
-  return /\.(?:test|test-support)\.|(?:^|\/)test-helpers\//u.test(file);
-}
 
 function loadsModule(node: ts.Node): boolean {
   return (

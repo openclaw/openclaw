@@ -180,6 +180,8 @@ describe("Control UI Lit ratchet", () => {
     "new.test.ts",
     "lit/solid-bridge.test.tsx",
     "new.test-support.ts",
+    "new-test-support.ts",
+    "new-test-harness.ts",
     "test-helpers/view.ts",
   ])("exempts new Lit tests: %s", (file) => {
     const root = fixture();
