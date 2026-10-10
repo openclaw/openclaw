@@ -400,7 +400,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: normalizeAnyChannelId,
 }));
 
-vi.mock("./session.js", () => ({
+vi.mock("./session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session.js")>()),
   loadCronSessionEntryLatest: loadSessionEntryMock,
   prepareCronSession: resolveCronSessionMock,
 }));

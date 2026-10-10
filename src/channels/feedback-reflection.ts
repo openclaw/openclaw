@@ -33,13 +33,24 @@ export async function recordChannelFeedbackEvent(params: {
       if (!read.value?.sessionId) {
         return false;
       }
-      const target = await resolveSessionTranscriptRuntimeTarget({
-        ...owner.scope,
-        agentId: params.agentId,
-        sessionId: read.value.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: owner.scope?.storePath ?? storePath,
-      });
+      const target = owner.incognito
+        ? {
+            agentId: params.agentId,
+            sessionId: read.value.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: owner.incognito.actor.path,
+            expectedOwner: {
+              lifecycleRevision: read.value.lifecycleRevision,
+              activeWriterRunId: read.value.activeWriterRunId,
+            },
+          }
+        : await resolveSessionTranscriptRuntimeTarget({
+            ...owner.scope,
+            agentId: params.agentId,
+            sessionId: read.value.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: owner.scope?.storePath ?? storePath,
+          });
       owner.assertCurrent();
       await appendPreparedTranscriptEvent(
         { ...target, env: owner.scope?.env },

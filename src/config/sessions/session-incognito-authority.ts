@@ -6,7 +6,10 @@ import type {
   IncognitoSessionAuthority,
   IncognitoSessionFacts,
 } from "./session-incognito-facts.types.js";
-import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
+import type {
+  IncognitoCompletionSourceTarget,
+  IncognitoHistoryOperations,
+} from "./session-incognito-history-contract.js";
 
 export type IncognitoSessionClaim = {
   readonly identity: IncognitoSessionFacts["identity"];
@@ -327,10 +330,7 @@ export function bindIncognitoSessionHistory(owner: {
   return {
     retainCompletionSource(
       authority: IncognitoSessionAuthority,
-      target: Omit<
-        IncognitoHistoryOperations["session.history.completion-source.open"]["input"],
-        "sourceId"
-      >,
+      target: IncognitoCompletionSourceTarget,
       signal?: AbortSignal,
     ): Promise<{ assertCurrent(): void; release(): Promise<void> }> {
       owner.assertOutsideGrant();

@@ -283,7 +283,12 @@ export async function handleCompactCommand(
   assertOwnerBeforeAcceptance();
   // Draining a run does not clear its durable writer fence. Capture the current
   // row after the drain instead of accounting against the command's older snapshot.
-  const refreshedEntry = resolveCurrentEntry();
+  const refreshedEntry = await runtime.readCurrentSessionEntry({
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    storePath: compactionStorePath,
+    expected: expectedSession,
+  });
   if (!refreshedEntry) {
     return compactionUnavailable("command session changed", interruptionNotice);
   }

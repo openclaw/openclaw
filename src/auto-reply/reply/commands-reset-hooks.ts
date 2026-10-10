@@ -8,6 +8,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 export type ResetCommandAction = "new" | "reset";
@@ -41,6 +42,7 @@ export async function readBeforeResetMessages(params: {
       }),
     );
   } catch (err: unknown) {
+    rethrowIncognitoSessionError(err);
     logVerbose(
       `before_reset: failed to read transcript identity ${params.sessionKey}/${params.sessionId}; firing hook with empty messages (${String(err)})`,
     );

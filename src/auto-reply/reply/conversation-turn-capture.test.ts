@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -16,6 +17,8 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import * as transcriptEvent from "../../config/sessions/session-transcript-event.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
@@ -28,6 +31,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -978,3 +982,63 @@ describe("conversation turn capture", () => {
     pending.cancel();
   });
 });
+
+it.each([false, true])(
+  "keeps the private session audit separate from durable reply custody (audit failure=%s)",
+  async (auditFailure) => {
+    const setup = await setupReefConversation();
+    setup.sessionKey = "agent:main:dashboard:incognito-capture";
+    const actor = await openIncognitoTestActor(
+      { OPENCLAW_STATE_DIR: path.dirname(setup.storePath) },
+      { assertCurrent() {} },
+    );
+    await actor.sessions.create(
+      { assertCurrent() {} },
+      {
+        sessionKey: setup.sessionKey,
+        entry: {
+          sessionId: setup.sessionId,
+          lifecycleRevision: "private",
+          updatedAt: Date.now(),
+          incognito: true,
+        },
+      },
+    );
+    vi.useFakeTimers();
+    const id = "private-capture";
+    const pending = await registerCapture(setup, id);
+    pending.markReady();
+    if (auditFailure) {
+      vi.spyOn(transcriptEvent, "appendPreparedTranscriptEvent").mockRejectedValueOnce(
+        new Error("optional audit unavailable"),
+      );
+    }
+    try {
+      await withIncognitoSessionActor(actor, async () => {
+        const input = { cfg: setup.cfg, ctx: inboundReply(setup, id) };
+        await expect(capturePendingConversationTurnReply(input)).resolves.toBe(true);
+        await expect(capturePendingConversationTurnReply(input)).resolves.toBe(true);
+        const events = await sessionAccessor.loadTranscriptEvents({
+          agentId: "main",
+          storePath: actor.path,
+          sessionKey: setup.sessionKey,
+          sessionId: setup.sessionId,
+        });
+        expect(
+          events.filter((event) => event.customType === "openclaw.conversation-turn-reply"),
+        ).toHaveLength(auditFailure ? 0 : 1);
+      });
+      expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
+        status: "replied",
+        reply: { text: "ordinary reply" },
+      });
+      expect(
+        sessionAccessor.loadSessionEntryReadOnly({ ...setup.scope, sessionKey: setup.sessionKey }),
+      ).toBeUndefined();
+    } finally {
+      pending.cancel();
+      vi.useRealTimers();
+      await actor.close();
+    }
+  },
+);

@@ -3,6 +3,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { logVerbose } from "../../globals.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import {
   getReplyPayloadMetadata,
   type ReplyPayload,
@@ -19,6 +20,7 @@ export function captureSessionWriterDeliveryRead(
   }
   const sessionKey = target.sessionKey;
   return () => {
+    source.admissionSignal?.throwIfAborted();
     if ("kind" in source) {
       source.assertCurrent();
       return undefined;
@@ -74,7 +76,8 @@ function isAuthorityCurrent(
     // A queued final owns transport custody after execution cleanup. Keep the
     // exact task/outcome and session fence, not the now-retired input claim.
     return !claim || Boolean(getOwedHarnessCompletionTask(claim, current));
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return false;
   }
 }

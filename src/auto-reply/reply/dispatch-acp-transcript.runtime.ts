@@ -3,7 +3,8 @@ import { resolveAcpSessionCwd } from "@openclaw/acp-core/runtime/session-identif
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { persistAcpTurnTranscript } from "../../agents/command/transcript-persistence.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,7 +35,12 @@ export async function persistAcpDispatchTranscript(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: sessionAgentId,
   });
-  const sessionEntry = loadSessionEntryReadOnly({
+  const incognito = captureIncognitoSessionBinding({
+    agentId: sessionAgentId,
+    storePath,
+    sessionKey: params.sessionKey,
+  });
+  const sessionEntry = await readSessionEntryReadOnlyInWorker({
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     storePath,
@@ -47,6 +53,8 @@ export async function persistAcpDispatchTranscript(params: {
     throw new Error("ACP transcript session changed before the turn could be persisted.");
   }
 
+  incognito?.admissionSignal?.throwIfAborted();
+  incognito?.actor.assertReadable();
   const result = await persistAcpTurnTranscript({
     body: promptText,
     transcriptBody: promptText,

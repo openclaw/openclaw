@@ -13,6 +13,18 @@ import {
 } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
+type StoredModelEntry =
+  | SessionEntry
+  | Pick<
+      SessionEntry,
+      | "modelOverrideSource"
+      | "modelOverride"
+      | "providerOverride"
+      | "modelOverrideRouteResolution"
+      | "modelOverrideFallbackOriginProvider"
+      | "modelOverrideFallbackOriginModel"
+    >;
+
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
   provider?: string;
@@ -23,7 +35,7 @@ export type StoredModelOverride = {
 
 function resolveStoredOverrideFromEntry(
   params: {
-    entry?: SessionEntry;
+    entry?: StoredModelEntry;
     defaultProvider: string;
     source: StoredModelOverride["source"];
     allowPluginNormalization?: boolean;
@@ -58,7 +70,7 @@ function resolveStoredOverrideFromEntry(
 /** Resolves only the current session's persisted model override. */
 export function resolveDirectStoredModelOverride(
   params: {
-    sessionEntry?: SessionEntry;
+    sessionEntry?: StoredModelEntry;
     defaultProvider: string;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
@@ -89,8 +101,9 @@ function resolveParentSessionKeyCandidate(params: {
 
 /** Keep prepared host metadata outside the published command resolver contract. */
 export function resolveStoredModelOverride(params: {
-  loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
-  sessionEntry?: SessionEntry;
+  /** Null records selected absence; undefined permits the supplied working-set fallback. */
+  loadSessionEntry?: (sessionKey: string) => StoredModelEntry | null | undefined;
+  sessionEntry?: StoredModelEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -123,7 +136,9 @@ export function resolveStoredModelOverrideCore(
   if (!parentKey) {
     return null;
   }
-  const parentEntry = params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey];
+  const selectedParent = params.loadSessionEntry?.(parentKey);
+  const parentEntry =
+    selectedParent === null ? undefined : (selectedParent ?? params.sessionStore?.[parentKey]);
   if (hasSessionActiveAutoModelFallback(parentEntry)) {
     return null;
   }

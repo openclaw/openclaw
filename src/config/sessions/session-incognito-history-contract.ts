@@ -79,6 +79,9 @@ export type IncognitoHistoryTarget = {
   allowMissing?: true;
 };
 
+export type IncognitoCompletionSourceTarget = IncognitoHistoryTarget &
+  ({ claim: HarnessCompletionRecovery } | { entryId: string });
+
 export type IncognitoContextReadResult<Value> =
   | { ok: true; value: Value }
   | { ok: false; message: string };
@@ -94,7 +97,7 @@ type Reads = {
     output: HarnessCompletionSourceSnapshot;
   };
   "completion-source.open": {
-    input: { sourceId: string; claim: HarnessCompletionRecovery };
+    input: { sourceId: string } & ({ claim: HarnessCompletionRecovery } | { entryId: string });
     output: void;
   };
   "completion-source.release": {

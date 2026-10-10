@@ -1984,6 +1984,33 @@ No feature flag, worker service, schema, retention, permission, content limit,
 freshness probe, or update migration is introduced. No incognito T1 retirement
 is claimed before production activation.
 
+### Incognito reply, Cron, Talk, and delivery consumers (P10, inactive)
+
+Explicit actor bindings carry reply commands, admission, parent model selection,
+progress, and delivery continuations through the existing session owner. Live
+delivery and policy guards consume bounded acknowledged facts. Heartbeat
+publication retains its exact active transcript anchor across asynchronous media
+preparation; unrelated appends do not revoke that anchor, but branch changes do.
+
+Cron keeps its private source and durable execution in separate physical readers.
+An absent selected private source never falls back to the main session's route.
+Talk keeps durable voice reservations and confirmations with the voice owner,
+while private history and transcript appends use the retained session actor.
+Conversation replies commit with their existing conversation owner before the
+optional session audit append; an audit failure never replays the reply.
+
+Restart notices preserve independently authorized explicit external delivery.
+An ended private continuation settles without creating a session or exporting its
+contents. Typed private-session failures remain distinct from ordinary optional
+history or hook failures.
+
+This composition is inactive. Production incognito acquisition and native
+selectors remain host-owned until P12, and ordinary unbound calls allocate no
+actor. The existing incognito execution owner supplies the memory backend for
+the shared session-actor contract; these consumers add no second writer, worker
+service, schema, retention rule, permission, content limit, or freshness probe.
+Update behavior is unchanged, and no incognito T1 retirement is claimed.
+
 ### Incognito command, CLI, and harness consumers (P03, inactive)
 
 Explicit actor bindings now carry command admission, CLI history and compaction,

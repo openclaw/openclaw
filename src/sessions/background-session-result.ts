@@ -12,6 +12,8 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -63,9 +65,19 @@ export async function commitBackgroundResultToSession(params: {
     return { ok: false, reason: "background session result is missing required data" };
   }
 
-  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
-    agentId: params.agentId,
-  });
+  const incognito = captureIncognitoSessionSource({ sessionKey });
+  const agentId = incognito
+    ? "kind" in incognito
+      ? incognito.agentId
+      : incognito.actor.agentId
+    : params.agentId;
+  const storePath = incognito
+    ? "kind" in incognito
+      ? incognito.path
+      : incognito.actor.path
+    : resolveSessionStorePathCore(params.config.session?.store, {
+        agentId: params.agentId,
+      });
   const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
   if (!expectedSessionId) {
     return { ok: false, reason: "background session result has an invalid expected generation" };
@@ -88,12 +100,15 @@ export async function commitBackgroundResultToSession(params: {
     },
     run: async () => {
       params.assertCurrent?.();
-      const current = loadSessionEntryReadOnly({
-        agentId: params.agentId,
+      const readScope = {
+        agentId,
         sessionKey,
         storePath,
-        readConsistency: "latest",
-      });
+        readConsistency: "latest" as const,
+      };
+      const current = incognito
+        ? await readSessionEntryReadOnlyInWorker(readScope, () => params.assertCurrent?.())
+        : loadSessionEntryReadOnly(readScope);
       if (
         current?.sessionId !== expectedSessionId ||
         normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
@@ -108,7 +123,7 @@ export async function commitBackgroundResultToSession(params: {
         return { ok: false, reason: unavailable };
       }
       const scope = {
-        agentId: params.agentId,
+        agentId,
         sessionKey,
         sessionId: expectedSessionId,
         storePath,

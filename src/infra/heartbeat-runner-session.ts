@@ -5,7 +5,14 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryInWorker,
+  readSessionEntryReadOnlyInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -102,6 +109,7 @@ export type ResolvedHeartbeatSession = {
   storePath: string;
   suppressOriginatingContext: boolean;
   entry: SessionEntry | undefined;
+  incognito?: ReturnType<typeof captureIncognitoSessionSource>;
 };
 
 export async function resolveHeartbeatSession(
@@ -112,14 +120,19 @@ export async function resolveHeartbeatSession(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedHeartbeatSession> {
   const resolved = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, forcedSessionKey, env);
+  const scope = { agentId, storePath: resolved.storePath, sessionKey: resolved.sessionKey, env };
+  const incognito = captureIncognitoSessionSource(scope);
   return {
     ...resolved,
-    entry: await readSessionEntryInWorker({
-      agentId,
-      storePath: resolved.storePath,
-      sessionKey: resolved.sessionKey,
-      env,
-    }),
+    incognito,
+    entry: incognito
+      ? await withIncognitoSessionEntry(
+          incognito,
+          resolved.sessionKey,
+          () => {},
+          async (entry) => entry,
+        )
+      : await readSessionEntryInWorker(scope),
   };
 }
 
@@ -184,14 +197,14 @@ export type HeartbeatSessionSelection = ResolvedHeartbeatSession & {
 };
 
 /** Selects the execution key and descriptive conversation for an already-resolved event queue. */
-export function resolveHeartbeatSessionSelection(
+export async function resolveHeartbeatSessionSelection(
   cfg: OpenClawConfig,
   agentId: string,
   heartbeat: HeartbeatConfig | undefined,
   session: ResolvedHeartbeatSession,
   isolated: boolean,
   env: NodeJS.ProcessEnv = process.env,
-): HeartbeatSessionSelection {
+): Promise<HeartbeatSessionSelection> {
   if (!isolated) {
     return {
       ...session,
@@ -217,12 +230,19 @@ export function resolveHeartbeatSessionSelection(
     conversationEntry:
       isolatedBaseSessionKey === session.sessionKey
         ? session.entry
-        : loadSessionEntry({
-            agentId,
-            storePath: session.storePath,
-            sessionKey: isolatedBaseSessionKey,
-            env,
-          }),
+        : session.incognito
+          ? await withIncognitoSessionEntry(
+              session.incognito,
+              isolatedBaseSessionKey,
+              () => {},
+              async (entry) => entry,
+            )
+          : loadSessionEntry({
+              agentId,
+              storePath: session.storePath,
+              sessionKey: isolatedBaseSessionKey,
+              env,
+            }),
     // Legacy isolated queues retain their route after the execution key is canonicalized.
     inspectsRunQueue: session.sessionKey !== isolatedBaseSessionKey,
   };
@@ -251,7 +271,9 @@ export async function restoreHeartbeatUpdatedAt(params: {
   if (typeof updatedAt !== "number") {
     return;
   }
-  const entry = loadSessionEntry(scope);
+  const entry = captureIncognitoSessionSource(scope)
+    ? await readSessionEntryReadOnlyInWorker(scope)
+    : loadSessionEntry(scope);
   if (!entry || entry.updatedAt === Math.max(entry.updatedAt ?? 0, updatedAt)) {
     return;
   }

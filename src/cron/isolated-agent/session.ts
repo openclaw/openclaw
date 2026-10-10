@@ -1,9 +1,11 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
+import { resolveSessionLifecycleTimestampsWithHeader } from "../../config/sessions/lifecycle-timestamps.js";
 import {
   type resolveSessionLifecycleTimestamps,
   resolveSessionWorkStartError,
@@ -22,8 +24,12 @@ import {
 } from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "chatType",
@@ -173,13 +179,115 @@ type CronSessionParams = {
    */
   exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
+  assertSourceCurrent?: () => void;
 };
+
+/** Retain the exact private creator and skill authority before preparation yields. */
+export function captureCronSessionSourceAssertion(target: {
+  sessionKey: string;
+  expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+}) {
+  const source = captureIncognitoSessionSource(target);
+  if (!source) {
+    return undefined;
+  }
+  if ("kind" in source) {
+    throw new IncognitoSessionMissingError();
+  }
+  const claim = source.actor.sessions.captureCurrent(target.sessionKey);
+  const sharing = source.actor.sessions.readSharing(target.sessionKey)?.entry;
+  if (!sharing) {
+    throw new IncognitoSessionMissingError();
+  }
+  if (
+    target.expectedGeneration &&
+    (sharing.sessionId !== target.expectedGeneration.sessionId ||
+      sharing.lifecycleRevision !== target.expectedGeneration.lifecycleRevision)
+  ) {
+    throw new Error("Cron source generation changed; prepare the run again");
+  }
+  const createdActor = source.actor.sessions.readPolicy(target.sessionKey)?.createdActor;
+  const skills = source.actor.sessions.readPolicy(target.sessionKey)?.skillLibrarySelections;
+  return () => {
+    source.admissionSignal?.throwIfAborted();
+    source.actor.assertReadable();
+    claim.assertCurrent();
+    if (
+      !isDeepStrictEqual(
+        source.actor.sessions.readPolicy(target.sessionKey)?.createdActor,
+        createdActor,
+      ) ||
+      !isDeepStrictEqual(
+        source.actor.sessions.readPolicy(target.sessionKey)?.skillLibrarySelections,
+        skills,
+      )
+    ) {
+      throw new Error("Cron source authority changed; prepare the run again");
+    }
+  };
+}
 
 export async function prepareCronSession(params: CronSessionParams) {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   const sourceSessionKey = params.sourceSessionKey?.trim();
+  const sourceKey = sourceSessionKey || params.sessionKey;
+  const incognito = captureIncognitoSessionSource({
+    sessionKey: sourceKey,
+  });
+  const assertSourceCurrent =
+    params.assertSourceCurrent ??
+    (sourceKey !== params.sessionKey
+      ? captureCronSessionSourceAssertion({ sessionKey: sourceKey })
+      : undefined);
+  assertSourceCurrent?.();
+  if (incognito) {
+    const sourceTarget = {
+      agentId: "kind" in incognito ? incognito.agentId : incognito.actor.agentId,
+      storePath: "kind" in incognito ? incognito.path : incognito.actor.path,
+    };
+    return withSessionEntryReadOnlyInWorker(
+      { ...sourceTarget, sessionKey: sourceKey },
+      () => {},
+      async (read, source) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        if (!read.value) {
+          throw new IncognitoSessionMissingError();
+        }
+        // A detached run keeps its durable execution row separate from its private source.
+        const target =
+          sourceKey === params.sessionKey
+            ? undefined
+            : await readSessionEntriesFromStoreInWorker({
+                agentId: params.agentId,
+                storePath,
+                sessionKeys: [params.sessionKey].filter((key) => !isInternalSessionEffectsKey(key)),
+              });
+        source.assertCurrent();
+        assertSourceCurrent?.();
+        return resolveCronSession({
+          ...params,
+          assertSourceCurrent,
+          sourceTarget,
+          storePath: sourceKey === params.sessionKey ? sourceTarget.storePath : storePath,
+          store: {
+            ...Object.fromEntries(
+              target?.entries.map(({ sessionKey, entry }) => [sessionKey, entry]) ?? [],
+            ),
+            [sourceKey]: read.value,
+          },
+          // Memory-only creation publishes the start timestamp with its entry.
+          lifecycleTimestamps: resolveSessionLifecycleTimestampsWithHeader({
+            entry: read.value,
+            readHeader: () => undefined,
+          }),
+        });
+      },
+    );
+  }
   const prepared = await readSessionEntriesFromStoreInWorker({
     agentId: params.agentId,
     storePath,
@@ -202,6 +310,7 @@ export function resolveCronSession(
     store: Record<string, SessionEntry>;
     lifecycleTimestamps: ReturnType<typeof resolveSessionLifecycleTimestamps>;
     storePath?: string;
+    sourceTarget?: { agentId: string; storePath: string };
   },
 ) {
   const sessionCfg = params.cfg.session;
@@ -313,11 +422,16 @@ export function resolveCronSession(
   if (sourceSessionDiffers) {
     delete sessionEntry.usageFamilyKey;
     delete sessionEntry.usageFamilySessionIds;
+    if (!isIncognitoSessionKey(params.sessionKey)) {
+      delete sessionEntry.incognito;
+    }
   }
   if (targetEntry) {
     copySessionFields(sessionEntry, targetEntry, ["usageFamilyKey", "usageFamilySessionIds"]);
   }
   return {
+    ...(params.assertSourceCurrent ? { assertSourceCurrent: params.assertSourceCurrent } : {}),
+    ...(params.sourceTarget ? { sourceTarget: params.sourceTarget } : {}),
     storePath,
     store,
     sessionEntry: preserveCreationStamp(

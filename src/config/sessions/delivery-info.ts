@@ -6,6 +6,7 @@ import {
 } from "../../gateway/session-store-key.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { hasDeliveryTargetFields } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
@@ -18,6 +19,10 @@ import {
 } from "./session-accessor.js";
 import type { SessionEntryReadView } from "./session-accessor.types.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
+import {
+  captureIncognitoSessionSource,
+  type IncognitoSessionBinding,
+} from "./session-incognito-binding.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -39,6 +44,14 @@ export function readExactSessionDeliveryContext(params: {
   }
   try {
     const { agentId, canonicalKey } = resolveSessionStoreIdentity({ cfg: params.cfg, sessionKey });
+    const source = captureIncognitoSessionSource({ agentId, sessionKey: canonicalKey });
+    if (source) {
+      const entry = "kind" in source ? undefined : source.actor.sessions.readDelivery(canonicalKey);
+      if (params.sessionId && entry?.sessionId !== params.sessionId) {
+        return undefined;
+      }
+      return deliveryContextFromSession(entry);
+    }
     const entry = loadExactSessionEntryReadOnly({
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
       sessionKey: canonicalKey,
@@ -48,7 +61,8 @@ export function readExactSessionDeliveryContext(params: {
       return undefined;
     }
     return deliveryContextFromSession(entry);
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     // A missing or unreadable store leaves the caller's existing inferred route intact.
     return undefined;
   }
@@ -138,6 +152,22 @@ export function extractDeliveryInfoBatch(
       return [];
     }
     try {
+      const source = captureIncognitoSessionSource({ sessionKey });
+      if (source) {
+        if (!("kind" in source)) {
+          const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
+            cfg,
+            sessionKey: baseSessionKey,
+          });
+          const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
+          const store = actorDeliveryStore(source);
+          installDeliveryInfo(results[index]!, sessionKey, baseSessionKey, {
+            entry: findSessionEntryInStore(store, [sessionKey, canonicalKey]),
+            baseEntry: findSessionEntryInStore(store, [baseSessionKey, canonicalBaseKey]),
+          });
+        }
+        return [];
+      }
       const lookup = prepareDeliveryLookup(sessionKey, baseSessionKey);
       // Incognito keyed reads retain their existing process-owned handle lifetime.
       const readIndexes = isIncognitoSessionKey(sessionKey)
@@ -150,7 +180,8 @@ export function extractDeliveryInfoBatch(
             return reads.length - 1;
           });
       return [{ index, sessionKey, baseSessionKey, lookup, readIndexes }];
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       return [];
     }
   });
@@ -217,23 +248,54 @@ export function extractDeliveryInfoBatch(
           : openSessionEntryReadView({ storePath, projection: "list" });
         return { get: store.get, normalizedIndex };
       });
-      let context = deliveryContextFromSession(selected.entry);
-      if (!hasDeliveryTargetFields(context) && baseSessionKey !== sessionKey) {
-        context = deliveryContextFromSession(selected.baseEntry);
-      }
-      if (hasDeliveryTargetFields(context)) {
-        results[index]!.deliveryContext = {
-          channel: context.channel,
-          to: context.to,
-          accountId: context.accountId,
-          threadId: context.threadId,
-        };
-      }
-    } catch {
+      installDeliveryInfo(results[index]!, sessionKey, baseSessionKey, selected);
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       // Delivery recovery remains best-effort for each logical lookup.
     }
   }
   return results;
+}
+
+function installDeliveryInfo(
+  result: DeliveryInfo,
+  sessionKey: string,
+  baseSessionKey: string,
+  selected: { entry: SessionEntry | undefined; baseEntry: SessionEntry | undefined },
+) {
+  let context = deliveryContextFromSession(selected.entry);
+  if (!hasDeliveryTargetFields(context) && baseSessionKey !== sessionKey) {
+    context = deliveryContextFromSession(selected.baseEntry);
+  }
+  if (hasDeliveryTargetFields(context)) {
+    result.deliveryContext = {
+      channel: context.channel,
+      to: context.to,
+      accountId: context.accountId,
+      threadId: context.threadId,
+    };
+  }
+}
+
+/** Delivery aliases consume only the actor's acknowledged route facts. */
+function actorDeliveryStore(binding: IncognitoSessionBinding): DeliveryStoreRead {
+  const { actor, admissionSignal } = binding;
+  const get = (key: string) => {
+    admissionSignal?.throwIfAborted();
+    return actor.sessions.readDelivery(key);
+  };
+  return {
+    get,
+    normalizedIndex: () =>
+      buildFreshestSessionEntryIndex({
+        get,
+        entries: () =>
+          actor.sessions.deadlines().flatMap(({ sessionKey }) => {
+            const entry = get(sessionKey);
+            return entry ? [{ sessionKey, entry }] : [];
+          }),
+      }),
+  };
 }
 
 function deliveryLookupExactKeys(keys: readonly string[]): string[] {

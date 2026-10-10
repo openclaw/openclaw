@@ -11,6 +11,7 @@ import {
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
@@ -229,6 +230,37 @@ async function readSessionDataFromIdentity(params: {
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+  const source = captureIncognitoSessionSource(params);
+  if (!source) {
+    return buildExportSessionReplyFromSource(params);
+  }
+  if ("kind" in source) {
+    return { text: `❌ Session not found: ${params.sessionKey}` };
+  }
+  return source.actor.sessions.withSharedState(async () => {
+    const claim = source.actor.sessions.captureCurrent(params.sessionKey);
+    const assertCurrent = () => {
+      params.commandInvocationSignal?.throwIfAborted();
+      params.opts?.abortSignal?.throwIfAborted();
+      source.admissionSignal?.throwIfAborted();
+      params.command.assertOwnerCurrent?.();
+      source.actor.assertReadable();
+      claim.assertCurrent();
+    };
+    assertCurrent();
+    const result = await buildExportSessionReplyFromSource(
+      { ...params, storePath: source.actor.path, agentId: source.actor.agentId },
+      assertCurrent,
+    );
+    assertCurrent();
+    return result;
+  });
+}
+
+async function buildExportSessionReplyFromSource(
+  params: HandleCommandsParams,
+  assertCurrent?: () => void,
+): Promise<ReplyPayload> {
   const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
     "export-session",
     "export",
@@ -236,7 +268,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (args.error) {
     return { text: args.error };
   }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
+  const sessionTarget = await resolveExportCommandSessionTarget(params);
+  assertCurrent?.();
   if ("text" in sessionTarget) {
     return sessionTarget;
   }
@@ -251,15 +284,26 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     storePath: sessionTarget.storePath,
   });
 
+  assertCurrent?.();
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
     ...params,
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = hasPersistedAcpSession({
-    sessionKey: params.sessionKey,
-    entry,
-  });
+  assertCurrent?.();
+  const hasStoredAcpSession = assertCurrent
+    ? Boolean(
+        await (
+          await import("../../acp/runtime/session-meta-read.js")
+        ).readAcpSessionMetaAsync({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          assertCurrent,
+        }),
+      )
+    : hasPersistedAcpSession({ sessionKey: params.sessionKey, entry });
+  assertCurrent?.();
   const backendWarning = isBackendDelegatedSession(entry, entries, hasStoredAcpSession)
     ? BACKEND_DELEGATED_WARNING
     : undefined;
@@ -278,6 +322,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   };
 
   const html = await generateHtml(sessionData);
+  assertCurrent?.();
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
@@ -288,7 +333,9 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       requestedPath: args.outputPath,
       defaultFileName,
       contents: html,
+      ...(assertCurrent ? { assertBeforeMutation: assertCurrent } : {}),
     });
+    assertCurrent?.();
     displayPath = written.displayPath;
   } catch (error) {
     if (error instanceof FsSafeError && error.category === "policy") {

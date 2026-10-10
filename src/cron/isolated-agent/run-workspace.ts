@@ -32,6 +32,7 @@ export async function prepareCronSessionWorkspace(params: {
   const abortSignal = params.input.abortSignal ?? params.input.signal;
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
+    params.cronSession.assertSourceCurrent?.();
     if (!sessionWorkAdmission.isActive()) {
       throw new CronSessionLifecycleClaimError(sessionKey);
     }

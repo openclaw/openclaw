@@ -12,12 +12,14 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { captureSessionEntryReadScope } from "../../config/sessions/session-entry-read-request.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -42,6 +44,7 @@ export function createShouldEmitVerboseProgress(params: {
   fallbackLevel: string;
   assertCurrent?: () => void;
 }) {
+  const source = captureIncognitoSessionSource(params);
   let runVerbosity: ReplyRunVerbosity | undefined;
   const scope =
     params.sessionKey && params.storePath
@@ -56,26 +59,43 @@ export function createShouldEmitVerboseProgress(params: {
   const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
-        const entry = loadSessionEntryReadOnly({
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-          clone: false,
-        });
+        const entry = source
+          ? "kind" in source
+            ? undefined
+            : source.actor.sessions.readSteering(params.sessionKey)
+          : loadSessionEntryReadOnly({
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              storePath: params.storePath,
+              sessionKey: params.sessionKey,
+              readConsistency: "latest",
+              clone: false,
+            });
         return normalizeVerboseLevel(entry?.verboseLevel ?? "");
-      } catch {
+      } catch (error) {
+        rethrowIncognitoSessionError(error);
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
       }
     }
     return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
   };
-  const resolveLevel = (explicit: () => VerboseLevel | undefined) =>
-    runVerbosity?.verboseLevelOverride ??
-    explicit() ??
-    runVerbosity?.resolvedVerboseLevel ??
-    normalizeVerboseLevel(params.fallbackLevel) ??
-    "off";
+  const resolveLevel = (explicit: () => VerboseLevel | undefined) => {
+    source?.admissionSignal?.throwIfAborted();
+    if (source && "kind" in source) {
+      source.assertCurrent();
+      return "off";
+    }
+    source?.actor.assertReadable();
+    if (source && params.sessionKey && !source.actor.sessions.readSteering(params.sessionKey)) {
+      return "off";
+    }
+    return (
+      runVerbosity?.verboseLevelOverride ??
+      explicit() ??
+      runVerbosity?.resolvedVerboseLevel ??
+      normalizeVerboseLevel(params.fallbackLevel) ??
+      "off"
+    );
+  };
   const resolveLevelAsync = async () => {
     params.assertCurrent?.();
     let explicit = normalizeVerboseLevel(params.initialExplicitLevel ?? "");
@@ -83,7 +103,8 @@ export function createShouldEmitVerboseProgress(params: {
       try {
         const entry = await readSessionEntryReadOnlyInWorker(scope, params.assertCurrent);
         explicit = normalizeVerboseLevel(entry?.verboseLevel ?? "");
-      } catch {
+      } catch (error) {
+        rethrowIncognitoSessionError(error);
         // Preserve the dispatch fallback on read failure, never on lost caller authority.
       }
     }
@@ -207,13 +228,13 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
           fallbackAgentId: params.sessionAgentId,
         });
         const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-        return loadSessionEntryReadOnly({
-          agentId,
-          storePath,
-          sessionKey,
-          readConsistency: "latest",
-          clone: false,
-        });
+        const target = { agentId, storePath, sessionKey };
+        const source = captureIncognitoSessionSource(target);
+        return source
+          ? "kind" in source
+            ? null
+            : (source.actor.sessions.readModelSelection(sessionKey) ?? null)
+          : loadSessionEntryReadOnly({ ...target, readConsistency: "latest", clone: false });
       },
       sessionEntry: params.entry,
       sessionStore: params.sessionStore,
@@ -263,6 +284,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     }
     return resolveCandidateDefault(defaultModelRef);
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     logVerbose(
       `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
     );

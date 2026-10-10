@@ -8,7 +8,9 @@ import {
   resolveSessionTranscriptDatabasePath,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
@@ -43,7 +45,17 @@ export function bindUserTurnTranscriptAnnotation(params: {
   let admission = structuredClone(receipt);
   let admittedMessage = structuredClone(message);
   const target = { ...params.target };
-  const selected = loadSessionEntry({ ...target, readConsistency: "latest" });
+  const incognito = captureIncognitoSessionBinding(target);
+  const claim = incognito?.actor.sessions.captureCurrent(target.sessionKey);
+  const readEntry = () => {
+    if (incognito) {
+      incognito.admissionSignal?.throwIfAborted();
+      claim?.assertCurrent();
+      return incognito.actor.sessions.readSharing(target.sessionKey)?.entry;
+    }
+    return loadSessionEntry({ ...target, readConsistency: "latest" });
+  };
+  const selected = readEntry();
   const fence = getOwnedSessionTranscriptWriterFence({ sessionTarget: target });
   if (
     target.sessionId !== admission.sessionId ||
@@ -79,7 +91,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
   };
   const assertCurrent = () => {
     assertLive();
-    const current = loadSessionEntry({ ...target, readConsistency: "latest" });
+    const current = readEntry();
     const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
     if (
       !sessionMatchesExpectedTranscriptTurn(current ? { entry: current } : undefined, {
@@ -92,13 +104,25 @@ export function bindUserTurnTranscriptAnnotation(params: {
       (fence?.expectedLifecycleRevision !== undefined &&
         current?.lifecycleRevision !== fence.expectedLifecycleRevision) ||
       current?.activeWriterRunId !== selected.activeWriterRunId ||
-      sessionTranscriptIndexNeedsReconcile(
-        openOpenClawAgentDatabase({ agentId: admission.agentId, path: admission.storePath }).db,
-        admission.sessionId,
-      ) ||
-      !isDeepStrictEqual(readActiveTranscriptEntryAnchor(admission), anchor)
+      (!incognito &&
+        (sessionTranscriptIndexNeedsReconcile(
+          openOpenClawAgentDatabase({ agentId: admission.agentId, path: admission.storePath }).db,
+          admission.sessionId,
+        ) ||
+          !isDeepStrictEqual(readActiveTranscriptEntryAnchor(admission), anchor)))
     ) {
       throw new Error("current user admission is no longer available for native annotation");
+    }
+  };
+  const assertActiveAdmission = async () => {
+    assertCurrent();
+    if (incognito) {
+      const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
+      const active = await readActiveTranscriptEntryAnchorAsync(admission, params.abortSignal);
+      assertCurrent();
+      if (!isDeepStrictEqual(active, anchor)) {
+        throw new Error("current user admission is no longer available for native annotation");
+      }
     }
   };
   return async (annotation) => {
@@ -118,7 +142,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
     ) {
       throw new Error("native prompt annotation requires complete provenance");
     }
-    assertCurrent();
+    await assertActiveAdmission();
     // This is the existing user-source fingerprint contract, including upstream prompt bytes.
     const fingerprint = sha256HexPrefixCore(
       JSON.stringify({
@@ -176,14 +200,14 @@ export function bindUserTurnTranscriptAnnotation(params: {
       owner.refresh({ ...admission }, rewritten.message);
       await waitForSessionTranscriptProjection(admission, params.abortSignal);
     }
-    assertCurrent();
+    await assertActiveAdmission();
     if (rewritten) {
       await publishTranscriptUpdate(admission, {
         message: rewritten.message,
         messageId: admission.entryId,
         messageSeq: admission.activeMessagePosition + 1,
       });
-      assertCurrent();
+      await assertActiveAdmission();
     }
   };
 }

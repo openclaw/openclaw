@@ -27,6 +27,7 @@ import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
+import { resolveActorSelectedNoticeOrigin } from "../update-run-notice-target.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -248,7 +249,9 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     params.requestParams,
   );
   // Restart delivery uses generic :thread: parsing plus plugin-owned session grammars.
-  const sessionDelivery = extractDeliveryInfo(sessionKey);
+  const sessionDelivery = resolveActorSelectedNoticeOrigin(sessionKey)
+    ? undefined
+    : extractDeliveryInfo(sessionKey);
   const restartRequirement = resolveConfigRestartRequirement({
     changedPaths: params.changedPaths,
     previousConfig: params.previousConfig,
@@ -259,8 +262,8 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     status: "ok",
     ts: Date.now(),
     sessionKey,
-    deliveryContext: deliveryContext ?? sessionDelivery.deliveryContext,
-    threadId: threadId ?? sessionDelivery.threadId,
+    deliveryContext: deliveryContext ?? sessionDelivery?.deliveryContext,
+    threadId: threadId ?? sessionDelivery?.threadId,
     message: note ?? null,
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {

@@ -5,10 +5,13 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { IncognitoSessionEndedError } from "../../state/incognito-session-error.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext } from "./commands-context.js";
+import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -771,4 +774,28 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
     expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
+});
+
+it("does not turn a lost private reset transcript into empty hook history", async () => {
+  const error = new IncognitoSessionEndedError();
+  const read = vi.spyOn(sessionAccessor, "loadTranscriptEvents").mockRejectedValueOnce(error);
+  try {
+    await expect(
+      readBeforeResetMessages({
+        sessionId: "private",
+        sessionKey: "agent:main:dashboard:incognito-private",
+        storePath: "/tmp/private.sqlite",
+      }),
+    ).rejects.toBe(error);
+    read.mockRejectedValueOnce(new Error("ordinary read failure"));
+    await expect(
+      readBeforeResetMessages({
+        sessionId: "durable",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/durable.sqlite",
+      }),
+    ).resolves.toEqual([]);
+  } finally {
+    read.mockRestore();
+  }
 });

@@ -1,24 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearBootstrapSnapshot, getOrLoadBootstrapFiles } from "../../agents/bootstrap-cache.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { commitBackgroundResultToSession } from "../../sessions/background-session-result.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   loadSessionEntryMock,
   patchSessionEntryMock,
   preflightCronModelProviderMock,
+  readSessionMessagesAsyncMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
 } from "./run.test-harness.js";
@@ -183,6 +189,151 @@ describe("cron session preparation", () => {
     });
     expect(prepared?.isNewSession).toBe(true);
     expect(prepared?.sessionEntry.sessionId).not.toBe(source.sessionId);
+  });
+
+  it("keeps cross-agent private context on its owner and rejects pending source revocation", async () => {
+    const transcriptReaders = await vi.importActual<
+      typeof import("../../gateway/session-transcript-readers.js")
+    >("../../gateway/session-transcript-readers.js");
+    const state = await createOpenClawTestState({ scenario: "minimal" });
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor(state.env, authority, "source");
+    const sourceKey = "agent:source:dashboard:incognito-scheduled-source";
+    const entry: SessionEntry = {
+      sessionId: "private-scheduled-source",
+      lifecycleRevision: "private-scheduled-generation",
+      updatedAt: Date.now(),
+      incognito: true,
+      createdActor: { type: "human", source: "profile", id: "original-owner" },
+      skillLibrarySelections: [],
+    };
+    try {
+      await actor.sessions.create(authority, { sessionKey: sourceKey, entry });
+      await withIncognitoSessionActor(actor, async () => {
+        resetRunCronIsolatedAgentTurnHarness();
+        resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+        loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+        patchSessionEntryMock.mockImplementation(actualAccessor.patchSessionEntryCore);
+        readSessionMessagesAsyncMock.mockImplementation(transcriptReaders.readSessionMessagesAsync);
+        const committed = await commitBackgroundResultToSession({
+          agentId: "main",
+          sessionKey: sourceKey,
+          expectedGeneration: {
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+          },
+          text: "private cross-agent conversation context",
+          idempotencyKey: "cross-agent-source-context",
+          provenance: { kind: "cron", jobId: "source-job", runId: "source-run" },
+          config: {},
+        });
+        expect(committed.ok).toBe(true);
+        const prepared = await prepareCronRunContext({
+          input: makeIsolatedAgentParamsFixture({
+            agentId: "main",
+            sessionKey: "cron:test-job",
+            job: makeIsolatedAgentJobFixture({
+              sessionTarget: "current",
+              sessionKey: sourceKey,
+              delivery: { mode: "none" },
+            }),
+          }),
+          isFastTestEnv: true,
+          onLifecycleInterrupt() {},
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("Cross-agent Cron preparation failed");
+        }
+        try {
+          await using _ = prepared.context.preparedModelRuntimeLease;
+          expect(prepared.context.agentId).toBe("main");
+          expect(prepared.context.cronSession.sourceTarget).toEqual({
+            agentId: "source",
+            storePath: actor.path,
+          });
+          expect(prepared.context.cronSession.storePath).not.toBe(actor.path);
+          expect(prepared.context.commandBody).toContain(
+            "private cross-agent conversation context",
+          );
+          const stored = actualAccessor.loadSessionEntry({
+            agentId: "main",
+            storePath: prepared.context.cronSession.storePath,
+            sessionKey: prepared.context.agentSessionKey,
+          });
+          expect(stored).toMatchObject({ createdVia: "cron" });
+          expect(stored?.incognito).toBeUndefined();
+        } finally {
+          prepared.context.sessionWorkAdmission.release();
+          await prepared.context.workspaceLease?.release();
+        }
+        for (const sessionTarget of ["current", "isolated"] as const) {
+          resetRunCronIsolatedAgentTurnHarness();
+          resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+          loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+          const preflightStarted = createDeferred();
+          const releasePreflight = createDeferred();
+          preflightCronModelProviderMock.mockImplementationOnce(async () => {
+            preflightStarted.resolve();
+            await releasePreflight.promise;
+            return { status: "available" };
+          });
+          const preparation = prepareCronRunContext({
+            input: makeIsolatedAgentParamsFixture({
+              agentId: "main",
+              sessionKey: "cron:test-job",
+              job: makeIsolatedAgentJobFixture({
+                sessionTarget,
+                sessionKey: sourceKey,
+                sourceConversation: {
+                  sessionKey: sourceKey,
+                  sessionId: entry.sessionId,
+                  lifecycleRevision: entry.lifecycleRevision,
+                },
+                delivery: { mode: "none" },
+              }),
+            }),
+            isFastTestEnv: true,
+            onLifecycleInterrupt() {},
+          });
+          await Promise.race([
+            preflightStarted.promise,
+            preparation.then(() => {
+              throw new Error("Cron preparation finished before model preflight");
+            }),
+          ]);
+          try {
+            await actualAccessor.replaceSessionEntry(
+              { agentId: "source", storePath: actor.path, sessionKey: sourceKey },
+              sessionTarget === "current"
+                ? { ...entry, createdActor: { type: "system" } }
+                : {
+                    ...entry,
+                    skillLibrarySelections: [
+                      {
+                        skillId: "00000000-0000-0000-0000-000000000001",
+                        revision: "a".repeat(64),
+                        name: "changed-skill",
+                        ownerProfileId: null,
+                      },
+                    ],
+                  },
+            );
+          } finally {
+            releasePreflight.resolve();
+          }
+          await expect(preparation).rejects.toThrow("Cron source authority changed");
+          expect(patchSessionEntryMock).not.toHaveBeenCalled();
+          await actualAccessor.replaceSessionEntry(
+            { agentId: "source", storePath: actor.path, sessionKey: sourceKey },
+            entry,
+          );
+        }
+      });
+    } finally {
+      await actor.close();
+      await state.cleanup();
+    }
   });
 
   it("preserves bootstrap ownership when rollover admission is rejected", async () => {

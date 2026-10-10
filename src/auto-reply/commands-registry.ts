@@ -10,6 +10,7 @@ import {
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -408,11 +409,17 @@ export function resolveCommandArgMenu(
   if (command.key === "verbose" && cfg && params.session) {
     // Native menus bypass directive dispatch; keep its status tied to the same target session.
     const { agentId, sessionKey } = params.session;
-    const entry = loadSessionEntryReadOnly({
+    const target = {
       agentId,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
       sessionKey,
-    });
+    };
+    const source = captureIncognitoSessionSource(target);
+    const entry = source
+      ? "kind" in source
+        ? undefined
+        : source.actor.sessions.readSteering(sessionKey)
+      : loadSessionEntryReadOnly(target);
     const level = entry?.verboseLevel ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
     menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
   }

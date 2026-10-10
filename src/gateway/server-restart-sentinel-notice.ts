@@ -69,6 +69,7 @@ type GatewayLifecycleNotice = RestartSentinelNoticeRoute & {
   cfg: OpenClawConfig;
   message: string;
   sessionKey?: string;
+  assertCurrent?: () => void;
 };
 
 /** Resolve once before an update can replace lazily loaded channel modules. */
@@ -161,12 +162,15 @@ const activeRestartNoticeEnqueues = new Map<string, Promise<RestartSentinelNotic
 
 export async function enqueueRestartSentinelNotice(
   params: GatewayLifecycleNotice & {
-    sessionKey: string;
+    sessionKey?: string;
     revision: number;
     deliveryIntentId?: string;
   },
   context = captureDeliveryQueueStateContext(),
 ): Promise<RestartSentinelNoticeEnqueueResult> {
+  if (!params.deliveryIntentId && !params.sessionKey) {
+    throw new Error("A detached lifecycle notice requires an explicit delivery intent");
+  }
   return await enqueueGatewayLifecycleNotice(
     params,
     params.deliveryIntentId ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
@@ -229,6 +233,7 @@ async function enqueueRestartSentinelNoticeClaimed(
   preparationOwner: StableDeliveryPreparationOwner,
   context: DeliveryQueueStateContext,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
+  params.assertCurrent?.();
   const delivery = {
     cfg: params.cfg,
     channel: params.channel,
@@ -247,9 +252,13 @@ async function enqueueRestartSentinelNoticeClaimed(
     deliveryQueueStateDir: context.stateDir,
   };
   const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
-    onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
+    onBeforeFirstModifier: () => {
+      params.assertCurrent?.();
+      return preparationOwner.beforeFirstModifier();
+    },
   });
   await preparationOwner.markPrepared();
+  params.assertCurrent?.();
   const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
     getStablePreparation: preparationOwner.current,
   });
@@ -264,12 +273,21 @@ async function drainFailedRestartSentinelNotice(
   params: {
     cfg: OpenClawConfig;
     queueId: string;
-    sessionKey: string;
+    sessionKey?: string;
     summary: string;
+    assertCurrent?: () => void;
   },
   context: DeliveryQueueStateContext,
 ): Promise<void> {
+  const deliver: typeof deliverOutboundPayloadsInternal = (input) => {
+    params.assertCurrent?.();
+    return deliverOutboundPayloadsInternal({
+      ...input,
+      assertDirectAdapterHandoff: params.assertCurrent,
+    });
+  };
   for (let cycle = 1; cycle <= RESTART_NOTICE_RECOVERY_MAX_CYCLES; cycle += 1) {
+    params.assertCurrent?.();
     const beforeDrain = await loadPendingDelivery(params.queueId, undefined, context).catch(
       (error: unknown) => {
         log.warn(`${params.summary}: restart notice recovery reload failed: ${String(error)}`, {
@@ -297,7 +315,7 @@ async function drainFailedRestartSentinelNotice(
         logLabel: `${params.summary}: restart notice recovery`,
         cfg: params.cfg,
         log,
-        deliver: deliverOutboundPayloadsInternal,
+        deliver,
         selectEntry: (entry) => ({
           match: entry.id === params.queueId,
           // The caller already waits between attempts. Recovery still reconciles
@@ -305,7 +323,7 @@ async function drainFailedRestartSentinelNotice(
           bypassBackoff: true,
         }),
       },
-      deliverOutboundPayloadsInternal,
+      deliver,
       context,
     ).catch((error: unknown) => {
       log.warn(`${params.summary}: restart notice recovery drain failed: ${String(error)}`, {
@@ -339,13 +357,14 @@ async function drainFailedRestartSentinelNotice(
 export async function deliverRestartSentinelNotice(
   params: GatewayLifecycleNotice & {
     deps: CliDeps;
-    sessionKey: string;
+    sessionKey?: string;
     summary: string;
     queueId: string;
   },
   context = captureDeliveryQueueStateContext(),
 ): Promise<boolean> {
   let delivered = false;
+  params.assertCurrent?.();
   const claim = await deliverGatewayLifecycleNoticeAttempt(
     params,
     () => {
@@ -446,6 +465,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
           deliveryQueueOwner: owner,
           deferCommitHooks: true,
           onMessageSentEvent: (event) => messageSentEvents.push(event),
+          assertDirectAdapterHandoff: params.assertCurrent,
         },
         undefined,
         context,

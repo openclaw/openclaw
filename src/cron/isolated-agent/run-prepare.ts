@@ -75,7 +75,7 @@ import {
   resolveThinkingSelection,
 } from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { prepareCronSession } from "./session.js";
+import { captureCronSessionSourceAssertion, prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = Extract<
   Awaited<ReturnType<typeof prepareCronRunContext>>,
@@ -101,6 +101,17 @@ export async function prepareCronRunContext(params: {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
+  const privateSourceKey =
+    input.job.sessionTarget === "current"
+      ? input.job.sessionKey
+      : input.job.sourceConversation?.sessionKey;
+  const assertSourceCurrent = privateSourceKey
+    ? captureCronSessionSourceAssertion({
+        sessionKey: privateSourceKey,
+        expectedGeneration:
+          input.job.sessionTarget === "isolated" ? input.job.sourceConversation : undefined,
+      })
+    : undefined;
   await using runtimeResources = new AsyncDisposableStack();
   let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
@@ -124,6 +135,7 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
+  assertSourceCurrent?.();
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -189,6 +201,7 @@ export async function prepareCronRunContext(params: {
       forceNew: usesDetachedRunSession,
       exactRunSession: usesExactRunSession,
       hookExternalContentSource,
+      assertSourceCurrent,
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     const completionSource =
@@ -222,7 +235,6 @@ export async function prepareCronRunContext(params: {
       signal: input.abortSignal ?? input.signal,
       onInterrupt: params.onLifecycleInterrupt,
     });
-
     clearBootstrapSnapshotOnSessionRollover({
       sessionKey: agentSessionKey,
       previousSessionId: cronSession.previousSessionId,
@@ -232,6 +244,7 @@ export async function prepareCronRunContext(params: {
     let workspaceLease: CronWorkspaceLease | undefined;
     let workspaceLeaseTransferred = false;
     try {
+      cronSession.assertSourceCurrent?.();
       const selectedWorkspace = await prepareCronSessionWorkspace({
         cfg: runtimeCfg,
         agentId,
@@ -255,6 +268,13 @@ export async function prepareCronRunContext(params: {
       }) => {
         const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
           await loadSessionAccessorRuntime();
+        const assertCurrent = cronSession.assertSourceCurrent
+          ? () => {
+              cronSession.assertSourceCurrent?.();
+              assertCommitAllowed?.();
+            }
+          : assertCommitAllowed;
+        assertCurrent?.();
         if (resetBoundary) {
           await applySessionEntryLifecycleMutation({
             activeSessionKey: sessionKey,
@@ -268,6 +288,7 @@ export async function prepareCronRunContext(params: {
               },
             ],
             skipMaintenance: true,
+            beforeCommitInTransaction: assertCurrent,
           });
           return;
         }
@@ -278,7 +299,7 @@ export async function prepareCronRunContext(params: {
           {
             fallbackEntry,
             replaceEntry: true,
-            workerGuard: { assertCurrent: assertCommitAllowed },
+            workerGuard: { assertCurrent },
           },
         );
       };
@@ -314,6 +335,7 @@ export async function prepareCronRunContext(params: {
         agentDir,
         workspaceDir,
       });
+      cronSession.assertSourceCurrent?.();
       if (!resolvedModelSelection.ok) {
         return {
           ok: false as const,
@@ -348,6 +370,7 @@ export async function prepareCronRunContext(params: {
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
       });
+      cronSession.assertSourceCurrent?.();
       if (!preflight.ok) {
         logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
         return {
@@ -383,6 +406,7 @@ export async function prepareCronRunContext(params: {
         hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
         sessionThinking: cronSession.sessionEntry.thinkingLevel,
       });
+      cronSession.assertSourceCurrent?.();
       const {
         requestedLevel: requestedThinkLevel,
         level: fallbackThinkLevel,
@@ -430,6 +454,7 @@ export async function prepareCronRunContext(params: {
           abortSignal: input.abortSignal ?? input.signal,
         },
       );
+      cronSession.assertSourceCurrent?.();
       const admittedConfig = preparedModelRuntimeLease.snapshot.config;
 
       const explicitTimeoutSeconds =
@@ -480,10 +505,10 @@ export async function prepareCronRunContext(params: {
       const currentConversationContext =
         input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
           ? await buildCurrentConversationContextBlock({
-              agentId,
+              agentId: cronSession.sourceTarget?.agentId ?? agentId,
               sourceSessionEntry: sourceEntry,
               sourceSessionKey,
-              storePath: cronSession.storePath,
+              storePath: cronSession.sourceTarget?.storePath ?? cronSession.storePath,
             })
           : undefined;
       const turnMessage =
@@ -538,6 +563,7 @@ export async function prepareCronRunContext(params: {
         librarySelections: cronSession.sessionEntry.skillLibrarySelections,
         isFastTestEnv: params.isFastTestEnv,
       });
+      cronSession.assertSourceCurrent?.();
       await persistCronSkillsSnapshotIfChanged({
         isFastTestEnv: params.isFastTestEnv,
         cronSession,
@@ -551,6 +577,7 @@ export async function prepareCronRunContext(params: {
       try {
         await persistSessionEntry();
       } catch (err) {
+        cronSession.assertSourceCurrent?.();
         if (err instanceof CronSessionLifecycleClaimError) {
           throw err;
         }
@@ -563,6 +590,7 @@ export async function prepareCronRunContext(params: {
         job: input.job,
         cronSession,
       });
+      cronSession.assertSourceCurrent?.();
       const authSelection = await resolveCronAuthSelection({
         agentId,
         cfg: admittedConfig,
@@ -578,6 +606,7 @@ export async function prepareCronRunContext(params: {
         sessionKey: agentSessionKey,
         isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
       });
+      cronSession.assertSourceCurrent?.();
       const authProfileId = authSelection?.profileId;
       const liveSelection: LiveSessionModelSelection = {
         provider,
@@ -616,6 +645,7 @@ export async function prepareCronRunContext(params: {
           })
         : undefined;
       await runContinuationSession?.initialize();
+      cronSession.assertSourceCurrent?.();
 
       workspaceLeaseTransferred = true;
       return {

@@ -4,6 +4,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -22,6 +23,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
@@ -181,10 +183,15 @@ export function assertCronDoesNotTargetAgentHarness(input: {
     return;
   }
 
-  const loaded = loadGatewaySessionEntryReadOnly(
-    targetSessionKey,
-    input.agentId?.trim() ? { agentId: input.agentId.trim() } : {},
-  );
+  const agentId = input.agentId?.trim() || undefined;
+  const source = captureIncognitoSessionSource({ sessionKey: targetSessionKey, agentId });
+  const loaded = source
+    ? {
+        canonicalKey: targetSessionKey,
+        entry:
+          "kind" in source ? undefined : source.actor.sessions.readSharing(targetSessionKey)?.entry,
+      }
+    : loadGatewaySessionEntryReadOnly(targetSessionKey, agentId ? { agentId } : {});
   const reservedKey =
     isAgentHarnessSessionKey(targetSessionKey) || isAgentHarnessSessionKey(loaded.canonicalKey);
   if (loaded.entry?.modelSelectionLocked === true) {
@@ -215,7 +222,26 @@ export function captureCronCreatorSession(
   const isolatedAgentTurn = job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
   const sessionKey = callerScope?.sessionKey ?? (isolatedAgentTurn ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
-  const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
+  const incognito = sessionKey && captureIncognitoSessionSource({ sessionKey, agentId });
+  const readCreator = () => {
+    if (incognito) {
+      incognito.admissionSignal?.throwIfAborted();
+      if ("kind" in incognito) {
+        incognito.assertCurrent();
+        throw new IncognitoSessionMissingError();
+      }
+      const entry = incognito.actor.sessions.readSharing(sessionKey!)?.entry;
+      if (!entry) {
+        throw new IncognitoSessionMissingError();
+      }
+      return {
+        canonicalKey: sessionKey!,
+        entry: { ...entry, ...incognito.actor.sessions.readPolicy(sessionKey!) },
+      };
+    }
+    return sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
+  };
+  const loaded = readCreator();
   const creatorSession = loaded?.entry;
   const sourceConversation =
     isolatedAgentTurn && loaded && creatorSession?.sessionId
@@ -232,6 +258,7 @@ export function captureCronCreatorSession(
   const actorId = normalizeOptionalString(actor?.id);
   const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+  const creatorIdentity = JSON.stringify(creatorSession?.createdActor);
   return {
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
@@ -240,11 +267,12 @@ export function captureCronCreatorSession(
       : {}),
     assertCurrent: () => {
       if (creatorSession && sessionKey) {
-        const latest = loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry;
+        const latest = readCreator()?.entry;
         if (
           latest?.sessionId !== creatorSession.sessionId ||
           latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
-          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity ||
+          JSON.stringify(latest.createdActor) !== creatorIdentity
         ) {
           throw new Error(
             "Creator session changed before scheduling; retry from the current turn.",

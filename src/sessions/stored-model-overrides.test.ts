@@ -159,4 +159,25 @@ describe("resolveStoredModelOverride", () => {
       }),
     ).toBeNull();
   });
+  it("does not revive a selected absent parent from a stale working set", () => {
+    const sessionKey = "agent:main:dashboard:child";
+    const parentSessionKey = "agent:main:dashboard:parent";
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey,
+        parentSessionKey,
+        loadSessionEntry: () => null,
+        sessionStore: {
+          [parentSessionKey]: {
+            sessionId: "stale-parent",
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+            modelOverrideSource: "user",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
 });

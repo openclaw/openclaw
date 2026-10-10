@@ -4,12 +4,18 @@ import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-ag
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
+import {
+  IncognitoSessionMissingError,
+  rethrowIncognitoSessionError,
+} from "../../state/incognito-session-error.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -101,7 +107,19 @@ export async function admitFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   onCompactionNoticePayload?: (payload: ReplyPayload, turn: AdmittedFollowupTurn) => Promise<void>;
 }): Promise<FollowupAdmissionResult> {
-  const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
+  const incognito = captureIncognitoSessionSource({
+    agentId: params.queued.run.agentId,
+    sessionKey: params.queued.run.sessionKey ?? params.defaults.sessionKey,
+    storePath: params.defaults.storePath,
+  });
+  if (incognito && "kind" in incognito) {
+    throw new IncognitoSessionMissingError();
+  }
+  const assertOperatorCurrent = () => {
+    incognito?.admissionSignal?.throwIfAborted();
+    incognito?.actor.assertReadable();
+    params.queued.operatorAuthority?.assertCurrent();
+  };
   assertOperatorCurrent();
   const resolvedConfig = await resolveQueuedReplyExecutionConfig(params.queued.run.config, {
     originatingChannel: params.queued.originatingChannel,
@@ -183,9 +201,21 @@ export async function admitFollowupTurn(params: {
     const sessionRotated = operation.sessionId !== run.sessionId;
     const admittedEntry = replySessionKey
       ? params.defaults.storePath
-        ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
+        ? incognito
+          ? await readSessionEntryReadOnlyInWorker(
+              {
+                agentId: run.agentId,
+                storePath: params.defaults.storePath,
+                sessionKey: replySessionKey,
+              },
+              assertOperatorCurrent,
+            )
+          : loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
         : params.defaults.sessionStore?.[replySessionKey]
       : undefined;
+    if (incognito && !admittedEntry) {
+      throw new IncognitoSessionMissingError();
+    }
     const admissionEntry =
       admission.sessionEntry?.sessionId === operation.sessionId
         ? admission.sessionEntry
@@ -298,15 +328,23 @@ export async function admitFollowupTurn(params: {
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
-    const readTurnSessionEntry = () =>
+    const readNativeTurnSessionEntry = () =>
       replySessionKey && params.defaults.storePath
-        ? loadSessionEntry({
-            storePath: params.defaults.storePath,
-            sessionKey: replySessionKey,
-          })
+        ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
         : replySessionKey && params.defaults.sessionStore
           ? params.defaults.sessionStore[replySessionKey]
           : session.current();
+    const readActorTurnSessionEntry = () =>
+      replySessionKey && params.defaults.storePath
+        ? readSessionEntryReadOnlyInWorker(
+            {
+              agentId: run.agentId,
+              storePath: params.defaults.storePath,
+              sessionKey: replySessionKey,
+            },
+            assertOperatorCurrent,
+          )
+        : Promise.resolve(readNativeTurnSessionEntry());
     const refreshTurnSessionState = (
       entry: SessionEntry | undefined,
       previousEntry: SessionEntry | undefined,
@@ -349,7 +387,9 @@ export async function admitFollowupTurn(params: {
               pendingTerminalCompactionNotice = { phase, text };
               return;
             }
-            const noticeEntry = readTurnSessionEntry();
+            const noticeEntry = incognito
+              ? await readActorTurnSessionEntry()
+              : readNativeTurnSessionEntry();
             try {
               assertPersistedGeneration(noticeEntry);
             } catch (error) {
@@ -398,7 +438,9 @@ export async function admitFollowupTurn(params: {
         );
       }
       if (replySessionKey && params.defaults.storePath) {
-        const persistedEntry = readTurnSessionEntry();
+        const persistedEntry = incognito
+          ? await readActorTurnSessionEntry()
+          : readNativeTurnSessionEntry();
         if (
           (!persistedEntry && preflightEntry) ||
           (persistedEntry &&
@@ -426,7 +468,10 @@ export async function admitFollowupTurn(params: {
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
-      const failureEntry = readTurnSessionEntry();
+      rethrowIncognitoSessionError(error);
+      const failureEntry = incognito
+        ? await readActorTurnSessionEntry()
+        : readNativeTurnSessionEntry();
       if (!isSameSessionGeneration(failureEntry, session.current())) {
         assertPersistedGeneration(failureEntry);
       }

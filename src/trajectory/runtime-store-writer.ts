@@ -17,7 +17,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "../config/sessions/session-incognito-binding.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -106,6 +109,10 @@ export async function createSqliteTrajectoryRuntimeSink(input: TrajectoryRuntime
         : undefined;
   params.assertCommitAllowed?.();
   const selected = scope ?? marker;
+  const source = selected && captureIncognitoSessionSource({ ...selected, env: params.env });
+  if (source && "kind" in source) {
+    return null;
+  }
   const incognito = selected && captureIncognitoSessionOperation({ ...selected, env: params.env });
   if (incognito) {
     const sessionKey =

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -11,6 +12,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { IncognitoSessionSyncAccessError } from "../state/incognito-session-error.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 
 type SessionTerminalModel = { modelProvider: string; model: string };
@@ -69,6 +71,52 @@ export function readSessionFallbackModel(
     : undefined;
 }
 
+/** Prepare the terminal model from the selected actor without opening a host database. */
+export async function readSessionFallbackModelAsync(
+  params: Parameters<typeof readSessionFallbackModel>[0],
+): Promise<SessionTerminalModel | undefined> {
+  const source = captureIncognitoSessionSource(params.sessionScope);
+  if (!source) {
+    return readSessionFallbackModel(params);
+  }
+  if ("kind" in source || !params.sessionScope?.sessionKey || !params.sessionEntry) {
+    return undefined;
+  }
+  if (
+    params.sessionEntry.status !== "done" ||
+    !params.sessionEntry.lastRunId ||
+    !params.sessionEntry.fallbackNotice
+  ) {
+    return undefined;
+  }
+  const { actor, admissionSignal } = source;
+  const sessionKey = params.sessionScope.sessionKey;
+  const claim = actor.sessions.captureCurrent(sessionKey);
+  const assertCurrent = () => {
+    admissionSignal?.throwIfAborted();
+    claim.assertCurrent();
+    const entry = actor.sessions.readSharing(sessionKey)?.entry;
+    if (
+      entry?.sessionId !== params.sessionEntry?.sessionId ||
+      entry?.lifecycleRevision !== params.sessionEntry?.lifecycleRevision
+    ) {
+      throw new Error("Session fallback model source changed");
+    }
+  };
+  return actor.sessions.withSharedState(async () => {
+    const result = await actor.sessions.sideData(
+      { assertCurrent },
+      {
+        type: "session.row.read",
+        input: { sessionKey },
+      },
+      admissionSignal,
+    );
+    assertCurrent();
+    return readSessionFallbackModel({ ...params, terminalModel: result?.terminalModel ?? null });
+  });
+}
+
 /** Storage readers prepare terminal facts; the host retains runtime alias policy. */
 export function readSessionTerminalFallbackModel(
   params: SessionFallbackSource,
@@ -82,6 +130,12 @@ export function readSessionTerminalFallbackModel(
     !entry.fallbackNotice
   ) {
     return undefined;
+  }
+  if (captureIncognitoSessionSource(params.sessionScope)) {
+    throw new IncognitoSessionSyncAccessError(
+      "readSessionTerminalFallbackModel",
+      "readSessionFallbackModelAsync",
+    );
   }
   try {
     const page = readSessionTranscriptBoundedMessageTailPage(

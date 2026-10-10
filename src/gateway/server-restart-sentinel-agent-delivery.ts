@@ -23,6 +23,7 @@ import {
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/transcript-write-context.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
@@ -57,6 +58,7 @@ import {
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
+import { resolveActorSelectedNoticeOrigin } from "./update-run-notice-target.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
@@ -298,6 +300,19 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   if (params.entry.kind !== "agentTurn") {
     return false;
   }
+  if (
+    resolveActorSelectedNoticeOrigin(params.canonicalKey, params.queueContext.environment) ===
+    "ended"
+  ) {
+    params.queueContext.admission.assertCurrent();
+    return true;
+  }
+  const actorSource = captureIncognitoSessionBinding({
+    agentId: params.agentId,
+    sessionKey: params.canonicalKey,
+    env: params.queueContext.environment,
+  });
+  const actorClaim = actorSource?.actor.sessions.captureCurrent(params.canonicalKey);
   const entry = params.entry;
   const binding = entry.requesterBinding;
   const route = entry.route;
@@ -315,6 +330,8 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   params.queueContext.admission.assertCurrent();
   const assertRequesterAdmissionCurrent = () => {
     params.queueContext.admission.assertCurrent();
+    actorSource?.admissionSignal?.throwIfAborted();
+    actorClaim?.assertCurrent();
     if (!binding) {
       return;
     }

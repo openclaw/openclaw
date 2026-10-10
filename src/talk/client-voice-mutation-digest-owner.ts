@@ -1,4 +1,9 @@
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+  withIncognitoSessionEntry,
+} from "../config/sessions/session-incognito-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { captureSessionStoreCandidateIdentities } from "../config/sessions/session-store-read-candidates.js";
@@ -13,6 +18,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -58,6 +64,7 @@ type MutationDigestConversation = {
   storePath: string;
   identities: ReturnType<typeof captureSessionStoreCandidateIdentities>;
   selected?: DatabasePathIdentity;
+  incognito?: ReturnType<typeof captureIncognitoSessionSource>;
 };
 
 type MutationDigestDelivery = {
@@ -136,6 +143,25 @@ async function deliverClientVoiceMutationDigest(
         deliveredAt: Date.now(),
       };
     };
+    const incognito = isIncognitoSessionKey(record.sessionKey) ? conversation.incognito : undefined;
+    if (incognito) {
+      await withIncognitoSessionEntry(
+        incognito,
+        record.sessionKey,
+        assertCurrent,
+        async (entry, assertReadCurrent) => {
+          if (!entry) {
+            return;
+          }
+          const deliver = () => send(entry, assertReadCurrent);
+          await ("kind" in incognito ? deliver() : withIncognitoSessionBinding(incognito, deliver));
+        },
+      );
+      if (delivery.confirmed) {
+        await writer.mutate({ ...delivery.confirmed, kind: "delivered", now: Date.now() });
+      }
+      return;
+    }
     const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(conversation.storePath);
     const captured = conversation.identities.get(writer.identity.canonicalPath);
     // The metadata read already carries delivery facts for its unambiguous canonical conversation.
@@ -199,7 +225,7 @@ type MutationDigestIntent<TContext> = {
 };
 
 type MutationDigestSettlement = {
-  run: <T>(run: () => T) => T;
+  run: (run: () => Promise<boolean>) => Promise<boolean>;
   release: () => void;
 };
 
@@ -554,12 +580,35 @@ export function createClientVoiceMutationDigestDeliveryOptions(
         // Capture configured conversation files before a delivery slot or consult can defer work.
         context.conversation = {
           storePath,
+          incognito: captureIncognitoSessionSource(),
           identities: captureSessionStoreCandidateIdentities(
             captureSessionStoreReadCandidates(storePath),
           ),
         };
       }
-      return captureAttempt(context.source.settlementContext);
+      const settlement = captureAttempt(context.source.settlementContext);
+      const incognito = context.conversation.incognito;
+      if (!incognito || "kind" in incognito) {
+        return settlement;
+      }
+      // Retry ownership keeps the accepted actor borrowed through detached delivery.
+      const admitted = createDeferredCore<() => Promise<boolean>>();
+      const completion = incognito.actor.sessions.withSharedState(async () => {
+        const run = await admitted.promise;
+        return withIncognitoSessionBinding(incognito, run);
+      });
+      void completion.catch(() => {});
+      return {
+        run: (run) =>
+          settlement.run(() => {
+            admitted.resolve(run);
+            return completion;
+          }),
+        release() {
+          admitted.resolve(async () => false);
+          settlement.release();
+        },
+      };
     },
     // The same file can reopen under a different shared-state admission.
     matchesRetryContext: (previous, next) =>

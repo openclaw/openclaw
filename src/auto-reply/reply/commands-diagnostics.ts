@@ -2,8 +2,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -12,6 +15,7 @@ import type {
 } from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -74,21 +78,92 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   if (nonOwner) {
     return nonOwner;
   }
-  // Inventory belongs to this authorized command, not every reply's retained
-  // session view. Metadata preserves Codex target discovery without prompt snapshots.
-  const commandParams = params.storePath
+  const source = captureIncognitoSessionSource(params);
+  if (!source) {
+    return await runDiagnosticsCommand(params, args);
+  }
+  if ("kind" in source) {
+    return commandReply(`Session not found: ${params.sessionKey}`);
+  }
+  return await source.actor.sessions.withSharedState(async () => {
+    const claim = source.actor.sessions.captureCurrent(params.sessionKey);
+    const assertOwnerCurrent = params.command.assertOwnerCurrent;
+    let active = true;
+    const assertCurrent = () => {
+      params.commandInvocationSignal?.throwIfAborted();
+      params.opts?.abortSignal?.throwIfAborted();
+      source.admissionSignal?.throwIfAborted();
+      source.actor.assertReadable();
+      claim.assertCurrent();
+      assertOwnerCurrent?.();
+      if (!active) {
+        throw new Error("Diagnostics command source has been released");
+      }
+    };
+    try {
+      assertCurrent();
+      if (!source.actor.sessions.readSharing(params.sessionKey)?.entry) {
+        return commandReply(`Session not found: ${params.sessionKey}`);
+      }
+      return await withGatewayToolCallerIdentity(
+        {
+          agentId: source.actor.agentId,
+          sessionKey: params.sessionKey,
+          receiptAuthority: assertCurrent,
+        },
+        async () => {
+          const result = await runDiagnosticsCommand(
+            {
+              ...params,
+              agentId: source.actor.agentId,
+              storePath: source.actor.path,
+              command: { ...params.command, assertOwnerCurrent: assertCurrent },
+            },
+            args,
+            assertCurrent,
+          );
+          assertCurrent();
+          return result;
+        },
+      );
+    } finally {
+      active = false;
+    }
+  });
+};
+
+async function runDiagnosticsCommand(
+  params: HandleCommandsParams,
+  args: string,
+  assertCurrent?: () => void,
+) {
+  // Inventory belongs to this command; a selected actor never merges stale host rows.
+  const entries = params.storePath
+    ? assertCurrent
+      ? await readSessionEntrySummariesInWorker({
+          agentId: params.agentId,
+          storePath: params.storePath,
+        })
+      : listSessionEntriesReadOnly({
+          agentId: params.agentId,
+          storePath: params.storePath,
+          projection: "list",
+        })
+    : undefined;
+  assertCurrent?.();
+  const commandParams = entries
     ? {
         ...params,
         sessionStore: {
-          ...Object.fromEntries(
-            listSessionEntriesReadOnly({
-              agentId: params.agentId,
-              storePath: params.storePath,
-              projection: "list",
-            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-          ),
-          ...params.sessionStore,
+          ...Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+          ...(assertCurrent ? {} : params.sessionStore),
         },
+        ...(assertCurrent
+          ? {
+              sessionEntry: entries.find(({ sessionKey }) => sessionKey === params.sessionKey)
+                ?.entry,
+            }
+          : {}),
       }
     : params;
   if (isCodexDiagnosticsConfirmationAction(args)) {
@@ -97,13 +172,20 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
       ? rewriteCodexDiagnosticsResult(codexResult)
       : { text: "No Codex diagnostics confirmation handler is available for this session." };
     if (commandParams.isGroup) {
-      return await deliverGroupDiagnosticsReplyPrivately(commandParams, reply);
+      return await deliverGroupDiagnosticsReplyPrivately(
+        commandParams,
+        reply,
+        undefined,
+        assertCurrent,
+      );
     }
+    assertCurrent?.();
     return commandReply(reply);
   }
 
   if (commandParams.isGroup) {
     const privateTarget = (await resolvePrivateDiagnosticsTargetsForCommand(commandParams))[0];
+    assertCurrent?.();
     if (!privateTarget) {
       return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
     }
@@ -111,24 +193,33 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
       diagnosticsPrivateRouted: true,
       privateApprovalTarget: privateTarget,
     });
+    assertCurrent?.();
     if (!privateReply) {
       return commandReply(
         "Diagnostics are sensitive. Owner approval is pending on the private route.",
       );
     }
-    return await deliverGroupDiagnosticsReplyPrivately(commandParams, privateReply, privateTarget);
+    return await deliverGroupDiagnosticsReplyPrivately(
+      commandParams,
+      privateReply,
+      privateTarget,
+      assertCurrent,
+    );
   }
 
   const reply = await buildDiagnosticsReply(commandParams, args);
+  assertCurrent?.();
   return reply ? commandReply(reply) : { shouldContinue: false };
-};
+}
 
 async function deliverGroupDiagnosticsReplyPrivately(
   params: HandleCommandsParams,
   reply: ReplyPayload,
   privateTarget?: PrivateCommandRouteTarget,
+  assertCurrent?: () => void,
 ) {
   const target = privateTarget ?? (await resolvePrivateDiagnosticsTargetsForCommand(params))[0];
+  assertCurrent?.();
   if (!target) {
     return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
   }
@@ -136,7 +227,9 @@ async function deliverGroupDiagnosticsReplyPrivately(
     commandParams: params,
     targets: [target],
     reply,
+    assertCurrent,
   });
+  assertCurrent?.();
   return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome]);
 }
 
@@ -179,6 +272,7 @@ async function buildDiagnosticsReply(
 ): Promise<ReplyPayload | undefined> {
   const codexDiagnostics =
     (await buildCodexDiagnosticsApprovalIntegration(params, args, options)) ?? {};
+  params.command.assertOwnerCurrent?.();
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
@@ -198,6 +292,7 @@ async function buildDiagnosticsReply(
       timeoutSec,
       agentId,
     });
+    params.command.assertOwnerCurrent?.();
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
       env,
@@ -205,6 +300,7 @@ async function buildDiagnosticsReply(
       background: true,
       timeoutSeconds: timeoutSec,
     });
+    params.command.assertOwnerCurrent?.();
     if (result.details?.status === "approval-pending") {
       return undefined;
     }
@@ -212,6 +308,7 @@ async function buildDiagnosticsReply(
       result.details?.status === "completed" || result.details?.status === "failed"
         ? await codexDiagnostics.approvalFollowup?.()
         : undefined;
+    params.command.assertOwnerCurrent?.();
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
@@ -223,6 +320,8 @@ async function buildDiagnosticsReply(
     }
     return { text: lines.join("\n") };
   } catch (error) {
+    rethrowIncognitoSessionError(error);
+    params.command.assertOwnerCurrent?.();
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
@@ -322,6 +421,7 @@ async function executeCodexDiagnosticsAddon(
   if (!match || match.command.pluginId !== "codex") {
     return undefined;
   }
+  params.command.assertOwnerCurrent?.();
   return await executePluginCommand({
     command: match.command,
     args: match.args,

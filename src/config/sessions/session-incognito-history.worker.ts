@@ -33,6 +33,7 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   hasSessionTranscriptMessageInDatabase,
   readLatestAssistantTextFromDatabase,
@@ -237,10 +238,11 @@ export function createIncognitoHistoryWorker(
       case "session.history.completion-source.open":
         prepared = prepareHistoryRead(command.type, () => {
           if (
-            command.input.claim.requesterAgentId !== database.agentId ||
-            command.input.claim.requesterSessionKey !== sessionKey ||
-            command.input.claim.sessionId !== sessionId ||
-            command.input.claim.lifecycleRevision !== command.input.lifecycleRevision
+            "claim" in command.input &&
+            (command.input.claim.requesterAgentId !== database.agentId ||
+              command.input.claim.requesterSessionKey !== sessionKey ||
+              command.input.claim.sessionId !== sessionId ||
+              command.input.claim.lifecycleRevision !== command.input.lifecycleRevision)
           ) {
             throw new Error("Incognito completion source belongs to another session");
           }
@@ -645,6 +647,25 @@ export function createIncognitoHistoryWorker(
                   sessionKey,
                   sessionId: source.sessionId,
                 });
+              }
+              if ("entryId" in source) {
+                const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
+                return (
+                  entry?.sessionId === source.sessionId &&
+                  entry.lifecycleRevision === source.lifecycleRevision &&
+                  Boolean(
+                    readActiveTranscriptEntryAnchorInTransaction({
+                      database,
+                      resolved: {
+                        agentId: database.agentId,
+                        path: database.path,
+                        sessionKey,
+                        sessionId: source.sessionId,
+                      },
+                      entryId: source.entryId,
+                    }),
+                  )
+                );
               }
               const snapshot = readHarnessCompletionSourceInDatabase(database, source.claim);
               return (

@@ -4,6 +4,8 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { escapeRegExp } from "../../shared/regexp.js";
@@ -38,16 +40,15 @@ export function parseExportCommandOutputPath(
   return { outputPath };
 }
 
-export function resolveExportCommandSessionTarget(
+export async function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
-): ExportCommandSessionTarget | { text: string } {
+): Promise<ExportCommandSessionTarget | { text: string }> {
   const targetAgentId = params.agentId;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const entry = loadSessionEntryReadOnly({
-    storePath,
-    sessionKey: params.sessionKey,
-    clone: false,
-  });
+  const scope = { storePath, sessionKey: params.sessionKey, clone: false };
+  const entry = captureIncognitoSessionSource(scope)
+    ? await readSessionEntryReadOnlyInWorker(scope)
+    : loadSessionEntryReadOnly(scope);
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     return { text: `❌ Session not found: ${params.sessionKey}` };

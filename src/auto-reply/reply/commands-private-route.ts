@@ -120,8 +120,10 @@ export async function deliverPrivateCommandReply(params: {
   commandParams: HandleCommandsParams;
   targets: PrivateCommandRouteTarget[];
   reply: ReplyPayload;
+  assertCurrent?: () => void;
 }): Promise<"delivered" | "pending" | "suppressed" | "failed"> {
   for (const target of params.targets) {
+    params.assertCurrent?.();
     const result = await routeReply({
       payload: params.reply,
       channel: target.channel as OriginatingChannelType,
@@ -135,7 +137,9 @@ export async function deliverPrivateCommandReply(params: {
       mirror: false,
       isGroup: false,
       replyKind: "final",
+      assertCurrent: params.assertCurrent,
     }).catch(() => undefined);
+    params.assertCurrent?.();
     // Transport failures resolve with custody; rejection is a pre-send preparation failure.
     if (!result) {
       continue;

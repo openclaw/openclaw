@@ -10,6 +10,8 @@ import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js"
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -64,6 +66,7 @@ import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
+  const incognito = captureIncognitoSessionSource(params);
   const {
     ctx,
     sessionCtx,
@@ -394,7 +397,24 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     }
     inboundContextSessionEntry =
       storePath && sessionKey
-        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
+        ? incognito
+          ? await readSessionEntryReadOnlyInWorker(
+              {
+                agentId,
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
+              },
+              () => {
+                incognito.admissionSignal?.throwIfAborted();
+                if ("kind" in incognito) {
+                  incognito.assertCurrent();
+                } else {
+                  incognito.actor.assertReadable();
+                }
+              },
+            )
+          : loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
         : (sessionEntryHandle?.getCurrent() ??
           (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
           sessionEntry);

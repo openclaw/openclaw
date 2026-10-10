@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { derivePromptSegments } from "./agent-runner-trace.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as transcriptUsage from "../../gateway/session-transcript-usage.js";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionMissingError,
+  IncognitoSessionSyncAccessError,
+} from "../../state/incognito-session-error.js";
+import {
+  accumulateSessionUsageFromTranscript,
+  derivePromptSegments,
+} from "./agent-runner-trace.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 describe("derivePromptSegments", () => {
@@ -32,4 +41,26 @@ describe("derivePromptSegments", () => {
       { key: "user_message", chars: 6 },
     ]);
   });
+});
+
+afterEach(() => vi.restoreAllMocks());
+it.each([
+  new IncognitoSessionEndedError(),
+  new IncognitoSessionMissingError(),
+  new IncognitoSessionSyncAccessError("usage", "read usage"),
+])("preserves actionable usage failure: $name", async (error) => {
+  vi.spyOn(transcriptUsage, "readLatestSessionUsageFromTranscriptAsync").mockRejectedValueOnce(
+    error,
+  );
+  await expect(accumulateSessionUsageFromTranscript({ sessionId: "private-session" })).rejects.toBe(
+    error,
+  );
+});
+it("keeps ordinary usage failures recoverable", async () => {
+  vi.spyOn(transcriptUsage, "readLatestSessionUsageFromTranscriptAsync").mockRejectedValueOnce(
+    new Error("temporarily unavailable"),
+  );
+  await expect(
+    accumulateSessionUsageFromTranscript({ sessionId: "durable-session" }),
+  ).resolves.toBeUndefined();
 });

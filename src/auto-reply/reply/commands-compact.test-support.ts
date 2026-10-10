@@ -16,6 +16,8 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
+  readCurrentSessionEntry: async (params: Parameters<typeof resolveCurrentSessionEntry>[0]) =>
+    resolveCurrentSessionEntry(params),
   resolveCurrentSessionEntry: vi.fn(
     ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
       updatedAt: 1,

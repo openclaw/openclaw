@@ -1,5 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
@@ -37,6 +38,12 @@ export function resolveClientVoiceAgentSessionId(params: {
   sessionKey: string;
   storePath?: string;
 }): string | undefined {
+  const source = captureIncognitoSessionSource(params);
+  if (source) {
+    return "kind" in source
+      ? undefined
+      : source.actor.sessions.readSharing(params.sessionKey)?.entry?.sessionId;
+  }
   return loadSessionEntryReadOnly(params)?.sessionId?.trim() || undefined;
 }
 

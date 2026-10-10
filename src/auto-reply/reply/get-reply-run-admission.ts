@@ -12,6 +12,8 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -22,6 +24,7 @@ import {
   interruptSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -64,6 +67,7 @@ import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
+  const incognito = captureIncognitoSessionBinding(context.params);
   const {
     params,
     traceRunPhase,
@@ -309,6 +313,22 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     candidateSessionId === providedReplyOperation.sessionId;
   const sessionIdFinal = sessionId ?? providedReplyOperation?.sessionId ?? crypto.randomUUID();
   const sessionFilePathOptions = resolveSessionFilePathOptions({ agentId, storePath });
+  let actorEntry: SessionEntry | undefined;
+  const refreshActorEntry = async () => {
+    if (!incognito || !sessionKey) {
+      return;
+    }
+    actorEntry = await readSessionEntryReadOnlyInWorker({ agentId, storePath, sessionKey }, () => {
+      incognito.admissionSignal?.throwIfAborted();
+      incognito.actor.assertReadable();
+    });
+    if (!actorEntry) {
+      throw new IncognitoSessionMissingError();
+    }
+  };
+  if (incognito) {
+    await refreshActorEntry();
+  }
   const resolvePreparedSessionState = (): {
     sessionEntry: SessionEntry | undefined;
     sessionId: string;
@@ -316,8 +336,22 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   } => {
     // Working-set exact key first; disk alias resolve only when storePath known.
     // No whole-map scan — that encodes the store layout the accessor hides.
-    const latestSessionEntry =
-      sessionStore && sessionKey
+    incognito?.admissionSignal?.throwIfAborted();
+    const liveActorEntry =
+      incognito && sessionKey ? incognito.actor.sessions.readSharing(sessionKey)?.entry : undefined;
+    if (incognito && !liveActorEntry) {
+      throw new IncognitoSessionMissingError();
+    }
+    if (
+      incognito &&
+      (liveActorEntry?.sessionId !== actorEntry?.sessionId ||
+        liveActorEntry?.lifecycleRevision !== actorEntry?.lifecycleRevision)
+    ) {
+      throw new Error("Reply admission session generation changed");
+    }
+    const latestSessionEntry = incognito
+      ? { ...actorEntry!, ...liveActorEntry! }
+      : sessionStore && sessionKey
         ? (sessionStore[sessionKey] ??
           (storePath
             ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
@@ -468,6 +502,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
     loadAgentRunnerRuntime(),
   );
+  if (incognito) {
+    await refreshActorEntry();
+  }
   preparedSessionState = resolvePreparedSessionState();
   const currentRouteThreadId = resolveRoutedDeliveryThreadId({ ctx, sessionKey });
   const applySlackRouteThreadSteeringGuard = isSlackDirectRoutedThreadTurn(ctx);
@@ -603,8 +640,14 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           : (embeddedAgentRuntime?.waitForEmbeddedAgentRunEnd(activeRunSessionId) ??
             Promise.resolve(undefined)),
       refreshPreparedState: async () => {
+        if (incognito) {
+          await refreshActorEntry();
+        }
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
+        if (incognito) {
+          await refreshActorEntry();
+        }
         preparedSessionState = resolvePreparedSessionState();
         // The interrupted run may have changed goal or suggestion state while admission waited.
         await refreshInboundContextAfterAdmissionWait();

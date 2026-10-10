@@ -7,11 +7,16 @@ import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
 } from "../../config/sessions/session-entry-read-request.js";
-import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  withSessionEntryReadOnlyInWorker,
+  withSessionStoreReaderInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -93,9 +98,25 @@ export async function executeFollowupTurn(params: {
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
-  const progressAllowed = () =>
-    deliveryAllowed() &&
-    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
+  const progressAllowed = () => {
+    source?.admissionSignal?.throwIfAborted();
+    if (source && "kind" in source) {
+      source.assertCurrent();
+      return false;
+    }
+    source?.actor.assertReadable();
+    if (
+      source &&
+      verboseReadScope?.sessionKey &&
+      !source.actor.sessions.readSteering(verboseReadScope.sessionKey)
+    ) {
+      return false;
+    }
+    return (
+      deliveryAllowed() &&
+      (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required")
+    );
+  };
   const verboseRead =
     turn.session.kind === "session" && turn.session.storePath
       ? captureSessionEntryReadScope({
@@ -104,6 +125,7 @@ export async function executeFollowupTurn(params: {
         })
       : undefined;
   const verboseReadScope = verboseRead?.scope;
+  const source = captureIncognitoSessionSource(verboseReadScope);
   const currentVerboseLevel = (prepared?: { entry: SessionEntry | undefined }): VerboseLevel => {
     if (turn.queued.run.verboseLevelOverride !== undefined) {
       return turn.queued.run.verboseLevelOverride;
@@ -113,10 +135,11 @@ export async function executeFollowupTurn(params: {
       try {
         const loadedEntry = prepared
           ? prepared.entry
-          : loadSessionEntryReadOnly({
-              storePath: session.storePath,
-              sessionKey: session.key,
-            });
+          : source
+            ? "kind" in source
+              ? undefined
+              : { ...session.current(), ...source.actor.sessions.readSteering(session.key) }
+            : loadSessionEntryReadOnly({ storePath: session.storePath, sessionKey: session.key });
         const ownedEntry = session.current();
         const loadedGenerationMatches =
           loadedEntry !== undefined &&
@@ -130,7 +153,8 @@ export async function executeFollowupTurn(params: {
             return level;
           }
         }
-      } catch {
+      } catch (error) {
+        rethrowIncognitoSessionError(error);
         // A queued turn keeps its admitted snapshot when a read races store maintenance.
       }
     }
@@ -168,6 +192,18 @@ export async function executeFollowupTurn(params: {
         };
         assertCurrent();
         if (verboseReadScope?.storePath && turn.queued.run.verboseLevelOverride === undefined) {
+          if (source) {
+            return withSessionEntryReadOnlyInWorker(
+              verboseReadScope,
+              assertCurrent,
+              async (read) => {
+                if (!read.ok) {
+                  throw read.error;
+                }
+                return progressAllowed() && currentVerboseLevel({ entry: read.value }) !== "off";
+              },
+            );
+          }
           if (isNativeSessionEntryRead(verboseReadScope, verboseRead?.agentId)) {
             const visible = progressAllowed() && shouldEmitVerboseToolResult();
             assertCurrent();
@@ -206,7 +242,8 @@ export async function executeFollowupTurn(params: {
             );
             assertCurrent();
             return visible;
-          } catch {
+          } catch (error) {
+            rethrowIncognitoSessionError(error);
             // Match the existing maintenance fallback, but never swallow lost authority.
           }
         }

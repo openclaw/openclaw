@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "../config/sessions/session-accessor.sqlite-events.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -12,6 +13,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabases from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -52,6 +54,63 @@ const { useClientVoiceDigestHarness } = await vi.hoisted(
 describe("client voice digest physical sources", () => {
   const harness = useClientVoiceDigestHarness();
   const { sendDurableMessageBatch, settleDigestAttempts } = harness;
+
+  it("delivers a detached digest from the captured private actor and confirms only once", async () => {
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor({ OPENCLAW_STATE_DIR: harness.stateDir }, authority);
+    const target = { agentId: "main", sessionKey: "agent:main:dashboard:incognito-digest" };
+    try {
+      await actor.sessions.create(authority, {
+        sessionKey: target.sessionKey,
+        entry: {
+          sessionId: "private-digest",
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "channel:private-digest" },
+          }),
+        },
+      });
+      await seedSession("agent:main:main", { channel: "discord", to: "channel:unrelated-main" });
+      await withIncognitoSessionActor(actor, async () => {
+        const voiceSessionId = await createOrResumeClientVoiceSession({
+          ...target,
+          origin: "client",
+        });
+        const runId = `run-${voiceSessionId}`;
+        await registerClientVoiceConsultRun({ ...target, voiceSessionId, runId });
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.started",
+          runId,
+          toolCallId: "private-change",
+          toolName: "message",
+          mutatingAction: true,
+        });
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.completed",
+          runId,
+          toolCallId: "private-change",
+          toolName: "message",
+          durationMs: 5,
+        });
+        await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
+        await completeRun(runId);
+        await closeClientVoiceSession({ ...target, voiceSessionId, config: {} });
+        await settleDigestAttempts();
+        expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
+        expect(sendDurableMessageBatch).toHaveBeenCalledWith(
+          expect.objectContaining({ to: "channel:private-digest" }),
+        );
+        expect(readVoiceSessionRecord("main", voiceSessionId)?.digestDeliveredAt).toEqual(
+          expect.any(Number),
+        );
+        await closeClientVoiceSession({ ...target, voiceSessionId, config: {} });
+        await settleDigestAttempts();
+        expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
+      });
+    } finally {
+      await actor.close();
+    }
+  });
 
   it("records a missing conversation instead of silently completing its digest", async () => {
     const sessionKey = "agent:main:main";

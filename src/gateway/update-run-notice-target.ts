@@ -7,6 +7,7 @@ import { createAccountActionGate } from "../channels/plugins/account-action-gate
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionThreadInfo } from "../channels/plugins/session-conversation.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.records.js";
@@ -14,6 +15,10 @@ import { getUpdateRun, recordUpdateRunVerification } from "../infra/update-run-l
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionMissingError,
+} from "../state/incognito-session-error.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -156,6 +161,28 @@ export function recordUpdateRunNoticeSkipped(
   }
 }
 
+/** Capture selected private origins without discovering or reviving a session. */
+export function resolveActorSelectedNoticeOrigin(
+  sessionKey: string | undefined,
+  env?: NodeJS.ProcessEnv,
+): "live" | "ended" | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const source = captureIncognitoSessionSource({ sessionKey, env });
+    return source ? ("kind" in source ? "ended" : "live") : undefined;
+  } catch (error) {
+    if (
+      error instanceof IncognitoSessionEndedError ||
+      error instanceof IncognitoSessionMissingError
+    ) {
+      return "ended";
+    }
+    throw error;
+  }
+}
+
 /** Resolve the origin once; internal sessions intentionally have no external delivery context. */
 export async function resolveUpdateRunNoticeTarget(params: {
   cfg: OpenClawConfig;
@@ -165,6 +192,23 @@ export async function resolveUpdateRunNoticeTarget(params: {
   session?: NoticeSession;
   env?: NodeJS.ProcessEnv;
 }): Promise<NoticeTarget> {
+  if (
+    resolveActorSelectedNoticeOrigin(params.sessionKey ?? params.session?.canonicalKey, params.env)
+  ) {
+    // Only a separately authorized explicit route survives the private origin.
+    const route = resolveGatewayLifecycleNoticeRoute({
+      cfg: params.cfg,
+      deliveryContext: params.explicitDeliveryContext,
+      threadId: params.threadId,
+    });
+    return prepareUpdateRunNoticeTarget(
+      params.cfg,
+      route
+        ? { kind: "route", route: { ...route, chatType: "direct" } }
+        : { kind: "none", reason: "incognito origin ended" },
+      params.env,
+    );
+  }
   const session =
     params.session ??
     (params.sessionKey ? loadSessionEntry(params.sessionKey, { env: params.env }) : undefined);

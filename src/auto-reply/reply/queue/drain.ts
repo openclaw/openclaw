@@ -8,6 +8,8 @@ import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../ag
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
@@ -319,17 +321,14 @@ function buildCollectTranscriptInput(
   return { text, mentions };
 }
 
-function resolveFollowupTranscriptTarget(source: FollowupRun) {
+function createFollowupTranscriptTarget(source: FollowupRun) {
   const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
   const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
     agentId: source.run.agentId,
   });
-  const sessionEntry = loadSessionEntryReadOnly({
-    storePath,
-    sessionKey,
-    clone: false,
-  });
-  return {
+  const scope = { storePath, sessionKey, agentId: source.run.agentId, clone: false };
+  const incognito = captureIncognitoSessionSource(scope);
+  const target = (sessionEntry: ReturnType<typeof loadSessionEntryReadOnly>) => ({
     sessionId: sessionEntry?.sessionId ?? source.run.sessionId,
     sessionKey,
     sessionEntry,
@@ -337,7 +336,21 @@ function resolveFollowupTranscriptTarget(source: FollowupRun) {
     agentId: source.run.agentId,
     cwd: source.run.cwd ?? source.run.workspaceDir,
     config: source.run.config,
-  };
+  });
+  if (!incognito) {
+    return () => target(loadSessionEntryReadOnly(scope));
+  }
+  return async () =>
+    target(
+      await readSessionEntryReadOnlyInWorker(scope, () => {
+        incognito.admissionSignal?.throwIfAborted();
+        if ("kind" in incognito) {
+          incognito.assertCurrent();
+        } else {
+          incognito.actor.assertReadable();
+        }
+      }),
+    );
 }
 
 function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
@@ -391,7 +404,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     },
     resolveInput: buildInput,
     pendingInputSources: transcriptSources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
-    target: () => resolveFollowupTranscriptTarget(source),
+    target: createFollowupTranscriptTarget(source),
     errorContext: "collected followup user turn transcript",
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
   });
@@ -756,7 +769,7 @@ async function runSyntheticOverflowSummary(params: {
       senderIsOwner: params.source.run.senderIsOwner,
       provenance: params.source.run.inputProvenance,
     },
-    target: () => resolveFollowupTranscriptTarget(params.source),
+    target: createFollowupTranscriptTarget(params.source),
     pendingInputSources: params.sources.flatMap(
       (source) => source.userTurnTranscriptRecorder ?? [],
     ),

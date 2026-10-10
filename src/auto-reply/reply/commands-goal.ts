@@ -8,8 +8,9 @@ import {
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
-import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
@@ -49,11 +50,14 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   return { action, text: args };
 }
 
-function syncGoalSessionEntry(params: HandleCommandsParams): void {
+async function syncGoalSessionEntry(params: HandleCommandsParams): Promise<void> {
   if (!params.sessionStore || !params.sessionKey) {
     return;
   }
-  const entry = getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  const entry = await readSessionEntryReadOnlyInWorker({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   if (!entry) {
     return;
   }
@@ -200,7 +204,7 @@ export const handleGoalCommand: CommandHandler = defineAuthorizedTextCommand(
         readOnlyStatus: true,
       });
       if (result.changed || parsed.action === "status" || parsed.action === "clear") {
-        syncGoalSessionEntry(params);
+        await syncGoalSessionEntry(params);
       }
       if (result.changed) {
         markCommandSessionMetadataChanged(params);
@@ -211,6 +215,7 @@ export const handleGoalCommand: CommandHandler = defineAuthorizedTextCommand(
       }
       return goalReply(result.text);
     } catch (error) {
+      rethrowIncognitoSessionError(error);
       const message = error instanceof Error ? error.message : String(error);
       return goalReply(`Goal error: ${message}`);
     }

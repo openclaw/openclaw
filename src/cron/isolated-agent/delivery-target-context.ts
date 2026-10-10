@@ -3,6 +3,7 @@ import { extractDeliveryInfoBatch } from "../../config/sessions/delivery-info.js
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadExactSessionEntryCandidatesReadOnlyBatch } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { foldedSessionKeyAliasCandidates } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,15 +33,21 @@ export function readCronDeliveryTargetContexts(
   const planned = requests.map(({ agentId, sessionKey }): Result<CronDeliveryReadPlan, unknown> => {
     try {
       const rawSessionKey = sessionKey?.trim();
+      const source = rawSessionKey && captureIncognitoSessionSource({ sessionKey: rawSessionKey });
+      const sourceAgentId = source
+        ? "kind" in source
+          ? source.agentId
+          : source.actor.agentId
+        : agentId;
       return ok({
-        agentId,
+        agentId: sourceAgentId,
         rawSessionKey,
-        mainSessionKey: resolveAgentMainSessionKey({ cfg, agentId }),
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+        mainSessionKey: resolveAgentMainSessionKey({ cfg, agentId: sourceAgentId }),
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: sourceAgentId }),
         threadSessionKey: rawSessionKey
           ? resolveCronAgentSessionKey({
               sessionKey: rawSessionKey,
-              agentId,
+              agentId: sourceAgentId,
               mainKey: cfg.session?.mainKey,
               cfg,
             })
@@ -51,11 +58,26 @@ export function readCronDeliveryTargetContexts(
     }
   });
   const recovered = extractDeliveryInfoBatch(
-    planned.map((item) => (item.ok ? item.value.threadSessionKey : undefined)),
+    planned.map((item) =>
+      item.ok &&
+      !captureIncognitoSessionSource({
+        agentId: item.value.agentId,
+        sessionKey: item.value.threadSessionKey,
+      })
+        ? item.value.threadSessionKey
+        : undefined,
+    ),
     { cfg },
   );
   const targets = planned.flatMap((item, index) =>
-    item.ok && !recovered[index]?.deliveryContext ? [{ index, ...item.value }] : [],
+    item.ok &&
+    !recovered[index]?.deliveryContext &&
+    !captureIncognitoSessionSource({
+      agentId: item.value.agentId,
+      sessionKey: item.value.threadSessionKey,
+    })
+      ? [{ index, ...item.value }]
+      : [],
   );
   const rows = loadExactSessionEntryCandidatesReadOnlyBatch(
     targets.map(({ agentId, storePath, threadSessionKey, mainSessionKey }) => ({
@@ -78,6 +100,23 @@ export function readCronDeliveryTargetContexts(
       return item;
     }
     const { mainSessionKey, rawSessionKey, threadSessionKey } = item.value;
+    const incognito =
+      threadSessionKey &&
+      captureIncognitoSessionSource({
+        agentId: item.value.agentId,
+        sessionKey: threadSessionKey,
+      });
+    if (incognito) {
+      incognito.admissionSignal?.throwIfAborted();
+      return ok({
+        mainSessionKey,
+        rawSessionKey,
+        threadSessionKey,
+        main:
+          "kind" in incognito ? undefined : incognito.actor.sessions.readDelivery(threadSessionKey),
+        usedSharedMainFallback: false,
+      });
+    }
     const recoveredInfo = recovered[index];
     const recoveredContext = recoveredInfo?.deliveryContext;
     const context =

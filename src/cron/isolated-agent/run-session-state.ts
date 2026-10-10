@@ -189,8 +189,10 @@ export async function beginCronSessionWorkAdmission(params: {
     signal: params.signal,
     onInterrupt: params.onInterrupt,
     assertAllowed: async (signal) => {
+      cronSession.assertSourceCurrent?.();
       const currentEntry = await loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
       signal.throwIfAborted();
+      cronSession.assertSourceCurrent?.();
       const changed = initialSessionEntry
         ? !currentEntry ||
           !isDeepStrictEqual(

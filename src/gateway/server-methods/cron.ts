@@ -250,8 +250,14 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const callerScope = readCronCallerScope(client);
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
-    const { assertCurrent: assertCreatorSessionCurrent, ...creatorOptions } =
-      captureCronCreatorSession(jobCreate, callerScope, client);
+    let creator: ReturnType<typeof captureCronCreatorSession>;
+    try {
+      creator = captureCronCreatorSession(jobCreate, callerScope, client);
+    } catch (error) {
+      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(error));
+      return;
+    }
+    const { assertCurrent: assertCreatorSessionCurrent, ...creatorOptions } = creator;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {

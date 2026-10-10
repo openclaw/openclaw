@@ -18,6 +18,8 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
+import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
+import type { IncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-history-read.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -44,7 +46,7 @@ import { enqueueSystemEvent } from "./system-events.js";
 type HeartbeatSessionPublication = { ok: true; messageId: string } | { ok: false; reason: string };
 
 /** Publishes an admitted heartbeat final before its completion occurrences can settle. */
-export async function publishHeartbeatSessionReply(params: {
+type HeartbeatSessionPublicationParams = {
   cfg: OpenClawConfig;
   agentId: string;
   storePath: string;
@@ -54,8 +56,43 @@ export async function publishHeartbeatSessionReply(params: {
   payload: ReplyPayload;
   sourceText?: string;
   signal?: AbortSignal;
-}): Promise<HeartbeatSessionPublication> {
+};
+
+export async function publishHeartbeatSessionReply(
+  params: HeartbeatSessionPublicationParams,
+): Promise<HeartbeatSessionPublication> {
+  const incognito = captureIncognitoSessionHistoryBinding({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    sessionId: params.expectedGeneration.sessionId,
+  });
+  return incognito
+    ? incognito.actor.sessions.withSharedState(() =>
+        publishHeartbeatSessionReplyOwned(params, incognito),
+      )
+    : publishHeartbeatSessionReplyOwned(params);
+}
+
+async function publishHeartbeatSessionReplyOwned(
+  params: HeartbeatSessionPublicationParams,
+  incognito?: IncognitoSessionHistoryBinding,
+): Promise<HeartbeatSessionPublication> {
   let acceptedPublication: Promise<HeartbeatSessionPublication> | undefined;
+  const sources = new Map<string, { assertCurrent(): void; release(): Promise<void> }>();
+  const retainEntry = async (entryId: string) => {
+    if (!incognito || sources.has(entryId)) {
+      return;
+    }
+    sources.set(
+      entryId,
+      await incognito.actor.sessions.retainCompletionSource(
+        incognito.authority,
+        { ...incognito.target, entryId },
+        params.signal,
+      ),
+    );
+  };
   try {
     const { text, mediaUrls } = resolveSendableOutboundReplyParts(params.payload);
     const occurrences = [...new Set(params.occurrenceIds)].toSorted();
@@ -71,7 +108,9 @@ export async function publishHeartbeatSessionReply(params: {
     const assertOwnedWrite = captureOwnedTranscriptWriteAssertion(scope);
     const metadata = getReplyPayloadMetadata(params.payload);
     const authority = metadata?.sessionWriterDeliveryAuthority;
-    const initial = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+    const initial = incognito
+      ? incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+      : loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
     const writerRunId = authority?.expectedWriterRunId ?? initial?.activeWriterRunId;
     const expected = {
       expectedSessionId: scope.sessionId,
@@ -96,13 +135,24 @@ export async function publishHeartbeatSessionReply(params: {
     };
     const assertTargetCurrent = (messageId?: string) => {
       assertCurrent();
-      const current = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+      incognito?.authority.assertCurrent();
+      const current = incognito
+        ? incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+        : loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+      const activeEntry =
+        messageId &&
+        (incognito
+          ? sources.get(messageId)
+          : readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }));
+      if (incognito && messageId) {
+        sources.get(messageId)?.assertCurrent();
+      }
       if (
         !scope.sessionId ||
         current?.sessionId !== scope.sessionId ||
         current.lifecycleRevision !== params.expectedGeneration.lifecycleRevision ||
         current.activeWriterRunId !== writerRunId ||
-        (messageId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }))
+        (messageId && !activeEntry)
       ) {
         throw new Error("heartbeat publication no longer owns the active transcript");
       }
@@ -191,6 +241,9 @@ export async function publishHeartbeatSessionReply(params: {
     ) {
       return { ok: false, reason: "heartbeat runtime final has no matching committed receipt" };
     }
+    if (priorId) {
+      await retainEntry(priorId);
+    }
     assertTargetCurrent(priorId);
     const content: SessionTranscriptAssistantMessage["content"] = [
       { type: "text", text: text.trim() },
@@ -251,7 +304,7 @@ export async function publishHeartbeatSessionReply(params: {
       // A later drain failure cannot revoke a notification already published here.
       updateMode: "none",
       onMessageCommitted: (receipt, acceptCompletion) => {
-        assertTargetCurrent(receipt.messageId);
+        assertTargetCurrent(incognito ? undefined : receipt.messageId);
         const publish = (): Promise<HeartbeatSessionPublication> => {
           const messageSeq = readCommittedTranscriptMessageSequence(receipt);
           assertTargetCurrent(receipt.messageId);
@@ -271,6 +324,30 @@ export async function publishHeartbeatSessionReply(params: {
             (error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }),
           );
         };
+        if (incognito) {
+          const completion = (async () => {
+            await retainEntry(receipt.messageId);
+            assertTargetCurrent(receipt.messageId);
+            if (
+              attachMedia &&
+              !(await attachMedia({
+                messageId: receipt.messageId,
+                blocks: readAssistantDisplayContent(receipt.message),
+              }))
+            ) {
+              throw new Error("heartbeat source receipt media custody is unavailable");
+            }
+            return publish();
+          })();
+          acceptedPublication = completion.catch((error: unknown) => ({
+            ok: false,
+            reason: formatErrorMessage(error),
+          }));
+          acceptCompletion(async () => {
+            await completion;
+          });
+          return;
+        }
         if (!attachMedia) {
           acceptedPublication = publish();
           return;
@@ -310,6 +387,10 @@ export async function publishHeartbeatSessionReply(params: {
       return receipt;
     }
     return { ok: false, reason: formatErrorMessage(error) };
+  } finally {
+    for (const source of sources.values()) {
+      await source.release();
+    }
   }
 }
 
@@ -331,7 +412,10 @@ export function prepareHeartbeatTargetAwareness(params: {
       return undefined;
     }
     const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
-    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
+    const incognito = captureIncognitoSessionHistoryBinding(scope);
+    const entry = incognito
+      ? incognito.actor.sessions.readSharing(sessionKey)?.entry
+      : loadExactSessionEntryReadOnly(scope)?.entry;
     if (!entry?.sessionId) {
       return undefined;
     }
@@ -342,7 +426,10 @@ export function prepareHeartbeatTargetAwareness(params: {
       try {
         // Recheck the exact pre-send lifecycle before publishing awareness. Resets
         // can preserve sessionId while rotating lifecycleRevision.
-        const latest = loadExactSessionEntryReadOnly(scope)?.entry;
+        incognito?.authority.assertCurrent();
+        const latest = incognito
+          ? incognito.actor.sessions.readSharing(sessionKey)?.entry
+          : loadExactSessionEntryReadOnly(scope)?.entry;
         if (
           latest?.sessionId !== expectedSessionId ||
           latest.lifecycleRevision !== expectedLifecycleRevision

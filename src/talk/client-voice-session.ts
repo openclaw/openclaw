@@ -8,6 +8,10 @@ import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-
 import type { SessionTranscriptWriteScope } from "../config/sessions/session-accessor.types.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -23,6 +27,7 @@ import {
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
 import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import {
@@ -342,6 +347,10 @@ function appendVoiceTranscript(
   if (!normalized.text) {
     return Promise.resolve();
   }
+  const incognito = captureIncognitoSessionSource({
+    agentId: normalized.agentId,
+    ...normalized.sessionTarget,
+  });
   const confirmation =
     normalized.role === "user"
       ? prepareClientVoiceConfirmationTranscript({
@@ -468,6 +477,38 @@ function appendVoiceTranscript(
                 });
               }
             };
+            if (incognito) {
+              if ("kind" in incognito) {
+                incognito.assertCurrent();
+                throw new IncognitoSessionMissingError();
+              }
+              await incognito.actor.sessions.withSharedState(() =>
+                withIncognitoSessionBinding(incognito, async () => {
+                  const read = await incognito.actor.sessions.read(
+                    { assertCurrent: writer.assertCurrent },
+                    { sessionKey: sessionTarget.sessionKey },
+                    incognito.admissionSignal,
+                  );
+                  if (!read.entry) {
+                    throw new IncognitoSessionMissingError();
+                  }
+                  const assertCurrent = () => {
+                    writer.assertCurrent();
+                    incognito.admissionSignal?.throwIfAborted();
+                    read.claim.assertCurrent();
+                  };
+                  const record = await writer.mutate(reservation);
+                  assertCurrent();
+                  await appendReserved(
+                    record,
+                    read.entry,
+                    { ...sessionTarget, storePath: incognito.actor.path },
+                    assertCurrent,
+                  );
+                }),
+              );
+              return;
+            }
             const nativeTranscript = isNativeSessionEntryRead(sessionTarget, normalized.agentId);
             const transcriptStore = resolveUnsuffixedSqliteTargetFromSessionStorePath(
               sessionTarget.storePath ||

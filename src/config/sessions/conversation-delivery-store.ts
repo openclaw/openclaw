@@ -143,13 +143,19 @@ export async function markConversationDeliverySent(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   platformMessageId?: string,
+  assertCurrent?: () => void,
 ): Promise<ConversationDeliveryRecord> {
-  return writeConversationDelivery(scope, "conversation.delivery.transition", {
-    operationId,
-    status: "sent",
-    ...(platformMessageId ? { platformMessageId } : {}),
-    allowedFrom: ["created", "queued"],
-  });
+  return writeConversationDelivery(
+    scope,
+    "conversation.delivery.transition",
+    {
+      operationId,
+      status: "sent",
+      ...(platformMessageId ? { platformMessageId } : {}),
+      allowedFrom: ["created", "queued"],
+    },
+    assertCurrent,
+  );
 }
 
 export async function markConversationDeliverySuppressed(

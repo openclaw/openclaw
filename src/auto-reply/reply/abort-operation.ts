@@ -14,13 +14,14 @@ import {
 } from "../../agents/tools/sessions-helpers.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
-  loadSessionEntry,
   markSessionAbortTarget,
-  resolveSessionAbortTarget,
   type SessionAbortTargetContext,
   type SessionAbortTargetIdentity,
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -30,6 +31,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   type AbortCutoff,
@@ -135,22 +137,25 @@ export function prepareSessionRunTargetAbort(params: {
   };
 }
 
-function resolveStoredSessionId(params: {
+async function resolveStoredSessionId(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   try {
-    return loadSessionEntry({
-      agentId: params.agentId,
-      clone: false,
-      sessionKey: params.sessionKey,
-      storePath,
-    })?.sessionId;
-  } catch {
+    return (
+      await readSessionEntryReadOnlyInWorker({
+        agentId: params.agentId,
+        clone: false,
+        sessionKey: params.sessionKey,
+        storePath,
+      })
+    )?.sessionId;
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return undefined;
   }
 }
@@ -255,25 +260,35 @@ export async function executeFastAbortRequest(
       })
         ? resolveAbortCutoffFromContext(ctx)
         : undefined;
+    const incognito = captureIncognitoSessionBinding({ agentId, sessionKey: targetKey, storePath });
+    const assertCurrent = () => {
+      incognito?.admissionSignal?.throwIfAborted();
+      incognito?.actor.assertReadable();
+      if (params.isCommandTargetCurrent?.() === false) {
+        throw new Error("The selected session changed before it could be stopped.");
+      }
+    };
     let resolvedAbortTarget: SessionAbortTargetIdentity | null = null;
     try {
-      resolvedAbortTarget = resolveSessionAbortTarget({
-        agentId,
-        sessionKey: targetKey,
-        storePath,
-      });
+      const entry = await readSessionEntryReadOnlyInWorker(
+        {
+          agentId,
+          sessionKey: targetKey,
+          storePath,
+        },
+        assertCurrent,
+      );
+      resolvedAbortTarget = entry
+        ? { entry, sessionId: entry.sessionId, sessionKey: normalizeStoreSessionKey(targetKey) }
+        : null;
     } catch (error) {
+      rethrowIncognitoSessionError(error);
       logVerbose(
         `abort: failed to resolve abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
       );
     }
     const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey;
-    const assertCurrent = () => {
-      if (params.isCommandTargetCurrent?.() === false) {
-        throw new Error("The selected session changed before it could be stopped.");
-      }
-    };
-    const prepareTarget = (key: string) => {
+    const prepareTarget = async (key: string) => {
       const targetAgentId =
         key === resolvedTargetKey
           ? agentId
@@ -289,7 +304,7 @@ export async function executeFastAbortRequest(
         })[0]?.sessionId ??
         (key === resolvedTargetKey
           ? resolvedAbortTarget?.sessionId
-          : resolveStoredSessionId({ cfg, sessionKey: key, agentId: targetAgentId }));
+          : await resolveStoredSessionId({ cfg, sessionKey: key, agentId: targetAgentId }));
       const target = { key, agentId: targetAgentId, sessionId };
       return {
         abort: prepareSessionRunTargetAbort(target),
@@ -302,8 +317,10 @@ export async function executeFastAbortRequest(
       };
     };
     const preparedTargets = new Map(
-      [resolvedTargetKey, ...(commandSessionKey ? [commandSessionKey] : [])].map(
-        (key) => [key, prepareTarget(key)] as const,
+      await Promise.all(
+        [resolvedTargetKey, ...(commandSessionKey ? [commandSessionKey] : [])].map(
+          async (key) => [key, await prepareTarget(key)] as const,
+        ),
       ),
     );
     let aborted = false;
@@ -352,8 +369,10 @@ export async function executeFastAbortRequest(
             abortTargetKeys.includes(conversationBoundAcpTargetKey)
               ? commandSessionKey
               : undefined;
-          const targets = [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
-            (key) => preparedTargets.get(key) ?? prepareTarget(key),
+          const targets = await Promise.all(
+            [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
+              (key) => preparedTargets.get(key) ?? prepareTarget(key),
+            ),
           );
           assertCurrent();
           sealRootSelection();
@@ -398,6 +417,7 @@ export async function executeFastAbortRequest(
                     reason: "fast-abort",
                   })
                   .catch((error: unknown) => {
+                    rethrowIncognitoSessionError(error);
                     logVerbose(
                       `abort: ACP cancel failed for ${acpTargetKey}: ${formatErrorMessage(error)}`,
                     );
@@ -424,6 +444,7 @@ export async function executeFastAbortRequest(
             resolveAbortCutoff: abortCutoffForTarget,
           });
         } catch (error) {
+          rethrowIncognitoSessionError(error);
           logVerbose(
             `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
           );

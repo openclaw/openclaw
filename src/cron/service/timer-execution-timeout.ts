@@ -1,7 +1,9 @@
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -166,13 +168,20 @@ export function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = loadSessionEntryReadOnly({
+    const target = {
       agentId,
       sessionKey: targetSessionKey,
       storePath,
-    });
+    };
+    const incognito = captureIncognitoSessionSource(target);
+    const sessionEntry = incognito
+      ? "kind" in incognito
+        ? undefined
+        : incognito.actor.sessions.readDelivery(targetSessionKey)
+      : loadSessionEntryReadOnly(target);
     return deliveryContextFromSession(sessionEntry);
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return undefined;
   }
 }

@@ -8,6 +8,10 @@ import {
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
+import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -79,9 +83,19 @@ async function disposeCronRunContext(params: {
 export async function runCronIsolatedAgentTurn(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
-  return await runWithDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope(), () =>
-    runCronIsolatedAgentTurnInTrace(params),
-  );
+  const source = captureIncognitoSessionSource({
+    sessionKey:
+      params.job.sessionTarget === "current"
+        ? params.job.sessionKey
+        : (params.job.sourceConversation?.sessionKey ?? params.job.sessionKey ?? params.sessionKey),
+  });
+  const run = () =>
+    runWithDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope(), () =>
+      runCronIsolatedAgentTurnInTrace(params),
+    );
+  return await (source && !("kind" in source)
+    ? source.actor.sessions.withSharedState(() => withIncognitoSessionBinding(source, run))
+    : run());
 }
 
 async function runCronIsolatedAgentTurnInTrace(

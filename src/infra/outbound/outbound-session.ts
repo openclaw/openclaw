@@ -1,5 +1,6 @@
 // Outbound session routing maps send targets back into route/session metadata
 // so outbound-only messages can be mirrored into conversation state.
+import { isDeepStrictEqual } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -31,7 +32,11 @@ import {
   buildInboundSessionCreationStamp,
   inheritSessionCreationPolicy,
 } from "../../config/sessions/session-entry-provenance.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -39,6 +44,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute, type RoutePeer } from "../../routing/resolve-route.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  IncognitoSessionMissingError,
+  rethrowIncognitoSessionError,
+} from "../../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
@@ -245,11 +254,48 @@ type OutboundSessionEntryParams = {
 type CapturedOutboundSessionBinding = {
   destination: PreparedConversationRegistryScope;
   source?: SessionAccessScope & { storePath: string };
+  incognitoSource?: ReturnType<typeof captureOutboundIncognitoSource>;
 };
 
 type PreparedOutboundSessionBinding = Omit<CapturedOutboundSessionBinding, "source"> & {
   source?: SessionAccessScope & { databaseAgentId: string };
 };
+
+/** Retain only the creation policy used by this cross-session operation. */
+function captureOutboundIncognitoSource(source: SessionAccessScope) {
+  const binding = captureIncognitoSessionSource(source);
+  if (!binding) {
+    return undefined;
+  }
+  if ("kind" in binding) {
+    throw new IncognitoSessionMissingError();
+  }
+  const { actor } = binding;
+  const claim = actor.sessions.captureCurrent(source.sessionKey);
+  const selectPolicy = () => {
+    const current = actor.sessions.readPolicy(source.sessionKey);
+    if (!current) {
+      throw new IncognitoSessionMissingError();
+    }
+    return {
+      via: current.createdVia ?? "channel",
+      ...inheritSessionCreationPolicy(current),
+    };
+  };
+  const policy = selectPolicy();
+  return {
+    policy,
+    assertCurrent() {
+      binding.admissionSignal?.throwIfAborted();
+      actor.assertReadable();
+      claim.assertCurrent();
+      if (!isDeepStrictEqual(policy, selectPolicy())) {
+        throw new Error("Outbound source creation policy changed before commit");
+      }
+    },
+    retain: <T>(operation: () => Promise<T>) => actor.sessions.withSharedState(operation),
+  };
+}
 
 /** Capture logical locators without opening a source store that a completed retry never needs. */
 export function captureOutboundSessionBinding(params: {
@@ -276,12 +322,14 @@ export function captureOutboundSessionBinding(params: {
     env: destination.env,
     sessionKey: params.sourceSessionKey,
   };
+  const capturedSource = {
+    ...source,
+    storePath: resolveSessionStorePathForScope({ ...source, env: params.scope.env }, params.cfg),
+  };
   return {
     destination,
-    source: {
-      ...source,
-      storePath: resolveSessionStorePathForScope({ ...source, env: params.scope.env }, params.cfg),
-    },
+    source: capturedSource,
+    incognitoSource: captureOutboundIncognitoSource(capturedSource),
   };
 }
 
@@ -289,13 +337,14 @@ export function captureOutboundSessionBinding(params: {
 export function prepareOutboundSessionBinding(
   captured: CapturedOutboundSessionBinding,
 ): PreparedOutboundSessionBinding {
-  const { destination, source } = captured;
+  const { destination, source, incognitoSource } = captured;
   if (!source) {
     return { destination };
   }
   const target = toDatabaseOptions(resolveSqliteReadScope(source));
   return {
     destination,
+    incognitoSource,
     source: {
       ...source,
       databaseAgentId: target.agentId,
@@ -308,12 +357,42 @@ async function persistOutboundSessionEntry(
   params: OutboundSessionEntryParams,
   prepared?: PreparedOutboundSessionBinding,
 ): Promise<SessionEntry | null> {
+  const sourceScope =
+    prepared?.source ??
+    (params.sourceSessionKey
+      ? {
+          sessionKey: params.sourceSessionKey,
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+            agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
+          }),
+        }
+      : undefined);
+  const incognitoSource =
+    prepared?.incognitoSource ??
+    (sourceScope ? captureOutboundIncognitoSource(sourceScope) : undefined);
+  if (incognitoSource) {
+    return incognitoSource.retain(() =>
+      persistOutboundSessionEntryWithPolicy(params, prepared, incognitoSource),
+    );
+  }
+  return persistOutboundSessionEntryWithPolicy(params, prepared);
+}
+
+async function persistOutboundSessionEntryWithPolicy(
+  params: OutboundSessionEntryParams,
+  prepared?: PreparedOutboundSessionBinding,
+  incognitoSource?: NonNullable<ReturnType<typeof captureOutboundIncognitoSource>>,
+): Promise<SessionEntry | null> {
   const storePath =
     prepared?.destination.storePath ??
     resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
     });
-  let creation = params.creation;
+  const assertCommitAllowed = incognitoSource
+    ? composeSessionSourceAssertion([params.assertCommitAllowed, incognitoSource.assertCurrent])
+    : params.assertCommitAllowed;
+  assertCommitAllowed?.();
+  let creation = params.creation ?? incognitoSource?.policy;
   if (!creation && params.sourceSessionKey) {
     const source = prepared?.source
       ? loadSessionEntryReadOnlyInScope(prepared.source)
@@ -357,7 +436,7 @@ async function persistOutboundSessionEntry(
     accountId: params.accountId ?? undefined,
     threadId: params.route.threadId,
     ctx,
-    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+    ...(assertCommitAllowed ? { assertCommitAllowed } : {}),
     ...(params.workerGuard ? { workerGuard: params.workerGuard } : {}),
   };
   const entry = prepared
@@ -384,7 +463,7 @@ async function persistOutboundSessionEntry(
         fallbackEntry,
         preserveActivity: true,
         workerGuard: params.workerGuard ?? {},
-        assertCommitAllowed: params.assertCommitAllowed,
+        assertCommitAllowed,
       },
     );
   }
@@ -398,6 +477,7 @@ export async function ensureOutboundSessionEntry(
   try {
     await persistOutboundSessionEntry(params);
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.creation?.sandbox === "required" || params.sourceSessionKey) {
       createSubsystemLogger("outbound/session").warn(
         `Failed to preserve outbound session creation policy for ${params.route.sessionKey}: ${String(error)}`,

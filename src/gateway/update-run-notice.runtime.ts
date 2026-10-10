@@ -9,6 +9,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-notice.js";
@@ -18,6 +19,7 @@ import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js"
 import {
   authorizeUpdateRunNoticeTarget,
   recordUpdateRunNoticeSkipped,
+  resolveActorSelectedNoticeOrigin,
   resolveUpdateRunNoticeTarget,
 } from "./update-run-notice-target.js";
 
@@ -32,6 +34,9 @@ export async function createUpdateRunNotifier(
   context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
 ) {
   const env = context.workerContext.environment;
+  const sessionKey = resolveActorSelectedNoticeOrigin(initial.origin.sessionKey, env)
+    ? undefined
+    : initial.origin.sessionKey;
   const noticeTarget =
     target ??
     (await resolveUpdateRunNoticeTarget({
@@ -41,7 +46,6 @@ export async function createUpdateRunNotifier(
       threadId: initial.origin.deliveryContext?.threadId,
       env,
     }));
-  const { sessionKey } = initial.origin;
   // Update delivery belongs to the host and can outlive the requesting attempt.
   return (run: UpdateRunRecord, kind: UpdateRunNoticeKind) =>
     runWithoutOwnedSessionTranscriptWrites(async () => {
@@ -79,6 +83,15 @@ export async function createUpdateRunNotifier(
             sessionKey,
             message,
             deliveryIntentId,
+            assertCurrent() {
+              context.workerContext.admission.assertCurrent();
+              if (authorizeUpdateRunNoticeTarget(getConfig(), noticeTarget).kind !== "route") {
+                throw new PlatformMessageNotDispatchedError("Update notice authority ended", {
+                  cause: undefined,
+                  retryable: false,
+                });
+              }
+            },
           },
           context,
         );

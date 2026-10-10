@@ -53,6 +53,8 @@ export type IncognitoSessionFacts = {
     | "sandbox"
     | "sandboxMode"
     | "createdActor"
+    | "createdVia"
+    | "ttsAuto"
     | "agentRuntimeOverride"
     | "nativeRuntimeConsent"
     | "permissionMode"
@@ -70,6 +72,7 @@ export type IncognitoSessionFacts = {
   completionSources?: Array<{ sourceId: string; valid: boolean }>;
   steering?: Pick<
     SessionEntry,
+    | "verboseLevel"
     | "sessionId"
     | "updatedAt"
     | "lifecycleRevision"

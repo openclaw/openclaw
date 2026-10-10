@@ -13,13 +13,16 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { captureExternalSessionCommitGuard } from "../config/sessions/session-source-authority.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
@@ -47,6 +50,7 @@ import {
 } from "./client-voice-session.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 import { VoiceTranscriptOperationRegistry } from "./voice-transcript.js";
+import { voiceTranscriptEventId } from "./voice-transcript.js";
 
 // Install shared mocks before fixture imports load the voice persistence graph.
 const { useClientVoiceSessionHarness } = await vi.hoisted(
@@ -55,6 +59,59 @@ const { useClientVoiceSessionHarness } = await vi.hoisted(
 
 describe("client voice session worker contract", () => {
   const { releaseHeldWrites, sessionTurnMocks } = useClientVoiceSessionHarness();
+
+  it("reserves and confirms durable voice custody around an actor transcript append", async () => {
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor(
+      { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+      authority,
+    );
+    const sessionKey = "agent:main:dashboard:incognito-voice";
+    const entry = {
+      sessionId: "private-voice",
+      lifecycleRevision: "voice-generation",
+      updatedAt: 1,
+    };
+    try {
+      await actor.sessions.create(authority, { sessionKey, entry });
+      await withIncognitoSessionActor(actor, async () => {
+        const voiceSessionId = await createOrResumeClientVoiceSession({
+          agentId: "main",
+          sessionKey,
+          origin: "client",
+          voiceSessionId: "private-call",
+        });
+        const observation = observeHostDataSql();
+        try {
+          await appendClientVoiceTranscript({
+            agentId: "main",
+            sessionKey,
+            sessionTarget: { sessionKey, storePath: actor.path },
+            voiceSessionId,
+            entryId: "spoken-1",
+            role: "user",
+            text: "Private spoken words",
+          });
+          expect(observation.queries).toEqual([]);
+        } finally {
+          observation.restore();
+        }
+        expect(readVoiceSessionRecord("main", voiceSessionId)).toMatchObject({
+          hasUserTranscript: true,
+          transcriptFailureKeys: [],
+        });
+        expect(
+          await findTranscriptEvent(
+            { agentId: "main", storePath: actor.path, sessionKey, sessionId: entry.sessionId },
+            { kind: "latest" },
+          ),
+        ).toMatchObject({ event: { id: voiceTranscriptEventId(voiceSessionId, "spoken-1") } });
+      });
+      expect(existsSync(actor.path)).toBe(false);
+    } finally {
+      await actor.close();
+    }
+  });
 
   it("persists admission, consult effects, transcript bookkeeping, and close off the caller thread", async () => {
     const target = { agentId: "main", sessionKey: "agent:main:main" };

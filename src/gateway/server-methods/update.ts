@@ -68,7 +68,10 @@ import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { recordLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
+import {
+  resolveActorSelectedNoticeOrigin,
+  resolveUpdateRunNoticeTarget,
+} from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -123,7 +126,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-      extractDeliveryInfo(sessionKey, { cfg: config });
+      resolveActorSelectedNoticeOrigin(sessionKey)
+        ? {}
+        : extractDeliveryInfo(sessionKey, { cfg: config });
     let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMs = params.timeoutMs === undefined ? undefined : Math.max(1000, params.timeoutMs);

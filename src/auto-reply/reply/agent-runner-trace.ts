@@ -8,6 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EmbeddedAgentRunMeta } from "../../agents/embedded-agent-runner/types.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-usage.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
@@ -253,7 +254,8 @@ export async function accumulateSessionUsageFromTranscript(params: {
       cacheWrite: usage.cacheWrite,
       total: usage.totalTokens,
     };
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return undefined;
   }
 }

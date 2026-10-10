@@ -5,4 +5,8 @@ export type PreparedTalkSessionTarget = Readonly<{
   sessionKey: string;
   canonicalKey: string;
   storePath: string;
+  /** Captured private owner; it cannot be replaced by another actor at the same path. */
+  assertCurrent?: () => void;
+  /** Consume history under the captured owner's binding, including detached callers. */
+  withSource?: <T>(consume: () => Promise<T>) => Promise<T>;
 }>;

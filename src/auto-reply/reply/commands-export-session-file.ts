@@ -46,8 +46,14 @@ export async function writeSessionExportFile(params: {
   requestedPath?: string;
   defaultFileName: string;
   contents: string;
+  assertBeforeMutation?: () => void;
 }): Promise<{ absolutePath: string; displayPath: string }> {
-  const workspaceRoot = await root(params.workspaceDir, { mkdir: true, mode: 0o600 });
+  params.assertBeforeMutation?.();
+  const workspaceRoot = await root(params.workspaceDir, {
+    mkdir: true,
+    mode: 0o600,
+    ...(params.assertBeforeMutation ? { assertBeforeMutation: params.assertBeforeMutation } : {}),
+  });
 
   let writtenPath: string;
   if (params.requestedPath) {
@@ -61,6 +67,7 @@ export async function writeSessionExportFile(params: {
   }
 
   const absolutePath = await workspaceRoot.resolve(writtenPath);
+  params.assertBeforeMutation?.();
   const relativePath = path.relative(workspaceRoot.rootReal, absolutePath);
   return {
     absolutePath,

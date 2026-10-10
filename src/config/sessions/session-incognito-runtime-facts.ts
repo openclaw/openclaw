@@ -50,6 +50,8 @@ export function projectIncognitoSessionRuntimeFacts(
           sandbox: entry.sandbox,
           sandboxMode: entry.sandboxMode,
           createdActor: entry.createdActor,
+          createdVia: entry.createdVia,
+          ttsAuto: entry.ttsAuto,
           agentRuntimeOverride: entry.agentRuntimeOverride,
           nativeRuntimeConsent: entry.nativeRuntimeConsent,
           permissionMode: entry.permissionMode,
@@ -63,6 +65,7 @@ export function projectIncognitoSessionRuntimeFacts(
       : undefined,
     steering: entry
       ? {
+          verboseLevel: entry.verboseLevel,
           lifecycleRevision: entry.lifecycleRevision,
           lifecycleRunId: entry.lifecycleRunId,
           startedAt: entry.startedAt,

@@ -2,7 +2,9 @@ import {
   loadSessionEntryReadOnly,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -18,12 +20,54 @@ export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
 ): Promise<void> {
+  const source = captureIncognitoSessionSource({ sessionKey, storePath });
+  if (source) {
+    if ("kind" in source) {
+      return;
+    }
+    return source.actor.sessions.withSharedState(async () => {
+      const read = await source.actor.sessions.read(
+        { assertCurrent: () => source.actor.assertCurrent() },
+        { sessionKey },
+        source.admissionSignal,
+      );
+      read.snapshot.assertCurrent();
+      const claim = source.actor.sessions.captureCurrent(sessionKey);
+      return deliverNotice(
+        sessionKey,
+        storePath,
+        read.entry,
+        () => {
+          source.admissionSignal?.throwIfAborted();
+          claim.assertCurrent();
+          const current = source.actor.sessions.readDelivery(sessionKey);
+          if (
+            deliveryContextKey(deliveryContextFromSession(current)) !==
+            deliveryContextKey(deliveryContextFromSession(read.entry))
+          ) {
+            throw new Error("Pending delivery notice route changed before delivery");
+          }
+        },
+        true,
+      );
+    });
+  }
   const entry = loadSessionEntryReadOnly({
     sessionKey,
     storePath,
     readConsistency: "latest",
     hydrateSkillPromptRefs: false,
   });
+  return deliverNotice(sessionKey, storePath, entry);
+}
+
+async function deliverNotice(
+  sessionKey: string,
+  storePath: string,
+  entry: SessionEntry | undefined,
+  assertCurrent: () => void = () => {},
+  liveOnly = false,
+): Promise<void> {
   const notice = entry?.pendingDeliveryNotice;
   const context = normalizeDeliveryContext(notice?.context);
   const runtime = getGatewayRecoveryRuntime();
@@ -41,6 +85,7 @@ export async function deliverPendingDeliveryNotice(
   const idempotencyKey = `main-session-restart-recovery:pending-final:${notice.intentId}`;
   let delivered: boolean;
   try {
+    assertCurrent();
     const outcome = await runtime.sendRecoveryNotice({
       channel: context.channel,
       to: context.to,
@@ -48,15 +93,26 @@ export async function deliverPendingDeliveryNotice(
       threadId: context.threadId,
       text: PENDING_DELIVERY_NOTICE,
       idempotencyKey,
+      ...(liveOnly
+        ? {
+            liveOnly: true as const,
+            isCurrent: () => {
+              assertCurrent();
+              return true;
+            },
+          }
+        : {}),
     });
     delivered = !outcome.suppressed;
   } catch {
+    assertCurrent();
     const owner = await findDeliveryIntentOwner(idempotencyKey);
     if (owner?.status !== "completed" && owner?.status !== "failed") {
       return;
     }
     delivered = owner.status === "completed";
   }
+  assertCurrent();
   if (
     delivered &&
     !(
@@ -87,6 +143,6 @@ export async function deliverPendingDeliveryNotice(
             updatedAt: Date.now(),
           }
         : null,
-    { skipMaintenance: true, takeCacheOwnership: true },
+    { skipMaintenance: true, takeCacheOwnership: true, assertCommitAllowed: assertCurrent },
   );
 }

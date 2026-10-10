@@ -1,8 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  applySessionPatchProjection,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import { applySessionPatchProjection } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
@@ -20,14 +19,17 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
       return nameReply("Naming is not available for this session.");
     }
 
+    const source = captureIncognitoSessionSource(params);
     const title = normalizeOptionalString(rawTitle);
 
     // No argument: surface the current name plus a deterministic suggestion
     // derived locally (no LLM, no mutation). Apply it with `/name <title>`.
     if (!title) {
       const entry =
-        loadSessionEntryReadOnly({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
-        params.sessionEntry;
+        (await readSessionEntryReadOnlyInWorker({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        })) ?? (source ? undefined : params.sessionEntry);
       const current = normalizeOptionalString(entry?.label);
       const suggestionEntry = entry ? { ...entry, label: undefined } : undefined;
       const suggestion = deriveSessionTitle(suggestionEntry);
@@ -54,7 +56,8 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
         // Native slash may invoke `/name` before the fast path persists the entry.
         // Seed a copy under the canonical key without mutating params on failed writes.
         const entry =
-          existingEntry ?? (params.sessionEntry ? { ...params.sessionEntry } : undefined);
+          existingEntry ??
+          (!source && params.sessionEntry ? { ...params.sessionEntry } : undefined);
         if (!entry) {
           return { ok: false, error: "no active session to name" };
         }
@@ -77,16 +80,10 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
     if (!result.ok) {
       return nameReply(`Couldn't rename the session: ${result.error}`);
     }
-    if (params.sessionStore && params.sessionKey && params.storePath) {
-      const entry = loadSessionEntryReadOnly({
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
-      if (entry) {
-        params.sessionStore[params.sessionKey] = entry;
-        params.sessionEntry = entry;
-      }
+    if (params.sessionStore) {
+      params.sessionStore[params.sessionKey] = result.entry;
     }
+    params.sessionEntry = result.entry;
     markCommandSessionMetadataChanged(params);
     return nameReply(`✅ Session renamed to “${result.entry.label}”.`);
   },

@@ -16,6 +16,9 @@ import {
   appendTranscriptEventSync,
   loadSessionEntryReadOnly,
 } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
@@ -27,6 +30,7 @@ import {
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 
@@ -76,172 +80,232 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   };
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
-  const scope = resolveConversationRegistryScope({ agentId, config: params.cfg });
-  const sessionEntry = loadSessionEntryReadOnly({
-    ...scope,
-    sessionKey,
-    readConsistency: "latest",
-  });
-  if (!sessionEntry) {
+  const source = captureIncognitoSessionSource({ agentId, sessionKey });
+  if (source && "kind" in source) {
     return false;
   }
-  const timestamp = normalizeMessageTimestampMs(params.ctx.Timestamp);
-  const parentConversationRef = threadId
-    ? (conversation.parentConversationRef ??
-      buildConversationRef({
-        channel: conversation.channel,
-        accountId: conversation.accountId,
-        kind: conversation.kind,
-        peerId: conversation.peerId,
-      }))
-    : undefined;
-  const input: UserTurnInput = {
-    // This is the model-facing reply returned by the tool, so its durable copy
-    // must pass through the same write hook and redaction policy as transcripts.
-    text: replyText,
-    timestamp,
-    idempotencyKey: `conversation-inbound:${conversation.conversationRef}:${messageId}`,
-    ...(params.ctx.InputProvenance ? { provenance: params.ctx.InputProvenance } : {}),
-    transport: {
-      channel: conversation.channel,
-      conversationRef: conversation.conversationRef,
-      ...replyTarget,
-    },
-    sender:
-      conversation.kind === "group" || conversation.kind === "channel"
-        ? buildChannelUserTurnSender(params.ctx)
-        : undefined,
-  };
-  const claim = await claimPendingConversationTurnReply({
-    agentId,
-    conversationRef: conversation.conversationRef,
-    ...(parentConversationRef ? { parentConversationRef } : {}),
-    sessionId: sessionEntry.sessionId,
-    messageId,
-    replyToId,
-    threadId,
-    text: replyText,
-    timestamp,
-  });
-  if (!claim) {
-    if (!replyToId) {
+  const scope = resolveConversationRegistryScope({ agentId, config: params.cfg });
+  const consume = async (
+    sessionEntry: SessionEntry | undefined,
+    assertSourceCurrent: () => void = () => {},
+  ): Promise<boolean> => {
+    if (!sessionEntry) {
       return false;
     }
-    const operation =
-      (await findConversationTurnDeliveryByReplyTarget(scope, {
+    const timestamp = normalizeMessageTimestampMs(params.ctx.Timestamp);
+    const parentConversationRef = threadId
+      ? (conversation.parentConversationRef ??
+        buildConversationRef({
+          channel: conversation.channel,
+          accountId: conversation.accountId,
+          kind: conversation.kind,
+          peerId: conversation.peerId,
+        }))
+      : undefined;
+    const input: UserTurnInput = {
+      // This is the model-facing reply returned by the tool, so its durable copy
+      // must pass through the same write hook and redaction policy as transcripts.
+      text: replyText,
+      timestamp,
+      idempotencyKey: `conversation-inbound:${conversation.conversationRef}:${messageId}`,
+      ...(params.ctx.InputProvenance ? { provenance: params.ctx.InputProvenance } : {}),
+      transport: {
+        channel: conversation.channel,
         conversationRef: conversation.conversationRef,
-        replyToId,
-      })) ??
-      (parentConversationRef && parentConversationRef !== conversation.conversationRef
-        ? await findConversationTurnDeliveryByReplyTarget(scope, {
-            conversationRef: parentConversationRef,
-            replyToId,
-          })
-        : undefined);
-    if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
-      return true;
-    }
-    if (operation && operation.status !== "replied") {
-      // Ordinary inbound dispatch owns this reply when no process-local waiter remains.
-      await markConversationDeliverySent(scope, operation.operationId, replyToId);
-    }
-    return false;
-  }
-  let replyCommitted = false;
-  try {
-    if (sessionEntry.sessionId !== claim.sessionId) {
-      throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
-    }
-    const prepared = preparePersistedUserTurnMessageForTranscriptWrite(
-      buildPersistedUserTurnMessage(input),
-      {
-        agentId,
-        sessionKey,
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        ...replyTarget,
       },
-    );
-    if (!prepared) {
-      throw new Error("captured conversation turn reply was blocked before persistence");
+      sender:
+        conversation.kind === "group" || conversation.kind === "channel"
+          ? buildChannelUserTurnSender(params.ctx)
+          : undefined,
+    };
+    const claim = await claimPendingConversationTurnReply({
+      agentId,
+      conversationRef: conversation.conversationRef,
+      ...(parentConversationRef ? { parentConversationRef } : {}),
+      sessionId: sessionEntry.sessionId,
+      messageId,
+      replyToId,
+      threadId,
+      text: replyText,
+      timestamp,
+    });
+    if (!claim) {
+      assertSourceCurrent();
+      if (!replyToId) {
+        return false;
+      }
+      const operation =
+        (await findConversationTurnDeliveryByReplyTarget(scope, {
+          conversationRef: conversation.conversationRef,
+          replyToId,
+        })) ??
+        (parentConversationRef && parentConversationRef !== conversation.conversationRef
+          ? await findConversationTurnDeliveryByReplyTarget(scope, {
+              conversationRef: parentConversationRef,
+              replyToId,
+            })
+          : undefined);
+      assertSourceCurrent();
+      if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
+        return true;
+      }
+      if (operation && operation.status !== "replied") {
+        // Ordinary inbound dispatch owns this reply when no process-local waiter remains.
+        await markConversationDeliverySent(
+          scope,
+          operation.operationId,
+          replyToId,
+          source ? assertSourceCurrent : undefined,
+        );
+        assertSourceCurrent();
+      }
+      return false;
     }
-    const persistedMessage = redactTranscriptMessage(prepared, params.cfg);
-    const persistedReplyText = readPersistedReplyText(persistedMessage);
-    if (!persistedReplyText) {
-      throw new Error("captured conversation turn reply has no persistable text");
-    }
-    // Commit the replayable reply before its optional transcript audit artifact.
-    await markConversationDeliveryReplied(
-      scope,
-      {
-        operationId: claim.turnId,
-        session: {
-          sessionKey,
-          sessionId: claim.sessionId,
-          lifecycleRevision: sessionEntry.lifecycleRevision,
-        },
-        reply: {
-          ...replyTarget,
-          text: persistedReplyText,
-          timestamp: timestamp ?? Date.now(),
-        },
-      },
-      claim.assertCurrent,
-    );
-    replyCommitted = true;
-    return await runConversationDatabaseWrite(scope, (writeScope) => {
-      claim.assertCurrent();
-      const current = loadSessionEntryReadOnly({
-        ...writeScope,
-        sessionKey,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== claim.sessionId ||
-        current.lifecycleRevision !== sessionEntry.lifecycleRevision
-      ) {
+    let replyCommitted = false;
+    try {
+      assertSourceCurrent();
+      if (sessionEntry.sessionId !== claim.sessionId) {
         throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
       }
-      const artifactId = `conversation-turn-reply-${claim.turnId}`;
-      // The tool result owns model context. A side artifact keeps an audit trail
-      // without inserting a user row between an active tool call and its result.
-      let persisted = false;
-      try {
-        const appendResult = appendTranscriptEventSync(
-          { ...writeScope, sessionId: sessionEntry.sessionId, sessionKey },
-          {
-            type: "custom",
-            id: artifactId,
-            customType: CONVERSATION_TURN_REPLY_CUSTOM_TYPE,
-            appendMode: "side",
+      const prepared = preparePersistedUserTurnMessageForTranscriptWrite(
+        buildPersistedUserTurnMessage(input),
+        {
+          agentId,
+          sessionKey,
+          beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        },
+      );
+      if (!prepared) {
+        throw new Error("captured conversation turn reply was blocked before persistence");
+      }
+      const persistedMessage = redactTranscriptMessage(prepared, params.cfg);
+      const persistedReplyText = readPersistedReplyText(persistedMessage);
+      if (!persistedReplyText) {
+        throw new Error("captured conversation turn reply has no persistable text");
+      }
+      // Commit the replayable reply before its optional transcript audit artifact.
+      await markConversationDeliveryReplied(
+        scope,
+        {
+          operationId: claim.turnId,
+          // The conversation ledger remains durable; a bound private session is
+          // validated by its live actor, never by a same-key durable row.
+          ...(!source
+            ? {
+                session: {
+                  sessionKey,
+                  sessionId: claim.sessionId,
+                  lifecycleRevision: sessionEntry.lifecycleRevision,
+                },
+              }
+            : {}),
+          reply: {
+            ...replyTarget,
+            text: persistedReplyText,
             timestamp: timestamp ?? Date.now(),
-            data: {
-              turnId: claim.turnId,
-              conversationRef: conversation.conversationRef,
-              ...replyTarget,
-              message: persistedMessage,
-            },
+          },
+        },
+        () => {
+          assertSourceCurrent();
+          claim.assertCurrent();
+        },
+      );
+      replyCommitted = true;
+      const artifactId = `conversation-turn-reply-${claim.turnId}`;
+      const event = {
+        type: "custom",
+        id: artifactId,
+        customType: CONVERSATION_TURN_REPLY_CUSTOM_TYPE,
+        appendMode: "side" as const,
+        timestamp: timestamp ?? Date.now(),
+        data: {
+          turnId: claim.turnId,
+          conversationRef: conversation.conversationRef,
+          ...replyTarget,
+          message: persistedMessage,
+        },
+      };
+      if (source) {
+        await appendPreparedTranscriptEvent(
+          {
+            agentId,
+            storePath: source.actor.path,
+            sessionId: sessionEntry.sessionId,
+            sessionKey,
+            expectedLifecycleRevision: sessionEntry.lifecycleRevision ?? null,
+          },
+          event,
+          () => {
+            assertSourceCurrent();
+            claim.assertCurrent();
           },
         );
-        persisted = appendResult.ok && appendResult.value;
-        if (!appendResult.ok) {
-          logVerbose(
-            `captured conversation turn reply audit persistence failed: ${appendResult.error.code}`,
-          );
+        claim.complete({ transcriptArtifactId: artifactId });
+        return true;
+      }
+      return await runConversationDatabaseWrite(scope, (writeScope) => {
+        claim.assertCurrent();
+        const current = loadSessionEntryReadOnly({
+          ...writeScope,
+          sessionKey,
+          readConsistency: "latest",
+        });
+        if (
+          current?.sessionId !== claim.sessionId ||
+          current.lifecycleRevision !== sessionEntry.lifecycleRevision
+        ) {
+          throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
         }
-      } catch (error) {
-        logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
+        // The tool result owns model context. A side artifact keeps an audit trail
+        // without inserting a user row between an active tool call and its result.
+        let persisted = false;
+        try {
+          const appendResult = appendTranscriptEventSync(
+            { ...writeScope, sessionId: sessionEntry.sessionId, sessionKey },
+            event,
+          );
+          persisted = appendResult.ok && appendResult.value;
+          if (!appendResult.ok) {
+            logVerbose(
+              `captured conversation turn reply audit persistence failed: ${appendResult.error.code}`,
+            );
+          }
+        } catch (error) {
+          logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
+        }
+        if (!persisted) {
+          logVerbose("captured conversation turn reply audit artifact was not persisted");
+        }
+        claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
+        return true;
+      });
+    } catch (error) {
+      claim.release();
+      logVerbose(`conversation turn reply capture failed: ${String(error)}`);
+      // A committed reply remains consumed even when its actor or audit owner ends.
+      if (!replyCommitted) {
+        rethrowIncognitoSessionError(error);
       }
-      if (!persisted) {
-        logVerbose("captured conversation turn reply audit artifact was not persisted");
-      }
-      claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
-      return true;
+      return replyCommitted;
+    }
+  };
+  if (source) {
+    return source.actor.sessions.withSharedState(async () => {
+      const read = await source.actor.sessions.read(
+        { assertCurrent: () => source.actor.assertCurrent() },
+        { sessionKey },
+        source.admissionSignal,
+      );
+      read.snapshot.assertCurrent();
+      const claim = source.actor.sessions.captureCurrent(sessionKey);
+      return consume(read.entry, () => {
+        source.admissionSignal?.throwIfAborted();
+        claim.assertCurrent();
+      });
     });
-  } catch (error) {
-    claim.release();
-    logVerbose(`conversation turn reply capture failed: ${String(error)}`);
-    // A committed reply remains consumed if the waiter expires during audit admission.
-    return replyCommitted;
   }
+  return consume(loadSessionEntryReadOnly({ ...scope, sessionKey, readConsistency: "latest" }));
 }
 
 /** Consumes a correlated channel reply before it can start a second local agent turn. */
@@ -252,6 +316,7 @@ export async function capturePendingConversationTurnReply(params: {
   try {
     return await capturePendingConversationTurnReplyUnsafe(params);
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     // Correlation is an optional interception path. Storage/config failures must
     // fall through to ordinary inbound dispatch and its existing lifecycle cleanup.
     logVerbose(`conversation turn reply capture unavailable: ${String(error)}`);

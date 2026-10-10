@@ -4,6 +4,8 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -20,20 +22,28 @@ type VerboseGateParams = {
 
 const VERBOSE_GATE_SESSION_REFRESH_MS = 250;
 
-function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | undefined {
+function readCurrentVerboseLevel(
+  params: VerboseGateParams,
+  source: ReturnType<typeof captureIncognitoSessionSource>,
+): VerboseLevel | undefined {
   if (!params.sessionKey || !params.storePath) {
     return undefined;
   }
   try {
-    const entry = loadSessionEntryReadOnly({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      clone: false,
-    });
+    const entry = source
+      ? "kind" in source
+        ? undefined
+        : source.actor.sessions.readSteering(params.sessionKey)
+      : loadSessionEntryReadOnly({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          clone: false,
+        });
     return typeof entry?.verboseLevel === "string"
       ? normalizeVerboseLevel(entry.verboseLevel)
       : undefined;
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return undefined;
   }
 }
@@ -42,9 +52,21 @@ function createVerboseGate(
   params: VerboseGateParams,
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
+  const source = captureIncognitoSessionSource(params);
   let cachedLevel: VerboseLevel | undefined;
   let cachedAtMs = Number.NEGATIVE_INFINITY;
   return () => {
+    source?.admissionSignal?.throwIfAborted();
+    if (source) {
+      if ("kind" in source) {
+        source.assertCurrent();
+        return false;
+      }
+      source.actor.assertReadable();
+      if (params.sessionKey && !source.actor.sessions.readSteering(params.sessionKey)) {
+        return false;
+      }
+    }
     // Explicit turn hints stay fixed; only inherited settings follow live session changes.
     if (params.verboseLevelOverride != null) {
       return shouldEmit(params.verboseLevelOverride);
@@ -52,9 +74,12 @@ function createVerboseGate(
     if (!params.sessionKey || !params.storePath) {
       return shouldEmit(params.resolvedVerboseLevel);
     }
+    if (source) {
+      return shouldEmit(readCurrentVerboseLevel(params, source) ?? params.resolvedVerboseLevel);
+    }
     const now = Date.now();
     if (now - cachedAtMs >= VERBOSE_GATE_SESSION_REFRESH_MS) {
-      cachedLevel = readCurrentVerboseLevel(params);
+      cachedLevel = readCurrentVerboseLevel(params, source);
       cachedAtMs = now;
     }
     return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);

@@ -12,6 +12,15 @@ export async function readTalkRealtimeInitialItems(
   target: PreparedTalkSessionTarget,
   assertCurrent: () => void,
 ): Promise<TalkHistoryItem[]> {
+  const consume = () => readRetainedTalkRealtimeInitialItems(target, assertCurrent);
+  return target.withSource ? target.withSource(consume) : consume();
+}
+
+async function readRetainedTalkRealtimeInitialItems(
+  target: PreparedTalkSessionTarget,
+  assertCurrent: () => void,
+): Promise<TalkHistoryItem[]> {
+  target.assertCurrent?.();
   assertCurrent();
   const sessionTarget = {
     agentId: target.agentId,
@@ -27,6 +36,7 @@ export async function readTalkRealtimeInitialItems(
   return await readRestoredSessionTranscript(
     { ...sessionTarget, sessionId },
     async () => {
+      target.assertCurrent?.();
       assertCurrent();
       const preview = await readSessionPreviewItemsFromTranscriptAsync(
         { ...sessionTarget, sessionId },
@@ -35,6 +45,7 @@ export async function readTalkRealtimeInitialItems(
         "model-context",
       );
       assertCurrent();
+      target.assertCurrent?.();
       const items = preview.filter(
         (item): item is TalkHistoryItem => item.role === "user" || item.role === "assistant",
       );
