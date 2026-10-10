@@ -31,7 +31,6 @@ suite.define(() => {
           const documentRelease = createDeferred();
           const configRelease = createDeferred();
           let reloading = false;
-          let helloReleasedAt = 0;
           let boardRequestedAt = 0;
           const widgetHtml = buildWidgetDocument(title, "<h1>All systems ready</h1>");
           await page.route("**/__openclaw__/board/**", async (route) => {
@@ -221,7 +220,7 @@ suite.define(() => {
               ),
             ).toBe(true);
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
-            helloReleasedAt = performance.now();
+            const helloReleasedAt = performance.now();
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("board.get");
             expect(await skeleton.count()).toBe(1);
