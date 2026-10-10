@@ -15,7 +15,7 @@ export function debugEmbeddingsLog(message: string, meta?: Record<string, unknow
 
 /** Only numeric HTTP metadata belongs in embedding shape diagnostics. */
 export function embeddingResponseLogMeta(response: Response) {
-  const bytes = Number(response.headers.get("content-length") ?? NaN);
+  const bytes = Number(response.headers.get("content-length") ?? Number.NaN);
   return {
     status: response.status,
     responseBytes: Number.isSafeInteger(bytes) && bytes >= 0 ? bytes : undefined,
