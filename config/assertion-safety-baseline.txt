@@ -595,7 +595,6 @@ extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	3
-extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
@@ -1054,7 +1053,7 @@ packages/ai/src/providers/tool-result-text.ts	2
 packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
-packages/ai/src/transports/anthropic-payload-policy.ts	6
+packages/ai/src/transports/anthropic-payload-policy.ts	4
 packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
@@ -1665,7 +1664,7 @@ src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	7
-src/cli/devices-cli.runtime.ts	10
+src/cli/devices-cli.runtime.ts	9
 src/cli/directory-cli.ts	2
 src/cli/dns-cli.ts	3
 src/cli/exec-approvals-cli.ts	9
@@ -2662,8 +2661,7 @@ ui/src/app/native-notifications.ts	2
 ui/src/app/native-route-memory.ts	1
 ui/src/app/native-web-chrome.ts	2
 ui/src/app/overlays.ts	1
-ui/src/app/server-prefs-state.ts	10
-ui/src/app/server-prefs.ts	5
+ui/src/app/server-prefs-state.ts	1
 ui/src/app/settings.ts	2
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
@@ -2672,7 +2670,7 @@ ui/src/app/web-push.runtime.ts	1
 ui/src/components/agent-select.ts	2
 ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-nav-menus.ts	1
-ui/src/components/app-sidebar-render.ts	4
+ui/src/components/app-sidebar-render.ts	3
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
 ui/src/components/app-sidebar-session-menu-renderers.ts	3

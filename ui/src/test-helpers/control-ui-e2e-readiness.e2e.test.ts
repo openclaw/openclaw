@@ -3,7 +3,11 @@ import { openChatSidePanelType } from "../e2e/chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "../e2e/control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "../e2e/control-ui-e2e-suite.test-support.ts";
 import { waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
-import { defaultControlUiFeatureMethods, installMockGateway } from "./control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "./control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({ name: "Initial roster navigation readiness" });
 
@@ -60,6 +64,34 @@ suite.define(() => {
     });
   });
 
+  it("navigates through a lazily loaded readiness hook after reload", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const key = "agent:main:lazy-readiness-navigation";
+      const requests: string[] = [];
+      const readinessModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/app/control-ui-readiness-lit.ts",
+      );
+      page.on("request", (request) => {
+        if (readinessModule.test(request.url())) {
+          requests.push(request.url());
+        }
+      });
+      await installMockGateway(page, {
+        awaitInitialRoster: false,
+        sessions: [{ key, label: "Lazy navigation target", kind: "direct", updatedAt: 1 }],
+        historyMessages: [{ role: "assistant", content: "Navigated after reloading." }],
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.reload();
+      await page.locator(".new-session-page__message").waitFor();
+      expect(requests).toEqual([]);
+      await navigateToControlUiSession(page, key);
+      await page.getByText("Navigated after reloading.", { exact: true }).waitFor();
+      expect(requests).toHaveLength(1);
+      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey)).toBe(key);
+    });
+  });
+
   it.each([false, true])(
     "catches up after boot, navigation, and terminal activation before its first read (offline: %s)",
     async (offline) => {
@@ -90,7 +122,8 @@ suite.define(() => {
         await page.locator("openclaw-terminal-panel .tp-host canvas").waitFor();
         if (offline) {
           await gateway.setOnline(false);
-          await page.locator(".gateway-status__label", { hasText: "Reconnecting…" }).waitFor();
+          // The rail exposes status on the visible profile control, not its clipped text.
+          await page.getByRole("button", { name: /Reconnecting…/ }).waitFor();
         }
         expect(requests).toEqual([]);
 

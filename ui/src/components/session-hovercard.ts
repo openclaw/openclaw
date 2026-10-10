@@ -7,6 +7,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import { i18n, t } from "../i18n/index.ts";
+import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import {
@@ -26,6 +27,8 @@ import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progr
 import "./session-hovercard.css";
 import "./tooltip.ts";
 import "./viewer-facepile.ts";
+
+registerGitHubEnglish();
 
 // Preserve the pre-dropdown facepile footprint; further identities remain linked in the menu.
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
