@@ -4,7 +4,6 @@ import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import {
   addGatewayClientOptions,
   callGatewayFromCli,
-  GATEWAY_SERVER_CAPS,
   parseTimeoutMsWithFallback,
   isImplicitLocalGatewayTargetFromCli,
 } from "openclaw/plugin-sdk/gateway-runtime";
@@ -89,11 +88,10 @@ export function registerWorkboardCli(params: {
     options?: { scopes: string[]; timeoutMs: number; expectFinal?: boolean },
   ) =>
     runWithLocalStateOwner<T>({
-      method,
+      method: `${method}.owner`,
       params: input,
       target: "Workboard",
       ...options,
-      requiredCapabilities: [GATEWAY_SERVER_CAPS.WORKBOARD_CLI_OWNER],
       recoveryCommand: "openclaw workboard list --json",
       runLocal: ({ assertCurrent }) =>
         params.withStore(async (store) => {

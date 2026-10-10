@@ -34,7 +34,7 @@ async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => P
 }
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
-  await withProxyCaptureOwner(async (store) => {
+  await withProxyCaptureOwner(async (store, signal) => {
     const settings = resolveDebugProxySettings();
     const errors: unknown[] = [];
     const finalizers: Array<() => Promise<void>> = [];
@@ -49,6 +49,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
         proxyUrl: settings.proxyUrl,
       });
       const ca = await ensureDebugProxyCa(settings.certDir);
+      signal.throwIfAborted();
       const server = await startDebugProxyServer({
         host: opts.host,
         port: opts.port,
@@ -56,6 +57,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
         captureStore: store,
       });
       finalizers.unshift(() => server.stop());
+      signal.throwIfAborted();
       process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
       process.stdout.write(`CA cert: ${ca.certPath}\n`);
       process.stdout.write(`Capture DB: ${store.dbPath}\n`);
@@ -85,7 +87,7 @@ export async function runDebugProxyRunCommand(opts: {
   if (opts.commandArgs.length === 0) {
     throw new Error("proxy run requires a command after --");
   }
-  await withProxyCaptureOwner(async (store) => {
+  await withProxyCaptureOwner(async (store, signal) => {
     const sessionId = randomUUID();
     const baseSettings = resolveDebugProxySettings();
     const settings = {
@@ -103,6 +105,7 @@ export async function runDebugProxyRunCommand(opts: {
         sourceProcess: "openclaw",
         proxyUrl: undefined,
       });
+      signal.throwIfAborted();
       const server = await startDebugProxyServer({
         host: opts.host,
         port: opts.port,
@@ -110,6 +113,7 @@ export async function runDebugProxyRunCommand(opts: {
         captureStore: store,
       });
       finalizers.unshift(() => server.stop());
+      signal.throwIfAborted();
       const [command, ...args] = opts.commandArgs;
       const childEnv = {
         ...applyDebugProxyEnv(process.env, {

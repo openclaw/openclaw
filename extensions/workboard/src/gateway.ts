@@ -28,6 +28,13 @@ import {
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+const CLI_OWNER_METHODS = new Set([
+  "workboard.cards.list",
+  "workboard.cards.create",
+  "workboard.cards.move",
+  "workboard.cards.dispatch",
+  "workboard.cards.dispatchWithOptions",
+]);
 
 function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoardView | undefined {
   const unknownParam = Object.keys(input).find(
@@ -133,55 +140,68 @@ export function registerWorkboardGatewayMethods(params: {
     scope: typeof READ_SCOPE | typeof WRITE_SCOPE,
     handler: (request: GatewayMethodContext) => unknown,
   ) => {
-    api.registerGatewayMethod(
-      method,
-      async (request) => {
-        let assertOwnerCurrent: (() => void) | undefined;
-        if (request.params.expectedOwnerId !== undefined) {
-          try {
-            const expectedOwnerId = readStringParam(request.params, "expectedOwnerId", {
-              required: true,
-            });
-            assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, request);
-          } catch (error) {
+    const requestHandler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1] = async (
+      request,
+    ) => {
+      let assertOwnerCurrent: (() => void) | undefined;
+      if (request.params?.expectedOwnerId !== undefined) {
+        try {
+          const expectedOwnerId = readStringParam(request.params, "expectedOwnerId", {
+            required: true,
+          });
+          assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, request);
+        } catch (error) {
+          request.respond(false, undefined, {
+            code: "UNAVAILABLE",
+            message: String(error),
+            details: { mutationAccepted: false },
+          });
+          return;
+        }
+        const { expectedOwnerId: _expectedOwnerId, ...input } = request.params;
+        const previousGuard = request.sessionMutationCommitGuard;
+        request = {
+          ...request,
+          params: input,
+          sessionMutationCommitGuard: () => {
+            previousGuard?.();
+            assertOwnerCurrent?.();
+          },
+        };
+      }
+      try {
+        await store.runOperation(async () => {
+          assertOwnerCurrent?.();
+          if (method === "workboard.cards.attachments.add") {
+            assertUploadsAllowed(request.client);
+          }
+          request.respond(true, await handler(request));
+        });
+      } catch (error) {
+        respondError(request.respond, error);
+      }
+    };
+    api.registerGatewayMethod(method, requestHandler, { scope });
+    if (CLI_OWNER_METHODS.has(method)) {
+      api.registerGatewayMethod(
+        `${method}.owner`,
+        (request) => {
+          if (
+            typeof request.params?.expectedOwnerId !== "string" ||
+            !request.params.expectedOwnerId.trim()
+          ) {
             request.respond(false, undefined, {
-              code: "UNAVAILABLE",
-              message: String(error),
+              code: "INVALID_REQUEST",
+              message: "expectedOwnerId is required",
               details: { mutationAccepted: false },
             });
             return;
           }
-          const { expectedOwnerId: _expectedOwnerId, ...input } = request.params;
-          const previousGuard = request.sessionMutationCommitGuard;
-          request = {
-            ...request,
-            params: input,
-            sessionMutationCommitGuard: () => {
-              previousGuard?.();
-              assertOwnerCurrent?.();
-            },
-          };
-        }
-        try {
-          await store.runOperation(async () => {
-            assertOwnerCurrent?.();
-            if (method === "workboard.cards.attachments.add") {
-              assertUploadsAllowed(request.client);
-            }
-            request.respond(
-              true,
-              await store.withMutationAuthority(
-                () => Promise.resolve(handler(request)),
-                assertOwnerCurrent,
-              ),
-            );
-          });
-        } catch (error) {
-          respondError(request.respond, error);
-        }
-      },
-      { scope },
-    );
+          return requestHandler(request);
+        },
+        { scope },
+      );
+    }
   };
   const cardMutation = (
     method: string,
@@ -206,7 +226,12 @@ export function registerWorkboardGatewayMethods(params: {
     register(`workboard.cards.${method}`, WRITE_SCOPE, async (request) => {
       const input = withoutWorkboardWorkspaceAccess(request.params);
       const access = await resolveGatewayWorkspaceMutationAccess(request, input);
-      return redactCardResult(store[method](withWorkboardWorkspaceAccess(input, access)));
+      const prepared = withWorkboardWorkspaceAccess(input, access);
+      return redactCardResult(
+        method === "create"
+          ? store.create(prepared, undefined, request.sessionMutationCommitGuard)
+          : store.captureSession(prepared),
+      );
     });
   }
   register("workboard.cards.update", WRITE_SCOPE, async (request) => {
@@ -226,10 +251,11 @@ export function registerWorkboardGatewayMethods(params: {
   register("workboard.cards.start", WRITE_SCOPE, (request) =>
     dispatchCards(request, { supportsMaxStarts: false, directCard: true }),
   );
-  register("workboard.cards.move", WRITE_SCOPE, ({ params: input }) =>
+  register("workboard.cards.move", WRITE_SCOPE, ({ params: input, sessionMutationCommitGuard }) =>
     redactCardResult(
       store.move(readId(input), input.status, input.position, undefined, {
         expectedUpdatedAt: readExpectedUpdatedAt(input),
+        assertOwnerCurrent: sessionMutationCommitGuard,
       }),
     ),
   );

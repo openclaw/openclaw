@@ -12,11 +12,12 @@ import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
 /** The proxy stays local; only persistence crosses the selected state-owner boundary. */
 export function withProxyCaptureOwner<T>(
-  action: (store: DebugProxyCliStore) => Promise<T>,
+  action: (store: DebugProxyCliStore, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return withDeferredDebugProxyCapture(async () => {
     const finished = createDeferredCore();
-    const releaseExitGate = registerSignalExitGate(finished.promise);
+    const controller = new AbortController();
+    const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
     try {
       const run = await runWithLocalStateOwner({
         method: "debugProxy.capture",
@@ -51,24 +52,28 @@ export function withProxyCaptureOwner<T>(
               return result;
             };
             try {
-              return await action({
-                dbPath: path.join(resolveStateDir(env), "state", "openclaw.sqlite"),
-                upsertSession: (input) => execute("capture.upsertSession", input),
-                endSession: (sessionId, endedAt = Date.now()) =>
-                  execute("capture.endSession", { sessionId, endedAt }),
-                recordEvent: (input) => execute("capture.recordEvent", input),
-                recordEventWithPayload: (event, payload) =>
-                  execute(
-                    "capture.recordEventWithPayload",
-                    { event, payload },
-                    { event, payload: encodeDebugProxyPayload(payload) },
-                  ),
-                listSessions: (limit) => execute("capture.listSessions", { limit }),
-                readBlob: (blobId) => execute("capture.readBlob", { blobId }),
-                queryPreset: (preset, sessionId) =>
-                  execute("capture.queryPreset", { preset, sessionId }),
-                purgeAll: () => execute("capture.purgeAll", undefined),
-              });
+              controller.signal.throwIfAborted();
+              return await action(
+                {
+                  dbPath: path.join(resolveStateDir(env), "state", "openclaw.sqlite"),
+                  upsertSession: (input) => execute("capture.upsertSession", input),
+                  endSession: (sessionId, endedAt = Date.now()) =>
+                    execute("capture.endSession", { sessionId, endedAt }),
+                  recordEvent: (input) => execute("capture.recordEvent", input),
+                  recordEventWithPayload: (event, payload) =>
+                    execute(
+                      "capture.recordEventWithPayload",
+                      { event, payload },
+                      { event, payload: encodeDebugProxyPayload(payload) },
+                    ),
+                  listSessions: (limit) => execute("capture.listSessions", { limit }),
+                  readBlob: (blobId) => execute("capture.readBlob", { blobId }),
+                  queryPreset: (preset, sessionId) =>
+                    execute("capture.queryPreset", { preset, sessionId }),
+                  purgeAll: () => execute("capture.purgeAll", undefined),
+                },
+                controller.signal,
+              );
             } finally {
               await queue;
             }
@@ -76,10 +81,16 @@ export function withProxyCaptureOwner<T>(
         runLocal: async ({ env, assertCurrent }) => {
           assertCurrent();
           const lease = await acquireDebugProxyCaptureStoreAsync({ env });
-          const outcome = await action(lease.store).then(
-            (value) => ({ ok: true, value }) as const,
-            (error: unknown) => ({ ok: false, error }) as const,
-          );
+          const outcome = await Promise.resolve()
+            .then(() => {
+              assertCurrent();
+              controller.signal.throwIfAborted();
+              return action(lease.store, controller.signal);
+            })
+            .then(
+              (value) => ({ ok: true, value }) as const,
+              (error: unknown) => ({ ok: false, error }) as const,
+            );
           try {
             await lease.release();
           } catch (error) {
