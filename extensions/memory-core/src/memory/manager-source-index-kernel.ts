@@ -141,12 +141,15 @@ export class MemorySourceIndexKernel {
     const desiredIds = new Set<string>();
     const retained: Array<{ id: string; chunk: IndexedMemoryChunk }> = [];
     let written = false;
-    const writeChunk = createMemoryChunkWriter(this.database, {
-      path: entry.path,
-      source,
-      model,
-      now,
-    });
+    let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
+    // Empty sources must not construct unused chunk-write queries.
+    const getChunkWriter = () =>
+      (writeChunk ??= createMemoryChunkWriter(this.database, {
+        path: entry.path,
+        source,
+        model,
+        now,
+      }));
     let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
     let hasEmbeddings = false;
     for (const { chunk, embedding, retained: keep } of rows) {
@@ -164,7 +167,7 @@ export class MemorySourceIndexKernel {
       }
       written = true;
       hasEmbeddings ||= embedding.length > 0;
-      writeChunk(id, chunk, embedding);
+      getChunkWriter()(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
         writeVector ??= createMemoryVectorWriter(this.database);
         writeVector(id, embedding);
@@ -172,7 +175,7 @@ export class MemorySourceIndexKernel {
     }
     if (liveIds) {
       for (const { id, chunk } of retained) {
-        writeChunk(id, chunk);
+        getChunkWriter()(id, chunk);
       }
       this.deleteIds(
         entry.path,
