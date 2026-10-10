@@ -249,6 +249,9 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     try {
       const { method, ...params } = mutation;
       await scope.client.request(method, { agentId: scope.agentId, ...params });
+      if (this.scope !== scope) {
+        return;
+      }
       await this.load();
       if (this.scope !== scope) {
         return;
@@ -260,10 +263,14 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         this.selectSkill(mutation.name);
       }
     } catch (error) {
-      this.actionError = formatUiError(error);
+      if (this.scope === scope) {
+        this.actionError = formatUiError(error);
+      }
     } finally {
-      this.pendingAction = null;
-      this.requestUpdate();
+      if (this.scope === scope) {
+        this.pendingAction = null;
+        this.requestUpdate();
+      }
     }
   };
 
