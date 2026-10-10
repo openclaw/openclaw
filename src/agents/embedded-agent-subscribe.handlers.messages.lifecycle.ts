@@ -47,6 +47,8 @@ export function handleMessageStart(
     return;
   }
 
+  // Persistent reasoning spans all text items in this provider message.
+  ctx.state.lastReasoningSent = undefined;
   // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;

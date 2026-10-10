@@ -500,6 +500,28 @@ describe("reasoning delivery", () => {
     },
   );
 
+  it("keeps reasoning deduplicated across distinct Responses answer items", () => {
+    const h = setup({ reasoningMode: "on" });
+    const thinking = { type: "thinking", thinking: "Because it helps" };
+    const message = { role: "assistant", content: [thinking] };
+    h.emit({ type: "message_start", message });
+    h.emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "thinking_end", content: thinking.thinking },
+    });
+    responsePair(h, "Alpha", "item_alpha");
+    responsePair(h, "Beta", "item_beta");
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [thinking, block("Alpha", "item_alpha"), block("Beta", "item_beta")],
+      },
+    });
+    expect(h.texts()).toEqual(["Because it helps", "Alpha", "Beta"]);
+  });
+
   it("does not repeat accumulated reasoning and resets delivery for the next message", () => {
     const { emit, onBlockReply } = blockHarness({ reasoningMode: "on" });
     for (const answer of ["First answer", "Next answer"]) {
