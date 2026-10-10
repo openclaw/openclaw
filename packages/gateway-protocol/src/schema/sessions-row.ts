@@ -161,6 +161,7 @@ export const SessionRowSchema = Type.Object(
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
+    sidebarRoot: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     snoozedUntil: Type.Optional(Type.Number()),
     snoozedAt: Type.Optional(Type.Number()),

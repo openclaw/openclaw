@@ -84,6 +84,7 @@ export function buildGatewaySessionSnapshot(params: {
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
     pinned: sessionRow.pinned ?? false,
+    sidebarRoot: sessionRow.sidebarRoot ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
     snoozedUntil: sessionRow.snoozedUntil ?? null,
     snoozedAt: sessionRow.snoozedAt ?? null,

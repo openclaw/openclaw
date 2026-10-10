@@ -55,8 +55,6 @@ vi.mock("./package-update-activation-immutable-recovery.js", async (importOrigin
   ...(await importOriginal<typeof import("./package-update-activation-immutable-recovery.js")>()),
   prepareImmutableRecoveryRuntime: mocks.prepareRecovery,
   verifyImmutableRecoveryRuntime: mocks.verifyRecovery,
-  resolveImmutableRecoveryCommand: (reference: { helperPath: string }) =>
-    `synthetic-node ${reference.helperPath}`,
 }));
 vi.mock("./update-immutable-install-record.js", () => ({ readImmutableInstallRecord: mocks.read }));
 vi.mock("./update-immutable-install.js", async (importOriginal) => ({

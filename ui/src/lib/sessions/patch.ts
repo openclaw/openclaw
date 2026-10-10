@@ -29,6 +29,7 @@ export type SessionPatch = Pick<
   | "communication"
   | "archived"
   | "pinned"
+  | "sidebarRoot"
   | "snoozedUntil"
   | "unread"
 >;

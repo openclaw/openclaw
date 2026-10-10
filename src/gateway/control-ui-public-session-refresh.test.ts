@@ -16,6 +16,8 @@ function fixture() {
     hidden: false,
     title: "Before",
     getElementById: () => null,
+    // The copy-control enhancer scans the document and each refreshed main; this stub has no code blocks.
+    querySelectorAll: () => [],
     querySelector: (selector: string) =>
       selector.includes("entry-pending")
         ? null
@@ -50,6 +52,7 @@ function fixture() {
             enabled: body !== "revoked",
             hasAttribute: () => body === "revoked",
             removeAttribute: clearPending,
+            querySelectorAll: () => [],
             querySelector: () => ({ textContent: "Conversation unavailable" }),
           }),
         };

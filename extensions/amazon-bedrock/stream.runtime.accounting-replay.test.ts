@@ -279,6 +279,33 @@ describe("Bedrock prompt cache ownership", () => {
     }
   });
 
+  it.each([
+    ["anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
+    ["us.anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
+    ["anthropic.claude-sonnet-4-20250514-v1:0", undefined],
+    ["anthropic.claude-opus-4-1-20250805-v1:0", undefined],
+    ["anthropic.claude-sonnet-4-5-20250929-v1:0", "1h"],
+    ["anthropic.claude-opus-4-8", "1h"],
+    ["anthropic.claude-sonnet-5-5", "1h"],
+    ["anthropic.claude-fable-5-1", "1h"],
+  ])("uses the supported long-retention TTL for %s", async (id, ttl) => {
+    const payload = await capturePayload(
+      bedrockModel({ id, name: id }),
+      {
+        systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+        messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+      },
+      { cacheRetention: "long" },
+    );
+    const checkpoint = { cachePoint: { type: "default", ...(ttl ? { ttl } : {}) } };
+    expect(payload.system).toEqual([
+      { text: "Stable workspace" },
+      checkpoint,
+      { text: "Today: Monday" },
+    ]);
+    expect(payload.messages?.[0]?.content).toEqual([{ text: "Hello" }, checkpoint]);
+  });
+
   it.each(["direct"])(
     "advances the retained-carrier checkpoint through a tool loop (%s)",
     async (route) => {

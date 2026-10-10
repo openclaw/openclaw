@@ -662,17 +662,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/secrets/store/secret-store.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["updateSecretStoreAllowedHosts"],
-        evidence:
-          "Only cli/secrets-store-cli.ts:251 mutates allowed hosts; runtime reads and other writes remain T1",
-      },
-    ],
-  ],
-  [
     "src/secrets/store/secret-store-write.ts",
     [
       {
@@ -681,6 +670,7 @@ const reviewedOperations = new Map([
           "writeSecretStoreEntriesInDatabase",
           "rollbackSecretStoreEntryWriteInDatabase",
           "deleteSecretStoreEntryInDatabase",
+          "updateSecretStoreAllowedHostsInDatabase",
         ],
         evidence:
           "Only openclaw-state-worker-runtime.ts calls these ordinary secret mutation kernels",

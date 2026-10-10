@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  navigateToControlUiSession,
+  pauseVirtualClock,
+  releasePlacementPolicyRead,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   type createControlUiE2eSuite,
   tooltipTitleText,
@@ -175,8 +179,18 @@ export function defineSessionPlacementModuleBoundaryTests(
           })),
         ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
         await gateway.waitForRequest("environments.list");
-        await page.locator("#new-session-where-trigger").click();
         const place = page.locator("wa-popover.new-session-page__where-popover");
+        await place.evaluate((element) => {
+          const onAfterShow = (event: Event) => {
+            if (event.target === element) {
+              element.removeEventListener("wa-after-show", onAfterShow);
+              element.setAttribute("data-test-picker-ready", "true");
+            }
+          };
+          element.addEventListener("wa-after-show", onAfterShow);
+        });
+        await page.locator("#new-session-where-trigger").click();
+        await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
         await place.getByRole("button", { name: "aws", exact: true }).click();
         const trigger = page.locator("#new-session-where-trigger");
         await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
@@ -369,7 +383,9 @@ export function defineSessionPlacementModuleBoundaryTests(
         for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
           await gateway.deferNext("environments.list");
           const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
-          await page.clock.fastForward(delayMs + 1);
+          await releasePlacementPolicyRead(page, gateway, () =>
+            page.clock.fastForward(delayMs + 1),
+          );
           await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
           await expect.poll(() => startButton.isDisabled()).toBe(true);
           await gateway.rejectDeferred("environments.list", profileCatalogError);

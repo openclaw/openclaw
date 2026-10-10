@@ -285,6 +285,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           target: { key: session.key, agentId: session.agentId },
           sessionId: session.sessionId ?? null,
           isChild: session.isChild,
+          hasChildren: session.childSessionKeys.length > 0,
           pinned: session.pinned,
           pinnable: session.pinnable,
           unread: allUnread,
@@ -422,6 +423,12 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
                   }
                 });
               }
+              break;
+            case "move-to-top-level":
+              void host.sessionOrganizer.promoteSession(session);
+              break;
+            case "archive-tree":
+              void host.sessionOrganizer.archiveSessionTreeWithUndo(session);
               break;
             case "move-to-group":
               if (action.category === null || session.category !== action.category) {

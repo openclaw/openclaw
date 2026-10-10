@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteStoreScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import * as sessionMembers from "../config/sessions/session-sharing-store.native.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -65,7 +66,11 @@ afterEach(() => {
   replacementBoundary.release = undefined;
 });
 
-async function createFixture(suffix: string) {
+async function createFixture(
+  suffix: string,
+  targetFields: Partial<SessionEntry> = {},
+  communication?: SessionEntry["communication"],
+) {
   const { dir, storePath } = await createSessionStoreDir();
   const creator = ensureProfileForEmail("communication-creator-" + suffix + "@example.test");
   const collaborator = ensureProfileForEmail(
@@ -78,7 +83,7 @@ async function createFixture(suffix: string) {
   setUserProfileRole(admin.id, "administrator");
   const cfg = {
     ...getRuntimeConfig(),
-    session: { ...getRuntimeConfig().session, store: storePath },
+    session: { ...getRuntimeConfig().session, store: storePath, communication },
     gateway: {
       ...getRuntimeConfig().gateway,
       roles: {
@@ -112,6 +117,7 @@ async function createFixture(suffix: string) {
         createdActor: creatorActor,
         visibility: "read-only",
         communication: { receive: "never" },
+        ...targetFields,
       }),
     },
   });
@@ -306,6 +312,82 @@ test("communication writes require the creator or admin and existing creates can
     receive: "never",
   });
 });
+
+test.each([
+  {
+    name: "built-in defaults",
+    defaults: undefined,
+    effective: { send: "always", receive: "always" },
+  },
+  {
+    name: "configured defaults",
+    defaults: { send: "never", receive: "ask" },
+    effective: { send: "never", receive: "ask" },
+  },
+] as const)(
+  "preserves pre-feature sparse metadata with $name through RPC and SQLite reopen",
+  async ({ name, defaults, effective }) => {
+    const metadata = {
+      label: "Existing conversation",
+      icon: "book",
+      category: "Compatibility",
+      sidebarRoot: true,
+    };
+    const f = await createFixture(
+      name.replaceAll(" ", "-"),
+      { ...metadata, communication: undefined },
+      defaults,
+    );
+    const scope = { sessionKey: f.targetKey, storePath: f.storePath };
+    const before = expectDefined(loadSessionEntry(scope), "pre-feature stored row");
+    expect(before).not.toHaveProperty("communication");
+
+    const described = await request(f.context, f.creatorClient, "sessions.describe", {
+      key: f.targetKey,
+    });
+    expect(described.ok, JSON.stringify(described.error)).toBe(true);
+    expect(described.payload).toMatchObject({
+      session: { ...metadata, sessionId: before.sessionId, effectiveCommunication: effective },
+    });
+    // Describing a sparse row projects defaults without backfilling stored overrides.
+    expect(loadSessionEntry(scope)).toEqual(before);
+    expect(loadSessionEntry(scope)).not.toHaveProperty("communication");
+
+    const patched = await request(f.context, f.creatorClient, "sessions.patch", {
+      key: f.targetKey,
+      expectedSessionId: before.sessionId,
+      communication: { send: "ask" },
+    });
+    expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+    const expected = {
+      ...metadata,
+      sessionId: before.sessionId,
+      createdActor: before.createdActor,
+      communication: { send: "ask" },
+    };
+    expect(loadSessionEntry(scope)).toMatchObject(expected);
+    expect(loadSessionEntry(scope)?.communication).toEqual({ send: "ask" });
+
+    await disposeSessionReadContexts();
+    await releaseGatewaySessionStoreFixture(f.dir);
+    testState.sessionStorePath = f.storePath;
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    const reopened = await f.makeContext();
+    const reloaded = await request(reopened, identifiedClient(f.creator.id), "sessions.describe", {
+      key: f.targetKey,
+    });
+    expect(reloaded.ok, JSON.stringify(reloaded.error)).toBe(true);
+    expect(reloaded.payload).toMatchObject({
+      session: {
+        ...expected,
+        createdActor: { type: "human", id: f.creator.id },
+        effectiveCommunication: { send: "ask", receive: effective.receive },
+      },
+    });
+    expect(loadSessionEntry(scope)).toMatchObject(expected);
+    expect(loadSessionEntry(scope)?.communication).toEqual({ send: "ask" });
+  },
+);
 
 test.for(["creator", "admin", "membership"] as const)(
   "sessions.create refuses persistence after %s authority changes during worker preparation",

@@ -541,8 +541,8 @@ test("preserves complete base rows across time and caller presentation fixtures"
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
         expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
         expect(row.sessionModelRevision).toEqual(expect.any(String));
+        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
         // Assert additive fields separately while preserving the frozen wire-byte coverage.
-        // Assert new metadata separately while preserving the prior wire-field golden.
         expect(row.communication).toBeUndefined();
         expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
         const {
@@ -552,6 +552,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
           sessionModelRevision: _sessionModelRevision,
           communication: _communication,
           effectiveCommunication: _effectiveCommunication,
+          sidebarRoot: _sidebarRoot,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(previousWireFields);

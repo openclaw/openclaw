@@ -1,4 +1,3 @@
-import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -47,6 +46,7 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
+  normalizeTypingRequestParams,
   TYPING_PREVIEW_THROTTLE_MS,
   TYPING_THROTTLE_MS,
   updateTypingConnections,
@@ -534,13 +534,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     context,
     hasCurrentClientAuthority,
   }) => {
-    const params =
-      typeof requestParams.preview === "string"
-        ? {
-            ...requestParams,
-            preview: truncateCodePoints(requestParams.preview.trim(), 400),
-          }
-        : requestParams;
+    const params = normalizeTypingRequestParams(requestParams);
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
@@ -633,17 +627,22 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}\0${target.entry.lifecycleRevision ?? 0}`;
-    const { typing: effectiveTyping, preview } = updateTypingConnections({
+    const {
+      typing: effectiveTyping,
+      preview,
+      cursor,
+    } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
-      ...(params.typing && params.preview ? { preview: params.preview } : {}),
+      preview: params.preview,
+      cursor: params.cursor,
       now,
     });
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,
-      signature: `${effectiveTyping}\0${preview ?? ""}`,
+      signature: `${effectiveTyping}\0${preview ?? ""}\0${cursor ?? ""}`,
       intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
       now,
       emit: () => {
@@ -682,6 +681,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           actor,
           typing: effectiveTyping,
           ...(preview ? { preview } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {

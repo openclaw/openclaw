@@ -270,8 +270,10 @@ describe("session menu", () => {
       labels: [
         "Rename…",
         "Mark as unread",
+        "Move to top level",
         "Archive session",
         "Session settings",
+        "Move to group",
         "Fork conversation",
         "Copy",
         "Open in",
