@@ -64,7 +64,9 @@ async function capture(
   surface: Locator,
   content: Locator[],
 ) {
-  if (!captureProof) return;
+  if (!captureProof) {
+    return;
+  }
   const filename = path.join(suite.artifactDir, `${name}.png`);
   if (engine === "chromium") {
     const frame = await takeControlUiScreenshotFrame(page, surface, content, {
@@ -107,9 +109,9 @@ suite.define(() => {
               }
             });
             await page.addInitScript(
-              ({ key, theme }) => {
+              ({ key, theme: colorTheme }) => {
                 localStorage.setItem("openclaw.i18n.locale", "en");
-                localStorage.setItem(key, JSON.stringify({ theme }));
+                localStorage.setItem(key, JSON.stringify({ theme: colorTheme }));
               },
               { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), theme },
             );
@@ -142,7 +144,9 @@ suite.define(() => {
             ]);
 
             const retained = await tile.elementHandle();
-            if (!retained) throw new Error("Native Workboard card did not mount");
+            if (!retained) {
+              throw new Error("Native Workboard card did not mount");
+            }
             try {
               await tile.focus();
               await gateway.setMethodResponse("workboard.cards.list", {
@@ -211,8 +215,11 @@ suite.define(() => {
             expect(await gateway.getRequests("workboard.cards.create")).toEqual([]);
             expect(errors).toEqual([]);
           } finally {
-            if (engine === "chromium") await suite.closeBrowserContext(context);
-            else await context.close();
+            if (engine === "chromium") {
+              await suite.closeBrowserContext(context);
+            } else {
+              await context.close();
+            }
           }
         }
       }

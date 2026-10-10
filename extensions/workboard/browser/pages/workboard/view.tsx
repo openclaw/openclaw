@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, For } from "solid-js";
 import { SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { WorkboardToast } from "../../components/toast.tsx";
@@ -21,7 +21,7 @@ import { agentDisplayName, buildAgentFilterOptions } from "./agent-filter.ts";
 import { buildBoardFilterOptions, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { getVisibleDetailCard, CardDetailsPanel } from "./view-card-details.tsx";
 import { openCreateModal, CardModal, workboardCardModalId } from "./view-card-modal.tsx";
-import { WorkboardColumn } from "./view-card.tsx";
+import { WorkboardColumn } from "./view-column.tsx";
 import {
   multiFilterLabel,
   ActiveFilters,
@@ -45,6 +45,7 @@ import {
 } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
+import { WorkboardSearch } from "./view-search.tsx";
 import { matchesWorkboardCardScope, SelectionActions, SelectionDialog } from "./view-selection.tsx";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
@@ -89,11 +90,21 @@ function WorkboardColumns(props: {
   const boardEdges = boardScrollEdgesRef();
   return (
     <div
-      class={`workboard-board-viewport ${state().viewMode === "list" ? "workboard-board-viewport--list" : ""}`}
+      class={[
+        "workboard-board-viewport",
+        { "workboard-board-viewport--list": state().viewMode === "list" },
+      ]}
     >
       <div
         ref={boardEdges}
-        class={`workboard-board workboard-board--page workboard-board--${state().layout} ${state().viewMode === "list" ? "workboard-board--list" : ""} ${props.statuses.length === 1 ? "workboard-board--single-column" : ""}`}
+        class={[
+          "workboard-board workboard-board--page",
+          `workboard-board--${state().layout}`,
+          {
+            "workboard-board--list": state().viewMode === "list",
+            "workboard-board--single-column": props.statuses.length === 1,
+          },
+        ]}
       >
         {state().viewMode === "list" ? (
           <div class="workboard-list-header" aria-hidden="true">
@@ -115,98 +126,6 @@ function WorkboardColumns(props: {
           )}
         </For>
       </div>
-    </div>
-  );
-}
-
-function WorkboardSearch(props: { workboard: WorkboardProps }) {
-  const state = () => {
-    void props.workboard.revision;
-    return getWorkboardState(props.workboard.host);
-  };
-  let pendingFocus: { target: "input" | "trigger"; previous: Element | null } | undefined;
-  const focusMounted = (target: "input" | "trigger", element: HTMLElement) => {
-    if (pendingFocus?.target !== target) return;
-    const previous = pendingFocus.previous;
-    pendingFocus = undefined;
-    const active = element.ownerDocument.activeElement;
-    if (
-      element.isConnected &&
-      (active === previous ||
-        (previous && !previous.isConnected && active === element.ownerDocument.body))
-    ) {
-      element.focus();
-    }
-  };
-  const close = (restoreFocus: boolean) => {
-    pendingFocus = restoreFocus
-      ? { target: "trigger", previous: document.activeElement }
-      : undefined;
-    state().query = "";
-    state().searchOpen = false;
-    props.workboard.onRequestUpdate?.();
-  };
-  function SearchField() {
-    let input!: HTMLInputElement;
-    onSettled(() => focusMounted("input", input));
-    return (
-      <div class="workboard-search">
-        <span aria-hidden="true">{icons.search}</span>
-        <input
-          ref={input}
-          class="settings-input"
-          id="workboard-search-input"
-          type="search"
-          aria-label={t("workboard.searchPlaceholder")}
-          placeholder={t("workboard.searchPlaceholder")}
-          prop:value={state().query}
-          onInput={(event) => {
-            state().query = event.currentTarget.value;
-            props.workboard.onRequestUpdate?.();
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.preventDefault();
-            event.stopPropagation();
-            close(true);
-          }}
-        />
-        <button
-          class="btn btn--icon workboard-search__clear"
-          type="button"
-          aria-label={t("workboard.closeSearch")}
-          onClick={(event) => close(event.detail === 0)}
-        >
-          {icons.x}
-        </button>
-      </div>
-    );
-  }
-  function SearchTrigger() {
-    let trigger!: HTMLButtonElement;
-    onSettled(() => focusMounted("trigger", trigger));
-    return (
-      <button
-        ref={trigger}
-        class="btn btn--icon workboard-search-trigger"
-        type="button"
-        aria-label={t("workboard.searchPlaceholder")}
-        title={t("workboard.searchPlaceholder")}
-        aria-expanded="false"
-        aria-controls="workboard-search-input"
-        onClick={() => {
-          pendingFocus = { target: "input", previous: document.activeElement };
-          state().searchOpen = true;
-          props.workboard.onRequestUpdate?.();
-        }}
-      >
-        {icons.search}
-      </button>
-    );
-  }
-  return (
-    <div class="workboard-search-control">
-      {state().searchOpen || state().query ? <SearchField /> : <SearchTrigger />}
     </div>
   );
 }
@@ -273,7 +192,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
         id: "query",
         label: t("workboard.filterChipSearch", { query: current.query.trim() }),
         clear: () => {
-          current.query = "";
+          state().query = "";
         },
       });
     }
@@ -286,7 +205,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
           priorityOptions,
           true,
         ),
-        clear: () => current.priorityFilter.clear(),
+        clear: () => state().priorityFilter.clear(),
       });
     }
     if (current.attentionFilter.size) {
@@ -297,7 +216,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
           current.attentionFilter,
           attentionOptions,
         ),
-        clear: () => current.attentionFilter.clear(),
+        clear: () => state().attentionFilter.clear(),
       });
     }
     if (current.donePeriod !== "all") {
@@ -308,7 +227,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
           value: t("workboard.filterLastWeek"),
         }),
         clear: () => {
-          current.donePeriod = "all";
+          state().donePeriod = "all";
         },
       });
     }
@@ -317,7 +236,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
         id: "archived",
         label: t("workboard.filterChipArchived"),
         clear: () => {
-          current.showArchived = false;
+          state().showArchived = false;
         },
       });
     }
@@ -348,7 +267,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
       ? props.onClearAgentScope
       : props.showAgentFilter !== false
         ? () => {
-            current.agentFilter = "all";
+            state().agentFilter = "all";
           }
         : undefined;
     if (activeAgent !== "all" && clearAgentFilter) {
@@ -435,7 +354,10 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
               title={view().refreshStatus || t("common.refresh")}
             >
               <button
-                class={`btn btn--icon btn--ghost workboard-refresh ${state().lastRefreshError ? "workboard-refresh--error" : ""}`}
+                class={[
+                  "btn btn--icon btn--ghost workboard-refresh",
+                  { "workboard-refresh--error": Boolean(state().lastRefreshError) },
+                ]}
                 type="button"
                 aria-label={state().loading ? t("common.refreshing") : t("common.refresh")}
                 aria-busy={state().loading ? "true" : "false"}
@@ -458,7 +380,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
                     : "workboard.dispatchHelp",
                 )}
                 disabled={state().dispatching || workboardHasActiveWrites(state())}
-                onClick={() => dispatchWorkboard(workboardMutationContext(props))}
+                onClick={() => void dispatchWorkboard(workboardMutationContext(props))}
               >
                 {icons.play}
                 <span class="workboard-action-label">{t("workboard.dispatch")}</span>
@@ -486,7 +408,10 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
           </div>
         </header>
         <div
-          class={`workboard-toolbar ${view().selectedCards.length ? "workboard-toolbar--selection" : ""}`}
+          class={[
+            "workboard-toolbar",
+            { "workboard-toolbar--selection": view().selectedCards.length > 0 },
+          ]}
         >
           {view().selectedCards.length ? (
             <SelectionActions workboard={props} />
@@ -516,7 +441,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             ) : null}
             <button
               popovertarget={workboardFilterPopoverId}
-              class={`btn workboard-filter-trigger ${view().activeFilterCount > 0 ? "active" : ""}`}
+              class={["btn workboard-filter-trigger", { active: view().activeFilterCount > 0 }]}
               type="button"
               aria-label={
                 view().activeFilterCount > 0
@@ -671,7 +596,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
                     <input
                       type="checkbox"
                       role="switch"
-                      prop:checked={state().showArchived}
+                      checked={state().showArchived}
                       onChange={(event) => {
                         state().showArchived = event.currentTarget.checked;
                         props.onRequestUpdate?.();

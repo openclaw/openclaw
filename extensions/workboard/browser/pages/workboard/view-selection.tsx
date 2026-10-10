@@ -66,24 +66,24 @@ export function matchesWorkboardCardScope(props: WorkboardProps, card: Workboard
     (props.showAgentFilter === false || matchesAgentFilter(card, state.agentFilter))
   );
 }
-export function reconcileSelectionScope(props: WorkboardProps) {
-  const state = getWorkboardState(props.host);
+export function reconcileSelectionScope(workboard: WorkboardProps) {
+  const state = getWorkboardState(workboard.host);
   const scope = JSON.stringify([
     state.boardFilter,
-    props.scopeAgentId ?? null,
-    props.agentsList?.defaultId ?? props.defaultAgentId ?? null,
-    props.showAgentFilter === false ? null : state.agentFilter,
+    workboard.scopeAgentId ?? null,
+    workboard.agentsList?.defaultId ?? workboard.defaultAgentId ?? null,
+    workboard.showAgentFilter === false ? null : state.agentFilter,
   ]);
-  const previous = selectionScopes.get(props.host);
+  const previous = selectionScopes.get(workboard.host);
   if (previous !== undefined && previous !== scope) {
     state.selectedCardIds = new Set();
     state.bulkDialog = null;
     state.bulkResult = null;
   }
-  selectionScopes.set(props.host, scope);
+  selectionScopes.set(workboard.host, scope);
   const eligible = new Set(
     state.cards
-      .filter((card) => isActiveWorkboardCard(card) && matchesWorkboardCardScope(props, card))
+      .filter((card) => isActiveWorkboardCard(card) && matchesWorkboardCardScope(workboard, card))
       .map((card) => card.id),
   );
   for (const id of state.selectedCardIds) {
@@ -242,11 +242,11 @@ async function applySelection(
     props.onRequestUpdate?.();
   }
 }
-function agentOptions(props: WorkboardProps) {
+function agentOptions(workboard: WorkboardProps) {
   return buildAssignableAgentPickerOptions(
-    props.agentsList ?? null,
+    workboard.agentsList ?? null,
     "",
-    props.agentsList?.defaultId ?? props.defaultAgentId ?? undefined,
+    workboard.agentsList?.defaultId ?? workboard.defaultAgentId ?? undefined,
   ).map((option) =>
     Object.assign({}, option, {
       description: option.badge,
@@ -254,7 +254,10 @@ function agentOptions(props: WorkboardProps) {
   );
 }
 export function SelectionActions(input: { workboard: WorkboardProps }) {
-  const state = () => (input.workboard.revision, getWorkboardState(input.workboard.host));
+  const state = () => {
+    void input.workboard.revision;
+    return getWorkboardState(input.workboard.host);
+  };
   const cardIds = createMemo(() =>
     state()
       .cards.filter((card) => state().selectedCardIds.has(card.id))
@@ -325,7 +328,7 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
             }
           },
         }}
-        className={"workboard-selection__picker"}
+        class={"workboard-selection__picker"}
       />
       <SelectPicker
         {...{
@@ -351,13 +354,13 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
             }
           },
         }}
-        className={"workboard-selection__picker"}
+        class={"workboard-selection__picker"}
       />
       <button class="btn" type="button" disabled={disabled()} onClick={() => openDialog("edit")}>
         {icons.edit}
         <span>{t("workboard.bulkEdit")}</span>
       </button>
-      <span class="workboard-selection__separator" aria-hidden="true"></span>
+      <span class="workboard-selection__separator" aria-hidden="true" />
       <button
         class="btn"
         type="button"
@@ -429,10 +432,10 @@ function editPatch(
   return patch;
 }
 export function SelectionDialog(props: { workboard: WorkboardProps }) {
-  const draft = () => (
-    props.workboard.revision,
-    getWorkboardState(props.workboard.host).bulkDialog
-  );
+  const draft = () => {
+    void props.workboard.revision;
+    return getWorkboardState(props.workboard.host).bulkDialog;
+  };
   return (
     <Show when={draft()} keyed>
       {(current) => <SelectionDialogContent workboard={props.workboard} draft={current} />}
@@ -457,15 +460,22 @@ function SelectionLabelsInput(props: {
       ref={bindValue}
       disabled={props.disabled}
       onInput={(event: InputEvent) => {
-        if (event.currentTarget instanceof HTMLInputElement)
+        if (event.currentTarget instanceof HTMLInputElement) {
           props.draft.labels = event.currentTarget.value;
+        }
       }}
     />
   );
 }
 function SelectionDialogContent(props: { workboard: WorkboardProps; draft: WorkboardBulkDialog }) {
-  const state = () => (props.workboard.revision, getWorkboardState(props.workboard.host));
-  const draft = () => (props.workboard.revision, props.draft);
+  const state = () => {
+    void props.workboard.revision;
+    return getWorkboardState(props.workboard.host);
+  };
+  const draft = () => {
+    void props.workboard.revision;
+    return props.draft;
+  };
   const editDraft = () => {
     const current = draft();
     return current.kind === "edit" ? current : undefined;
@@ -482,7 +492,9 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
     );
   };
   const close = () => {
-    if (state().bulkSaving) return false;
+    if (state().bulkSaving) {
+      return false;
+    }
     state().bulkDialog = null;
     props.workboard.onRequestUpdate?.();
     return true;
@@ -530,7 +542,10 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
         </div>
         <Show when={editDraft()} fallback={<p>{t("workboard.bulkDeleteHelp")}</p>}>
           {(current) => {
-            const edit = () => (props.workboard.revision, current());
+            const edit = () => {
+              void props.workboard.revision;
+              return current();
+            };
             return (
               <>
                 <p>{t("workboard.bulkEditHelp")}</p>

@@ -4,7 +4,7 @@ import { AppearanceGlyph } from "./host-components.tsx";
 
 export function WorkboardBoardGlyph(props: {
   board: Pick<WorkboardBoardSummary, "id" | "name" | "icon" | "color">;
-  className?: string;
+  class?: string;
 }) {
   return (
     <>
@@ -13,7 +13,7 @@ export function WorkboardBoardGlyph(props: {
           icon={props.board.icon ?? null}
           color={props.board.color ?? null}
           fallback=""
-          className={`workboard-board-glyph ${props.className ?? ""}`}
+          class={`workboard-board-glyph ${props.class ?? ""}`}
         />
       ) : null}
     </>

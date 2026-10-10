@@ -92,13 +92,17 @@ export function SessionStatus(props: {
   };
   const dismiss = () => {
     clearTimer();
-    if (open && panel?.isConnected) panel.hidePopover();
+    if (open && panel?.isConnected) {
+      panel.hidePopover();
+    }
     open = false;
     trigger?.setAttribute("aria-expanded", "false");
   };
   const show = () => {
     clearTimer();
-    if (!host.isConnected || !panel || !trigger || open) return;
+    if (!host.isConnected || !panel || !trigger || open) {
+      return;
+    }
     panel.showPopover();
     open = true;
     trigger.setAttribute("aria-expanded", "true");
@@ -111,23 +115,31 @@ export function SessionStatus(props: {
   const enter = () => {
     pointerInside = true;
     clearTimer();
-    if (!open) timer = setTimeout(show, 350);
+    if (!open) {
+      timer = setTimeout(show, 350);
+    }
   };
   const leave = () => {
     pointerInside = false;
     clearTimer();
     timer = setTimeout(() => {
-      if (!pointerInside && !host.contains(host.ownerDocument.activeElement)) dismiss();
+      if (!pointerInside && !host.contains(host.ownerDocument.activeElement)) {
+        dismiss();
+      }
     }, 150);
   };
   createEffect(() => `${props.context.id}:${props.presentation.visible}`, dismiss);
   onSettled(() => {
     const doc = host.ownerDocument;
     const outside = (event: Event) => {
-      if (!event.composedPath().includes(host)) dismiss();
+      if (!event.composedPath().includes(host)) {
+        dismiss();
+      }
     };
     const scroll = (event: Event) => {
-      if (!(event.target instanceof Node && panel?.contains(event.target))) dismiss();
+      if (!(event.target instanceof Node && panel?.contains(event.target))) {
+        dismiss();
+      }
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && open) {
@@ -148,11 +160,18 @@ export function SessionStatus(props: {
   });
   onCleanup(dismiss);
   return (
-    <openclaw-workboard-session-status ref={host} class="workboard-session-status">
+    <openclaw-workboard-session-status
+      ref={(element) => {
+        host = element;
+      }}
+      class="workboard-session-status"
+    >
       {props.presentation.visible ? (
         <>
           <button
-            ref={trigger}
+            ref={(element) => {
+              trigger = element;
+            }}
             class="workboard-session-status__trigger"
             type="button"
             aria-expanded="false"
@@ -170,7 +189,9 @@ export function SessionStatus(props: {
             <SessionStatusBadge presentation={props.presentation} />
           </button>
           <div
-            ref={panel}
+            ref={(element) => {
+              panel = element;
+            }}
             id={`${props.context.id}-session-status`}
             class="workboard-session-status__popover"
             popover="manual"

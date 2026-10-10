@@ -1,8 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import type {
-  WorkboardBoardSummary,
-  WorkboardSessionsBoardRead,
-} from "@openclaw/workboard-contract";
+import type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 import type { JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createMemo, For, Show } from "solid-js";
@@ -16,11 +13,10 @@ import { agentDisplayName } from "./agent-filter.ts";
 import type { SessionsBoardController } from "./sessions-board-controller.ts";
 import { cardRelativeTime } from "./view-card-time.tsx";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
-import { SessionStatusBadge } from "./view-session-status.tsx";
+import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
 import "../../styles/sessions-board.css";
 
 const PULL_REQUEST_STATE_PRIORITY = { open: 0, draft: 1, merged: 2, closed: 3 };
-type Session = WorkboardSessionsBoardRead["sessions"][number];
 
 export type SessionsBoardProps = {
   board: WorkboardBoardSummary;
@@ -66,13 +62,25 @@ export function SessionsBoard(props: SessionsBoardProps) {
     const sessions = (snapshot?.sessions ?? [])
       .filter((session) => !host.agents.scopeId || session.agentId === host.agents.scopeId)
       .map((session) => ({
-        ...session,
+        key: session.key,
+        agentId: session.agentId,
+        columnId: session.columnId,
+        reason: session.reason,
+        headline: session.observerDigest?.headline,
+        lastActivityAt: session.lastActivityAt,
         title: session.label || session.derivedTitle || session.key,
         agentName: agentDisplayName(
           agents.find((agent) => agent.id === session.agentId),
           session.agentId,
         ),
         sourceLabel: t(`workboard.sessionsBoard.source.${session.source}`),
+        status: {
+          state: session.run === "active" ? "running" : session.run,
+          label: t(`workboard.sessionsBoard.run.${session.run}`),
+          detail: "",
+          visible: true,
+          tone: session.run === "active" ? "live" : session.run === "failed" ? "blocked" : "idle",
+        } satisfies SessionStatusPresentation,
         pullRequests: session.pullRequests
           .map((pr) => ({ ...pr }))
           .toSorted(
@@ -98,23 +106,25 @@ export function SessionsBoard(props: SessionsBoardProps) {
       draggedKey: controller.draggedKey,
       dropColumn: controller.dropColumn,
       columns: (snapshot?.columns ?? props.board.sessions?.columns ?? []).map((column) => ({
-        ...column,
+        id: column.id,
+        label: column.label,
+        description: column.description,
         color: host.components.resolveAppearanceColor(column.color) || "var(--muted)",
         sessions: sessions.filter((session) => session.columnId === column.id),
       })),
     };
   });
 
-  const startDrag = (event: DragEvent, session: Session) => {
+  const startDrag = (event: DragEvent, sessionKey: string) => {
     if (!state().writable) {
       event.preventDefault();
       return;
     }
-    event.dataTransfer?.setData("text/plain", session.key);
+    event.dataTransfer?.setData("text/plain", sessionKey);
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "move";
     }
-    props.controller.drag(session.key);
+    props.controller.drag(sessionKey);
   };
 
   return (
@@ -246,15 +256,15 @@ export function SessionsBoard(props: SessionsBoardProps) {
                               agentId: session().agentId,
                             })
                           }
-                          onDragStart={(event: DragEvent) => startDrag(event, session())}
+                          onDragStart={(event: DragEvent) => startDrag(event, session().key)}
                           onDragEnd={() => props.controller.drag()}
                         >
                           <button class="workboard-session-tile__title" type="button">
                             {session().title}
                           </button>
-                          {session().observerDigest?.headline ? (
+                          {session().headline ? (
                             <span class="workboard-session-tile__headline">
-                              {session().observerDigest?.headline}
+                              {session().headline}
                             </span>
                           ) : null}
                           <span class="workboard-session-tile__meta">
@@ -268,20 +278,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
                               />
                               {session().agentName}
                             </span>
-                            <SessionStatusBadge
-                              presentation={{
-                                state: session().run === "active" ? "running" : session().run,
-                                label: t(`workboard.sessionsBoard.run.${session().run}`),
-                                detail: "",
-                                visible: true,
-                                tone:
-                                  session().run === "active"
-                                    ? "live"
-                                    : session().run === "failed"
-                                      ? "blocked"
-                                      : "idle",
-                              }}
-                            />
+                            <SessionStatusBadge presentation={session().status} />
                           </span>
                           {session().pullRequests.length ? (
                             <span class="workboard-session-tile__prs">

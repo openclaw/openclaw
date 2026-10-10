@@ -93,6 +93,7 @@ it.each(["global", "unknown"])(
 
 it("renders shared card updates and retires navigation while hidden or disposed", async () => {
   const fixture = workboardTestHost();
+  const initialListeners = new Set(fixture.listeners);
   fixture.connection.connected = true;
   const sessionKey = "agent:main:workboard-card";
   const card = createWorkboardCard({
@@ -137,6 +138,6 @@ it("renders shared card updates and retires navigation while hidden or disposed"
   }
   workboard.notify();
   expect(container.childElementCount).toBe(0);
-  expect(fixture.listeners.size).toBe(0);
+  expect(fixture.listeners).toEqual(initialListeners);
   workboard.dispose();
 });

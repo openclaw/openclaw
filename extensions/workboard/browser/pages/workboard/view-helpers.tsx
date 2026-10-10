@@ -172,12 +172,16 @@ export function workboardErrorMessage(
   return state.error ?? pageError ?? state.lastRefreshError;
 }
 
-export function canMutate(props: WorkboardProps): boolean {
-  return props.canWrite !== false && workboardMutationsReady(getWorkboardState(props.host));
+export function canMutate(workboard: WorkboardProps): boolean {
+  return workboard.canWrite !== false && workboardMutationsReady(getWorkboardState(workboard.host));
 }
 
-export function workboardMutationContext(props: WorkboardProps): WorkboardClientContext {
-  return { host: props.host, client: props.client, requestUpdate: props.onRequestUpdate };
+export function workboardMutationContext(workboard: WorkboardProps): WorkboardClientContext {
+  return {
+    host: workboard.host,
+    client: workboard.client,
+    requestUpdate: workboard.onRequestUpdate,
+  };
 }
 
 export function formatEventLabel(event: WorkboardEvent): string {

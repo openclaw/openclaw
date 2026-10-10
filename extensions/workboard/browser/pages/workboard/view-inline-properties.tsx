@@ -9,6 +9,8 @@ import {
   getWorkboardState,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
+  type WorkboardPriority,
+  type WorkboardStatus,
 } from "../../lib/workboard/index.ts";
 import { updateWorkboardCardProperties } from "../../lib/workboard/mutations.ts";
 import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
@@ -47,11 +49,29 @@ function PropertyPicker<T extends string>(params: {
   onSelect: (value: T) => void | Promise<unknown>;
 }) {
   const selected = createMemo(() => params.options.find((option) => option.value === params.value));
+  const select = async (input: HTMLInputElement, value: T) => {
+    const trigger = input.closest("[popover]")?.previousElementSibling;
+    closePropertyPicker(input);
+    if (value !== params.value) {
+      await params.onSelect(value);
+    }
+    // A pending mutation disables the trigger. Restore keyboard position
+    // after it renders enabled, unless the operator has focused elsewhere.
+    requestAnimationFrame(() => {
+      if (
+        trigger instanceof HTMLElement &&
+        trigger.isConnected &&
+        document.activeElement === document.body
+      ) {
+        trigger.focus({ preventScroll: true });
+      }
+    });
+  };
   return (
     <div class="workboard-detail__property-control">
       <button
         type="button"
-        class={`workboard-detail__property-trigger ${params.className ?? ""}`}
+        class={["workboard-detail__property-trigger", `${params.className ?? ""}`]}
         aria-label={`${params.label}: ${selected()?.label ?? params.value}`}
         aria-haspopup="dialog"
         aria-expanded="false"
@@ -80,16 +100,20 @@ function PropertyPicker<T extends string>(params: {
               let radio: HTMLInputElement | undefined;
               createEffect(
                 () => {
-                  params.revision;
-                  params.disabled;
-                  return { checked: params.value === option().value };
+                  void params.revision;
+                  void params.disabled;
+                  return {
+                    checked: params.value === option().value,
+                  };
                 },
                 ({ checked }) => {
-                  if (radio) radio.checked = checked;
+                  if (radio) {
+                    radio.checked = checked;
+                  }
                 },
               );
               return (
-                <label class={`workboard-detail__property-option ${option().className ?? ""}`}>
+                <label class={["workboard-detail__property-option", `${option().className ?? ""}`]}>
                   <input
                     ref={(element: HTMLInputElement) => {
                       radio = element;
@@ -107,29 +131,12 @@ function PropertyPicker<T extends string>(params: {
                         closePropertyPicker(event.currentTarget);
                       }
                     }}
-                    onChange={async (event: Event) => {
+                    onChange={(event: Event) => {
                       const input = event.currentTarget;
                       if (!(input instanceof HTMLInputElement)) {
                         return;
                       }
-                      const trigger = input.closest("[popover]")?.previousElementSibling;
-                      closePropertyPicker(input);
-                      if (option().value !== params.value) {
-                        await params.onSelect(option().value);
-                      }
-                      // A pending mutation disables the trigger. Restore keyboard position
-                      // after it renders enabled, unless the operator has focused elsewhere.
-                      requestAnimationFrame(() => {
-                        if (
-                          trigger instanceof HTMLElement &&
-                          trigger.isConnected &&
-                          document.activeElement === document.body
-                        ) {
-                          trigger.focus({
-                            preventScroll: true,
-                          });
-                        }
-                      });
+                      void select(input, option().value);
                     }}
                   />
                   <span class="workboard-detail__property-icon" aria-hidden="true">
@@ -154,7 +161,7 @@ export function InlinePriority(input: {
   disabled: boolean;
 }) {
   return (
-    <PropertyPicker
+    <PropertyPicker<WorkboardPriority>
       {...{
         id: `workboard-detail-priority-${input.card.id}`,
         label: t("workboard.fieldPriority"),
@@ -186,14 +193,17 @@ export function InlineStatus(input: {
   card: WorkboardCard;
   disabled: boolean;
 }) {
-  const state = () => (input.workboard.revision, getWorkboardState(input.workboard.host));
+  const state = () => {
+    void input.workboard.revision;
+    return getWorkboardState(input.workboard.host);
+  };
   const statuses = createMemo(() =>
     state().statuses.includes(input.card.status)
       ? state().statuses
       : [input.card.status, ...state().statuses],
   );
   return (
-    <PropertyPicker
+    <PropertyPicker<WorkboardStatus>
       {...{
         id: `workboard-detail-status-${input.card.id}`,
         label: t("workboard.fieldStatus"),
@@ -201,7 +211,7 @@ export function InlineStatus(input: {
         options: statuses().map((status) => ({
           value: status,
           label: formatStatusLabel(status),
-          icon: () => <span class={`workboard-status-dot workboard-status-dot--${status}`} />,
+          icon: () => <span class={["workboard-status-dot", `workboard-status-dot--${status}`]} />,
         })),
         disabled: input.disabled || !input.workboard.connected || !input.workboard.client,
         revision: input.workboard.revision,
@@ -244,7 +254,7 @@ export function InlineAgent(input: {
           }
         },
       }}
-      className={"workboard-detail__property-control workboard-detail__agent-picker"}
+      class={"workboard-detail__property-control workboard-detail__agent-picker"}
     />
   );
 }
@@ -288,7 +298,9 @@ export function InlineText(props: InlineTextProps) {
     props.disabled || props.readOnly || !props.owner.connected || !props.owner.client;
   const changed = () => {
     revision();
-    if (!base) return false;
+    if (!base) {
+      return false;
+    }
     return props.field === "labels"
       ? JSON.stringify(normalizeDraftLabels(value)) !== JSON.stringify(base.labels)
       : value.trim() !== (base[props.field] ?? "").trim();
@@ -311,15 +323,24 @@ export function InlineText(props: InlineTextProps) {
     });
   };
   const save = async () => {
-    if (saving || disabled() || !base || (props.field === "title" && !value.trim())) return;
+    if (saving || disabled() || !base || (props.field === "title" && !value.trim())) {
+      return;
+    }
     const doc = host.ownerDocument;
     let restoreFocus = host.contains(doc.activeElement);
     const trackFocus = (event: Event) => {
-      if (event.target instanceof Node && event.target !== doc.body && !host.contains(event.target))
+      if (
+        event.target instanceof Node &&
+        event.target !== doc.body &&
+        !host.contains(event.target)
+      ) {
         restoreFocus = false;
+      }
     };
     const trackPointer = (event: Event) => {
-      if (event.target instanceof Node && !host.contains(event.target)) restoreFocus = false;
+      if (event.target instanceof Node && !host.contains(event.target)) {
+        restoreFocus = false;
+      }
     };
     doc.addEventListener("focusin", trackFocus);
     doc.addEventListener("pointerdown", trackPointer);
@@ -351,11 +372,16 @@ export function InlineText(props: InlineTextProps) {
       disposeSaveFocus?.();
       disposeSaveFocus = undefined;
       saving = false;
-      if (!disposed) publish();
+      if (!disposed) {
+        publish();
+      }
     }
-    if (disposed || base?.id !== observed.id) return;
-    if (saved) finish(restoreFocus);
-    else {
+    if (disposed || base?.id !== observed.id) {
+      return;
+    }
+    if (saved) {
+      finish(restoreFocus);
+    } else {
       base =
         getWorkboardState(owner.host).cards.find((card) => card.id === observed.id) ?? observed;
       publish();
@@ -370,9 +396,12 @@ export function InlineText(props: InlineTextProps) {
     editing = true;
     publish();
     queueMicrotask(() => {
-      if (!host.isConnected || !editing) return;
-      if (props.field === "labels")
+      if (!host.isConnected || !editing) {
+        return;
+      }
+      if (props.field === "labels") {
         host.querySelector<HTMLElement>(".workboard-detail__labels-popover")?.showPopover();
+      }
       host.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.focus();
     });
   };
@@ -391,7 +420,7 @@ export function InlineText(props: InlineTextProps) {
     disposed = true;
     disposeSaveFocus?.();
   });
-  const label = () =>
+  const fieldLabel = () =>
     t(
       props.field === "title"
         ? "workboard.fieldTitle"
@@ -426,7 +455,7 @@ export function InlineText(props: InlineTextProps) {
           class="workboard-detail__text-trigger workboard-detail__text-trigger--notes"
           role="button"
           tabindex={triggerDisabled() ? -1 : 0}
-          aria-description={label()}
+          aria-description={fieldLabel()}
           aria-disabled={triggerDisabled() ? "true" : undefined}
           onClick={(event: MouseEvent) => {
             const selection = host.ownerDocument.getSelection();
@@ -439,12 +468,15 @@ export function InlineText(props: InlineTextProps) {
                 [selection.anchorNode, selection.focusNode].some(
                   (node) => node && target.contains(node),
                 ))
-            )
+            ) {
               return;
+            }
             openEditor();
           }}
           onKeyDown={(event: KeyboardEvent) => {
-            if (triggerDisabled() || (event.key !== "Enter" && event.key !== " ")) return;
+            if (triggerDisabled() || (event.key !== "Enter" && event.key !== " ")) {
+              return;
+            }
             event.preventDefault();
             openEditor();
           }}
@@ -454,8 +486,11 @@ export function InlineText(props: InlineTextProps) {
       ) : (
         <button
           type="button"
-          class={`workboard-detail__text-trigger workboard-detail__text-trigger--${props.field}`}
-          aria-description={label()}
+          class={[
+            "workboard-detail__text-trigger",
+            `workboard-detail__text-trigger--${props.field}`,
+          ]}
+          aria-description={fieldLabel()}
           aria-haspopup={props.field === "labels" ? "dialog" : undefined}
           aria-controls={props.field === "labels" ? labelsPopoverId() : undefined}
           aria-expanded={props.field === "labels" ? (isEditing() ? "true" : "false") : undefined}
@@ -480,16 +515,20 @@ export function InlineText(props: InlineTextProps) {
     const bindValue = liveInputValue(draftValue);
     return (
       <span
-        class={`workboard-detail__text-editor workboard-detail__text-editor--${props.field}`}
+        class={["workboard-detail__text-editor", `workboard-detail__text-editor--${props.field}`]}
         onKeyDown={(event: KeyboardEvent) => {
           if (event.isComposing) {
-            if (props.field === "labels") event.stopPropagation();
+            if (props.field === "labels") {
+              event.stopPropagation();
+            }
             return;
           }
           if (event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
-            if (!saving) finish();
+            if (!saving) {
+              finish();
+            }
           } else if (
             event.key === "Enter" &&
             (event.target instanceof HTMLInputElement ||
@@ -505,7 +544,7 @@ export function InlineText(props: InlineTextProps) {
         {props.field === "notes" ? (
           <textarea
             class="settings-input"
-            aria-label={label()}
+            aria-label={fieldLabel()}
             rows={12}
             ref={bindValue}
             disabled={isSaving() || (disabled() && !props.readOnly)}
@@ -515,7 +554,7 @@ export function InlineText(props: InlineTextProps) {
         ) : (
           <input
             class="settings-input"
-            aria-label={label()}
+            aria-label={fieldLabel()}
             ref={bindValue}
             disabled={isSaving() || (disabled() && !props.readOnly)}
             readonly={props.readOnly}
@@ -582,7 +621,7 @@ export function InlineText(props: InlineTextProps) {
             class="workboard-detail__labels-popover"
             popover="auto"
             role="dialog"
-            aria-label={label()}
+            aria-label={fieldLabel()}
             ref={workboardPopoverRef()}
             onToggle={(event: Event) => {
               if (

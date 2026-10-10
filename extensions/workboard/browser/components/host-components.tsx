@@ -21,9 +21,14 @@ function hostMount<Props extends object>(
   let container: HTMLElement | undefined;
   let handle: ControlUiComponentHandle<Props> | undefined;
   createEffect(read, (props) => {
-    if (!container) return;
-    if (handle) handle.update(props);
-    else handle = mount(container, props);
+    if (!container) {
+      return;
+    }
+    if (handle) {
+      handle.update(props);
+    } else {
+      handle = mount(container, props);
+    }
   });
   onCleanup(() => handle?.dispose());
   return (node: HTMLElement) => {
@@ -52,7 +57,7 @@ export function Dialog(
   return (
     <>
       <Portal mount={content}>{props.children ?? props.content}</Portal>
-      <div style="display: contents" ref={mount} />
+      <div style={{ display: "contents" }} ref={mount} />
     </>
   );
 }

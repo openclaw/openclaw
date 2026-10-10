@@ -16,6 +16,7 @@ afterEach(() => {
 function mountWidget(canMutate = true, presented = true) {
   const fixture = workboardTestHost();
   fixture.connection.connected = true;
+  const initialListeners = new Set(fixture.listeners);
   const card = createWorkboardCard();
   const request = vi.fn(async () => ({ cards: [card] }));
   fixture.host.request = request as typeof fixture.host.request;
@@ -33,7 +34,7 @@ function mountWidget(canMutate = true, presented = true) {
   );
   const mounted = createWorkboardWidget(fixture.host, "card")(container, context);
   disposers.push(() => mounted?.dispose?.());
-  return { fixture, request, card, container, context, mounted };
+  return { fixture, request, card, container, context, mounted, initialListeners };
 }
 
 it("renders the public card widget with read-only status controls", async () => {
@@ -60,7 +61,7 @@ it("starts visible widgets and releases hidden widget subscriptions", async () =
   select.value = "done";
   select.dispatchEvent(new Event("change", { bubbles: true }));
   expect(widget.request).toHaveBeenCalledTimes(count);
-  expect(widget.fixture.listeners.size).toBe(0);
+  expect(widget.fixture.listeners).toEqual(widget.initialListeners);
   expect(widget.fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
   widget.fixture.emit("plugin.workboard.changed", {});
   expect(widget.request).toHaveBeenCalledTimes(count);

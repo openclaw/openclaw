@@ -9,7 +9,7 @@ import {
 import { groupWorkboardCardsByStatus } from "../lib/workboard/derived.ts";
 import { WORKBOARD_STATUSES } from "../lib/workboard/types.ts";
 import { workboardPageTarget } from "../pages/workboard/page-target.ts";
-import { WorkboardColumn } from "../pages/workboard/view-card.tsx";
+import { WorkboardColumn } from "../pages/workboard/view-column.tsx";
 import type { WorkboardProps } from "../pages/workboard/view-helpers.tsx";
 import type { WorkboardWidgetModel } from "./runtime.ts";
 
@@ -43,7 +43,7 @@ function isAvailable(model: WorkboardWidgetModel) {
 export function WorkboardMiniWidget(props: WidgetProps) {
   const boardId = () => props.model.readStringProp("boardId");
   const cards = createMemo(() => {
-    props.revision;
+    void props.revision;
     return boardId()
       ? props.model.cards.filter((card) => workboardCardBoardId(card) === boardId())
       : props.model.cards;
@@ -72,7 +72,7 @@ export function WorkboardMiniWidget(props: WidgetProps) {
           <For each={WORKBOARD_STATUSES} keyed={(status) => status}>
             {(status) => (
               <span title={t(`workboard.status.${status()}`)}>
-                <b>{cards().filter((card) => card.status === status()).length}</b>
+                <b>{cards().filter((card) => card.status === status()).length}</b>{" "}
                 {t(`workboard.status.${status()}`)}
               </span>
             )}
@@ -102,7 +102,7 @@ export function WorkboardMiniWidget(props: WidgetProps) {
 export function WorkboardCardWidget(props: WidgetProps) {
   const cardId = () => props.model.readStringProp("cardId");
   const card = createMemo(() => {
-    props.revision;
+    void props.revision;
     return props.model.cards.find((candidate) => candidate.id === cardId());
   });
   const statuses = () => {
@@ -112,7 +112,7 @@ export function WorkboardCardWidget(props: WidgetProps) {
       : props.model.statuses;
   };
   const canMutate = () => {
-    props.revision;
+    void props.revision;
     return props.model.canMutate;
   };
   return (
@@ -156,7 +156,7 @@ export function WorkboardCardWidget(props: WidgetProps) {
                   <span>{t("workboard.fieldStatus")}</span>
                   <select
                     aria-label={`${t("workboard.fieldStatus")}: ${current().title}`}
-                    prop:value={current().status}
+                    value={current().status}
                     disabled={!canMutate()}
                     onChange={(event: Event) => void props.model.handleStatusChange(event)}
                   >
@@ -183,7 +183,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
   const boardId = () => props.model.readStringProp("boardId");
   const filter = () => boardId() ?? WORKBOARD_ALL_BOARDS_FILTER;
   const cards = createMemo(() => {
-    props.revision;
+    void props.revision;
     return props.model.cards.filter((card) => matchesBoardFilter(card, filter()));
   });
   const byStatus = createMemo(() => groupWorkboardCardsByStatus(cards(), props.model.statuses));
@@ -201,7 +201,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
       return props.model.connected;
     },
     get canWrite() {
-      props.revision;
+      void props.revision;
       return props.model.canMutate;
     },
     agentsList: null,

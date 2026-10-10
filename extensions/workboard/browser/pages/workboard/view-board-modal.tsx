@@ -71,7 +71,7 @@ export function BoardModal(props: {
   requestUpdate: () => void;
 }) {
   const draft = () => {
-    props.revision;
+    void props.revision;
     return props.draft;
   };
   let disposed = false;
@@ -90,26 +90,28 @@ export function BoardModal(props: {
     if (!props.client || !props.canWrite || draft().saving || !draft().name.trim()) {
       return;
     }
-    const target = draft();
+    const initialDraft = draft();
     const client = props.client;
-    const isPresented = () => !disposed && props.draft === target;
+    const isPresented = () => !disposed && props.draft === initialDraft;
     const isCurrent = () => isPresented() && props.client === client;
     let sessions: WorkboardSessionsBoardSpec | undefined;
     try {
-      sessions = target.sessions ? normalizeWorkboardSessionsBoardSpec(target.sessions) : undefined;
+      sessions = initialDraft.sessions
+        ? normalizeWorkboardSessionsBoardSpec(initialDraft.sessions)
+        : undefined;
     } catch (error) {
-      target.error = formatUiError(error);
+      initialDraft.error = formatUiError(error);
       props.requestUpdate();
       return;
     }
-    const input: Record<string, string | string[]> = { id: target.id };
-    if (target.create && target.kind === "sessions") {
+    const input: Record<string, string | string[]> = { id: initialDraft.id };
+    if (initialDraft.create && initialDraft.kind === "sessions") {
       input.kind = "sessions";
     }
     const clearAppearance: string[] = [];
-    const original = originals.get(target);
+    const original = originals.get(initialDraft);
     for (const field of ["name", "icon", "color"] as const) {
-      const value = target[field].trim();
+      const value = initialDraft[field].trim();
       if (value !== original?.[field]) {
         if (!value && field !== "name") {
           clearAppearance.push(field);
@@ -121,33 +123,42 @@ export function BoardModal(props: {
     if (clearAppearance.length > 0) {
       input.clearAppearance = clearAppearance;
     }
-    target.saving = true;
-    target.error = null;
+    initialDraft.saving = true;
+    initialDraft.error = null;
     props.requestUpdate();
     try {
       const { board } = await client.request<{ board: WorkboardBoardMetadata }>(
         "workboard.boards.upsert",
         input,
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) {
+        return;
+      }
       if (
         sessions &&
-        JSON.stringify(target.sessions?.columns) !== JSON.stringify(original?.sessions?.columns)
+        JSON.stringify(initialDraft.sessions?.columns) !==
+          JSON.stringify(original?.sessions?.columns)
       ) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
         await client.request("workboard.sessionsBoard.update", {
-          boardId: target.id,
+          boardId: initialDraft.id,
           patch: { columns: sessions.columns },
         });
       }
-      if (isCurrent()) props.onSaved(board);
+      if (isCurrent()) {
+        props.onSaved(board);
+      }
     } catch (error) {
-      if (isCurrent()) target.error = formatUiError(error);
+      if (isCurrent()) {
+        initialDraft.error = formatUiError(error);
+      }
     } finally {
-      target.saving = false;
-      if (isPresented()) props.requestUpdate();
+      initialDraft.saving = false;
+      if (isPresented()) {
+        props.requestUpdate();
+      }
     }
   };
   return (
@@ -179,7 +190,7 @@ export function BoardModal(props: {
               type="button"
               aria-label={t("common.close")}
               disabled={draft().saving}
-              onClick={props.onCancel}
+              onClick={() => props.onCancel()}
             >
               {icons.x}
             </button>
@@ -194,7 +205,7 @@ export function BoardModal(props: {
                       type="radio"
                       name="board-kind"
                       value={kind()}
-                      prop:checked={draft().kind === kind()}
+                      checked={draft().kind === kind()}
                       onChange={() => {
                         draft().kind = kind();
                         props.requestUpdate();
@@ -263,7 +274,12 @@ export function BoardModal(props: {
             </div>
           ) : undefined}
           <div class="workboard-modal__actions">
-            <button class="btn" type="button" disabled={draft().saving} onClick={props.onCancel}>
+            <button
+              class="btn"
+              type="button"
+              disabled={draft().saving}
+              onClick={() => props.onCancel()}
+            >
               {t("common.cancel")}
             </button>
             <button
@@ -291,11 +307,11 @@ function SessionsEditor(props: {
   revision?: number;
 }) {
   const spec = () => {
-    props.revision;
+    void props.revision;
     return props.draft.sessions!;
   };
   const disabled = () => {
-    props.revision;
+    void props.revision;
     return props.draft.saving || !props.canWrite;
   };
   return (
@@ -304,7 +320,7 @@ function SessionsEditor(props: {
       <For each={[...spec().columns]} keyed={(column) => column.id}>
         {(column, index) => {
           const current = () => {
-            props.revision;
+            void props.revision;
             return column();
           };
           const labelValue = liveInputValue(() => current().label);
@@ -369,13 +385,13 @@ function SessionsEditor(props: {
                       props.requestUpdate();
                     }
                   }}
-                ></textarea>
+                />
               </label>
               <label>
                 <input
                   type="radio"
                   name="sessions-fallback"
-                  prop:checked={Boolean(current().fallback)}
+                  checked={Boolean(current().fallback)}
                   onChange={() => {
                     for (const entry of spec().columns) {
                       entry.fallback = entry.id === current().id;

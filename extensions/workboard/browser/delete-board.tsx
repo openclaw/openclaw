@@ -70,7 +70,14 @@ export function deleteWorkboardBoard(
           </div>
           {view().error ? <div role="alert">{view().error}</div> : null}
           <div class="exec-approval-actions">
-            <button class="btn danger" type="button" disabled={view().busy} onClick={remove}>
+            <button
+              class="btn danger"
+              type="button"
+              disabled={view().busy}
+              onClick={() => {
+                void remove();
+              }}
+            >
               {t("workboard.deleteBoardConfirm")}
             </button>
             <button class="btn" type="button" autofocus disabled={view().busy} onClick={finish}>

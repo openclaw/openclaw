@@ -229,7 +229,7 @@ export function CardMeta(input: { card: WorkboardCard; archived: boolean }) {
                   </span>
                 )}
               </For>
-              <span class="workboard-chip workboard-card__label-overflow" hidden></span>
+              <span class="workboard-chip workboard-card__label-overflow" hidden />
             </div>
           ) : null}
           {input.archived ? (

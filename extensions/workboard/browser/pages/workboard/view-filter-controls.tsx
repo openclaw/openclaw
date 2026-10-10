@@ -37,16 +37,24 @@ export function multiFilterLabel<Value extends string>(
 }
 export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: () => void }) {
   let pendingFocus:
-    | { button: HTMLButtonElement; toolbar: Element | null; index: number }
+    | {
+        button: HTMLButtonElement;
+        toolbar: Element | null;
+        index: number;
+      }
     | undefined;
   createEffect(
     () => props.filters,
     () => {
       const pending = pendingFocus;
       pendingFocus = undefined;
-      if (!pending) return;
+      if (!pending) {
+        return;
+      }
       const doc = pending.button.ownerDocument;
-      if (doc.activeElement !== pending.button && doc.activeElement !== doc.body) return;
+      if (doc.activeElement !== pending.button && doc.activeElement !== doc.body) {
+        return;
+      }
       const remaining = [
         ...(pending.toolbar?.querySelectorAll<HTMLButtonElement>(
           ".workboard-filter-chip__remove",
@@ -88,14 +96,23 @@ export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: 
                 })}
                 onClick={(event: MouseEvent) => {
                   const button = event.currentTarget;
-                  if (!(button instanceof HTMLButtonElement)) return;
+                  if (!(button instanceof HTMLButtonElement)) {
+                    return;
+                  }
                   const toolbar = button.closest(".workboard-toolbar");
                   const buttons = [
                     ...(toolbar?.querySelectorAll<HTMLElement>(".workboard-filter-chip__remove") ??
                       []),
                   ].filter((candidate) => candidate.getClientRects().length > 0);
                   const index = buttons.indexOf(button);
-                  pendingFocus = event.detail === 0 ? { button, toolbar, index } : undefined;
+                  pendingFocus =
+                    event.detail === 0
+                      ? {
+                          button,
+                          toolbar,
+                          index,
+                        }
+                      : undefined;
                   filter().clear();
                   props.requestUpdate?.();
                 }}
@@ -110,9 +127,13 @@ export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: 
   );
 }
 function toggleStatus(state: WorkboardUiState, status: WorkboardStatus | undefined) {
-  if (status === undefined) state.statusFilter.clear();
-  else if (state.statusFilter.has(status)) state.statusFilter.delete(status);
-  else state.statusFilter.add(status);
+  if (status === undefined) {
+    state.statusFilter.clear();
+  } else if (state.statusFilter.has(status)) {
+    state.statusFilter.delete(status);
+  } else {
+    state.statusFilter.add(status);
+  }
 }
 type StatusFilterProps = {
   state: WorkboardUiState;
@@ -121,7 +142,7 @@ type StatusFilterProps = {
 };
 export function StatusTabs(props: StatusFilterProps) {
   const state = () => {
-    props.revision;
+    void props.revision;
     return props.state;
   };
   return (
@@ -157,12 +178,14 @@ export function MobileStatusPicker(
   },
 ) {
   const state = () => {
-    props.revision;
+    void props.revision;
     return props.state;
   };
   const counts = createMemo(() => {
     const result = new Map<WorkboardStatus, number>();
-    for (const card of props.cards) result.set(card.status, (result.get(card.status) ?? 0) + 1);
+    for (const card of props.cards) {
+      result.set(card.status, (result.get(card.status) ?? 0) + 1);
+    }
     return result;
   });
   const selected = createMemo(() =>
@@ -221,7 +244,7 @@ export function MobileStatusPicker(
                 {status() === undefined ? (
                   icons.kanban
                 ) : (
-                  <span class={`workboard-status-dot workboard-status-dot--${status()}`} />
+                  <span class={["workboard-status-dot", `workboard-status-dot--${status()}`]} />
                 )}
               </span>
               <span>
@@ -255,7 +278,9 @@ export function FilterSelect<Value extends string>(props: {
         accessibleLabel={props.label}
         onSelect={(value) => {
           const option = props.options.find((candidate) => candidate.value === value);
-          if (option && !option.disabled) props.onChange(option.value);
+          if (option && !option.disabled) {
+            props.onChange(option.value);
+          }
         }}
       />
     </div>
@@ -343,9 +368,14 @@ export function MultiFilter<Value extends string>(props: {
                 type="checkbox"
                 checked={props.values.has(option().value)}
                 onChange={(event: Event) => {
-                  if (!(event.currentTarget instanceof HTMLInputElement)) return;
-                  if (event.currentTarget.checked) props.values.add(option().value);
-                  else props.values.delete(option().value);
+                  if (!(event.currentTarget instanceof HTMLInputElement)) {
+                    return;
+                  }
+                  if (event.currentTarget.checked) {
+                    props.values.add(option().value);
+                  } else {
+                    props.values.delete(option().value);
+                  }
                   props.onChange();
                 }}
               />

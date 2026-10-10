@@ -102,7 +102,7 @@ export function getVisibleDetailCard(state: WorkboardUiState): WorkboardCard | n
 
 export function CardDetailsPanel(props: WorkboardProps) {
   const card = () => {
-    props.revision;
+    void props.revision;
     return getVisibleDetailCard(getWorkboardState(props.host));
   };
   return (
@@ -112,13 +112,13 @@ export function CardDetailsPanel(props: WorkboardProps) {
 
 function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
   const state = () => {
-    props.revision;
+    void props.revision;
     return getWorkboardState(props.host);
   };
   const noteValue = liveInputValue(() => state().detailCommentBody);
   const visibleError = () => workboardErrorMessage(state(), props.pageError);
   const card = () => {
-    props.revision;
+    void props.revision;
     return props.card;
   };
   const drawer = { value: undefined as HTMLElement | undefined };
@@ -203,15 +203,11 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
   );
   const formatted = createMemo(() => formatLifecycle(lifecycle()));
   const sessionStatus = createMemo(() => getSessionStatus(card(), lifecycle()));
-  const comments = createMemo(() =>
-    (card().metadata?.comments ?? []).map((comment) => ({ ...comment })),
-  );
+  const comments = createMemo(() => [...(card().metadata?.comments ?? [])]);
   const automation = () => card().metadata?.automation;
   const boardId = () => workboardCardBoardId(card());
   const board = () => state().boards.find((entry) => entry.id === boardId());
-  const events = createMemo(() =>
-    (card().events ?? []).toReversed().map((event) => ({ ...event })),
-  );
+  const events = createMemo(() => (card().events ?? []).toReversed());
   const dependencies = createMemo(() => getWorkboardDependencyState(card(), state().cards));
   const technical = createMemo(() => technicalDetailsData(card(), action().linkedSessionKey));
   const tabs = () =>
@@ -254,10 +250,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                 (action().linkedSessionKey ? t("workboard.fieldSession") : formatted().label))}
           </span>
           {!sessionEmpty() && sessionStatus().detail ? (
-            <p
-              class="workboard-detail__session-description"
-              prop:textContent={sessionStatus().detail}
-            ></p>
+            <p class="workboard-detail__session-description" textContent={sessionStatus().detail} />
           ) : undefined}
           {sessionEmpty() && action().showStartControls && !action().archived ? (
             <p class="workboard-detail__session-help">
@@ -416,7 +409,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                     role="tab"
                     id={`workboard-detail-tab-${tab().id}`}
                     aria-controls={`workboard-detail-panel-${tab().id}`}
-                    aria-selected={String(activeTab() === tab().id)}
+                    aria-selected={activeTab() === tab().id ? "true" : "false"}
                     tabindex={activeTab() === tab().id ? "0" : "-1"}
                     autofocus={activeTab() === tab().id}
                     onClick={(event: MouseEvent) => selectTab(tab().id, event.currentTarget)}
@@ -511,7 +504,10 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                       readOnly={!action().writable || action().archived}
                     />
                     <section
-                      class={`workboard-detail__execution ${sessionEmpty() ? "workboard-detail__execution--empty" : ""}`}
+                      class={[
+                        "workboard-detail__execution",
+                        { "workboard-detail__execution--empty": sessionEmpty() },
+                      ]}
                       aria-label={t("workboard.fieldSession")}
                     >
                       <SessionHeading tab="overview" />
@@ -567,7 +563,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                     {automation()?.summary || visibleAutomationFields().length ? (
                       <section class="workboard-detail__section workboard-detail__automation">
                         <h3>{t("workboard.detailCardAutomation")}</h3>
-                        {automation()?.summary ? <p>{automation().summary}</p> : undefined}
+                        {automation()?.summary ? <p>{automation()?.summary}</p> : undefined}
                         <For each={visibleAutomationFields()} keyed={(field) => field[0]}>
                           {(field) => <DetailRow label={field()[0]} value={field()[1]} />}
                         </For>
@@ -636,18 +632,18 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                           state().detailCommentDrafts.set(card().id, state().detailCommentBody);
                           props.onRequestUpdate?.();
                         }}
-                      ></textarea>
+                      />
                       <button
                         class="btn"
                         type="button"
                         disabled={action().busy || !state().detailCommentBody.trim()}
-                        onClick={() =>
-                          addWorkboardCardComment({
+                        onClick={() => {
+                          void addWorkboardCardComment({
                             ...workboardMutationContext(props),
                             cardId: card().id,
                             body: state().detailCommentBody,
-                          })
-                        }
+                          });
+                        }}
                       >
                         {t("workboard.detailAddNote")}
                       </button>

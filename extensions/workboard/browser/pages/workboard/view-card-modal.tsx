@@ -60,7 +60,7 @@ function syncDraftTextInput(
   } else if (input.classList.contains("workboard-comments__input")) {
     state.draftCommentBody = input.value;
   } else {
-    return;
+    return false;
   }
 
   return true;
@@ -152,7 +152,7 @@ function DraftChoices<Value extends string>(params: {
 }) {
   return (
     <fieldset
-      class={`workboard-choice-field ${params.name === "status" ? "workboard-field--wide" : ""}`}
+      class={["workboard-choice-field", { "workboard-field--wide": params.name === "status" }]}
       disabled={params.disabled}
     >
       <legend>{params.label}</legend>
@@ -160,13 +160,16 @@ function DraftChoices<Value extends string>(params: {
         <For each={params.options} keyed={(option) => option.value}>
           {(option) => (
             <label
-              class={`workboard-segment ${params.name === "status" ? `workboard-segment--${option().value}` : ""}`}
+              class={[
+                "workboard-segment",
+                { [`workboard-segment--${option().value}`]: params.name === "status" },
+              ]}
             >
               <input
                 type="radio"
                 name={params.name}
                 value={option().value}
-                prop:checked={params.value === option().value}
+                checked={params.value === option().value}
                 onChange={() => params.onChange(option().value)}
               />
               <span>
@@ -185,7 +188,7 @@ function DraftChoices<Value extends string>(params: {
 
 export function CardModal(props: WorkboardProps) {
   const open = () => {
-    props.revision;
+    void props.revision;
     return getWorkboardState(props.host).draftOpen;
   };
   return (
@@ -198,7 +201,7 @@ export function CardModal(props: WorkboardProps) {
 function CardModalContent(props: WorkboardProps) {
   const [draftRevision, setDraftRevision] = createSignal(0);
   const state = () => {
-    props.revision;
+    void props.revision;
     return getWorkboardState(props.host);
   };
   const draftTitle = () => {
@@ -250,8 +253,7 @@ function CardModalContent(props: WorkboardProps) {
     state().editingCardId
       ? (state().cards.find((card) => card.id === state().editingCardId) ?? null)
       : null;
-  const comments = () =>
-    (editingCard()?.metadata?.comments ?? []).map((comment) => ({ ...comment }));
+  const comments = () => [...(editingCard()?.metadata?.comments ?? [])];
   const draftCommentBusy = () => editing() && state().busyCardIds.has(state().editingCardId ?? "");
   const draftActionsBusy = () =>
     !canMutate(props) ||
@@ -374,11 +376,11 @@ function CardModalContent(props: WorkboardProps) {
                   placeholder={t("workboard.notesPlaceholder")}
                   disabled={draftActionsBusy()}
                   ref={notesValue}
-                ></textarea>
+                />
               </label>
             </div>
             <div class="workboard-draft__meta">
-              <DraftChoices
+              <DraftChoices<WorkboardStatus>
                 {...{
                   name: "status",
                   value: state().draftStatus,
@@ -404,7 +406,7 @@ function CardModalContent(props: WorkboardProps) {
                       props.onRequestUpdate?.();
                     },
                   }}
-                  className={"workboard-agent-select"}
+                  class="workboard-agent-select"
                 />
               </div>
               <div class="workboard-field">
@@ -421,10 +423,10 @@ function CardModalContent(props: WorkboardProps) {
                     },
                     disabled: draftActionsBusy(),
                   }}
-                  className={"workboard-session-select"}
+                  class="workboard-session-select"
                 />
               </div>
-              <DraftChoices
+              <DraftChoices<WorkboardPriority>
                 {...{
                   name: "priority",
                   value: state().draftPriority,
@@ -470,7 +472,7 @@ function CardModalContent(props: WorkboardProps) {
                   maxlength="2000"
                   disabled={draftActionsBusy()}
                   ref={commentValue}
-                ></textarea>
+                />
                 <div class="workboard-modal__actions">
                   <button
                     class="btn workboard-comments__submit"
@@ -565,10 +567,10 @@ export function CardDiscardDialog(props: {
           <h2>{props.title}</h2>
           <p>{t("workboard.discardDraftHelp")}</p>
           <div class="workboard-discard__actions">
-            <button class="btn" type="button" autofocus onClick={props.onKeepEditing}>
+            <button class="btn" type="button" autofocus onClick={() => props.onKeepEditing()}>
               {t("workboard.keepEditing")}
             </button>
-            <button class="btn danger" type="button" onClick={props.onDiscard}>
+            <button class="btn danger" type="button" onClick={() => props.onDiscard()}>
               {t("workboard.discardDraft")}
             </button>
           </div>

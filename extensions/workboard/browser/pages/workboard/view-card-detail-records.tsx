@@ -234,13 +234,11 @@ function getDetailSections(card: WorkboardCard) {
 }
 
 export function technicalDetailsData(card: WorkboardCard, linkedSessionKey: string | undefined) {
-  const attempts = (card.metadata?.attempts ?? []).map((attempt) => ({ ...attempt }));
-  const proof = (card.metadata?.proof ?? []).map((entry) => ({ ...entry }));
+  const attempts = [...(card.metadata?.attempts ?? [])];
+  const proof = [...(card.metadata?.proof ?? [])];
   const automation = card.metadata?.automation;
   const metadata = card.metadata;
-  const notifications = (metadata?.notifications ?? []).map((notification) => ({
-    ...notification,
-  }));
+  const notifications = [...(metadata?.notifications ?? [])];
   const metadataFields: Array<readonly [string, string | number | undefined]> = [
     [t("workboard.fieldSession"), linkedSessionKey],
     [t("workboard.detailRun"), card.runId ?? card.execution?.runId],

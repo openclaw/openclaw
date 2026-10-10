@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.package-boundary.paths.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web"
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["**/*.test.ts", "**/*.test-support.ts", "test/**"]
+}

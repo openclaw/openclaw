@@ -65,7 +65,10 @@ export function CardMoveControl(input: {
     wide?: boolean;
   };
 }) {
-  const state = () => (input.workboard.revision, getWorkboardState(input.workboard.host));
+  const state = () => {
+    void input.workboard.revision;
+    return getWorkboardState(input.workboard.host);
+  };
   const statuses = createMemo(() =>
     state().statuses.includes(input.card.status)
       ? state().statuses
@@ -75,21 +78,27 @@ export function CardMoveControl(input: {
     <>
       {!isActiveWorkboardCard(input.card) || statuses().length < 2 ? null : (
         <label
-          class={`workboard-card__move ${input.options?.wide ? "workboard-card__move--wide" : ""}`}
+          class={[
+            "workboard-card__move",
+            `${input.options?.wide ? "workboard-card__move--wide" : ""}`,
+          ]}
           title={t("workboard.fieldStatus")}
         >
           <select
             class="workboard-card__move-select"
             aria-keyshortcuts="ArrowLeft ArrowRight"
             aria-label={`${t("workboard.fieldStatus")}: ${input.card.title}`}
-            prop:value={input.card.status}
+            value={input.card.status}
             disabled={input.busy || !input.workboard.connected || !input.workboard.client}
             onChange={(event: Event) => {
-              void moveCardToStatus(
-                input.workboard,
-                input.card,
-                (event.currentTarget as HTMLSelectElement).value as WorkboardStatus,
-              );
+              const target = event.currentTarget;
+              if (!(target instanceof HTMLSelectElement)) {
+                return;
+              }
+              const status = statuses().find((candidate) => candidate === target.value);
+              if (status) {
+                void moveCardToStatus(input.workboard, input.card, status);
+              }
             }}
             prop:onkeydown={(event: KeyboardEvent) => {
               if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
@@ -176,7 +185,7 @@ function CardActionButton(input: {
 }) {
   return (
     <button
-      class={`btn ${input.params.className ?? ""}`}
+      class={["btn", `${input.params.className ?? ""}`]}
       type="button"
       aria-label={input.params.label}
       aria-haspopup={input.params.ariaHaspopup}
@@ -201,7 +210,10 @@ export function EditCardAction(input: {
     requestAction?: (action: () => void) => void;
   };
 }) {
-  const state = () => (input.workboard.revision, getWorkboardState(input.workboard.host));
+  const state = () => {
+    void input.workboard.revision;
+    return getWorkboardState(input.workboard.host);
+  };
   return (
     <CardActionButton
       params={{
@@ -257,7 +269,9 @@ export function OpenSessionCardAction(input: {
 }) {
   const open = () => {
     const session = input.session;
-    if (session) input.workboard.onOpenSession(session);
+    if (session) {
+      input.workboard.onOpenSession(session);
+    }
   };
   return (
     <Show when={input.session}>
@@ -331,7 +345,10 @@ export function StartExecutionButton(input: {
   engine: WorkboardExecutionEngine | null;
   mode: WorkboardExecutionMode;
 }) {
-  const state = () => (input.workboard.revision, getWorkboardState(input.workboard.host));
+  const state = () => {
+    void input.workboard.revision;
+    return getWorkboardState(input.workboard.host);
+  };
   const busy = createMemo(() => state().busyCardIds.has(input.card.id) || state().dispatching);
   const runtimeBlock = createMemo(() =>
     engineBlockedByRuntime(input.workboard, input.card, input.engine),
@@ -346,9 +363,10 @@ export function StartExecutionButton(input: {
       Boolean(runtimeBlock()) ||
       Boolean(input.card.metadata?.archivedAt),
   );
-  const title = createMemo(() =>
-    runtimeBlock()
-      ? runtimeBlock()
+  const title = createMemo(() => {
+    const blocked = runtimeBlock();
+    return blocked
+      ? blocked
       : input.engine
         ? input.mode === "autonomous"
           ? t("workboard.runEngine", {
@@ -357,31 +375,38 @@ export function StartExecutionButton(input: {
           : t("workboard.openEngine", {
               engine: engineName(),
             })
-        : t("workboard.runDefaultAgent"),
-  );
+        : t("workboard.runDefaultAgent");
+  });
+  const start = async () => {
+    const key = await startWorkboardCard({
+      ...workboardMutationContext(input.workboard),
+      card: input.card,
+      ...(input.engine
+        ? {
+            engine: input.engine,
+          }
+        : {}),
+      mode: input.mode,
+    });
+    if (key) {
+      input.workboard.onOpenSession({
+        sessionKey: key,
+      });
+    }
+  };
   return (
     <button
-      class={`btn btn--xs workboard-card__start workboard-card__start--${input.mode}  ${input.engine ? "" : "workboard-card__start--default"}`}
+      class={[
+        "btn",
+        "btn--xs",
+        "workboard-card__start",
+        `workboard-card__start--${input.mode}`,
+        `${input.engine ? "" : "workboard-card__start--default"}`,
+      ]}
       type="button"
       aria-label={title()}
       disabled={disabled()}
-      onClick={async () => {
-        const key = await startWorkboardCard({
-          ...workboardMutationContext(input.workboard),
-          card: input.card,
-          ...(input.engine
-            ? {
-                engine: input.engine,
-              }
-            : {}),
-          mode: input.mode,
-        });
-        if (key) {
-          input.workboard.onOpenSession({
-            sessionKey: key,
-          });
-        }
-      }}
+      onClick={() => void start()}
     >
       {input.engine ? (
         <span>{engineName()}</span>

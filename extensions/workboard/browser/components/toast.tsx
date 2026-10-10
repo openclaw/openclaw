@@ -39,7 +39,7 @@ export function updateWorkboardToastOutcome(owner: object, props: WorkboardToast
 export function WorkboardToast(props: WorkboardToastProps) {
   const localOwner = {};
   const [visible, setVisible] = createSignal(false);
-  let host!: HTMLElement;
+  let host: HTMLElement | undefined;
   let lastMessage = "";
   let lastKey: unknown;
   let lastTone: ToastOutcome["tone"] = "info";
@@ -135,7 +135,12 @@ export function WorkboardToast(props: WorkboardToastProps) {
   onCleanup(pause);
 
   return (
-    <openclaw-workboard-toast ref={host} hidden={props.hidden}>
+    <openclaw-workboard-toast
+      ref={(element) => {
+        host = element;
+      }}
+      hidden={props.hidden}
+    >
       <Show when={visible()}>
         <div
           class={props.tone === "error" ? "toast toast--error" : "toast"}
@@ -152,7 +157,8 @@ export function WorkboardToast(props: WorkboardToastProps) {
             pause();
           }}
           onFocusOut={(event: FocusEvent) => {
-            focused = event.relatedTarget instanceof Node && host.contains(event.relatedTarget);
+            focused =
+              event.relatedTarget instanceof Node && Boolean(host?.contains(event.relatedTarget));
             resume();
           }}
         >

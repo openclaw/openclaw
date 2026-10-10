@@ -50,7 +50,7 @@ export function BoardAutomationHeading(props: {
   revision?: number;
 }) {
   const current = () => {
-    props.revision;
+    void props.revision;
     return props.automation;
   };
   return (
@@ -67,7 +67,7 @@ function BoardAutomationHeadingContent(props: {
   revision?: number;
 }) {
   const automation = () => {
-    props.revision;
+    void props.revision;
     return props.automation;
   };
   const job = () => {
@@ -265,7 +265,9 @@ function BoardAutomationLink(props: {
   createEffect(
     () => props.onNavigate,
     (navigate) => {
-      if (!navigate) return;
+      if (!navigate) {
+        return undefined;
+      }
       // Navigation admission must precede native listeners and the browser's default action.
       link.addEventListener("click", navigate);
       return () => link.removeEventListener("click", navigate);
@@ -273,7 +275,9 @@ function BoardAutomationLink(props: {
   );
   return (
     <a
-      ref={link}
+      ref={(element) => {
+        link = element;
+      }}
       href={`${workboardHost().basePath}/automations?job=${encodeURIComponent(props.jobId)}`}
       aria-label={t("workboard.openNamedAutomation", {
         name: props.job.displayName ?? props.job.name,

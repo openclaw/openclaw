@@ -78,7 +78,7 @@ export function createWorkboardPage(
     const automations = new Map<string, BoardAutomationState>();
     type PagePresentation = {
       workboardProps: WorkboardProps & { onRefresh: () => void };
-      selectedBoard: WorkboardBoardMetadata | null | undefined;
+      selectedBoard: (typeof state.boards)[number] | null | undefined;
       boards: typeof state.boards;
       boardDraft: BoardDraft | null;
       revision: number;
@@ -348,7 +348,7 @@ export function createWorkboardPage(
           <div class="page-title workboard-page-title">
             <Show when={board()}>
               {(selected) => (
-                <WorkboardBoardGlyph board={selected()} className="workboard-board-glyph--header" />
+                <WorkboardBoardGlyph board={selected()} class="workboard-board-glyph--header" />
               )}
             </Show>
             <span>{board() ? workboardBoardName(board()!) : "Workboard"}</span>
@@ -360,7 +360,9 @@ export function createWorkboardPage(
                 title={t("workboard.editBoard")}
                 onClick={() => {
                   const selected = board();
-                  if (!selected) return;
+                  if (!selected) {
+                    return;
+                  }
                   boardDraft = createBoardDraft({
                     ...selected,
                     ...(sessionsBoard.snapshot?.board.id === selected.id
@@ -414,6 +416,19 @@ export function createWorkboardPage(
       );
     }
     function Page() {
+      const liveClient = () => {
+        void presentation()?.revision;
+        return host.connection.connected ? host : null;
+      };
+      const canWrite = () => {
+        void presentation()?.revision;
+        return (
+          !disposed &&
+          !context.signal.aborted &&
+          host.connection.connected &&
+          host.connection.canWrite
+        );
+      };
       return (
         <Show when={presentation()}>
           {(current) => (
@@ -437,7 +452,7 @@ export function createWorkboardPage(
                   revision={current().revision}
                   heading={<PageHeading />}
                   scopeControl={<ScopeControl />}
-                  pageError={current().workboardProps.pageError}
+                  pageError={current().workboardProps.pageError ?? undefined}
                   overlayOpen={Boolean(current().boardDraft)}
                   onNewBoard={() => {
                     boardDraft = createNewBoardDraft();
@@ -458,18 +473,17 @@ export function createWorkboardPage(
                     revision={current().revision}
                     toastOwner={state}
                     pageError={workboardErrorMessage(state, current().workboardProps.pageError)}
-                    client={current().workboardProps.client}
-                    canWrite={
-                      current().workboardProps.connected &&
-                      current().workboardProps.canWrite !== false
-                    }
+                    client={liveClient()}
+                    canWrite={canWrite()}
                     requestUpdate={requestUpdate}
                     onCancel={() => {
                       boardDraft = null;
                       requestUpdate();
                     }}
                     onSaved={(board) => {
-                      if (disposed) return;
+                      if (disposed) {
+                        return;
+                      }
                       const creating = boardDraft?.create;
                       const savedNavigation = navigationGeneration;
                       boardDraft = null;
@@ -488,15 +502,20 @@ export function createWorkboardPage(
                           disposed ||
                           !context.presented ||
                           savedNavigation !== navigationGeneration
-                        )
+                        ) {
                           return;
-                        if (creating)
+                        }
+                        if (creating) {
                           host.navigation.openPage(workboardPageTarget(board.id), {
                             replace: true,
                             preserveSearch: true,
                           });
-                        else if (presentation()?.selectedBoard?.kind === "sessions")
+                        } else if (
+                          state.boards.find((candidate) => candidate.id === state.boardFilter)
+                            ?.kind === "sessions"
+                        ) {
                           void sessionsBoard.read();
+                        }
                       });
                       requestUpdate();
                     }}

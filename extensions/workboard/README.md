@@ -31,3 +31,9 @@ browser changes:
 ```bash
 node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/workboard
 ```
+
+The browser has a dedicated typecheck configuration:
+
+```bash
+node scripts/run-tsgo.mjs -p extensions/workboard/browser/tsconfig.json
+```

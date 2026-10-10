@@ -639,8 +639,12 @@ it.each(
       vi.mocked(page.fixture.host.ui.pinNavigation).mock.invocationCallOrder[0]!,
     );
     expect(page.fixture.host.navigation.openPage).not.toHaveBeenCalled();
-    if (destination === "another board") page.navigate("another-board");
-    if (destination === "hidden") page.present(false);
+    if (destination === "another board") {
+      page.navigate("another-board");
+    }
+    if (destination === "hidden") {
+      page.present(false);
+    }
     await vi.advanceTimersByTimeAsync(0);
     refreshed.resolve({ cards: [], boards: [page.board] });
     await vi.advanceTimersByTimeAsync(0);
@@ -878,9 +882,11 @@ it.each(["resolved", "rejected"] as const)(
     page.fixture.connection.connected = false;
     page.fixture.notify();
     await vi.advanceTimersByTimeAsync(0);
-    if (outcome === "resolved")
+    if (outcome === "resolved") {
       pending.resolve({ board: { ...page.board, name: "Pending rename" } });
-    else pending.reject(new Error("Save unavailable"));
+    } else {
+      pending.reject(new Error("Save unavailable"));
+    }
     await vi.advanceTimersByTimeAsync(0);
     expect(page.container.querySelector(".workboard-board-draft")).toBe(form);
     expect(button(page, "Close").disabled).toBe(false);
