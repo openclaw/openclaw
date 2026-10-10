@@ -64,7 +64,11 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   let database: OpenClawAgentDatabase | undefined;
   let releaseBorrow: (() => void) | undefined;
   let prepared = false;
+  let lockWriteStarted = false;
   return {
+    get lockWriteStarted() {
+      return lockWriteStarted;
+    },
     async write<Key extends CacheWriteKey>(
       type: Key,
       input: AgentDatabaseOperations[Key]["input"],
@@ -86,6 +90,9 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
                 signal?.throwIfAborted();
                 database = current;
                 releaseBorrow ??= retainAgentDatabase(current.db);
+                if (type === "usageCache.acquireLock") {
+                  lockWriteStarted = true;
+                }
                 return native(current);
               },
               options,
@@ -124,9 +131,12 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
               prepared = true;
             }
             source.assertCurrent();
-            const result = await current.runExisting(source, async (worker) => ({
-              value: await worker.execute({ type, input: captured }, { signal }),
-            }));
+            const result = await current.runExisting(source, async (worker) => {
+              if (type === "usageCache.acquireLock") {
+                lockWriteStarted = true;
+              }
+              return { value: await worker.execute({ type, input: captured }, { signal }) };
+            });
             if (!result) {
               throw new Error("Usage cache database disappeared before write");
             }
@@ -294,7 +304,7 @@ export function prepareSessionCostUsageRefreshLock(
     releasing ??= (async () => {
       await acquiring?.catch(() => undefined);
       try {
-        if (acquiring) {
+        if (writer.lockWriteStarted) {
           await writer.write(
             "usageCache.releaseLock",
             lockJson,

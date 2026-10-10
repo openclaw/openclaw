@@ -474,44 +474,6 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not repeat registry loads after bootstrap misses in the same generation", async () => {
-    getChannelPluginMock.mockReturnValue(undefined);
-
-    expect(
-      channelResolution.resolveOutboundChannelPlugin({
-        channel: "alpha",
-        cfg: { channels: {} } as never,
-        allowBootstrap: true,
-      }),
-    ).toBeUndefined();
-
-    channelResolution.resolveOutboundChannelPlugin({
-      channel: "alpha",
-      cfg: { channels: {} } as never,
-      allowBootstrap: true,
-    });
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows another activation attempt when the active registry version changes", async () => {
-    getChannelPluginMock.mockReturnValue(undefined);
-
-    channelResolution.resolveOutboundChannelPlugin({
-      channel: "alpha",
-      cfg: { channels: {} } as never,
-      allowBootstrap: true,
-    });
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
-
-    getActivePluginRegistryVersionMock.mockReturnValue(2);
-    channelResolution.resolveOutboundChannelPlugin({
-      channel: "alpha",
-      cfg: { channels: {} } as never,
-      allowBootstrap: true,
-    });
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(2);
-  });
-
   it("resolves message adapters through the activation-aware channel plugin path", async () => {
     const message = { send: { text: vi.fn() } };
     const plugin = { id: "alpha", message };

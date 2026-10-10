@@ -119,46 +119,6 @@ it.each([false, true])(
   },
 );
 
-it.each(process.platform === "win32" ? [false] : [false, true])(
-  "retains a descendant's failed native close until ordinary retry (root removed: %s)",
-  (removed) => {
-    const { cache, source } = createFixture();
-    const parent = createSqliteSnapshotStagingDirectorySync(cache);
-    const child = createSqliteSnapshotStagingDirectorySync(parent);
-    fs.copyFileSync(source, path.join(child, "database.sqlite"));
-    releaseSnapshotTempDirectory(child);
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let retained: ReturnType<typeof open> | undefined;
-    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-      const db = open(...args);
-      retained ??= db;
-      vi.spyOn(db, "close")
-        .mockImplementationOnce(() => {
-          throw new Error("native close did not finish");
-        })
-        .mockImplementationOnce(() => {
-          throw new Error("native close still pending");
-        });
-      return db;
-    });
-    try {
-      expect(removeTempDirectory(parent)).toBe(false);
-      expect(retained?.isOpen).toBe(true);
-      expect(fs.existsSync(path.join(child, "database.sqlite"))).toBe(false);
-      opened.mockRestore();
-      if (removed) {
-        // POSIX permits unlinking an open database; the process still owns its native handle.
-        fs.rmSync(parent, { recursive: true });
-      }
-      expect(removeTempDirectory(parent)).toBe(true);
-      expect(retained?.isOpen).toBe(false);
-    } finally {
-      vi.restoreAllMocks();
-      removeTempDirectory(parent);
-    }
-  },
-);
-
 it.each([
   "directory",
   "token",

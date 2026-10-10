@@ -159,7 +159,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     }
     let pending: RetainedOperation<void> | undefined;
     const startRetire = (): RetainedOperation<void> => {
-      if (pending) {
+      if (pending && pending.read().status !== "rejected") {
         return pending;
       }
       try {

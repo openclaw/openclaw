@@ -81,16 +81,20 @@ export function createSqliteSnapshotStagingRuntime(
           }
           throw error;
         }
-        let retirement: Promise<void> | undefined;
+        let retired = false;
         return {
           directory,
           retire: () =>
-            (retirement ??= run(async () => {
+            run(async () => {
+              if (retired) {
+                return;
+              }
               await current.run(directory, { mode: "staging-retire" });
+              retired = true;
               if (--directories === 0) {
                 await closeSession(current);
               }
-            })),
+            }),
         };
       });
     },

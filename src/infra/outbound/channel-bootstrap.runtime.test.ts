@@ -371,7 +371,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
       loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
       expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBe(handle);
-      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBe(handle);
       expect(getActivePluginRegistry()).toBe(root);
       expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
       expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(

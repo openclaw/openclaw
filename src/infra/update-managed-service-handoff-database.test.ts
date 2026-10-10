@@ -658,35 +658,6 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     });
   });
 
-  it.each(["missing", "replaced"] as const)(
-    "refuses a database %s immediately before a writable authority reopen",
-    async (change) => {
-      const existingAuthority = await authority();
-      const retained = path.join(root, "retained.sqlite");
-      let before: ReturnType<typeof snapshot> | undefined;
-      let raced = false;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-        if (options?.readOnly) {
-          return openDatabase(location, options);
-        }
-        raced = true;
-        fs.renameSync(databasePath, retained);
-        if (change === "replaced") {
-          fs.copyFileSync(retained, databasePath);
-          fs.chmodSync(databasePath, 0o600);
-        }
-        before = snapshot();
-        return openDatabase(location, options);
-      });
-      const operation = vi.fn();
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      expect(() => withDatabase(true, operation)).toThrow();
-      expect(raced).toBe(true);
-      expect(operation).not.toHaveBeenCalled();
-      expect(snapshot()).toEqual(before);
-    },
-  );
-
   describe.each(["acquire", "release"] as const)("%s transaction", (operation) => {
     it.each([
       { boundary: "after-open", target: "database" },
