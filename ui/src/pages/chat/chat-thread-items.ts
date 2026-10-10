@@ -113,7 +113,7 @@ function removeCanvasPreviewFromAssistantMessage(
     for (const candidate of extracted.previews) {
       if (
         !canvasPreviewsMatch(candidate, preview) &&
-        !structured.some((existing) => canvasPreviewsMatch(existing, candidate))
+        !structured.some((structuredPreview) => canvasPreviewsMatch(structuredPreview, candidate))
       ) {
         nextContent.push({ type: "canvas", preview: candidate });
       }
