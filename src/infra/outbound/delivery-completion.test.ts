@@ -196,7 +196,7 @@ describe("pending-final delivery completion", () => {
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
   });
 
-  it("reprepares only a proven actor version conflict without claiming stale queue custody", async () => {
+  it("admits current custody in one command without a preparatory read", async () => {
     const scope = { sessionKey, storePath };
     const original = loadSessionEntry(scope)!;
     const pending = original.pendingFinalDelivery!;
@@ -238,10 +238,7 @@ describe("pending-final delivery completion", () => {
         ).resolves.toEqual({
           state: "label" in change ? "queued" : "stale",
         });
-        expect(observed.commands.filter((command) => command !== "session.actor.read")).toEqual([
-          "session.actor.deliverySettled",
-          "session.actor.deliverySettled",
-        ]);
+        expect(observed.commands).toEqual(["session.actor.deliverySettled"]);
         if ("label" in change) {
           expect(loadSessionEntry(scope)).toMatchObject({
             label: "foreign metadata",
