@@ -62,16 +62,16 @@ function projectOpencodeGoListedRows(
     models: [],
   })
     .filter((model) => !snapshot.has(model.id.toLowerCase()))
-    .map(
-      (model) =>
-        // SAFETY: Without template rows the shared classifier emits only text/image input;
-        // normalization preserves the assigned Go route.
-        normalizeModelCompat({
-          ...model,
-          ...OPENCODE_GO_PROVIDER_ROUTE,
-          provider: PROVIDER_ID,
-        }) as OpencodeGoModelDefinition,
-    );
+    .map((model) => {
+      const listed = normalizeModelCompat({
+        ...model,
+        ...OPENCODE_GO_PROVIDER_ROUTE,
+        provider: PROVIDER_ID,
+      });
+      // SAFETY: Without template rows the shared classifier emits only text/image input,
+      // and normalization preserves the assigned Go route.
+      return listed as OpencodeGoModelDefinition;
+    });
   return [...projectProviderCatalogSnapshotRows(rows, snapshot), ...unknown];
 }
 const opencodeGoCatalog = createUpstreamProviderCatalog({
