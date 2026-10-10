@@ -60,7 +60,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
   type RouteModule = { render: (data: RouteData | undefined) => Node | null };
   const router = createRouter<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
     routes: [
-      definePage({
+      definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
         id: "about",
         path: "/about",
         component: () => ({
@@ -68,7 +68,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
         }),
         loader: () => ({ ready: true }),
       }),
-      definePage({
+      definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
         id: "debug",
         path: "/debug",
         component: () => ({ render: () => destination }),
