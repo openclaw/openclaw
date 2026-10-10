@@ -122,7 +122,11 @@ describe("memory mutation authority at durable effects", () => {
                     day: "2026-01-02",
                     snippet: "entry",
                     rendered: "entry",
-                    provenance: { originClass: "owner" },
+                    provenance: {
+                      originClass: "owner",
+                      sessionKind: "interactive",
+                      observedAt: 1_000,
+                    },
                   },
                 ],
               });
