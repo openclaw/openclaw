@@ -392,7 +392,7 @@ describe("OpenAI request cache policy", () => {
     const build = buildOpenAIResponsesParams;
     for (const [id, retention, options] of [
       ["gpt-5.4-2026-03-05", "24h", undefined],
-      ["gpt-5.6-sol", undefined, { ttl: "30m" }],
+      ["gpt-5.6-sol", undefined, { ttl: "30m", mode: "explicit" }],
       ["gpt-4o", undefined, undefined],
     ] as const) {
       const params = build(
