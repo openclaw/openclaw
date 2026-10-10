@@ -1,6 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
+  PluginStateComparisonCondition,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -71,7 +73,7 @@ export async function attachBindingToCurrentActiveSession(params: {
   }
   const { detachedAt: _detachedAt, ...retained } = params.binding;
   const attached = { ...retained, sessionId: entry.sessionId };
-  await params.store.set(params.sessionKey, attached, {
+  const applied = await params.store.setIfCurrent(params.sessionKey, params.binding, attached, {
     assertCurrent: () => {
       const current = params.store.get(params.sessionKey);
       if (
@@ -85,7 +87,7 @@ export async function attachBindingToCurrentActiveSession(params: {
       }
     },
   });
-  return attached;
+  return applied ? attached : undefined;
 }
 
 const DISCUSSION_BINDINGS_NAMESPACE = "discussion-bindings";
@@ -164,32 +166,104 @@ export class ClickClackDiscussionBindingStore {
     return { sessionKey, binding };
   }
 
-  async set(
+  async setIfCurrent(
     sessionKey: string,
+    expected: ClickClackDiscussionBinding | undefined,
     binding: ClickClackDiscussionBinding,
     options?: { assertCurrent?: () => void },
-  ): Promise<void> {
-    await this.#withMutation(async () => {
-      await this.#workerStore().register(sessionKey, binding, options);
-      if (!this.#prepared) {
-        this.#changedDuringPreparation.add(sessionKey);
-      }
-      this.#unindex(sessionKey);
-      this.#index(sessionKey, binding);
+  ): Promise<boolean> {
+    return await this.#mutateIfCurrent(sessionKey, expected, binding, options);
+  }
+
+  async observeCurrent(sessionKey: string): Promise<{
+    binding: ClickClackDiscussionBinding | undefined;
+    condition: PluginStateComparisonCondition;
+  }> {
+    return await this.#withMutation(async () => {
+      const observed = await this.#workerStore().observe(sessionKey);
+      this.#publish(sessionKey, observed.value);
+      return {
+        binding: observed.value,
+        condition: {
+          namespace: DISCUSSION_BINDINGS_NAMESPACE,
+          key: sessionKey,
+          comparison: observed.comparison,
+        },
+      };
     });
   }
 
-  async delete(sessionKey: string, options?: { assertCurrent?: () => void }): Promise<boolean> {
+  async deleteIfCurrent(
+    sessionKey: string,
+    expected: ClickClackDiscussionBinding,
+    options?: { assertCurrent?: () => void },
+  ): Promise<boolean> {
+    return await this.#mutateIfCurrent(sessionKey, expected, undefined, options);
+  }
+
+  async #mutateIfCurrent(
+    sessionKey: string,
+    expected: ClickClackDiscussionBinding | undefined,
+    next: ClickClackDiscussionBinding | undefined,
+    options?: { assertCurrent?: () => void },
+  ): Promise<boolean> {
     return await this.#withMutation(async () => {
-      const deleted = await this.#workerStore().delete(sessionKey, options);
-      if (deleted && !this.#prepared) {
-        this.#changedDuringPreparation.add(sessionKey);
+      const worker = this.#workerStore();
+      const observed = await worker.observe(sessionKey);
+      if (!isDeepStrictEqual(observed.value, expected)) {
+        this.#publish(sessionKey, observed.value);
+        return false;
       }
-      if (deleted) {
-        this.#unindex(sessionKey);
+      let authorityRejected = false;
+      try {
+        const guarded = options?.assertCurrent
+          ? this.#runtime.state.openKeyedStoreV2<ClickClackDiscussionBinding>(
+              BINDING_STORE_OPTIONS,
+              {
+                assertCurrent: () => {
+                  try {
+                    options.assertCurrent?.();
+                  } catch (error) {
+                    authorityRejected = true;
+                    throw error;
+                  }
+                },
+              },
+            )
+          : worker;
+        const result = await guarded.compareAndApply(
+          sessionKey,
+          observed.comparison,
+          next
+            ? { operation: "update", action: "set", value: next }
+            : { operation: "delete", action: "delete" },
+        );
+        this.#publish(sessionKey, result.status === "conflict" ? result.current.value : next);
+        return result.status === "applied";
+      } catch (error) {
+        // An old session guard can lose authority while its worker request waits.
+        // Only an observed replacement makes that failure an obsolete operation.
+        if (!authorityRejected) {
+          throw error;
+        }
+        const current = await worker.observe(sessionKey);
+        if (current.comparison === observed.comparison) {
+          throw error;
+        }
+        this.#publish(sessionKey, current.value);
+        return false;
       }
-      return deleted;
     });
+  }
+
+  #publish(sessionKey: string, binding: ClickClackDiscussionBinding | undefined): void {
+    if (!this.#prepared) {
+      this.#changedDuringPreparation.add(sessionKey);
+    }
+    this.#unindex(sessionKey);
+    if (binding) {
+      this.#index(sessionKey, binding);
+    }
   }
 
   async entries(): Promise<Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }>> {

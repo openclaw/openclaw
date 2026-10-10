@@ -1,15 +1,21 @@
+import { isDeepStrictEqual } from "node:util";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import type { ClickClackDiscussionBinding } from "./binding-store.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./binding-store.js";
 
 type RevokedDiscussionChannel = {
   accountId: string;
   serverBaseUrl: string;
   channelId: string;
   revokedAt: number;
+  /** Cleanup revokes its captured owner; legacy and unbound-channel markers revoke the room. */
+  binding?: ClickClackDiscussionBinding;
 };
 
 const REVOKED_CHANNELS_NAMESPACE = "discussion-revoked-channels";
@@ -46,16 +52,64 @@ function getStore(runtime: PluginRuntime): PluginStateKeyedStore<RevokedDiscussi
 /** Records managed ownership before its live binding is released. */
 export async function markClickClackDiscussionChannelRevoked(
   runtime: PluginRuntime,
+  sessionKey: string,
   binding: ClickClackDiscussionBinding,
   options?: { assertCurrent?: () => void },
-): Promise<void> {
+): Promise<boolean> {
   const value: RevokedDiscussionChannel = {
     accountId: binding.accountId,
     serverBaseUrl: binding.serverBaseUrl,
     channelId: binding.channelId,
     revokedAt: Date.now(),
+    binding,
   };
-  await getStore(runtime).register(revokedChannelKey(value), value, options);
+  const bindings = getClickClackDiscussionBindingStore(runtime);
+  for (;;) {
+    const owner = await bindings.observeCurrent(sessionKey);
+    const isCurrent = isDeepStrictEqual(owner.binding, binding);
+    const observed = await getStore(runtime).observe(revokedChannelKey(value));
+    // A legacy or quarantine marker revokes the whole channel and must never be narrowed.
+    if (observed.value && !observed.value.binding) {
+      return isCurrent;
+    }
+    // Obsolete cleanup may record an unmarked old channel, but cannot replace newer evidence.
+    if (!isCurrent && observed.value) {
+      return false;
+    }
+    let authorityRejected = false;
+    try {
+      const guarded =
+        isCurrent && options?.assertCurrent
+          ? runtime.state.openKeyedStoreV2<RevokedDiscussionChannel>(STORE_OPTIONS, {
+              assertCurrent: () => {
+                try {
+                  options.assertCurrent?.();
+                } catch (error) {
+                  authorityRejected = true;
+                  throw error;
+                }
+              },
+            })
+          : getStore(runtime);
+      const result = await guarded.compareAndApply(
+        revokedChannelKey(value),
+        observed.comparison,
+        { operation: "update", action: "set", value },
+        { conditions: [owner.condition] },
+      );
+      if (result.status !== "conflict") {
+        return isCurrent;
+      }
+    } catch (error) {
+      if (authorityRejected) {
+        const current = await bindings.observeCurrent(sessionKey);
+        if (!isDeepStrictEqual(current.binding, binding)) {
+          continue;
+        }
+      }
+      throw error;
+    }
+  }
 }
 
 export async function markClickClackDiscussionChannelIdentityRevoked(params: {
@@ -86,6 +140,7 @@ export function isClickClackDiscussionChannelRevoked(params: {
   runtime: PluginRuntime;
   serverBaseUrl: string;
   channelId: string;
+  binding?: ClickClackDiscussionBinding;
 }): boolean {
   // Final tool/disclosure authority must observe released synchronous SDK writes.
   let store = nativeStoresByRuntime.get(params.runtime);
@@ -93,13 +148,26 @@ export function isClickClackDiscussionChannelRevoked(params: {
     store = params.runtime.state.openSyncKeyedStore<RevokedDiscussionChannel>(STORE_OPTIONS);
     nativeStoresByRuntime.set(params.runtime, store);
   }
-  return Boolean(store.lookup(revokedChannelKey(params)));
+  return revocationApplies(store.lookup(revokedChannelKey(params)), params.binding);
 }
 
 export async function isClickClackDiscussionChannelRevokedAsync(params: {
   runtime: PluginRuntime;
   serverBaseUrl: string;
   channelId: string;
+  binding?: ClickClackDiscussionBinding;
 }): Promise<boolean> {
-  return Boolean(await getStore(params.runtime).lookup(revokedChannelKey(params)));
+  return revocationApplies(
+    await getStore(params.runtime).lookup(revokedChannelKey(params)),
+    params.binding,
+  );
+}
+
+function revocationApplies(
+  revoked: RevokedDiscussionChannel | undefined,
+  binding: ClickClackDiscussionBinding | undefined,
+): boolean {
+  return Boolean(
+    revoked && (!binding || !revoked.binding || isDeepStrictEqual(revoked.binding, binding)),
+  );
 }

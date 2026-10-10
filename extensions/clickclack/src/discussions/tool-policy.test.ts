@@ -1,7 +1,11 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
 import {
@@ -48,7 +52,13 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     maxEntries: 10_000,
     overflowPolicy: "reject-new",
   });
-  runtime.state.openKeyedStoreV2 = <T>() => asyncStore as PluginStateKeyedStore<T, 2>;
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
+    authority
+      ? asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority)
+      : (asyncStore as PluginStateKeyedStore<T, 2>);
   const mainSessionKey = "agent:research:main";
   const initialBinding = {
     accountId: "default",
@@ -71,7 +81,7 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
   }
   const bindingStore = getClickClackDiscussionBindingStore(runtime);
   if (!options.persistedBeforeOpening) {
-    await bindingStore.set(mainSessionKey, initialBinding);
+    await bindingStore.setIfCurrent(mainSessionKey, undefined, initialBinding);
   }
   const sideSessionKey = discussionSessionKey({
     runtime,
@@ -193,7 +203,7 @@ describe("ClickClack discussion session tool policy", () => {
     if (!binding) {
       throw new Error("expected binding");
     }
-    await bindingStore.set(mainSessionKey, { ...binding, archived: true });
+    await bindingStore.setIfCurrent(mainSessionKey, binding, { ...binding, archived: true });
 
     expect(run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
     expect(run("sessions_send", { sessionKey: mainSessionKey, message: "x" })).toBeUndefined();
@@ -205,7 +215,7 @@ describe("ClickClack discussion session tool policy", () => {
     if (!binding) {
       throw new Error("expected binding");
     }
-    await markClickClackDiscussionChannelRevoked(runtime, binding);
+    await markClickClackDiscussionChannelRevoked(runtime, mainSessionKey, binding);
 
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
     expect(run("sessions_send", { sessionKey: mainSessionKey, message: "x" })?.block).toBe(true);
@@ -235,7 +245,7 @@ describe("ClickClack discussion session tool policy", () => {
 
   it("fails closed for a revoked discussion session after its binding is deleted", async () => {
     const { bindingStore, mainSessionKey, run } = await setup();
-    await bindingStore.delete(mainSessionKey);
+    await bindingStore.deleteIfCurrent(mainSessionKey, bindingStore.get(mainSessionKey)!);
 
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
     expect(run("sessions_list", {})?.block).toBe(true);
@@ -275,9 +285,12 @@ describe("ClickClack discussion session tool policy", () => {
       vi.spyOn(asyncStore, "entries").mockReturnValueOnce(pending.promise);
       const preparing = bindingStore.prepare();
       if (operation === "replace") {
-        await bindingStore.set(mainSessionKey, { ...previous, channelId: "chn_replacement" });
+        await bindingStore.setIfCurrent(mainSessionKey, previous, {
+          ...previous,
+          channelId: "chn_replacement",
+        });
       } else {
-        await bindingStore.delete(mainSessionKey);
+        await bindingStore.deleteIfCurrent(mainSessionKey, previous);
       }
       pending.resolve(snapshot);
       await preparing;
@@ -303,7 +316,7 @@ describe("ClickClack discussion session tool policy", () => {
     });
 
     await expect(
-      bindingStore.set(mainSessionKey, {
+      bindingStore.setIfCurrent(mainSessionKey, previous, {
         ...previous,
         channelId: "chn_replacement",
       }),
@@ -316,7 +329,9 @@ describe("ClickClack discussion session tool policy", () => {
     store.delete = vi.fn(() => {
       throw new Error("SQLITE_IOERR");
     });
-    await expect(bindingStore.delete(mainSessionKey)).rejects.toThrow("SQLITE_IOERR");
+    await expect(bindingStore.deleteIfCurrent(mainSessionKey, previous)).rejects.toThrow(
+      "SQLITE_IOERR",
+    );
     expect(
       (await bindingStore.getByChannel("https://clickclack.example", "chn_discussion"))?.sessionKey,
     ).toBe(mainSessionKey);
