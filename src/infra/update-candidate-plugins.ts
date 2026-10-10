@@ -38,7 +38,8 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -174,12 +175,7 @@ async function resolvePluginFilePackageRoot(file: string): Promise<string> {
   for (let current = directory; ; current = path.dirname(current)) {
     const manifestExists = await fs.access(path.join(current, "package.json")).then(
       () => true,
-      (error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
+      (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
     );
     if (manifestExists) {
       return current;
@@ -232,12 +228,7 @@ function installRecordsHash(records: Record<string, PluginInstallRecord>): strin
 }
 
 async function statPluginLocator(source: string) {
-  return fs.stat(source, { bigint: true }).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  return fs.stat(source, { bigint: true }).catch(ignoreMissingUpdateCandidateFile);
 }
 
 async function readCopiedPluginIndex(shared: string): Promise<
@@ -247,12 +238,7 @@ async function readCopiedPluginIndex(shared: string): Promise<
     }
   | undefined
 > {
-  const stat = await fs.stat(shared).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const stat = await fs.stat(shared).catch(ignoreMissingUpdateCandidateFile);
   if (!stat) {
     return undefined;
   }
@@ -299,12 +285,9 @@ export async function prepareUpdateCandidatePlugins(
   const copied = await readCopiedPluginIndex(shared);
   const records = copied?.records ?? params.config.plugins?.installs ?? {};
   const resolve = (locator: string) => resolveUserPath(locator, params.env);
-  const canonicalStateRoot = await fs.realpath(sourceRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return sourceRoot;
-    }
-    throw error;
-  });
+  const canonicalStateRoot = await fs
+    .realpath(sourceRoot)
+    .catch((error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? sourceRoot);
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(canonicalStateRoot, targetStateDir, source);
   const bindings: UpdateCandidatePluginPlan["bindings"] = [];

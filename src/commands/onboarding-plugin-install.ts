@@ -438,31 +438,30 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
 }
 
-async function finishOnboardingPluginInstall(params: {
-  cfg: OpenClawConfig;
-  pluginId: string;
-  label: string;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  install?: Parameters<typeof recordPluginInstall>[1];
-  prepareConfig?: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>;
-}): Promise<OnboardingPluginInstallResult> {
-  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, params.pluginId);
+async function finishOnboardingPluginInstall(
+  params: Pick<OnboardingPluginInstallParams, "cfg" | "entry" | "prompter" | "runtime">,
+  options: {
+    pluginId: string;
+    install?: Parameters<typeof recordPluginInstall>[1];
+    prepareConfig?: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>;
+  },
+): Promise<OnboardingPluginInstallResult> {
+  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, options.pluginId);
   if (!enableResult.enabled) {
-    const safeLabel = sanitizeTerminalText(params.label);
+    const safeLabel = sanitizeTerminalText(params.entry.label);
     const reason = enableResult.reason ?? "plugin disabled";
     await params.prompter.note(
       t("wizard.plugins.enableFailed", { plugin: safeLabel, reason }),
       t("wizard.plugins.installTitle"),
     );
     params.runtime.error?.(
-      `Plugin install failed: ${sanitizeTerminalText(params.pluginId)} is disabled (${reason}).`,
+      `Plugin install failed: ${sanitizeTerminalText(options.pluginId)} is disabled (${reason}).`,
     );
-    return incompletePluginInstall(enableResult.config, params.pluginId, "failed");
+    return incompletePluginInstall(enableResult.config, options.pluginId, "failed");
   }
-  const cfg = params.install
-    ? recordPluginInstall(enableResult.config, params.install)
-    : ((await params.prepareConfig?.(enableResult.config)) ?? enableResult.config);
+  const cfg = options.install
+    ? recordPluginInstall(enableResult.config, options.install)
+    : ((await options.prepareConfig?.(enableResult.config)) ?? enableResult.config);
   // Onboarding has not committed config yet, so invalidate only process-local
   // discovery. The next lookup recovers the new package alongside persisted records.
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -470,7 +469,7 @@ async function finishOnboardingPluginInstall(params: {
   await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
     logger: { warn: (message) => params.runtime.log(message) },
   });
-  return { cfg, installed: true, pluginId: params.pluginId, status: "installed" };
+  return { cfg, installed: true, pluginId: options.pluginId, status: "installed" };
 }
 
 async function installLocalOnboardingPlugin(
@@ -483,12 +482,8 @@ async function installLocalOnboardingPlugin(
 ): Promise<OnboardingPluginInstallResult> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
-    return await finishOnboardingPluginInstall({
-      cfg: params.cfg,
+    return await finishOnboardingPluginInstall(params, {
       pluginId: params.entry.pluginId,
-      label: params.entry.label,
-      prompter: params.prompter,
-      runtime: params.runtime,
       prepareConfig: async (cfg) => {
         // Bundled sources already belong to the release; linked artifacts still require review.
         if (pathsReferToSameDirectory(params.localPath, params.bundledLocalPath)) {
@@ -750,12 +745,8 @@ async function installPluginFromOverride(
         }
       : {}),
   };
-  return await finishOnboardingPluginInstall({
-    cfg: params.cfg,
+  return await finishOnboardingPluginInstall(params, {
     pluginId: result.pluginId,
-    label: entry.label,
-    prompter,
-    runtime,
     install: installOutcome.capabilityConsent.applyAcceptedSurface(result.pluginId, install),
   });
 }
@@ -894,6 +885,9 @@ export async function ensureOnboardingPluginInstalled(params: {
         );
       }
     }
+    const onFallback = async (message: string) => {
+      await prompter.note(message, t("wizard.plugins.installTitle"));
+    };
     const { attempt: installOutcome, source: installedSource } = await installWithSourceFallback({
       sources,
       install: async (
@@ -920,15 +914,11 @@ export async function ensureOnboardingPluginInstalled(params: {
             (source.source === "npm"
               ? isUnavailableNpmTarget(attempt.result)
               : isUnavailableClawHubTarget(attempt.result)),
-          onFallback: async (message) => {
-            await prompter.note(message, t("wizard.plugins.installTitle"));
-          },
+          onFallback,
         });
       },
       result: (attempt) => (attempt.status === "completed" ? attempt.result : { ok: false }),
-      onFallback: async (message) => {
-        await prompter.note(message, t("wizard.plugins.installTitle"));
-      },
+      onFallback,
     });
     if (installOutcome.status === "timed_out") {
       return await reportPluginInstallTimeout(params, installedSource.spec);
@@ -952,17 +942,16 @@ export async function ensureOnboardingPluginInstalled(params: {
               version: result.version,
               ...buildNpmResolutionInstallFields(result.npmResolution),
             };
-      return await finishOnboardingPluginInstall({
-        cfg: next,
-        pluginId: result.pluginId,
-        label: entry.label,
-        prompter,
-        runtime,
-        install: capabilityConsent.applyAcceptedSurface(result.pluginId, {
+      return await finishOnboardingPluginInstall(
+        { cfg: next, entry, prompter, runtime },
+        {
           pluginId: result.pluginId,
-          ...install,
-        }),
-      });
+          install: capabilityConsent.applyAcceptedSurface(result.pluginId, {
+            pluginId: result.pluginId,
+            ...install,
+          }),
+        },
+      );
     }
     await notePluginInstallFailure(prompter, installedSource.spec, result.error);
     if (localPath && isUnavailablePluginSource(installedSource.source, result)) {

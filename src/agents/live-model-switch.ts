@@ -222,37 +222,21 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
     // /model request belongs to the next turn; these facts never authorize a write.
     return;
   }
-  await patchSessionEntryCore(
-    { storePath, sessionKey },
-    (entry) => {
-      if (!entry.liveModelSwitchPending) {
-        return null;
-      }
-      const persisted = resolveSelectionFromSessionEntry({
-        cfg,
-        entry,
-        agentId,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
-      const selectionApplied =
-        (providerUsed === persisted.provider && modelUsed === persisted.model) ||
-        isAlreadyAppliedOpenAICodexRuntimePromotion(
-          { provider: providerUsed, model: modelUsed },
-          persisted,
-        );
-      if (!selectionApplied) {
-        return null;
-      }
-      const next = { ...entry };
-      delete next.liveModelSwitchPending;
-      return next;
-    },
+  await clearMatchingLiveModelSwitch(
     {
-      replaceEntry: true,
-      workerGuard: {},
-      prepareIf: { kind: "live-model-switch-pending" },
+      cfg,
+      sessionKey,
+      storePath,
+      agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
     },
+    (persisted) =>
+      (providerUsed === persisted.provider && modelUsed === persisted.model) ||
+      isAlreadyAppliedOpenAICodexRuntimePromotion(
+        { provider: providerUsed, model: modelUsed },
+        persisted,
+      ),
   );
 }
 
@@ -272,24 +256,27 @@ export async function clearLiveModelSwitchPending(params: {
   if (!cfg || !sessionKey) {
     return;
   }
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId: params.agentId?.trim(),
-  });
+  const agentId = params.agentId?.trim();
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  await clearMatchingLiveModelSwitch(
+    { ...params, cfg, sessionKey, storePath, agentId },
+    (persisted) => !hasDifferentLiveSessionModelSelection(params.expectedSelection, persisted),
+  );
+}
+
+async function clearMatchingLiveModelSwitch(
+  params: Omit<Parameters<typeof resolveSelectionFromSessionEntry>[0], "entry"> & {
+    sessionKey: string;
+    storePath: string;
+  },
+  matches: (selection: LiveSessionModelSelection) => boolean,
+): Promise<void> {
   await patchSessionEntryCore(
-    { storePath, sessionKey },
+    { storePath: params.storePath, sessionKey: params.sessionKey },
     (entry) => {
       if (
         !entry.liveModelSwitchPending ||
-        hasDifferentLiveSessionModelSelection(
-          params.expectedSelection,
-          resolveSelectionFromSessionEntry({
-            cfg,
-            entry,
-            agentId: params.agentId,
-            defaultProvider: params.defaultProvider,
-            defaultModel: params.defaultModel,
-          }),
-        )
+        !matches(resolveSelectionFromSessionEntry({ ...params, entry }))
       ) {
         return null;
       }

@@ -15,10 +15,10 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseOperations,
   AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "../state/openclaw-agent-execution-contract.js";
 import {
@@ -268,14 +268,12 @@ export async function isSessionCostUsageRefreshRunning(
         incognito.authority,
         incognito.target,
         (compute) =>
-          compute.execute(
-            incognito.target
-              ? {
-                  type: "session.compute.usage.refreshLock",
-                  input: { ...incognito.target, request: {} },
-                }
-              : { type: "session.compute.store.refreshLock", input: { request: {} } },
-          ),
+          compute.execute({
+            type: incognito.target
+              ? "session.compute.usage.refreshLock"
+              : "session.compute.store.refreshLock",
+            input: { ...incognito.target, request: {} },
+          }),
         incognito.admissionSignal ?? getAsyncWorkSignal(),
       )
     : await readRefreshLock(options);

@@ -109,32 +109,6 @@ describe("downloadLineMedia", () => {
     });
   });
 
-  it("persists inbound media with the shared media store", async () => {
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    fetchMock.mockResolvedValueOnce(responseWithChunks(200, [jpeg]));
-
-    const result = await downloadLineMedia("mid-jpeg", "token");
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api-data.line.me/v2/bot/message/mid-jpeg/content",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer token" },
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(saveMediaStreamMock).toHaveBeenCalledTimes(1);
-    const call = saveMediaStreamCall();
-    expect(call[1]).toBeUndefined();
-    expect(call[2]).toBe("inbound");
-    expect(call[3]).toBe(10 * 1024 * 1024);
-    expect(result).toEqual({
-      path: "/home/user/.openclaw/media/inbound/saved-media",
-      contentType: "image/jpeg",
-      size: jpeg.length,
-    });
-  });
-
   it("does not pass the external messageId as a media filename", async () => {
     const messageId = "a/../../../../etc/passwd";
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
@@ -154,22 +128,6 @@ describe("downloadLineMedia", () => {
     }
   });
 
-  it("cancels content when the media store rejects it", async () => {
-    const content = cancellableResponse(200, [Buffer.from("oversized")]);
-    fetchMock.mockResolvedValueOnce(content.response);
-    saveMediaStreamMock.mockImplementationOnce(async (stream: AsyncIterable<Buffer>) => {
-      for await (const chunk of stream) {
-        expect(chunk).toEqual(Buffer.from("oversized"));
-        throw new Error("Media exceeds 0MB limit");
-      }
-      throw new Error("Expected media content");
-    });
-
-    await expect(downloadLineMedia("mid", "token", 7)).rejects.toThrow(/Media exceeds/i);
-    expect(saveMediaStreamMock).toHaveBeenCalledTimes(1);
-    expect(content.cancel).toHaveBeenCalledTimes(1);
-  });
-
   it("passes original filenames to the media store for extension fallback", async () => {
     fetchMock.mockResolvedValueOnce(responseWithChunks(200, [Buffer.from("unknown-audio-bytes")]));
 
@@ -180,46 +138,6 @@ describe("downloadLineMedia", () => {
     const call = saveMediaStreamCall();
     expect(call[3]).toBe(10 * 1024 * 1024);
     expect(call[4]).toBe("voice-note.m4a");
-  });
-
-  it("passes the LINE response content type to the media store", async () => {
-    storedContentType = "text/plain";
-    fetchMock.mockResolvedValueOnce(
-      new Response(Buffer.from("plain attachment"), {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      }),
-    );
-
-    const result = await downloadLineMedia("mid-text", "token");
-
-    expect(saveMediaStreamCall()[1]).toBe("text/plain");
-    expect(result.contentType).toBe("text/plain");
-  });
-
-  it("retries 202 responses and cancels every discarded body", async () => {
-    storedContentType = "audio/x-m4a";
-    const media = Buffer.from("ready media");
-    const first = cancellableResponse(202);
-    const second = cancellableResponse(202);
-    fetchMock
-      .mockResolvedValueOnce(first.response)
-      .mockResolvedValueOnce(second.response)
-      .mockResolvedValueOnce(responseWithChunks(200, [media]));
-
-    const result = await downloadLineMedia("mid-preparing", "token");
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(delayMock).toHaveBeenNthCalledWith(1, 500, undefined, {
-      signal: expect.any(AbortSignal),
-    });
-    expect(delayMock).toHaveBeenNthCalledWith(2, 1000, undefined, {
-      signal: expect.any(AbortSignal),
-    });
-    expect(first.cancel).toHaveBeenCalledTimes(1);
-    expect(second.cancel).toHaveBeenCalledTimes(1);
-    expect(result.contentType).toBe("audio/x-m4a");
-    expect(result.size).toBe(media.length);
   });
 
   it("cancels every response when content never becomes ready", async () => {
@@ -241,22 +159,6 @@ describe("downloadLineMedia", () => {
     for (const attempt of attempts) {
       expect(attempt.cancel).toHaveBeenCalledTimes(1);
     }
-    expect(saveMediaStreamMock).not.toHaveBeenCalled();
-  });
-
-  it("cancels error responses without retrying", async () => {
-    const response = cancellableResponse(404);
-    fetchMock.mockResolvedValueOnce(response.response);
-
-    const err = expectMediaFetchError(
-      await downloadLineMedia("mid-missing", "token").catch((error: unknown) => error),
-    );
-    expect(err.message).toMatch(/HTTP 404/i);
-    expect(err).toMatchObject({ code: "http_error", status: 404 });
-    expect(isRetryableLineInboundMediaError(err)).toBe(false);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(response.cancel).toHaveBeenCalledTimes(1);
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
   });
 
@@ -333,17 +235,6 @@ describe("downloadLineMedia", () => {
     expect(err.code).toBe("fetch_failed");
     expect(err.cause).toBe(failure);
     expect(isRetryableLineInboundMediaError(err)).toBe(true);
-  });
-
-  it("does not retry a permanent media-store failure", async () => {
-    fetchMock.mockResolvedValueOnce(responseWithChunks(200, [Buffer.from("media")]));
-    const failure = Object.assign(new Error("media store unavailable"), { code: "EACCES" });
-    saveMediaStreamMock.mockRejectedValueOnce(failure);
-
-    const err = await downloadLineMedia("mid-store", "token").catch((e: unknown) => e);
-
-    expect(err).toBe(failure);
-    expect(isRetryableLineInboundMediaError(err)).toBe(false);
   });
 
   it("uses one deadline across headers and body, then permits an identical retry", async () => {

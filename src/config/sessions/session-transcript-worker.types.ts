@@ -47,6 +47,7 @@ import type {
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type {
+  LatestTranscriptAssistantText,
   TranscriptEvent,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaResult,
@@ -67,7 +68,6 @@ import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-trans
 import type {
   SessionAccessScope,
   SessionEntryReadScope,
-  SessionEntrySummary,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
@@ -159,6 +159,7 @@ import type {
   SessionTranscriptWatermarkWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
   SessionTranscriptDeltaWorkerInput,
+  SessionTranscriptLatestAssistantWorkerInput,
   SessionMemoryCaptureWorkerInput,
   SessionProgressCardWorkerInput,
   VoiceSessionsWorkerInput,
@@ -364,6 +365,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptWatermarkWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
   | SessionTranscriptDeltaWorkerInput
+  | SessionTranscriptLatestAssistantWorkerInput
   | SessionMemoryCaptureWorkerInput
   | SessionTranscriptAnchorsWorkerInput
   | SessionActivitySummarySourceWorkerInput
@@ -435,6 +437,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "transcript-visible-delta": {
       kind: "transcript-visible-delta";
       result: SessionTranscriptVisibleMessageDeltaResult;
+    };
+    "transcript-latest-assistant": {
+      kind: "transcript-latest-assistant";
+      result: LatestTranscriptAssistantText | undefined;
     };
     "session-memory-capture": { kind: "session-memory-capture"; result: SessionMemoryTranscript };
     "board-snapshot": {
@@ -597,6 +603,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-visible-delta" }>,
       SessionTranscriptVisibleMessageDeltaResult
     >;
+    readLatestAssistant: CancellableSessionHistoryReader<
+      SessionTranscriptLatestAssistantWorkerInput,
+      LatestTranscriptAssistantText | undefined
+    >;
     readSessionMemoryCapture: CancellableSessionHistoryReader<
       SessionMemoryCaptureWorkerInput,
       SessionMemoryTranscript
@@ -689,7 +699,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       scope: SessionEntryListWorkerInput["scope"],
       continuation?: CanonicalSessionReaderContinuation,
       expectedIdentity?: SessionEntryListWorkerInput["expectedIdentity"],
-    ) => Promise<SessionEntrySummary[]>;
+      ifRevision?: string,
+    ) => Promise<SessionEntryListWorkerResult>;
     readStoreSummary: SessionHistoryReader<
       SessionStoreSummaryWorkerInput,
       SessionTranscriptWorkerValues["session-store-summary"]["summary"]

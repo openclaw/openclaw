@@ -82,8 +82,20 @@ function collectStaticStringSegments(node: ts.Expression): string[] {
   if (ts.isParenthesizedExpression(node)) {
     return collectStaticStringSegments(node.expression);
   }
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    return [...collectStaticStringSegments(node.left), ...collectStaticStringSegments(node.right)];
+  if (ts.isBinaryExpression(node)) {
+    if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+      return collectStaticStringSegments(node.right);
+    }
+    if (
+      node.operatorToken.kind === ts.SyntaxKind.PlusToken ||
+      node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    ) {
+      return [
+        ...collectStaticStringSegments(node.left),
+        ...collectStaticStringSegments(node.right),
+      ];
+    }
   }
   if (ts.isConditionalExpression(node)) {
     return [
@@ -121,38 +133,47 @@ export function collectControlUiRawCopyFromSource(sourceFile: ts.SourceFile): Ra
   const source = sourceFile.text;
   const repoPath = toRepoPath(sourceFile.fileName);
   const findings: RawCopyFinding[] = [];
-  const staticAttrPattern =
-    /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(staticAttrPattern)) {
-    const rawText = match[2];
-    if (rawText) {
-      pushRawCopyFinding(findings, {
-        kind: "html-attribute",
-        name: match[1] ?? "attribute",
-        path: repoPath,
-        text: parseDoubleQuotedString(rawText),
-      });
-    }
-  }
-
-  const propertyPattern =
-    /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(propertyPattern)) {
-    const rawText = match[2];
-    if (rawText) {
-      pushRawCopyFinding(findings, {
-        kind: "object-property",
-        name: match[1] ?? "property",
-        path: repoPath,
-        text: parseDoubleQuotedString(rawText),
-      });
-    }
-  }
-
+  const jsxRanges: { start: number; end: number }[] = [];
   const attrPattern =
     /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
   const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
-  const visit = (node: ts.Node) => {
+  const visit = (node: ts.Node, parent?: ts.Node) => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) {
+      if (node.pos >= (jsxRanges.at(-1)?.end ?? 0)) {
+        jsxRanges.push({ start: node.pos, end: node.end });
+      }
+    }
+    if (ts.isJsxText(node)) {
+      pushRawCopyFinding(findings, {
+        kind: "html-text",
+        name: "text",
+        path: repoPath,
+        text: node.text,
+      });
+    } else if (ts.isJsxAttribute(node) && node.initializer) {
+      const name = ts.isIdentifier(node.name)
+        ? node.name.text
+        : node.name.namespace.text === "prop"
+          ? node.name.name.text
+          : undefined;
+      if (name && RAW_COPY_ATTRIBUTE_NAMES.has(name)) {
+        const value = ts.isJsxExpression(node.initializer)
+          ? node.initializer.expression
+          : node.initializer;
+        for (const text of value ? collectStaticStringSegments(value) : []) {
+          pushRawCopyFinding(findings, { kind: "html-attribute", name, path: repoPath, text });
+        }
+      }
+    } else if (
+      ts.isJsxExpression(node) &&
+      node.expression &&
+      parent &&
+      (ts.isJsxElement(parent) || ts.isJsxFragment(parent))
+    ) {
+      for (const text of collectStaticStringSegments(node.expression)) {
+        pushRawCopyFinding(findings, { kind: "html-text", name: "text", path: repoPath, text });
+      }
+    }
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
@@ -208,10 +229,40 @@ export function collectControlUiRawCopyFromSource(sourceFile: ts.SourceFile): Ra
         }
       }
     }
-    node.forEachChild(visit);
+    node.forEachChild((child) => visit(child, node));
   };
   visit(sourceFile);
-  return findings;
+
+  const literalFindings: RawCopyFinding[] = [];
+  const staticAttrPattern =
+    /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
+  for (const match of source.matchAll(staticAttrPattern)) {
+    const rawText = match[2];
+    // JSX owns its attributes, including excluding metadata and callback strings.
+    if (rawText && !jsxRanges.some(({ start, end }) => match.index >= start && match.index < end)) {
+      pushRawCopyFinding(literalFindings, {
+        kind: "html-attribute",
+        name: match[1] ?? "attribute",
+        path: repoPath,
+        text: parseDoubleQuotedString(rawText),
+      });
+    }
+  }
+
+  const propertyPattern =
+    /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
+  for (const match of source.matchAll(propertyPattern)) {
+    const rawText = match[2];
+    if (rawText) {
+      pushRawCopyFinding(literalFindings, {
+        kind: "object-property",
+        name: match[1] ?? "property",
+        path: repoPath,
+        text: parseDoubleQuotedString(rawText),
+      });
+    }
+  }
+  return [...literalFindings, ...findings];
 }
 
 async function collectFindings(): Promise<RawCopyFinding[]> {

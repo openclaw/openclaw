@@ -43,6 +43,12 @@ const optionalPrefSpec = <
     write: (value) => ({ [key]: value }),
   });
 
+const booleanPrefSpec = (local: SyncedPrefSpec<boolean>["local"]) =>
+  prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local,
+  });
+
 /**
  * One descriptor per synced pref, including its profile-only storage boundary.
  * Each key owns server validation, local normalization, and applicability.
@@ -70,18 +76,9 @@ export const SYNCED_PREFS = {
     local: (settings) => settings.locale,
     write: (value) => ({ locale: value }),
   }),
-  chatShowThinking: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowThinking,
-  }),
-  chatShowToolCalls: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowToolCalls,
-  }),
-  chatPersistCommentary: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary !== false,
-  }),
+  chatShowThinking: booleanPrefSpec((settings) => settings.chatShowThinking),
+  chatShowToolCalls: booleanPrefSpec((settings) => settings.chatShowToolCalls),
+  chatPersistCommentary: booleanPrefSpec((settings) => settings.chatPersistCommentary !== false),
   chatSendShortcut: prefSpec<ChatSendShortcut>({
     extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
     local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),

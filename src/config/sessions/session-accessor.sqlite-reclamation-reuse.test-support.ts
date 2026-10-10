@@ -8,7 +8,7 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import * as nativeExecution from "../../state/openclaw-agent-execution-native.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";

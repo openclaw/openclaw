@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -9,6 +10,7 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -16,6 +18,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendNarrativeEntry } from "./dreaming-dreams-file.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
+import { recordMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   createMemoryCoreTestHarness,
@@ -45,7 +49,7 @@ async function createSweep(
   options: {
     promote?: boolean;
     empty?: boolean;
-    failNarrative?: boolean;
+    narrativeError?: Error;
     failDeepReport?: boolean;
     failRemReport?: boolean;
     narrativeGate?: Promise<void>;
@@ -72,7 +76,7 @@ async function createSweep(
   }
   const config: OpenClawConfig = {
     agents: {
-      defaults: { workspace: workspaceDir },
+      defaults: { workspace: workspaceDir, timeoutSeconds: 180 },
       entries: { main: { workspace: workspaceDir } },
     },
     plugins: {
@@ -119,8 +123,8 @@ async function createSweep(
     }
     narratives.push(input);
     await options.narrativeGate;
-    if (options.failNarrative) {
-      throw new Error("synthetic completion failure");
+    if (options.narrativeError) {
+      throw options.narrativeError;
     }
     // Different replies make duplicate publications observable even without exact-text dedupe.
     return { text: `The archive glowed softly, entry ${narratives.length}.` };
@@ -133,12 +137,15 @@ async function createSweep(
   const registerService =
     vi.fn<Parameters<typeof registerShortTermPromotionDreaming>[0]["registerService"]>();
   const baseApi = createTestPluginApi({ config, logger, pluginConfig: {} });
+  const agent = createPluginRuntimeMock().agent;
+  const resolveTimeout = vi.mocked(agent.resolveAgentTimeoutMs).mockReturnValue(180_000);
   registerShortTermPromotionDreaming({
     ...baseApi,
     config,
     pluginConfig: {},
     runtime: {
       ...baseApi.runtime,
+      agent,
       subagent: {
         complete,
         run: unexpectedSessionCall,
@@ -168,7 +175,13 @@ async function createSweep(
       { trigger, agentId: "main", workspaceDir, sessionKey },
     );
   };
-  const readDreams = () => fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+  const readDreams = () =>
+    fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8").catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
   const service = registerService.mock.calls.find(
     ([entry]) => entry.id === "memory-core-dreaming",
   )?.[0];
@@ -182,7 +195,17 @@ async function createSweep(
     logger,
     scheduler: createTestPluginServiceScheduler(),
   } satisfies OpenClawPluginServiceContext;
-  return { workspaceDir, narratives, logger, run, readDreams, service, serviceContext };
+  return {
+    workspaceDir,
+    config,
+    narratives,
+    resolveTimeout,
+    logger,
+    run,
+    readDreams,
+    service,
+    serviceContext,
+  };
 }
 
 function diaryEntryCount(dreams: string): number {
@@ -212,6 +235,8 @@ describe("dreaming sweep diary publication", () => {
         reason: "memory-core: short-term dreaming processed",
       });
       expect(sweep.narratives).toHaveLength(1);
+      expect(sweep.narratives[0]).toMatchObject({ agentId: "main", timeoutMs: 180_000 });
+      expect(sweep.resolveTimeout).toHaveBeenCalledWith({ cfg: sweep.config });
       expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
       expect(sweep.narratives[0]?.message).toContain(`Current sweep: ${DAY}`);
       expect(sweep.narratives[0]?.model).toBe(promote ? "openai/gpt-5.4" : "xai/grok-4.1-fast");
@@ -262,8 +287,11 @@ describe("dreaming sweep diary publication", () => {
     },
   );
 
-  it("writes one generic fallback when the combined narrative fails", async () => {
-    const sweep = await createSweep({ failNarrative: true });
+  it.each([
+    { label: "completion fails", error: new Error("synthetic completion failure") },
+    { label: "completion is request-scoped", error: new RequestScopedSubagentRuntimeError() },
+  ])("writes one generic fallback when $label", async ({ error }) => {
+    const sweep = await createSweep({ narrativeError: error });
     expect(await sweep.run()).toEqual({
       handled: true,
       reason: "memory-core: short-term dreaming degraded",
@@ -273,12 +301,18 @@ describe("dreaming sweep diary publication", () => {
     expect(diaryEntryCount(dreams)).toBe(1);
     expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(dreams).not.toContain(FRAGMENT);
+    expect(sweep.logger.warn.mock.calls.flat().join("\n")).toContain(
+      "failed=0, degraded=1, narrativesPending=0",
+    );
   });
 
   it("still publishes the prepared Light/REM entry when the deep report fails", async () => {
     const sweep = await createSweep({ promote: true, failDeepReport: true });
     await sweep.run();
     expect(sweep.logger.error.mock.calls.flat().join("\n")).toContain("dreaming promotion failed");
+    expect(sweep.logger.warn.mock.calls.flat().join("\n")).toContain(
+      "failed=1, degraded=0, narrativesPending=0",
+    );
     expect(sweep.narratives).toHaveLength(1);
     expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
     expect(sweep.narratives[0]?.message).toContain(
@@ -291,13 +325,16 @@ describe("dreaming sweep diary publication", () => {
     const sweep = await createSweep({ failRemReport: true });
     await sweep.run();
     expect(sweep.logger.error.mock.calls.flat().join("\n")).toContain("rem dreaming failed");
+    expect(sweep.logger.warn.mock.calls.flat().join("\n")).toContain(
+      "failed=1, degraded=0, narrativesPending=0",
+    );
     expect(sweep.narratives).toHaveLength(1);
     expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
     expect(sweep.narratives[0]?.model).toBe("anthropic/claude-haiku-4-5");
     expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
   });
 
-  it("keeps one detached cron narrative owned until the service stops", async () => {
+  it.each([false, true])("settles the detached diary with Forget=%s", async (forget) => {
     const publish = createDeferred<void>();
     const sweep = await createSweep({ narrativeGate: publish.promise });
     // Cron management is optional; starting without it admits no timers or fake scheduler work.
@@ -310,23 +347,58 @@ describe("dreaming sweep diary publication", () => {
         reason: "memory-core: short-term dreaming processed",
       });
       expect(sweep.narratives).toHaveLength(1);
+      expect(sweep.narratives[0]?.message).toContain(FRAGMENT);
       stopping = Promise.resolve(sweep.service.stop?.(sweep.serviceContext)).then(() => {
         stopped = true;
       });
-      const dreams = await sweep.readDreams().catch((error: unknown) => {
-        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
+      if (forget) {
+        const store = await shortTermTestState.readRecallStore(
+          sweep.workspaceDir,
+          new Date(NOW_MS).toISOString(),
+        );
+        const entries = Object.values(store.entries).filter((entry) => entry.snippet === FRAGMENT);
+        expect(entries).toHaveLength(1);
+        const entryKeys = entries.map((entry) => entry.key);
+        const sessionId = "pending-diary-source";
+        await recordMemoryEntryOrigins({
+          agentId: "main",
+          origins: entryKeys.map((entryKey) => ({
+            entryKey,
+            agentId: "main",
+            sessionId,
+            originClass: "owner",
+            observedAt: NOW_MS,
+          })),
+        });
+        const forgotten = await forgetMemoryEntries({
+          cfg: sweep.config,
+          agentId: "main",
+          sessionIds: [sessionId],
+        });
+        expect(forgotten).toMatchObject({
+          entryKeys,
+          artifacts: { shortTermEntries: 1 },
+          refusals: [],
+        });
+      }
+      const dreams = await sweep.readDreams();
       expect(diaryEntryCount(dreams)).toBe(0);
       expect(stopped).toBe(false);
     } finally {
       publish.resolve();
-      await stopping;
+      await (stopping ?? sweep.service.stop?.(sweep.serviceContext));
     }
     expect(stopped).toBe(true);
-    expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
+    const dreams = await sweep.readDreams();
+    expect(diaryEntryCount(dreams)).toBe(forget ? 0 : 1);
+    if (forget) {
+      expect(dreams).not.toContain("The archive glowed softly, entry 1.");
+      expect(sweep.logger.info.mock.calls.flat().join("\n")).toContain(
+        "narrative publication skipped",
+      );
+    } else {
+      expect(dreams).toContain("The archive glowed softly, entry 1.");
+    }
     expect(sweep.narratives).toHaveLength(1);
   });
 
@@ -337,12 +409,7 @@ describe("dreaming sweep diary publication", () => {
       reason: "memory-core: short-term dreaming processed",
     });
     expect(sweep.narratives).toHaveLength(0);
-    const dreams = await sweep.readDreams().catch((error: unknown) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-        return "";
-      }
-      throw error;
-    });
+    const dreams = await sweep.readDreams();
     expect(diaryEntryCount(dreams)).toBe(0);
   });
 });

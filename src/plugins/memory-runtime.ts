@@ -115,19 +115,15 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
 
 function listCurrentMemoryRuntimes(): AnyMemoryRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
-  const current = getMemoryRuntime();
-  if (current) {
-    runtimes.add(current);
-  }
-  const providerRuntime = getMemoryProviderRuntime();
-  if (providerRuntime) {
-    runtimes.add(providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.providerRuntime) {
-    runtimes.add(standaloneMemoryRegistrySlot.providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.runtime) {
-    runtimes.add(standaloneMemoryRegistrySlot.runtime);
+  for (const runtime of [
+    getMemoryRuntime(),
+    getMemoryProviderRuntime(),
+    standaloneMemoryRegistrySlot?.providerRuntime,
+    standaloneMemoryRegistrySlot?.runtime,
+  ]) {
+    if (runtime) {
+      runtimes.add(runtime);
+    }
   }
   return [...runtimes];
 }
@@ -209,11 +205,10 @@ function ensureMemoryRuntime(params: {
     return owner;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
-  if (previousSlot?.runtime) {
-    retiredRuntimes.add(previousSlot.runtime);
-  }
-  if (previousSlot?.providerRuntime) {
-    retiredRuntimes.add(previousSlot.providerRuntime);
+  for (const retiredRuntime of [previousSlot?.runtime, previousSlot?.providerRuntime]) {
+    if (retiredRuntime) {
+      retiredRuntimes.add(retiredRuntime);
+    }
   }
   standaloneMemoryRegistrySlot = {
     runtime,

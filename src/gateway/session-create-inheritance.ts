@@ -141,6 +141,9 @@ export function resolveSessionCreateSpawnPolicy(
     spawnedBy: parentSessionKey,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.spawnToolPolicy.delegatedToolPolicy
+      ? { delegatedToolPolicy: params.spawnToolPolicy.delegatedToolPolicy }
+      : {}),
     ...(params.preparedPermissionSelection
       ? { permissionMode: params.preparedPermissionSelection.mode }
       : {}),

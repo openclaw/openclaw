@@ -339,33 +339,26 @@ function decodeOpenAIQuicksilverCallId(params: {
   callUrl: string;
 }): string {
   const sessionId = params.openAiSessionId?.trim() ?? "";
-  if (!params.location) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
+  let errorMessage = sessionId
+    ? "GPT-Live call response returned an invalid openai-session-id"
+    : "GPT-Live call response missing Location and openai-session-id headers";
+  if (params.location) {
+    try {
+      const callId = new URL(params.location, params.callUrl).pathname
+        .split("/")
+        .find(isOpenAIQuicksilverCallId);
+      if (callId) {
+        return callId;
+      }
+      errorMessage = "GPT-Live call response Location has no valid call id";
+    } catch {
+      errorMessage = "GPT-Live call response returned an invalid Location";
     }
-    throw new OpenAIQuicksilverCallError(
-      sessionId
-        ? "GPT-Live call response returned an invalid openai-session-id"
-        : "GPT-Live call response missing Location and openai-session-id headers",
-    );
   }
-  let pathname: string;
-  try {
-    pathname = new URL(params.location, params.callUrl).pathname;
-  } catch {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError("GPT-Live call response returned an invalid Location");
+  if (isOpenAIQuicksilverCallId(sessionId)) {
+    return sessionId;
   }
-  const callId = pathname.split("/").filter(Boolean).find(isOpenAIQuicksilverCallId);
-  if (!callId) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError("GPT-Live call response Location has no valid call id");
-  }
-  return callId;
+  throw new OpenAIQuicksilverCallError(errorMessage);
 }
 
 function describeOpenAIQuicksilverCallError(

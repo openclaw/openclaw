@@ -188,6 +188,13 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
   };
 
+  const assertClaimCurrent = (sessionId: string) => {
+    assertReadCurrent();
+    if (params.getSessionId() !== sessionId) {
+      throw createRestartRecoveryClaimChangedError();
+    }
+  };
+
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
     patch: SessionTranscriptTurnLifecyclePatch;
@@ -229,12 +236,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         },
         workerGuard: {
           source: params.operatorAuthority?.assertCurrent,
-          assertCurrent: () => {
-            assertReadCurrent();
-            if (params.getSessionId() !== options.sessionId) {
-              throw createRestartRecoveryClaimChangedError();
-            }
-          },
+          assertCurrent: () => assertClaimCurrent(options.sessionId),
         },
       },
     );
@@ -521,12 +523,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         skipMaintenance: true,
         takeCacheOwnership: true,
         workerGuard: {
-          assertCurrent: () => {
-            assertReadCurrent();
-            if (params.getSessionId() !== sessionId) {
-              throw createRestartRecoveryClaimChangedError();
-            }
-          },
+          assertCurrent: () => assertClaimCurrent(sessionId),
         },
       },
     );

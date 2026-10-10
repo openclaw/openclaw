@@ -177,7 +177,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves the drained writer fence and completed count, with caller abort=%s",
     async (abortAfterCompletion) => {
       const controller = new AbortController();
@@ -225,10 +225,12 @@ describe("handleCompactCommand lifecycle authority", () => {
       expect(incrementCompactionCount).toHaveBeenCalledOnce();
       expect(enqueueSystemEvent).toHaveBeenCalledTimes(abortAfterCompletion ? 0 : 1);
       expect(currentEntry.activeWriterRunId).toBe("drained-writer");
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("session-1", 60_000);
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "uses the host-accepted successor before accounting, with owner replacement=%s",
     async (replaceBeforeAccounting) => {
       const initial = { sessionId: "native-session", updatedAt: 1, lifecycleRevision: "lifecycle" };

@@ -18,6 +18,7 @@ import { encodeTextAsDataUrl } from "../pages/chat/components/chat-attachment-te
 import { chatAttachmentFromDataUrl } from "../pages/chat/components/chat-attachments.ts";
 import { completeInitialSessionTurn } from "../pages/new-session/initial-session-turn-handoff.ts";
 import { StartedSessionNavigation } from "../pages/new-session/started-session-navigation.ts";
+import { base64ToBytes } from "./bytes-base64.ts";
 import type { ChatAttachment } from "./chat/chat-types.ts";
 import { mcpAppMessageText } from "./mcp-app-message-content.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "./uploads.ts";
@@ -81,7 +82,7 @@ export function mcpAppMessageInput(
         );
       } else if (block.type === "resource" && "blob" in block.resource) {
         const resource = block.resource;
-        const binary = Uint8Array.from(atob(resource.blob), (character) => character.charCodeAt(0));
+        const binary = base64ToBytes(resource.blob);
         const file = new File(
           [binary],
           typeof title === "string"

@@ -90,11 +90,8 @@ async function runShortTermDreamingPromotion(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
+  narrativeTimeoutMs: number;
 }): Promise<{ handled: true; reason: string } | undefined> {
-  if (!params.config.enabled) {
-    return { handled: true, reason: "memory-core: short-term dreaming disabled" };
-  }
-
   const recencyHalfLifeDays = params.config.recencyHalfLifeDays;
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
   // Each completion uses its workspace owner's model and credentials. The triggering
@@ -346,6 +343,7 @@ async function runShortTermDreamingPromotion(params: {
     } else {
       const narrativeOutcome = await runDreamNarrative({
         agentId,
+        timeoutMs: params.narrativeTimeoutMs,
         subagent: params.subagent,
         workspaceDir,
         data,
@@ -624,6 +622,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           pluginConfig: resolveMemoryDreamingPluginConfig(currentConfig),
           cfg: currentConfig,
         });
+        if (!config.enabled) {
+          return { handled: true, reason: "memory-core: short-term dreaming disabled" };
+        }
         return await runShortTermDreamingPromotion({
           runInBackground: ctx.trigger === "cron" ? trackDreamingTask : undefined,
           agentId: ctx.agentId,
@@ -631,7 +632,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           cfg: currentConfig,
           config,
           logger: api.logger,
-          subagent: config.enabled ? api.runtime?.subagent : undefined,
+          subagent: api.runtime.subagent,
+          narrativeTimeoutMs: api.runtime.agent.resolveAgentTimeoutMs({ cfg: currentConfig }),
         });
       } catch (err) {
         api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);

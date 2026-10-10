@@ -16,10 +16,10 @@ import {
 import {
   prepareImmutableRecoveryRuntime,
   verifyImmutableRecoveryRuntime,
-  resolveImmutableRecoveryCommand,
   readImmutableInstallRecordForRecovery,
 } from "./package-update-activation-immutable-recovery.js";
 import { updateImmutableInstallRecord } from "./package-update-activation-immutable.js";
+import { resolveImmutableRecoveryCommand } from "./package-update-activation-paths.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";

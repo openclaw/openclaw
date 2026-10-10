@@ -292,35 +292,30 @@ export async function sessionsLifecycleCommand(
         };
         continue;
       }
+      const rawResponse = await callGatewayFromCliWithTransport(
+        operation === "archive" ? "sessions.patch" : "sessions.delete",
+        rpcOptions,
+        {
+          key: keys[index],
+          ...(agent ? { agentId: agent } : {}),
+          ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
+          ...(operation === "archive"
+            ? { archived: true }
+            : {
+                deleteTranscript: true,
+                ...(session.archived === true ? { archivedOnly: true } : {}),
+              }),
+        },
+        { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
+      );
       if (operation === "archive") {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.patch",
-          rpcOptions,
-          {
-            key: keys[index],
-            ...(agent ? { agentId: agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            archived: true,
-          },
-          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
-        )) as SessionsPatchResult;
+        const response = rawResponse as SessionsPatchResult;
         if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
         results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };
       } else {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.delete",
-          rpcOptions,
-          {
-            key: keys[index],
-            ...(agent ? { agentId: agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            deleteTranscript: true,
-            ...(session.archived === true ? { archivedOnly: true } : {}),
-          },
-          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
-        )) as SessionsDeleteResult;
+        const response = rawResponse as SessionsDeleteResult;
         if (!response.deleted) {
           results[index] = notFoundResult(session.key, agent);
           continue;

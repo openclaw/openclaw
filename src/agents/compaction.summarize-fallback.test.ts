@@ -1,11 +1,10 @@
 // Covers final fallback behavior when model-backed summarization fails.
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { summarizeInStages } from "./compaction.js";
+import { summarizeCompactionHistory } from "./compaction.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
@@ -36,6 +35,16 @@ const testModel = {
   contextTokens: 200_000,
   maxTokens: 8192,
 } as unknown as NonNullable<ExtensionContext["model"]>;
+
+function summarizeHello(signal: AbortSignal): Promise<string> {
+  return summarizeCompactionHistory({
+    messages: [makeUserMessage("hello", 1) satisfies UserMessage],
+    model: testModel,
+    apiKey: "test-key", // pragma: allowlist secret
+    signal,
+    reserveTokens: 1000,
+  });
+}
 
 async function finishAssertionWithTimers(assertion: Promise<unknown>): Promise<void> {
   // The async clock drain yields native turns. Observe failures immediately,
@@ -71,16 +80,7 @@ describe("compaction summarization fallback", () => {
       .mockRejectedValueOnce(providerAbortErr)
       .mockResolvedValueOnce("recovered summary after provider disconnect");
 
-    const summary = summarizeInStages({
-      parts: 1,
-      messages: [makeUserMessage("hello", 1) satisfies UserMessage],
-      model: testModel,
-      apiKey: "test-key", // pragma: allowlist secret
-      signal: new AbortController().signal, // not aborted
-      reserveTokens: 1000,
-      maxChunkTokens: 50_000,
-      contextWindow: 200_000,
-    });
+    const summary = summarizeHello(new AbortController().signal); // not aborted
 
     const result = expect(summary).resolves.toBe("recovered summary after provider disconnect");
     await finishAssertionWithTimers(result);
@@ -98,18 +98,9 @@ describe("compaction summarization fallback", () => {
       )
       .mockResolvedValueOnce("recovered non-empty summary");
 
-    const result = expect(
-      summarizeInStages({
-        parts: 1,
-        messages: [makeUserMessage("hello", 1) satisfies UserMessage],
-        model: testModel,
-        apiKey: "test-key", // pragma: allowlist secret
-        signal: new AbortController().signal,
-        reserveTokens: 1000,
-        maxChunkTokens: 50_000,
-        contextWindow: 200_000,
-      }),
-    ).resolves.toBe("recovered non-empty summary");
+    const result = expect(summarizeHello(new AbortController().signal)).resolves.toBe(
+      "recovered non-empty summary",
+    );
     await finishAssertionWithTimers(result);
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
   });
@@ -122,16 +113,7 @@ describe("compaction summarization fallback", () => {
     agentSessionMocks.generateSummary.mockRejectedValueOnce(new Error("transient rate limit"));
 
     const startedAt = Date.now();
-    const promise = summarizeInStages({
-      parts: 1,
-      messages: [makeUserMessage("hello", 1) satisfies UserMessage],
-      model: testModel,
-      apiKey: "test-key", // pragma: allowlist secret
-      signal: controller.signal,
-      reserveTokens: 1000,
-      maxChunkTokens: 50_000,
-      contextWindow: 200_000,
-    });
+    const promise = summarizeHello(controller.signal);
     const rejection = expect(promise).rejects.toThrow("aborted");
     setTimeout(() => controller.abort(), 50);
     await finishAssertionWithTimers(rejection);
@@ -142,42 +124,38 @@ describe("compaction summarization fallback", () => {
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
-  it("throws CompactionError when both full and partial summarization fail", async () => {
-    // Oversized-message fallback tries the safe subset so a huge attachment or
-    // tool output does not prevent summarizing the rest of the transcript.
-    const messages: AgentMessage[] = [
-      makeUserMessage("small", 1) satisfies UserMessage,
-      {
-        role: "user",
-        content: "x".repeat(500_000),
-        timestamp: 2,
-      } satisfies UserMessage,
-    ];
+  it("rethrows the raw error without retrying when the caller already aborted", async () => {
+    const abortErr = Object.assign(new Error("aborted"), { name: "AbortError" });
+    agentSessionMocks.generateSummary.mockRejectedValue(abortErr);
+    const controller = new AbortController();
+    controller.abort();
 
-    let callCount = 0;
-    agentSessionMocks.generateSummary.mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return Promise.reject(new Error("full summarization error"));
-      }
-      return Promise.reject(new Error("partial retry error"));
-    });
+    const result = expect(summarizeHello(controller.signal)).rejects.toBe(abortErr);
+    await finishAssertionWithTimers(result);
+    // Caller cancellation is terminal and must not be masked as a CompactionError.
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+  });
 
-    const result = expect(
-      summarizeInStages({
-        parts: 1,
-        messages,
-        model: testModel,
-        apiKey: "test-key", // pragma: allowlist secret
-        signal: new AbortController().signal,
-        reserveTokens: 1000,
-        maxChunkTokens: 50_000,
-        contextWindow: 200_000,
-      }),
-    ).rejects.toThrow(
-      "All summarization attempts failed for 2 messages. Last error: partial retry error",
+  it("does not retry transport timeouts", async () => {
+    const timeoutErr = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    agentSessionMocks.generateSummary.mockRejectedValue(timeoutErr);
+
+    const result = expect(summarizeHello(new AbortController().signal)).rejects.toThrow(
+      "Summarization failed for 1 messages: request timed out",
     );
     await finishAssertionWithTimers(result);
-    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(6);
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws CompactionError with the last error after retries are exhausted", async () => {
+    agentSessionMocks.generateSummary.mockRejectedValue(new Error("provider unavailable"));
+
+    const promise = summarizeHello(new AbortController().signal);
+    const result = expect(promise).rejects.toBeInstanceOf(CompactionError);
+    const message = expect(promise).rejects.toThrow(
+      "Summarization failed for 1 messages: provider unavailable",
+    );
+    await finishAssertionWithTimers(Promise.all([result, message]));
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(3);
   });
 });

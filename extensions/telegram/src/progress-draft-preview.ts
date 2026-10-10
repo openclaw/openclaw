@@ -66,7 +66,10 @@ function progressLineText(
   maxLineChars: number,
 ): ProgressText {
   const compact = (text: string) => compactChannelProgressDraftLine(text, maxLineChars);
-  if (typeof line === "string" || (!line.icon && (!line.label || line.label === "Commentary"))) {
+  if (
+    typeof line === "string" ||
+    (!line.icon && (!line.label || (line.kind === "item" && !line.toolName)))
+  ) {
     // Reasoning/commentary retain authored Markdown; checklist labels stay literal.
     const text = compact(typeof line === "string" ? line : line.text);
     return markdownProgressText(text);

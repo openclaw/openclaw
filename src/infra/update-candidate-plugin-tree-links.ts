@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
@@ -164,12 +165,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
       params.assertBeforeMutation?.();
       await fs.mkdir(parent, { recursive: true });
     }
-    const existing = await fs.lstat(file).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const existing = await fs.lstat(file).catch(ignoreMissingUpdateCandidateFile);
     if (existing) {
       const matches = host
         ? existing.isSymbolicLink() && path.resolve(parent, await fs.readlink(file)) === target

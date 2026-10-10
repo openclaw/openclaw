@@ -247,13 +247,10 @@ export function createDispatchReplyOperationCoordinator(params: {
         dispatchLifecycleAbortController = undefined;
       }
     };
-    if (!afterWorkBarrier && pendingWork.length === 0) {
-      clearAbortControllers();
-      admission.release();
-      return;
-    }
     try {
-      await Promise.allSettled(pendingWork);
+      if (afterWorkBarrier || pendingWork.length > 0) {
+        await Promise.allSettled(pendingWork);
+      }
       if (afterWorkBarrier) {
         await waitForReplyBarrierSettlement(
           afterWorkBarrier(),
@@ -531,32 +528,30 @@ export function createDispatchReplyOperationCoordinator(params: {
     return { status: "ready" };
   };
 
-  let cachedPreDispatchAbortSignal:
-    | {
-        operationSignal: AbortSignal | undefined;
-        lifecycleSignal: AbortSignal | undefined;
-        upstreamSignal: AbortSignal | undefined;
-        signal: AbortSignal | undefined;
-      }
-    | undefined;
+  let cachedOperationSignal: AbortSignal | undefined;
+  let cachedLifecycleSignal: AbortSignal | undefined;
+  let cachedUpstreamSignal: AbortSignal | undefined;
+  let cachedPreDispatchAbortSignal: AbortSignal | undefined;
   const getPreDispatchAbortSignal = () => {
     const operationSignal = (dispatchAbortOperation ?? preDispatchAbortOperation)?.abortSignal;
     const lifecycleSignal = preDispatchLifecycleAbortController?.signal;
     const upstreamSignal = params.replyOptions?.abortSignal;
     if (
-      cachedPreDispatchAbortSignal &&
-      cachedPreDispatchAbortSignal.operationSignal === operationSignal &&
-      cachedPreDispatchAbortSignal.lifecycleSignal === lifecycleSignal &&
-      cachedPreDispatchAbortSignal.upstreamSignal === upstreamSignal
+      cachedOperationSignal === operationSignal &&
+      cachedLifecycleSignal === lifecycleSignal &&
+      cachedUpstreamSignal === upstreamSignal
     ) {
-      return cachedPreDispatchAbortSignal.signal;
+      return cachedPreDispatchAbortSignal;
     }
     const abortSignals = [operationSignal, lifecycleSignal, upstreamSignal].filter(
       (signal): signal is AbortSignal => Boolean(signal),
     );
-    const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
-    cachedPreDispatchAbortSignal = { operationSignal, lifecycleSignal, upstreamSignal, signal };
-    return signal;
+    cachedPreDispatchAbortSignal =
+      abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
+    cachedOperationSignal = operationSignal;
+    cachedLifecycleSignal = lifecycleSignal;
+    cachedUpstreamSignal = upstreamSignal;
+    return cachedPreDispatchAbortSignal;
   };
 
   const getDispatchAbortSignal = () => {
@@ -645,10 +640,8 @@ export function createDispatchReplyOperationCoordinator(params: {
     const complete = () => {
       if (params.replyOptions?.internalEventExecution) {
         // Source-owned effects retain the admitted operation until delivery settles.
-        void waitForDispatchDelivery().then(
-          () => operation.complete(),
-          () => operation.complete(),
-        );
+        const settle = () => operation.complete();
+        void waitForDispatchDelivery().then(settle, settle);
       } else {
         operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
       }

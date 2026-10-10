@@ -22,6 +22,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
+import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
@@ -565,7 +566,12 @@ export async function withAgentDatabaseStartupAdmission<T>(
     getAgentDatabaseStartupAdmission() ??
     new AgentDatabaseStartupAdmission(options.deferInspections);
   try {
-    return await startupAdmission.run(admission, () => run(admission));
+    return await startupAdmission.run(admission, () =>
+      withAgentDatabasePreparationContext(
+        () => admission,
+        () => run(admission),
+      ),
+    );
   } finally {
     await admission.releaseStartup();
   }
