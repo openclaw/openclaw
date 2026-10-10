@@ -14,6 +14,8 @@ export type GatewayCloseOptions = {
   drainTimeoutMs?: number | null;
   /** Process-owning host only: exit after accepted writes and database close settle. */
   onProcessExitReady?: () => Promise<void>;
+  /** Process-owning host only: the process exits after close, releasing native watchers. */
+  exitAfterClose?: boolean;
 };
 
 type GatewayShutdownBudget = {

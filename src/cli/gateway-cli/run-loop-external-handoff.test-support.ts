@@ -255,7 +255,11 @@ export function registerExternalHandoffShutdownTests(
       captureSignal("SIGTERM")();
       await expect(exited).resolves.toBe(0);
       expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, expect.any(Object));
-      expect(close).toHaveBeenCalledWith({ reason: "gateway stopping", restartExpectedMs: null });
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+        exitAfterClose: true,
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "external restart handoff refused: gateway terminal persistence is still pending",
       );
