@@ -585,7 +585,7 @@ export function writeSessionEntry(
     // Offline import/repair can stage aliases; readiness must validate them before use.
     markCanonicalSessionValidationPending(database, [sessionKey]);
   }
-  const { writeGeneration, sessionRow } = withSqliteDatabaseWriteScope(
+  const written = withSqliteDatabaseWriteScope(
     database.db,
     [sessionKey, sqliteSessionIdWriteScope(normalizedEntry.sessionId)],
     () => {
@@ -699,7 +699,7 @@ export function writeSessionEntry(
           }
         : {}),
     },
-    writeGeneration,
+    written.writeGeneration,
   );
   if (actor) {
     const previousRow = actor.entryRows.get(sessionKey)?.row;
@@ -723,7 +723,7 @@ export function writeSessionEntry(
     if (actor.window) {
       actor.window = {
         ...actor.window,
-        ...sessionRow,
+        ...written.sessionRow,
         created_at: actor.window.created_at,
         session_key:
           canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId

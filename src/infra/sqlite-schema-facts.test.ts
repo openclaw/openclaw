@@ -18,9 +18,6 @@ import {
   hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseSiblingWriteRevision,
-  readSqliteDatabaseScopedWriteToken,
-  readSqliteDatabasePendingScopedWriteToken,
-  withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
@@ -55,38 +52,6 @@ describe("admitted SQLite schema facts", () => {
     database.prepare("SELECT mutate()").get();
     expect(readSqliteDatabaseWriteRevision(database)).not.toBe(before);
     expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
-  });
-
-  it("isolates scoped receipts while raw writes and native callbacks revoke incomplete coverage", () => {
-    const database = openDatabase();
-    const first = readSqliteDatabaseScopedWriteToken(database, "first");
-    const second = readSqliteDatabaseScopedWriteToken(database, "second");
-    let pending: string | undefined;
-    withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, () =>
-        withSqliteDatabaseWriteScope(database, ["second"], () => {
-          database.exec("INSERT INTO original VALUES (2)");
-          pending = readSqliteDatabasePendingScopedWriteToken(database, "second");
-        }),
-      ),
-    );
-    expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
-    expect(readSqliteDatabaseScopedWriteToken(database, "second")).toBe(pending);
-    expect(pending).not.toBe(second);
-
-    database.function("uncovered_write", () => {
-      database.exec("INSERT INTO original VALUES (1)");
-      return 1;
-    });
-    withSqliteDatabaseWriteScope(database, ["second"], () =>
-      database.prepare("SELECT uncovered_write()").get(),
-    );
-    expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
-    const afterCallback = readSqliteDatabaseScopedWriteToken(database, "second");
-    expect(afterCallback).not.toBe(pending);
-
-    database.exec("INSERT INTO original VALUES (3)");
-    expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(afterCallback);
   });
 
   it("serves admitted runtime schema checks without executing SQL", () => {

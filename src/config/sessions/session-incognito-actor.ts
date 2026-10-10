@@ -14,6 +14,7 @@ import {
   authorizeSessionFacts,
   incognitoEntryPublication,
   isIncognitoEntryValidationGrant,
+  installIncognitoSessionFacts,
   readIncognitoGrantFacts,
   type IncognitoEntryOperations,
   type IncognitoSessionRunner,
@@ -109,29 +110,10 @@ export function createIncognitoSessionFacts(
   };
   const install = (facts: IncognitoSessionFacts) => {
     assertActorCurrent();
-    if (!isDeepStrictEqual(facts.identity, identity)) {
-      throw new Error("Incognito publication belongs to another actor");
-    }
-    const previous = entries.get(facts.sessionKey);
-    if (previous && previous.revision > facts.revision) {
-      throw new Error("Incognito publication is older than committed facts");
-    }
-    const next = structuredClone(facts);
-    snapshotRevision = Math.max(snapshotRevision, next.revision);
-    if (previous?.sharing?.entry?.sessionId === next.sharing?.entry?.sessionId && previous) {
-      next.expiresAt = previous.expiresAt;
-    }
-    if (
-      previous?.sharing?.entry?.sessionId !== next.sharing?.entry?.sessionId ||
-      previous?.sharing?.entry?.lifecycleRevision !== next.sharing?.entry?.lifecycleRevision
-    ) {
+    const { revision, topologyChanged } = installIncognitoSessionFacts(identity, entries, facts);
+    snapshotRevision = Math.max(snapshotRevision, revision);
+    if (topologyChanged) {
       topologyRevision += 1;
-    }
-    // Misses belong to their scoped claim, not an ever-growing negative cache.
-    if (next.sharing?.entry) {
-      entries.set(next.sessionKey, next);
-    } else {
-      entries.delete(next.sessionKey);
     }
     unavailable.delete(facts.sessionKey);
   };
