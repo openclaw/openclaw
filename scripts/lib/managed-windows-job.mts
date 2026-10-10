@@ -6,10 +6,7 @@ import { isSupported, WindowsJob } from "@openclaw/proc-safe/windows-job";
 import { createDeferredCore, type Deferred } from "../../src/shared/deferred.ts";
 import { resolveManagedWindowsJobEntrypointUrl } from "./managed-windows-job-entrypoint.mts";
 
-export type WindowsJobSetupFailureReason =
-  | "job-create-failed"
-  | "job-configuration-failed"
-  | "job-admission-failed";
+export type WindowsJobSetupFailureReason = "job-create-failed" | "job-admission-failed";
 
 export class WindowsJobSetupError extends Error {
   readonly reason: WindowsJobSetupFailureReason;
