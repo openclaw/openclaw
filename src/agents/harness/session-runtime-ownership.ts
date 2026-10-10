@@ -169,14 +169,14 @@ export async function readSessionRuntimeOwnershipAsync(
     return undefined;
   }
   const { harness, sessionId, privateSource, assertCurrent } = read;
-  const resolveOwnership = harness.resolveSessionRuntimeOwnershipAsync;
+  const resolveOwnership = harness.resolveSessionRuntimeOwnershipAsync?.bind(harness);
   if (!resolveOwnership) {
     read.close();
     return readSessionRuntimeOwnership(params);
   }
   try {
     assertCurrent();
-    const ownership = await resolveOwnership.call(harness, {
+    const ownership = await resolveOwnership({
       ...read.input,
       version: 2,
       readPreviousSessionId: async () => {

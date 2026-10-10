@@ -112,7 +112,7 @@ describe("createApprovalNativeRouteReporter", () => {
 
   it("drops an earlier eligible account that stops while another account is preparing", async () => {
     const coordinator = createApprovalNativeRouteCoordinator();
-    const preparing = createDeferred<void>();
+    const preparing = createDeferred();
     const eligibility = createDeferred<boolean>();
     const first = coordinator.createReporter(reporterOptions());
     const second = coordinator.createReporter(

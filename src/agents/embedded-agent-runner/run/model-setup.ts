@@ -175,7 +175,7 @@ async function prepareNativeSessionRuntime(
           (read) => read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
         );
         // The row publication subscription fences this snapshot while plugin ownership awaits.
-        return await consume(current, reader.assertCurrent);
+        return await consume(current, reader.assertCurrent.bind(reader));
       }
       return await withSessionEntriesFromStoreInWorker(
         {
