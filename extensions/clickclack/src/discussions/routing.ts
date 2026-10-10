@@ -40,7 +40,7 @@ export async function resolveClickClackDiscussionRoute(params: {
     pending = await hasPendingDiscussionOpenForDestination(params);
     matched = await store.getByChannel(params.serverBaseUrl, params.channelId);
   }
-  if (await isClickClackDiscussionChannelRevokedAsync(params)) {
+  if (await isClickClackDiscussionChannelRevokedAsync({ ...params, binding: matched?.binding })) {
     return { state: "revoked" };
   }
   if (!matched) {
@@ -83,7 +83,7 @@ export async function resolveClickClackDiscussionRoute(params: {
     !current ||
     current.externalRef !== binding.externalRef ||
     current.channelId !== binding.channelId ||
-    isClickClackDiscussionChannelRevoked(params) ||
+    isClickClackDiscussionChannelRevoked({ ...params, binding: current }) ||
     !bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, binding) ||
     // SAFETY: This fresh SDK config is schema-validated; account resolution only reads it.
     resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, binding)

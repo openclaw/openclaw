@@ -509,13 +509,18 @@ export async function openClickClackDiscussionBinding(
     };
     try {
       nextBinding.sessionId = assertCurrentAuthority().sessionId;
-      await store.set(sessionKey, nextBinding, {
+      const applied = await store.setIfCurrent(sessionKey, undefined, nextBinding, {
         assertCurrent: () => {
           if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
             throw new Error("ClickClack discussion session changed before binding committed");
           }
         },
       });
+      if (!applied) {
+        await clearPendingDiscussionOpen(generationScope);
+        params.warn(`superseded discussion channel remains quarantined: ${channel.id}`);
+        return undefined;
+      }
     } catch (error) {
       await clearPendingDiscussionOpen(generationScope);
       params.warn(`unbound discussion channel remains quarantined: ${channel.id}`);
