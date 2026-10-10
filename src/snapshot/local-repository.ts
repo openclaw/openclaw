@@ -21,7 +21,6 @@ import {
   type PinnedDirectory,
 } from "../infra/directory-durability.js";
 import {
-  FsSafeError,
   canonicalPathFromExistingAncestor,
   ensureAbsoluteDirectory,
   isPathInside,
@@ -43,6 +42,10 @@ import {
   assertPrivateStagingDirectory,
   assertTrustedStagingRoot,
 } from "./local-repository-directory-policy.js";
+import {
+  createPrivateSnapshotDirectory,
+  isPrivateDirectoryAlreadyExists,
+} from "./local-repository-private-directory.js";
 import {
   copySnapshotArtifact,
   hashSnapshotArtifact,
@@ -167,21 +170,8 @@ class LocalSqliteSnapshotProvider {
       await syncDirectoryIfSupported(stagingDir);
 
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      try {
-        await createPrivateSqliteDirectory(snapshotDir);
-        snapshotDirectoryCreated = true;
-      } catch (error) {
-        const alreadyExists =
-          process.platform === "win32"
-            ? error instanceof FsSafeError && error.code === "already-exists"
-            : (error as NodeJS.ErrnoException).code === "EEXIST";
-        if (alreadyExists) {
-          throw new Error(`SQLite snapshot directory already exists: ${snapshotDir}`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
+      await createPrivateSnapshotDirectory(snapshotDir);
+      snapshotDirectoryCreated = true;
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       publishedDirectory = await pinDirectory(snapshotDir, {
         label: "SQLite snapshot directory",
@@ -633,7 +623,7 @@ async function ensurePrivateDirectory(
           await createPrivateSqliteDirectory(targetPath);
           return;
         } catch (error) {
-          if (!(error instanceof FsSafeError) || error.code !== "already-exists") {
+          if (!isPrivateDirectoryAlreadyExists(error)) {
             throw error;
           }
         }
