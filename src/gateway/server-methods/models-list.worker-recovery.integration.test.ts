@@ -2,11 +2,13 @@ import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
+import { text as readText } from "node:stream/consumers";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -17,9 +19,12 @@ import { registerPreparedModelRuntimePublicationListener } from "../../agents/pr
 import type { OpenClawConfig } from "../../config/types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it("models.list retains a failed renewal before shared worker recovery", async ({ signal }) => {
+it("model reads recover a failed shared-worker publication and retain the failed renewal", async ({
+  signal,
+}) => {
   const state = await createOpenClawTestState({
     label: "catalog-worker-recovery",
     env: {
@@ -48,6 +53,9 @@ it("models.list retains a failed renewal before shared worker recovery", async (
   let siblingRequests = 0;
   let heldThread = 0;
   let hold = false;
+  let failedPreparations = 0;
+  const inferenceRequests: Array<{ authorization?: string; model: string }> = [];
+  const providerWork: Promise<void>[] = [];
   let advertised = ["original"];
   const held: ServerResponse[] = [];
   const reply = (response: ServerResponse, rows = advertised) => {
@@ -55,6 +63,43 @@ it("models.list retains a failed renewal before shared worker recovery", async (
     response.end(JSON.stringify(rows));
   };
   const endpoint = createServer((request, response) => {
+    if (request.url === "/prepare") {
+      if (failedPreparations > 0) {
+        failedPreparations--;
+        response.writeHead(503).end();
+      } else {
+        response.writeHead(200).end();
+      }
+      return;
+    }
+    if (request.method === "POST" && request.url === "/chat/completions") {
+      const work = (async () => {
+        const body = JSON.parse(await readText(request));
+        inferenceRequests.push({ authorization: request.headers.authorization, model: body.model });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-recovered-runtime",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: body.model,
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "RECOVERED_RUNTIME_REPLY" },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      })();
+      providerWork.push(work);
+      void work.catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
+      return;
+    }
     if (request.url === `/${sibling}`) {
       siblingRequests++;
       reply(response, ["healthy"]);
@@ -88,6 +133,13 @@ it("models.list retains a failed renewal before shared worker recovery", async (
         id: ${JSON.stringify(provider)}, register(api) {
           for (const provider of ${JSON.stringify(providers)}) api.registerProvider({
             id: provider, label: "Recovery fixture", auth: [],
+            staticCatalog: provider === ${JSON.stringify(provider)} ? {
+              order: "simple", async run() {
+                const response = await fetch(${JSON.stringify(`${baseUrl}/prepare`)});
+                if (!response.ok) throw new Error("Fixture runtime preparation failed");
+                return null;
+              },
+            } : undefined,
             catalog: { order: "profile", async run(ctx) {
               const auth = ctx.resolveProviderAuth(provider);
               if (!auth.discoveryApiKey) return null;
@@ -114,13 +166,25 @@ it("models.list retains a failed renewal before shared worker recovery", async (
     );
     const token = "catalog-recovery-gateway-token";
     const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl,
+            models: [],
+            request: { allowPrivateNetwork: true },
+          },
+        },
+      },
       agents: {
         defaults: {
+          skipBootstrap: true,
+          heartbeat: { every: "0m" },
           model: { primary: `${provider}/original` },
           modelPolicy: { allow: providers.map((id) => `${id}/*`) },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
+      tools: { profile: "minimal" },
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },
     };
@@ -181,19 +245,37 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       const initialRequests = requests;
       expect((await list()).models).toEqual(initial.models);
       expect(requests).toBe(initialRequests);
+      const renewalFailed = createDeferred<Error>();
+      const recoveryFailed = createDeferred<Error>();
       releasePublication = registerPreparedModelRuntimePublicationListener((event) => {
-        if (event.phase === "published" && !original!.isCurrent()) {
-          events.emit("recovered");
+        if (event.phase === "failed") {
+          renewalFailed.resolve(event.error);
+          recoveryFailed.resolve(event.error);
+        } else if (event.phase === "catalog-failed") {
+          renewalFailed.resolve(event.error);
         }
       });
-      // Arm the held request before making renewal due; a wall-clock TTL can expire
-      // during the initial models.list response, before this observer exists.
+      // The shipped SDK renewal entry point still owns background expiry; Gateway reads stay passive.
       hold = true;
       const renewal = once(events, "request");
       providerFacts.expiresAt = 0;
+      const renewing = refreshExpiredPreparedModelCatalog({
+        agentId: "main",
+        config: original!.config,
+      });
+      expect(renewing?.pendingProviders).toContain(provider);
       const retained = await list();
       expect(retained.models).toEqual(initial.models);
-      await withTestTimeout(renewal, 3_000, "models.list did not start the due renewal");
+      // Bind waits to the test signal so a stall still reaches held-response and Gateway cleanup.
+      await withinTest(
+        Promise.race([
+          renewal,
+          renewalFailed.promise.then((error) => {
+            throw error;
+          }),
+        ]),
+        signal,
+      );
       const acceptedCatalog = original!.readFullModelCatalog!()!;
       const catalogAuth = getPreparedModelFullCatalogAuth(acceptedCatalog)!;
       const acceptedAuth = {
@@ -217,9 +299,58 @@ it("models.list retains a failed renewal before shared worker recovery", async (
         cwd: process.cwd(),
         threadId: heldThread,
       });
-      const recovered = once(events, "recovered");
+      // A real provider preparation failure rejects the automatic publication, after
+      // the old worker has exited. No synthetic owner or publication event is installed.
+      failedPreparations = 1;
       await worker!.terminate();
-      await withTestTimeout(recovered, 30_000, "catalog recovery did not publish a replacement");
+      expect((await withinTest(recoveryFailed.promise, signal)).message).toContain(
+        "Fixture runtime preparation failed",
+      );
+      // Opening the model picker and preparing a chat share one demand-driven repair.
+      // A stale cached error must not require a Gateway restart or a plugin reload.
+      const [rechecked, metadata] = await Promise.all([
+        list(),
+        client.request<ChatMetadataResult>("chat.metadata", { agentId: "main" }),
+      ]);
+      expect(rechecked.models).toEqual(initial.models);
+      expect(metadata.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ provider, id: "original", available: true }),
+        ]),
+      );
+      const session = await client.request<{ key: string }>("sessions.create", {
+        agentId: "main",
+        key: "agent:main:recovered-runtime",
+        model: `${provider}/original`,
+      });
+      const turn = await client.request<{ runId: string; status: string }>("chat.send", {
+        sessionKey: session.key,
+        message: "Reply with the recovered runtime marker.",
+        idempotencyKey: "recovered-runtime-turn",
+      });
+      expect(turn.status).toBe("started");
+      const completed = await client.request<{ status: string; error?: string }>(
+        "agent.wait",
+        { runId: turn.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      );
+      expect(completed).toMatchObject({ status: "ok" });
+      const history = await client.request<{ messages: unknown[] }>("chat.history", {
+        sessionKey: session.key,
+      });
+      expect(history.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: "RECOVERED_RUNTIME_REPLY" }),
+            ]),
+          }),
+        ]),
+      );
+      expect(inferenceRequests).toEqual([
+        { authorization: `Bearer synthetic-${provider}`, model: "original" },
+      ]);
       for (let read = 0; read < 3; read++) {
         const saved = await list();
         expect(saved.models).toEqual(initial.models);
@@ -294,6 +425,7 @@ it("models.list retains a failed renewal before shared worker recovery", async (
     await new Promise<void>((resolve) => {
       endpoint.close(() => resolve());
     });
+    await Promise.all(providerWork);
     await state.cleanup();
   }
 }, 120_000);

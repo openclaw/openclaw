@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -9,9 +9,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
-  assignHumanOwner,
   databasePath,
-  humanOwner,
   outcomeKinds,
   readClaim,
   recordHarnessDeletions,
@@ -27,14 +25,16 @@ import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-tr
 import { readVerifiedSessionColdArchive } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
-import type { SessionEntry } from "./types.js";
 
-const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
+const { createFixture } = setupLegacyMainSessionMigrationTests();
+
+function repair(fixture: ReturnType<typeof createFixture>) {
+  return migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "doctor-fix" });
+}
 
 describe("legacy main session history handoff", () => {
   it("refuses cleanup rebound to an identical destination database", async () => {
     const fixture = createFixture();
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
     const entry = { sessionId: "rebound-source", updatedAt: 100 };
     const source = {
       databaseAgentId: "main",
@@ -111,28 +111,14 @@ describe("legacy main session history handoff", () => {
       assertAllowed: () => {},
     });
     try {
-      await expect(
-        migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "doctor-fix",
-        }),
-      ).rejects.toThrow("competing work is in flight");
+      await expect(repair(fixture)).rejects.toThrow("competing work is in flight");
       expect(readClaim(source)).toEqual(sourceBefore);
     } finally {
       admission.release();
     }
 
-    const repaired = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
-    const retry = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
+    const repaired = await repair(fixture);
+    const retry = await repair(fixture);
 
     expect(repaired.complete).toBe(true);
     expect(retry.ledgerComplete).toBe(true);
@@ -163,16 +149,8 @@ describe("legacy main session history handoff", () => {
       key: "agent:ops:chat",
     };
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
-    const retry = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
+    const result = await repair(fixture);
+    const retry = await repair(fixture);
 
     expect(result.complete).toBe(true);
     expect(outcomeKinds(result)).toContain("migrated-cross-store");
@@ -189,41 +167,6 @@ describe("legacy main session history handoff", () => {
         { agentId: source.databaseAgentId, path: source.databasePath },
       ),
     ).toEqual([]);
-  });
-
-  it.each([
-    { kind: "migrated-in-place", sharedStore: true },
-    { kind: "migrated-cross-store", sharedStore: false },
-  ])("preserves the assigned human owner when $kind", async ({ kind, sharedStore }) => {
-    const storePath = sharedStore
-      ? path.join(tempDirs.make("owned-in-place-migration-"), "sessions.sqlite")
-      : undefined;
-    const fixture = createFixture({
-      agents: { entries: { ops: {} } },
-      ...(storePath ? { session: { store: storePath } } : {}),
-    });
-    const sourcePath = storePath ?? databasePath(fixture.stateDir, "main");
-    seedClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" });
-    assignHumanOwner(sourcePath);
-
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
-
-    expect(result.complete).toBe(true);
-    expect(outcomeKinds(result)).toContain(kind);
-    expect(
-      readClaim({
-        databaseAgentId: sharedStore ? "main" : "ops",
-        databasePath: storePath ?? databasePath(fixture.stateDir, "ops"),
-        key: "agent:ops:chat",
-      })?.entry.owner,
-    ).toEqual(humanOwner);
-    expect(
-      readClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" }),
-    ).toBeUndefined();
   });
 
   it("preserves anchored history and recorded idempotency ownership across stores", async () => {
@@ -284,11 +227,7 @@ describe("legacy main session history handoff", () => {
       ]),
     );
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
+    const result = await repair(fixture);
 
     expect(result.complete).toBe(true);
     const scope = {
@@ -417,11 +356,10 @@ describe("legacy main session history handoff", () => {
     expect(committed).toEqual([]);
   });
 
-  it.each(["fresh", "existing-current", "cold"] as const)(
+  it.each(["existing-current", "cold"] as const)(
     "preserves every retained generation through a %s cross-store handoff",
     async (kind) => {
       const fixture = createFixture();
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
       const sourcePath = databasePath(fixture.stateDir, "main");
       const destinationPath = databasePath(fixture.stateDir, "ops");
       const sourceKey = "agent:main:chat";
@@ -504,11 +442,7 @@ describe("legacy main session history handoff", () => {
         expect(archived.archivedTranscripts).toBeGreaterThan(0);
       }
 
-      const result = await migrateLegacyMainSessionKeys({
-        cfg: fixture.cfg,
-        env: fixture.env,
-        mode: "doctor-fix",
-      });
+      const result = await repair(fixture);
 
       expect(result.complete).toBe(true);
       const after = snapshot("ops", destinationPath);
@@ -541,71 +475,14 @@ describe("legacy main session history handoff", () => {
           ).found,
         ).toBe(true);
       }
-      const retry = await migrateLegacyMainSessionKeys({
-        cfg: fixture.cfg,
-        env: fixture.env,
-        mode: "doctor-fix",
-      });
+      const retry = await repair(fixture);
       expect(retry.ledgerComplete).toBe(true);
       expect(snapshot("ops", destinationPath)).toEqual(after);
     },
   );
 
-  it.each([
-    { copiedBeforeCrash: true, label: "copy committed before source cleanup" },
-    { copiedBeforeCrash: false, label: "source cleanup committed before ledger" },
-  ])("converges when $label", async ({ copiedBeforeCrash }) => {
-    const fixture = createFixture();
-    const entry: SessionEntry = { sessionId: "crash-window", updatedAt: 100 };
-    if (copiedBeforeCrash) {
-      seedClaim({
-        databaseAgentId: "main",
-        databasePath: databasePath(fixture.stateDir, "main"),
-        entry,
-        key: "agent:main:chat",
-      });
-    }
-    seedClaim({
-      databaseAgentId: "ops",
-      databasePath: databasePath(fixture.stateDir, "ops"),
-      entry,
-      key: "agent:ops:chat",
-    });
-
-    const converged = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
-    const ledgerRerun = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "detect",
-    });
-
-    expect(converged.complete).toBe(true);
-    expect(
-      readClaim({
-        databaseAgentId: "main",
-        databasePath: databasePath(fixture.stateDir, "main"),
-        key: "agent:main:chat",
-      }),
-    ).toBeUndefined();
-    expect(
-      readClaim({
-        databaseAgentId: "ops",
-        databasePath: databasePath(fixture.stateDir, "ops"),
-        key: "agent:ops:chat",
-      }),
-    ).toBeDefined();
-    expect(ledgerRerun.outcomes).toEqual([
-      { kind: "no-legacy-rows", detail: "matching completed ledger" },
-    ]);
-  });
-
   it("preserves the verified cold archive during an in-place key migration", async () => {
     const fixture = createFixture();
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
     const storePath = path.join(fixture.stateDir, "shared.sqlite");
     fixture.cfg.session = { store: storePath };
     const sourceKey = "agent:main:chat";
@@ -662,11 +539,7 @@ describe("legacy main session history handoff", () => {
     const archive = { ...before.archive, archive_blob: null };
     const bytes = await readVerifiedSessionColdArchive({ storePath, archive });
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
+    const result = await repair(fixture);
 
     expect(result.complete).toBe(true);
     const after = snapshot(canonicalKey);

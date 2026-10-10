@@ -53,8 +53,8 @@ const boundary = {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: linkMocks.delete,
-  upsertSessionUpstreamLink: linkMocks.upsert,
+  deleteSessionUpstreamLinkAsync: linkMocks.delete,
+  upsertSessionUpstreamLinkAsync: linkMocks.upsert,
 }));
 
 vi.mock("./transcript-mirror.js", async (importOriginal) => ({
@@ -130,7 +130,7 @@ describe("forkCodexUpstreamSession", () => {
         return transport.client;
       });
       const config = {
-        agents: { list: [{ id: "main", agentDir: stateDir, workspace: stateDir }] },
+        agents: { entries: { main: { agentDir: stateDir, workspace: stateDir } } },
       };
       const pluginConfig = {
         appServer: {

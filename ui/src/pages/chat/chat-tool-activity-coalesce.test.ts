@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import * as canvas from "../../../../src/chat/canvas-render.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import * as toolIdentity from "./tool-stream-identity.ts";
@@ -154,6 +156,32 @@ describe("tool activity preparation cache", () => {
     expect(first[0]).toEqual(next[0]);
   });
 
+  it.each(["startsTurn", "projected"] as const)(
+    "coalesces a new %s boundary's invocation without borrowing from the previous turn",
+    (boundary) => {
+      const previous = {
+        role: "assistant",
+        content: [{ type: "tool_call", id: "call", name: "custom", arguments: { turn: "old" } }],
+      };
+      const current = {
+        role: "assistant",
+        content: [{ type: "tool_call", id: "call", name: "custom", arguments: { turn: "new" } }],
+        ...(boundary === "projected" ? { __openclaw: { turnBoundary: true } } : {}),
+      };
+      const rows = coalesceToolActivityMessages([
+        item(previous, "previous"),
+        { ...item(current, "current"), ...(boundary === "startsTurn" ? { startsTurn: true } : {}) },
+        item({ role: "toolResult", content: [result("call")] }, "result"),
+      ]).filter((row) => row.kind === "message");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.message).toBe(previous);
+      expect(extractToolCardsCached(rows[1]?.message)[0]).toMatchObject({
+        callId: "call",
+        completed: true,
+      });
+    },
+  );
+
   it("reuses finalized bundles across prepends and invalidates only changed sources", () => {
     const invocation = (id: string) => {
       const call = {
@@ -257,4 +285,83 @@ describe("tool activity preparation cache", () => {
       '{"exitCode":1}',
     ]);
   });
+});
+
+describe("tool activity outcome authority", () => {
+  const activity = (status?: AgentActivityItem["status"]): AgentActivityItem => ({
+    itemId: "tool:active",
+    toolCallId: "active",
+    name: "exec",
+    kind: "tool",
+    title: "Run checks",
+    phase: status === "running" ? "start" : "end",
+    ...(status ? { status } : { summary: "Outcome unknown" }),
+  });
+  const call = (status?: AgentActivityItem["status"], live = false) =>
+    item(
+      {
+        role: "assistant",
+        runId: "run",
+        content: [
+          { type: "toolCall", id: "active", name: "exec", arguments: { command: "pnpm check" } },
+        ],
+        activity: [{ ...activity(status), ...(!live && !status ? { unpairedCall: true } : {}) }],
+        ...(live
+          ? { __openclawToolStreamLive: true, __openclawToolStreamResultReceived: false }
+          : {}),
+      },
+      live ? "live" : "history",
+    );
+  const outcomes = (rows: ChatItem[]) =>
+    coalesceToolActivityMessages(rows).flatMap((row) =>
+      row.kind === "message" ? readPreparedActivity(row.message) : [],
+    );
+
+  it.each([false, true])(
+    "lets live activity replace a history placeholder (live first: %s)",
+    (liveFirst) => {
+      const history = call();
+      const live = call("running", true);
+      expect(outcomes(liveFirst ? [live, history] : [history, live])).toEqual([
+        activity("running"),
+      ]);
+      expect(outcomes([history])).toEqual([{ ...activity(), unpairedCall: true }]);
+    },
+  );
+
+  it.each(["completed", "failed", "blocked", undefined] as const)(
+    "retains a durable %s result over stale live activity",
+    (status) => {
+      const terminal = item(
+        {
+          role: "toolResult",
+          runId: "run",
+          toolCallId: "active",
+          toolName: "exec",
+          content: [{ type: "text", text: "Command ended" }],
+          activity: [activity(status)],
+        },
+        "result",
+      );
+      for (const rows of [
+        [call(), terminal, call("running", true)],
+        [call("running", true), call(), terminal],
+      ]) {
+        expect(outcomes(rows)).toEqual([activity(status)]);
+      }
+    },
+  );
+
+  it.each(["completed", undefined] as const)(
+    "retains a terminal %s outcome when its raw result is outside the page",
+    (status) => {
+      const history = item({
+        role: "assistant",
+        runId: "run",
+        content: [{ type: "toolCall", id: "active", name: "exec", arguments: {} }],
+        activity: [activity(status)],
+      });
+      expect(outcomes([history, call("running", true)])).toEqual([activity(status)]);
+    },
+  );
 });

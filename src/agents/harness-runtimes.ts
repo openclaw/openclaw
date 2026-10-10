@@ -1,6 +1,3 @@
-/**
- * Collects configured native harness runtime ids from model provider config.
- */
 import {
   listModelRefsFromConfigValue,
   type ConfiguredModelRef,
@@ -22,20 +19,8 @@ import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 // are selectable here; built-in OpenClaw/default runtime ids are excluded.
 function isSelectablePluginRuntime(runtime: string | undefined): runtime is string {
   return (
-    Boolean(runtime) &&
-    !isDefaultAgentRuntimeId(runtime) &&
-    normalizeOptionalAgentRuntimeId(runtime) !== OPENCLAW_AGENT_RUNTIME_ID
+    Boolean(runtime) && !isDefaultAgentRuntimeId(runtime) && runtime !== OPENCLAW_AGENT_RUNTIME_ID
   );
-}
-
-// Parse provider/model identity without interpreting a selector's auth profile.
-function parseConfiguredModelRef(
-  value: unknown,
-): { provider: string; modelId: string } | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return parseModelCatalogRef(value) ?? undefined;
 }
 
 export function resolveConfiguredModelHarnessRuntime(params: {
@@ -45,13 +30,13 @@ export function resolveConfiguredModelHarnessRuntime(params: {
   modelRefKind: ConfiguredModelRef["kind"];
   agentId?: string;
 }): string | undefined {
-  const parsed = parseConfiguredModelRef(params.modelRef);
+  const parsed = parseModelCatalogRef(params.modelRef);
   if (!parsed) {
     return undefined;
   }
   const selection =
     params.modelRefKind === "selector" ? splitTrailingAuthProfile(params.modelRef) : undefined;
-  const policyModel = selection?.profile ? parseConfiguredModelRef(selection.model) : parsed;
+  const policyModel = selection?.profile ? parseModelCatalogRef(selection.model) : parsed;
   if (!policyModel) {
     return undefined;
   }
@@ -75,16 +60,16 @@ export function resolveConfiguredModelHarnessRuntime(params: {
 }
 
 function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
-  for (const providerConfig of Object.values(config.models?.providers ?? {})) {
-    const providerRuntime = normalizeOptionalAgentRuntimeId(providerConfig?.agentRuntime?.id);
-    if (isSelectablePluginRuntime(providerRuntime)) {
-      runtimes.add(providerRuntime);
+  const addRuntime = (value: unknown) => {
+    const runtime = normalizeOptionalAgentRuntimeId(value);
+    if (isSelectablePluginRuntime(runtime)) {
+      runtimes.add(runtime);
     }
+  };
+  for (const providerConfig of Object.values(config.models?.providers ?? {})) {
+    addRuntime(providerConfig?.agentRuntime?.id);
     for (const modelConfig of providerConfig?.models ?? []) {
-      const modelRuntime = normalizeOptionalAgentRuntimeId(modelConfig?.agentRuntime?.id);
-      if (isSelectablePluginRuntime(modelRuntime)) {
-        runtimes.add(modelRuntime);
-      }
+      addRuntime(modelConfig?.agentRuntime?.id);
     }
   }
   const pushModelMapRuntimeIds = (models: unknown) => {
@@ -95,17 +80,9 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
       if (!isRecord(entry)) {
         continue;
       }
-      const runtime = normalizeOptionalAgentRuntimeId(
-        isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
-      );
-      if (isSelectablePluginRuntime(runtime)) {
-        runtimes.add(runtime);
-      }
+      addRuntime(isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined);
       for (const value of Array.isArray(entry.pickerRuntimes) ? entry.pickerRuntimes : []) {
-        const pickerRuntime = normalizeOptionalAgentRuntimeId(value);
-        if (isSelectablePluginRuntime(pickerRuntime)) {
-          runtimes.add(pickerRuntime);
-        }
+        addRuntime(value);
       }
     }
   };

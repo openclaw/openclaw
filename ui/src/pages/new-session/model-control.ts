@@ -99,11 +99,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           }
           this.updateMetadataState({
             ...this.metadataState,
-            status: this.metadataState.hasSnapshot
-              ? this.metadataState.status === "error"
-                ? "error"
-                : "ready"
-              : "loading",
+            status:
+              this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+                ? "ready"
+                : "loading",
           });
         } else {
           this.notify();
@@ -277,15 +276,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     return true;
   }
 
-  private retryPickerCatalogs() {
-    const client = this.metadataClient;
-    const scope = this.metadataScope;
-    if (!this.metadataReader.pending && client && scope) {
-      void this.metadataReader.read();
-    }
-    this.catalogTargets.retry(client, this.agentId);
-  }
-
   invalidate(resetSelection = false) {
     if (!resetSelection && this.metadataClient) {
       invalidateModelCatalogCache(this.metadataClient, this.metadataScope);
@@ -432,7 +422,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     });
   }
 
-  modelSelectionBlockedReason(agent: GatewayAgentRow | undefined): string | undefined {
+  modelSelectionBlockedReason(
+    agent: GatewayAgentRow | undefined,
+    inference?: "worker",
+  ): string | undefined {
+    const runtime = this.resolveAgentRuntime({ agent, context: this.pendingContext });
     return resolveDraftModelSelectionBlockedReason({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
@@ -442,6 +436,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       accountSelected: Boolean(this.draftAccount),
       accountReady: this.accountSelectionReady(),
       metadataPending: this.metadataReader.pending,
+      inference:
+        runtime?.id === "openclaw" && runtime.cloudPlacementExecutionMode === "worker-turn"
+          ? inference
+          : undefined,
     });
   }
 
@@ -706,7 +704,14 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       onModelSetup: () => options.context?.navigate("model-setup"),
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
-      onModelPickerOpen: () => this.retryPickerCatalogs(),
+      onModelPickerOpen: () => {
+        const metadataClient = this.metadataClient;
+        const metadataScope = this.metadataScope;
+        if (!this.metadataReader.pending && metadataClient && metadataScope) {
+          void this.metadataReader.read();
+        }
+        this.catalogTargets.retry(metadataClient, this.agentId);
+      },
       onRequestUpdate: this.notify,
     });
   }

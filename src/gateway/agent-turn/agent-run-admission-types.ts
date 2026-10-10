@@ -19,7 +19,20 @@ import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { PreparedAgentRunUserTurn, prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnIo } from "./types.js";
 
-export type PreparedAgentRunDispatch = {
+export type PreparedAgentRunModelRuntime =
+  | {
+      preparedModelRuntimeLease: PreparedModelRuntimeLease;
+      acquireWorkspaceModelRuntime?: never;
+    }
+  | {
+      /** Retains the dispatch generation until deferred workspace preparation selects its lease. */
+      preparedModelRuntimeLease: PreparedModelRuntimeLease;
+      acquireWorkspaceModelRuntime: (
+        workspaceDir: string | undefined,
+      ) => Promise<PreparedModelRuntimeLease>;
+    };
+
+export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
@@ -37,7 +50,6 @@ export type PreparedAgentRunDispatch = {
   resolvedThreadId?: string | number;
   reactivateSubagent: boolean;
   followupCompletion?: FollowupCompletionOwner;
-  preparedModelRuntimeLease: PreparedModelRuntimeLease;
   replyDispatchRuntime: PreparedReplyDispatchRuntime;
   unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;

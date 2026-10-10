@@ -16,7 +16,6 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -26,16 +25,18 @@ import {
 import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
+  formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
-  WINDOWS_NODE_CI_ADVISORY,
   planReleaseChildRerun,
   releaseChildSpec,
   releaseChildSpecs,
+  releaseGhRateLimitRetryAt,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
+  validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import {
   inspectActionsArtifactZipWithPolicy,
@@ -57,6 +58,7 @@ import {
   createReleaseEvidenceClient,
   releaseExecutionPlanRestoreContract,
   restoreOriginalPublicationAdmission,
+  tryReadReleaseDecisionArtifact,
 } from "./release-ci-summary.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -239,7 +241,7 @@ async function execCommand(command, args, options = {}) {
     maxBuffer: 64 * 1024 * 1024,
     timeout: options.timeoutMs ?? 60_000,
   });
-  return result.stdout.trim();
+  return result.stdout;
 }
 
 function execGh(args, options = {}) {
@@ -272,9 +274,7 @@ function isUnknownAllowEscapeSequencesFlag(error) {
 }
 
 async function execGhRead(args, options = {}) {
-  const attempts = options.attempts ?? 4;
-  let lastError;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     const remaining =
       options.operationDeadline === undefined
         ? Number.MAX_SAFE_INTEGER
@@ -285,8 +285,11 @@ async function execGhRead(args, options = {}) {
         timeoutMs: Math.min(options.timeoutMs ?? 60_000, remaining),
       });
     } catch (error) {
-      lastError = error;
-      if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
+      if (
+        attempt === 4 ||
+        releaseGhRateLimitRetryAt(error) !== undefined ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
         throw error;
       }
       await sleep(
@@ -300,21 +303,27 @@ async function execGhRead(args, options = {}) {
       );
     }
   }
-  throw lastError;
 }
 
-function readGhApi(repository, path, args = [], options = {}, fresh = true) {
+async function readGhApi(repository, path, args = [], options = {}, fresh = true) {
   // Rerun decisions require current attempts and jobs, not a relay's earlier snapshot.
   // Polling watchers keep the relay's own freshness policy.
-  return execGhRead(
+  const include = !path.endsWith("/logs");
+  const output = await execGhRead(
     [
       "api",
+      ...(include ? ["--include"] : []),
       `repos/${repository}/${path}`,
       ...(fresh ? ["-H", "Cache-Control: max-age=0"] : []),
       ...args,
     ],
     options,
   );
+  // gh emits a header block for each paginated response, even with --jq.
+  // Keep successful JSON rows intact while retaining failed-response retry headers.
+  return include
+    ? output.replace(/^HTTP\/\d+(?:\.\d+)? [^\r\n]+\r?\n(?:[^\r\n]+\r?\n)*\r?\n/gmu, "").trim()
+    : output.trim();
 }
 
 async function ghJson(repository, path, options, fresh) {
@@ -808,17 +817,6 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      if (!active && child.key === "normalCi" && run.conclusion !== "success") {
-        Object.assign(
-          policyChild,
-          await client.loadFlakeClassifications({
-            child: policyChild,
-            parentRunId: plan.parentRunId,
-            parentRunAttempt: plan.parentRunAttempt,
-            targetSha: plan.targetSha,
-          }),
-        );
-      }
       const passed = !active && terminalPolicyPass(policyChild);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
@@ -838,6 +836,138 @@ export async function inspectContinuation(plan, client, options = {}) {
     }),
   );
   return continuationStatus(children);
+}
+
+async function inspectQualificationStatus(plan, runId, client) {
+  const operationDeadline = createOperationDeadline();
+  let status;
+  let parent;
+  let jobs;
+  try {
+    status = await inspectContinuation(plan, client, { operationDeadline });
+    [parent, jobs] = await Promise.all([
+      client.getRun(runId, { operationDeadline }),
+      client.getParentJobs(runId, { operationDeadline }),
+    ]);
+  } catch (error) {
+    return {
+      ...(status ?? continuationStatus([])),
+      collectionComplete: false,
+      qualification: { state: "observation-unavailable", evidence: "unavailable" },
+      drain: {
+        status: "unknown",
+        conclusion: "",
+        activeRunIds: status?.active.map((child) => child.runId) ?? [],
+      },
+      decision: null,
+      candidate: { sha: plan.targetSha, ref: null, tipSha: null, state: "unknown" },
+      observationErrors: [
+        `GitHub observation unavailable (${classifyReleaseGhTransportError(error)})`,
+      ],
+      nextCommand: `pnpm frv watch --run ${runId} --once`,
+    };
+  }
+  if (String(parent.id) !== runId || parent.head_sha !== plan.workflowSha) {
+    throw new Error("status parent identity differs from the immutable execution plan");
+  }
+  const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
+  const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
+  const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
+  const drain = {
+    status: drainJob?.status ?? "unknown",
+    conclusion: drainJob?.conclusion ?? "",
+    activeRunIds: status.active.map((child) => child.runId),
+  };
+  const observationErrors = [];
+  if (parent.status === "completed" && !drainJob) {
+    observationErrors.push("Diagnostic Drain observation unavailable");
+  }
+  let decision;
+  try {
+    const artifact = tryReadReleaseDecisionArtifact(
+      { attempt: parent.run_attempt, headSha: parent.head_sha },
+      runId,
+      client.repository,
+    );
+    if (artifact) {
+      decision = validateReleaseStateArtifact(artifact, { executionPlan: plan }, "decision");
+    } else if (
+      parent.status === "completed" ||
+      currentJobs.some((job) => job.name === "Release Decision" && job.status === "completed")
+    ) {
+      observationErrors.push("Decision evidence unavailable");
+    }
+  } catch {
+    observationErrors.push("Decision evidence unavailable or invalid");
+  }
+  let evidence = "pending";
+  if (parent.status === "completed") {
+    evidence = "not-accepted";
+    if (parent.conclusion === "success") {
+      try {
+        const attempts = await freezeVerificationAttempts(
+          plan,
+          runId,
+          status,
+          client,
+          operationDeadline,
+        );
+        evidence = (await client.verifySeal(runId, plan, operationDeadline, attempts))
+          ? "accepted"
+          : "needs-refresh";
+      } catch {
+        evidence = "unavailable";
+        observationErrors.push("Seal verification unavailable; run frv verify for details");
+      }
+    }
+  }
+  const qualification = {
+    state:
+      evidence === "accepted"
+        ? "passed"
+        : evidence === "unavailable"
+          ? "observation-unavailable"
+          : decision && !["qualifying", "passed"].includes(decision.state)
+            ? "blocked"
+            : parent.status === "completed" || status.failed.length || status.missing.length
+              ? "blocked"
+              : "running",
+    evidence,
+  };
+  const ref =
+    plan.sourceAdmission?.targetContextRef ?? plan.qualificationInputs?.target_context_ref;
+  let candidate = { sha: plan.targetSha, ref: ref ?? null, tipSha: null, state: "unknown" };
+  if (ref && !/^[a-f0-9]{40}$/u.test(ref)) {
+    try {
+      const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+      const tip = await client.getRef(fullRef, { operationDeadline });
+      candidate = {
+        sha: plan.targetSha,
+        ref,
+        tipSha: tip.object.sha,
+        state: tip.object.sha === plan.targetSha ? "current" : "superseded",
+      };
+    } catch {
+      observationErrors.push("Candidate tip observation unavailable");
+    }
+  }
+  const nextCommand = `pnpm frv ${
+    status.active.length || parent.status !== "completed"
+      ? "watch"
+      : qualification.state === "blocked"
+        ? "continue --failed --dry-run"
+        : "verify"
+  } --run ${runId}`;
+  return {
+    ...status,
+    collectionComplete: observationErrors.length === 0,
+    qualification,
+    drain,
+    decision: decision ?? null,
+    candidate,
+    observationErrors,
+    nextCommand,
+  };
 }
 
 export function createClient(repository, dependencies = {}) {
@@ -868,10 +998,6 @@ export function createClient(repository, dependencies = {}) {
           .map((line) => JSON.parse(line))
       : [];
   };
-  const attemptJobs =
-    dependencies.getAttemptJobs ??
-    ((runId, runAttempt, options) =>
-      readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options));
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -907,15 +1033,21 @@ export function createClient(repository, dependencies = {}) {
   };
   return {
     repository,
-    loadFlakeClassifications(request) {
-      return loadFlakeClassifications({ ...request, repo: repository });
-    },
     getReleaseEvidenceClient() {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;
     },
-    getAttemptJobs(runId, runAttempt, options) {
-      return attemptJobs(runId, runAttempt, options);
+    getAttemptJobs:
+      dependencies.getAttemptJobs ??
+      ((runId, runAttempt, options) =>
+        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
+    getRef(fullRef, options) {
+      const ref = fullRef
+        .replace(/^refs\//u, "")
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/");
+      return apiJson(`git/ref/${ref}`, options);
     },
     getRun(runId, options) {
       return apiJson(`actions/runs/${runId}`, options);
@@ -940,7 +1072,6 @@ export function createClient(repository, dependencies = {}) {
       }
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
-    cancelRun: (runId) => rerun(runId, "cancel"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
     async getVariable(name) {
@@ -1013,6 +1144,7 @@ async function reconcileAttemptStarts(
   client,
   mutationResults,
   operationDeadline,
+  onStarted,
 ) {
   const reconcileDeadline = Math.min(
     operationDeadline,
@@ -1042,6 +1174,7 @@ async function reconcileAttemptStarts(
       const expectedAttempt = minimumAttempts.get(runId);
       const observedAttempt = controllerRunAttempt(run, sourceAttempt, expectedAttempt);
       if (observedAttempt === expectedAttempt) {
+        onStarted(run);
         pending.delete(runId);
       }
     }
@@ -1457,13 +1590,50 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
   }
 }
 
-export async function continueFailed(plan, rootRunId, client, options = {}) {
+export async function continueFailed(plan, rootRunId, reader, options = {}) {
   const operationDeadline =
     options.operationDeadline === undefined
       ? createOperationDeadline()
       : validateOperationDeadline(options.operationDeadline);
   const ownedAttempts = new Map();
   const target = resolveRerunTarget(plan, options);
+  const runKeys = new Map(selectedChildren(plan).map((child) => [child.runId, child.key]));
+  runKeys.set(String(rootRunId), "parent");
+  const reported = new Map();
+  const log = options.log ?? console.error;
+  const report = (run, started = false) => {
+    const key = runKeys.get(String(run.id));
+    if (!key) {
+      return;
+    }
+    const message = formatRunProgress(key, run, started ? "started" : undefined);
+    const previous = reported.get(String(run.id));
+    const now = Date.now();
+    if (
+      started ||
+      previous?.message !== message ||
+      (run.status !== "completed" && now - previous.at >= 5 * 60_000)
+    ) {
+      log(
+        formatProgressEvent("continue", {
+          message: !started && run.status !== "completed" ? `waiting for ${message}` : message,
+          url: `https://github.com/${client.repository ?? DEFAULT_REPOSITORY}/actions/runs/${run.id}/attempts/${run.run_attempt}`,
+        }),
+      );
+      if (!started) {
+        reported.set(String(run.id), { message, at: now });
+      }
+    }
+  };
+  const getRun = reader.getRun.bind(reader);
+  const client = {
+    ...reader,
+    getRun: async (...args) => {
+      const run = await getRun(...args);
+      report(run);
+      return run;
+    },
+  };
   const initial = await preflightContinuation(
     plan,
     rootRunId,
@@ -1476,6 +1646,9 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   const reruns = [];
   let status;
   while (true) {
+    for (const producer of artifactProducers) {
+      runKeys.set(producer.runId, `artifact:${producer.request.stage}`);
+    }
     status = await inspectRecovery(plan, artifactProducers, client, { operationDeadline });
     for (const child of status.children) {
       const expectedAttempt = ownedAttempts.get(child.runId);
@@ -1602,6 +1775,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
           client,
           mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
           operationDeadline,
+          (run) => report(run, true),
         );
       }
       const admissionFailure = mutationResults.find(
@@ -1730,6 +1904,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       client,
       mutationResults,
       operationDeadline,
+      (run) => report(run, true),
     );
     ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
@@ -2350,6 +2525,9 @@ function readWatchState(path, repository, parentRunId) {
   return {
     children: saved?.children ?? {},
     parentRunId,
+    nextCheckAt: saved?.nextCheckAt ?? 0,
+    rateLimitFailures: saved?.rateLimitFailures ?? 0,
+    failedReadFingerprint: saved?.failedReadFingerprint ?? "",
     reported: new Set(saved?.reported),
     repository,
   };
@@ -2362,20 +2540,23 @@ function writeWatchState(path, state) {
   renameSync(temporary, path);
 }
 
+function formatRunProgress(owner, run, state) {
+  return `${owner}${owner === "parent" ? "" : " run"} ${run.id} attempt ${run.run_attempt} ${state ?? (run.status === "completed" ? `completed ${run.conclusion}` : run.status)}`;
+}
+
+function formatProgressEvent(command, event) {
+  return `[frv ${command}] ${new Date().toISOString().slice(11, 19)}Z ${event.message}${event.url ? ` ${event.url}` : ""}`;
+}
+
 function failedJobEvent(owner, job, attempt) {
   if (job.status !== "completed" || !FAILED_JOB_CONCLUSIONS.has(String(job.conclusion))) {
     return undefined;
   }
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
-  const advisory =
-    owner === WINDOWS_NODE_CI_ADVISORY.child &&
-    WINDOWS_NODE_CI_ADVISORY.jobNamePattern.test(job.name)
-      ? ` [advisory ${WINDOWS_NODE_CI_ADVISORY.id}]`
-      : "";
   return [
     `job:${job.id}`,
-    `${owner} job "${job.name}" ${job.conclusion}${advisory} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
+    `${owner} job "${job.name}" ${job.conclusion} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }
@@ -2399,9 +2580,17 @@ async function pollRelease(state, client, pending, readOptions) {
   };
   // Transient GitHub failures, including HTML 5xx bodies, never become job results.
   const read = async (label, operation) => {
+    if (state.nextCheckAt > Date.now()) {
+      return undefined;
+    }
     try {
       return await operation();
     } catch (error) {
+      const retryAt = releaseGhRateLimitRetryAt(error, Date.now(), state.rateLimitFailures);
+      if (retryAt !== undefined) {
+        state.nextCheckAt = Math.max(state.nextCheckAt, retryAt);
+        state.rateLimitFailures += 1;
+      }
       const text = String(error?.stderr ?? error?.message ?? error);
       if (classifyReleaseGhTransportError(error) === "hard" && !/HTTP 404\b/u.test(text)) {
         throw error;
@@ -2418,7 +2607,7 @@ async function pollRelease(state, client, pending, readOptions) {
   const parentDone = parent.status === "completed";
   report(
     `run:${parentRunId}:${parent.run_attempt}:${parentDone ? "completed" : "active"}`,
-    `parent ${parentRunId} attempt ${parent.run_attempt} ${parentDone ? `completed ${parent.conclusion}` : parent.status}`,
+    formatRunProgress("parent", parent),
     parent.html_url,
   );
   const dispatchKeys = new Map([
@@ -2476,7 +2665,7 @@ async function pollRelease(state, client, pending, readOptions) {
       const done = run.status === "completed";
       report(
         `run:${runId}:${current}:${done ? "completed" : "active"}`,
-        `${child.key} run ${runId} attempt ${current} ${done ? `completed ${run.conclusion}` : run.status}`,
+        formatRunProgress(child.key, run),
         run.html_url,
       );
       // Earlier attempts are final; scan each once so a late start still reports them.
@@ -2537,15 +2726,29 @@ export async function watchRelease(parentRunId, client, options = {}) {
   const state = readWatchState(statePath, repository, String(parentRunId));
   const pending = new Set();
   while (true) {
-    const { complete, events, failedReads } = await pollRelease(state, client, pending, {
-      operationDeadline,
-    });
+    const { complete, events, failedReads } =
+      state.nextCheckAt > Date.now()
+        ? { complete: false, events: [], failedReads: [] }
+        : await pollRelease(state, client, pending, { operationDeadline });
+    if (failedReads.length > 0) {
+      const fingerprint = `${failedReads.join(", ")}:${state.nextCheckAt}`;
+      if (state.failedReadFingerprint !== fingerprint) {
+        events.push({
+          message:
+            state.nextCheckAt > Date.now()
+              ? `GitHub rate limited (${failedReads.join(", ")}); next check at ${new Date(state.nextCheckAt).toISOString()}`
+              : `GitHub reads failed (${failedReads.join(", ")}); retrying next poll`,
+        });
+        state.failedReadFingerprint = fingerprint;
+      }
+    } else if (state.nextCheckAt <= Date.now()) {
+      state.nextCheckAt = 0;
+      state.rateLimitFailures = 0;
+      state.failedReadFingerprint = "";
+    }
     writeWatchState(statePath, state);
     for (const event of events) {
       emit(event);
-    }
-    if (failedReads.length > 0) {
-      emit({ message: `GitHub reads failed (${failedReads.join(", ")}); retrying next poll` });
     }
     if (complete) {
       emit({ message: `parent ${parentRunId} and every dispatched child are terminal` });
@@ -2555,7 +2758,7 @@ export async function watchRelease(parentRunId, client, options = {}) {
     if (options.once || remaining < 1) {
       return { complete, statePath };
     }
-    await sleep(Math.min(intervalMs, remaining));
+    await sleep(Math.min(Math.max(intervalMs, state.nextCheckAt - Date.now()), remaining));
   }
 }
 
@@ -2572,9 +2775,28 @@ function print(value, json) {
     console.log(JSON.stringify(value, null, 2));
     return;
   }
+  if (value.qualification) {
+    console.log(
+      `qualification: ${value.qualification.state}; evidence: ${value.qualification.evidence}`,
+    );
+    console.log(
+      `drain: ${value.drain.status} ${value.drain.conclusion}; active children: ${value.drain.activeRunIds.join(", ") || "none"}`,
+    );
+    console.log(
+      `workloads: ${value.failed.length} failed, ${value.active.length} active, ${value.missing.length} missing`,
+    );
+    console.log(`candidate: ${value.candidate.sha}; tip: ${value.candidate.state}`);
+    if (value.decision) {
+      console.log(formatReleaseStateOutcome(value.decision));
+    }
+    for (const error of value.observationErrors) {
+      console.log(`observation: ${error}`);
+    }
+    console.log(`next: ${value.nextCommand}`);
+  }
   for (const child of value.status?.children ?? value.children ?? []) {
     console.log(
-      `${child.key}: ${child.status} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
+      `${child.key}: ${child.status}${child.conclusion && child.conclusion !== "success" ? ` (${child.conclusion})` : ""} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
     );
   }
   for (const run of value.rerun ?? []) {
@@ -2628,7 +2850,7 @@ async function main() {
         console.log(
           options.json
             ? JSON.stringify({ at: new Date().toISOString(), ...event })
-            : `[frv watch] ${new Date().toISOString().slice(11, 19)}Z ${event.message}${event.url ? ` ${event.url}` : ""}`,
+            : formatProgressEvent("watch", event),
         ),
       intervalMs: options.intervalMs,
       once: options.once,
@@ -2653,7 +2875,7 @@ async function main() {
   }
   const plan = await loadPlan(options);
   if (options.command === "status") {
-    print(await inspectContinuation(plan, client), options.json);
+    print(await inspectQualificationStatus(plan, options.runId, client), options.json);
     return;
   }
   const result = await continueFailed(plan, options.runId, client, {

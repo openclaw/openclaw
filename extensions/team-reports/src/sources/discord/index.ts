@@ -41,7 +41,7 @@ const parse = createResponseParser(
 
 export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
   return {
-    async collect(config, window, _roster, emit) {
+    async collect(config, window, emit) {
       const status: SourceStatus = {
         ok: true,
         warnings: [],

@@ -7,11 +7,12 @@ import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 
 const sourceRoot = process.cwd();
@@ -65,7 +66,7 @@ export function runFixture(
   privateQa = false,
   env: NodeJS.ProcessEnv = {},
 ) {
-  return command.run(process.execPath, args, fixtureOptions(root, privateQa, env));
+  return command.run(requireNodeTool("node"), args, fixtureOptions(root, privateQa, env));
 }
 
 export function runFixtureModule(
@@ -91,7 +92,7 @@ function readConfigEntries(
   groups: readonly string[],
 ): ConfigEntries {
   const result = spawnSync(
-    process.execPath,
+    requireNodeTool("node"),
     [
       "--input-type=module",
       "--eval",
@@ -158,7 +159,7 @@ export function createFixture(groups: readonly string[], root: string) {
       "junction",
     );
   }
-  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
+  materializeDeclarationPackages(root, groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -179,8 +180,11 @@ export function createFixture(groups: readonly string[], root: string) {
   fs.mkdirSync(path.join(root, "scripts/lib"));
   for (const script of [
     "build-all.mts",
+    "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
+    "run-node-watch-paths.mts",
+    "runtime-postbuild-shared.mjs",
     "windows-cmd-helpers.mjs",
     "write-plugin-sdk-entry-dts.ts",
     "write-unified-entry-dts.ts",
@@ -196,6 +200,8 @@ export function createFixture(groups: readonly string[], root: string) {
     recursive: true,
   });
   // Keep the generator's source owners and import.meta.url lookups inside the fixture.
+  // Plain paths are deliberate: owner edits do not select these suites in product PRs
+  // (see "Declaration-fixture owner selection" in .agents/skills/openclaw-ci-limits).
   const runtimeEntryOwners = new Set([
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",
@@ -207,6 +213,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
     "src/shared/pid-alive.ts",
+    "src/shared/worker-bundle-hash.ts",
     "src/infra/errno.ts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
@@ -234,6 +241,7 @@ export function createFixture(groups: readonly string[], root: string) {
   // The full config resolves these runtime inputs before selecting declaration groups.
   for (const source of [
     "src/worker/worker-deploy-browser-runtime.ts",
+    "src/agents/utils/syntax-highlight.ts",
     "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
@@ -246,9 +254,9 @@ export function createFixture(groups: readonly string[], root: string) {
   ]) {
     write(source, "export {};\n");
   }
-  if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
-    // Exercise every real extension partition, even in the small compiler fixture.
-    for (const id of ["fixture-a", "fixture-b", "fixture-c", "fixture-d", "fixture-e"]) {
+  if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
+    // Exercise shared contracts across multiple plugin entries.
+    for (const id of ["fixture-a", "fixture-b"]) {
       write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
       write(
         `extensions/${id}/package.json`,

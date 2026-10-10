@@ -58,7 +58,6 @@ function clockToMs(day: string, clock: string): number | null {
   return date.getTime();
 }
 
-/** Strips code fences and extracts the outermost JSON array/object from model text. */
 function extractJsonPayload(raw: string): string {
   const cleaned = raw.replaceAll("```json", "").replaceAll("```", "").trim();
   const firstBracket = cleaned.search(/[[{]/);
@@ -218,6 +217,12 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
       };
     }
     if (overlapMs > 0) {
+      if (current.endMs <= previous.endMs) {
+        return {
+          ok: false,
+          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+        };
+      }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
       normalized.push({ ...current, startMs: previous.endMs });
     } else {
@@ -227,7 +232,7 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
   return { ok: true, drafts: normalized };
 }
 
-/** Sub-minute slack so minute-rounded model times do not fail coverage checks. */
+/** Slack so minute-rounded model times do not fail coverage checks. */
 const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
 
 function formatClockForError(ms: number): string {
@@ -247,14 +252,12 @@ export function validateCardCoverage(params: {
   requiredSpans: Array<{ startMs: number; endMs: number }>;
   windowStartMs: number;
   windowEndMs: number;
-  toleranceMs?: number;
 }): { ok: true } | { ok: false; error: string } {
-  const tolerance = params.toleranceMs ?? COVERAGE_TOLERANCE_MS;
   const problems: string[] = [];
   for (const draft of params.drafts) {
     if (
-      draft.startMs < params.windowStartMs - tolerance ||
-      draft.endMs > params.windowEndMs + tolerance
+      draft.startMs < params.windowStartMs - COVERAGE_TOLERANCE_MS ||
+      draft.endMs > params.windowEndMs + COVERAGE_TOLERANCE_MS
     ) {
       problems.push(
         `Card ${formatClockForError(draft.startMs)}-${formatClockForError(draft.endMs)} lies outside the revision window ${formatClockForError(params.windowStartMs)}-${formatClockForError(params.windowEndMs)}.`,
@@ -268,15 +271,15 @@ export function validateCardCoverage(params: {
       if (interval.endMs <= cursor) {
         continue;
       }
-      if (interval.startMs > cursor + tolerance) {
+      if (interval.startMs > cursor + COVERAGE_TOLERANCE_MS) {
         break;
       }
       cursor = Math.max(cursor, interval.endMs);
-      if (cursor >= span.endMs - tolerance) {
+      if (cursor >= span.endMs - COVERAGE_TOLERANCE_MS) {
         break;
       }
     }
-    if (cursor < span.endMs - tolerance) {
+    if (cursor < span.endMs - COVERAGE_TOLERANCE_MS) {
       problems.push(
         `Time ${formatClockForError(Math.max(cursor, span.startMs))}-${formatClockForError(span.endMs)} from the previous timeline is not covered; do not drop existing cards or observed time.`,
       );
@@ -288,7 +291,6 @@ export function validateCardCoverage(params: {
   return { ok: true };
 }
 
-/** Union of the revision window: previous draft cards plus the new batch range. */
 export function revisionWindow(params: {
   batchStartMs: number;
   batchEndMs: number;
@@ -303,7 +305,6 @@ export function revisionWindow(params: {
   return { startMs, endMs };
 }
 
-/** Groups pending frames into one batch window, splitting on large gaps. */
 export function selectBatchFrames(params: {
   frames: Array<{ id: number; capturedAtMs: number }>;
   /** Close an in-progress window immediately instead of waiting for elapse. */
@@ -363,7 +364,6 @@ export function selectBatchFrames(params: {
   };
 }
 
-/** Picks the frame closest to a card's midpoint as its keyframe. */
 export function pickKeyframeId(
   card: { startMs: number; endMs: number },
   frames: Array<{ id: number; capturedAtMs: number }>,

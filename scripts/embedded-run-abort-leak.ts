@@ -18,9 +18,10 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { setImmediate, setTimeout } from "node:timers/promises";
 import * as v8 from "node:v8";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { coerceErrorMessage, toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { parseNonNegativeInt, parsePositiveInt } from "./lib/numeric-options.mjs";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
@@ -235,14 +236,10 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
 
 async function settleAndGc(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
-    await new Promise<void>((r) => {
-      setImmediate(r);
-    });
+    await setImmediate();
     globalThis.gc?.();
   }
-  await new Promise<void>((r) => {
-    setTimeout(r, 100);
-  });
+  await setTimeout(100);
   globalThis.gc?.();
 }
 
@@ -276,7 +273,7 @@ async function main(): Promise<void> {
   try {
     opts = parseArgs(process.argv.slice(2));
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    fail(coerceErrorMessage(error));
   }
   if (opts.mode === "production") {
     productionAbortable = (await import("../src/agents/embedded-agent-runner/run/abortable.js"))
@@ -323,8 +320,6 @@ async function main(): Promise<void> {
   }
 
   const rssGrowthMb = (final.rssBytes - baseline.rssBytes) / 1024 / 1024;
-  // Tracked retention: how many iter-allocated transcripts are STILL alive
-  // (have not been finalized). Lower is better.
   const trackedRetention = final.totalIters - final.trackedFinalized;
 
   const durationSec = ((Date.now() - startedAt) / 1000).toFixed(1);

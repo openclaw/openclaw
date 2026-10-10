@@ -1,4 +1,5 @@
 import { MEETING_AUDIO_BRIDGE_SOURCE } from "./audio-bridge-source.js";
+import { createMeetingStatusPreludeFragments } from "./status-prejoin-fragments.js";
 
 type MeetingStatusPreludeParams = {
   allowMicrophone: boolean;
@@ -15,10 +16,14 @@ type MeetingStatusPreludeParams = {
   waitForInCallMs: number;
 };
 
+type MeetingStatusPreludeFragment =
+  | string
+  | ((sources: ReturnType<typeof createMeetingStatusPreludeFragments>) => string);
+
 type MeetingStatusPreludeSourceOptions = {
   controlLookupSource: string;
-  lifecycleSource: string;
-  manualActionSource: string;
+  lifecycleSource: MeetingStatusPreludeFragment;
+  manualActionSource: MeetingStatusPreludeFragment;
   platform: {
     displayName: string;
     globals: {
@@ -42,6 +47,12 @@ export function createMeetingStatusPreludeSource(
   const captionsGlobal = JSON.stringify(options.platform.globals.captions);
   const meetingGlobal = JSON.stringify(options.platform.globals.meeting);
   const transcriptMaxLines = options.transcriptMaxLines ?? 500;
+  const fragments = createMeetingStatusPreludeFragments({
+    ...options.platform,
+    guestName: params.guestName,
+  });
+  const resolveSource = (source: MeetingStatusPreludeFragment) =>
+    typeof source === "function" ? source(fragments) : source;
   return `async () => {
   ${params.pageIdentitySource}
   ${options.setupSource ?? ""}
@@ -192,16 +203,6 @@ export function createMeetingStatusPreludeSource(
     else delete window[${audioOutputsGlobal}];
   };
   const adoptAudioBridgeSourcesForSession = () => suspendOwnedAudioBridges(true);
-  const retireOwnedCaptions = () => {
-    const active = window[${captionsGlobal}];
-    const owned = Boolean(
-      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
-    );
-    if (!owned) return;
-    if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
-    active.observer?.disconnect?.();
-    delete window[${captionsGlobal}];
-  };
   const finalizeCaptionState = (active) => {
     if (!active) return;
     if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
@@ -300,9 +301,9 @@ export function createMeetingStatusPreludeSource(
   if (canMutateSession && allowSessionAdoption && previousRemoteCapture && previousRemoteCapture.sessionId !== sessionId) {
     await previousRemoteCapture.stop();
   }
-  ${options.lifecycleSource}
+  ${resolveSource(options.lifecycleSource)}
   const micMuted = microphoneState === "off" ? true : microphoneState === "on" ? false : undefined;
   const cameraOff = cameraState === "off" ? true : cameraState === "on" ? false : undefined;
-  ${options.manualActionSource}
+  ${resolveSource(options.manualActionSource)}
 `;
 }

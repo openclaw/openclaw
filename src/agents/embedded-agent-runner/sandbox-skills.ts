@@ -5,14 +5,19 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
+import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
+import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type {
   SkillEligibilityContext,
+  ExplicitSkillSelection,
   SkillSnapshot,
   SkillUsagePath,
   SkillEntry,
 } from "../../skills/types.js";
+import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -37,14 +42,6 @@ function containerJoin(root: string, ...parts: string[]): string {
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
 }
 
-function pathEscapesRoot(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  );
-}
-
 function mapPathFromWorkspaceToContainer(params: {
   filePath: string | undefined;
   sourceWorkspaceDir: string;
@@ -57,7 +54,7 @@ function mapPathFromWorkspaceToContainer(params: {
     path.resolve(params.sourceWorkspaceDir),
     path.resolve(params.filePath),
   );
-  if (pathEscapesRoot(relativePath)) {
+  if (isPathRelativeEscape(relativePath)) {
     return params.filePath;
   }
   if (!relativePath) {
@@ -126,42 +123,69 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
-    const skillUsagePaths =
-      skillsWorkspaceDir === skillsPromptWorkspaceDir
-        ? params.sandbox.skillUsagePaths
-        : params.sandbox.skillUsagePaths?.map((entry) => ({
-            ...entry,
-            readPath:
-              mapPathFromWorkspaceToContainer({
+    const snapshot = params.skillsSnapshot;
+    const sourceReadPathBySkillName = indexFirstByKey(
+      snapshot?.resolvedSkills ?? [],
+      (skill) => skill.name,
+    );
+    const skillUsagePaths = params.sandbox.skillUsagePaths?.map((entry) => {
+      const sourceSkill = sourceReadPathBySkillName.get(entry.skillName);
+      const catalogSkill = snapshot?.skills.find((skill) => skill.name === entry.skillName);
+      const sourceReadPath = sourceSkill
+        ? resolveSkillReadPath(sourceSkill)
+        : catalogSkill && catalogSkill.gatewayFilePath === undefined
+          ? resolveSkillReadPath({ name: entry.skillName, filePath: entry.skillFile }, "workspace")
+          : undefined;
+      return {
+        ...entry,
+        readPath:
+          skillsWorkspaceDir === skillsPromptWorkspaceDir
+            ? entry.readPath
+            : (mapPathFromWorkspaceToContainer({
                 filePath: entry.readPath,
                 sourceWorkspaceDir: skillsWorkspaceDir,
                 targetWorkspaceDir: skillsPromptWorkspaceDir,
-              }) ?? entry.readPath,
-          }));
+              }) ?? entry.readPath),
+        ...(sourceReadPath && sourceReadPath !== entry.skillFile ? { sourceReadPath } : {}),
+      };
+    });
     // An explicit empty snapshot excludes instructions; it has no host paths to remap.
     let selectedSnapshot =
-      params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
+      params.skillsSnapshot &&
+      !params.skillsSnapshot.prompt.trim() &&
+      !params.skillsSnapshot.discoverySkills?.length
         ? params.skillsSnapshot
         : undefined;
-    if (params.skillsSnapshot?.librarySelections?.length) {
+    if (
+      snapshot &&
+      (snapshot.librarySelections?.length || (snapshot.discoverySkills && skillUsagePaths?.length))
+    ) {
       const usageBySkillName = indexFirstByKey(skillUsagePaths ?? [], (usage) => usage.skillName);
-      const resolvedSkills = params.skillsSnapshot.resolvedSkills?.map((skill) => {
+      const mapSkill = (skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number]) => {
         const materialized = usageBySkillName.get(skill.name);
         if (!materialized) {
           throw new Error(`Selected skill ${skill.name} was not delivered to the sandbox.`);
         }
-        return {
+        return clearSkillFileHost({
           ...skill,
           filePath: materialized.readPath,
           baseDir: path.posix.dirname(materialized.readPath),
-        };
-      });
+        });
+      };
+      const resolvedSkills = snapshot.resolvedSkills
+        ?.filter((skill) => snapshot.librarySelections?.length || usageBySkillName.has(skill.name))
+        .map(mapSkill);
+      // Discovery cannot advertise host resources absent from this sandbox's delivery.
+      const discoverySkills = snapshot.discoverySkills
+        ?.filter((skill) => usageBySkillName.has(skill.name))
+        .map(mapSkill);
       if (!resolvedSkills) {
         throw new Error("Selected skill snapshot must be hydrated before sandbox delivery.");
       }
       selectedSnapshot = {
-        ...params.skillsSnapshot,
+        ...snapshot,
         resolvedSkills,
+        discoverySkills,
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       };
     }
@@ -188,10 +212,46 @@ export function resolveSandboxSkillRuntimeInputs(params: {
 /** Rewrites host-generated explicit skill references to the prepared runtime's exact copies. */
 export function remapSkillReferencePaths(
   text: string,
-  paths?: readonly Pick<SkillUsagePath, "skillFile" | "readPath">[],
+  paths?: readonly Pick<SkillUsagePath, "skillFile" | "readPath" | "sourceReadPath">[],
 ): string {
-  return (paths ?? []).reduce(
-    (result, item) => result.replaceAll(item.skillFile, item.readPath),
-    text,
+  let result = text;
+  const items = paths ?? [];
+  for (const item of items) {
+    if (item.sourceReadPath) {
+      result = result.replaceAll(
+        item.sourceReadPath.slice(0, -"SKILL.md".length),
+        item.readPath.slice(0, -"SKILL.md".length),
+      );
+    }
+  }
+  for (const item of indexFirstByKey(items, (entry) => entry.skillFile).values()) {
+    const matches = items.filter((candidate) => candidate.skillFile === item.skillFile);
+    const physicalTarget =
+      matches.find((candidate) => candidate.sourceReadPath === undefined) ??
+      (matches.length === 1 ? matches[0] : undefined);
+    if (physicalTarget) {
+      result = result.replaceAll(
+        item.skillFile.slice(0, -"SKILL.md".length),
+        physicalTarget.readPath.slice(0, -"SKILL.md".length),
+      );
+    }
+  }
+  return result;
+}
+
+export function remapExplicitSkillSelectionPath(
+  selection: ExplicitSkillSelection,
+  paths?: readonly Pick<SkillUsagePath, "skillFile" | "readPath" | "sourceReadPath">[],
+): string {
+  const fileHost = resolveExplicitSkillSelectionFileHost(selection);
+  const match = paths?.find(
+    (item) =>
+      item.skillFile === selection.path &&
+      (fileHost === "workspace"
+        ? item.sourceReadPath !== undefined
+        : fileHost === "gateway"
+          ? item.sourceReadPath === undefined
+          : true),
   );
+  return match?.readPath ?? selection.path;
 }

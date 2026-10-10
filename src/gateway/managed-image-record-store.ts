@@ -10,10 +10,10 @@ import { captureChannelReadAuthority } from "../shared/channel-read-authority.js
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { ManagedImageRecordMutation } from "./managed-image-record-store.kernel.js";
 import type {
   ManagedImageRecord,
   ManagedImageRecordAttachment,
-  ManagedImageRecordMutation,
   ManagedImageRecordEntry,
 } from "./managed-image-record-store.types.js";
 
@@ -168,28 +168,23 @@ export async function attachManagedImageRecordsToMessage(params: {
   return result;
 }
 
-export async function claimManagedImageRecordCleanupIfCurrent(
-  planned: ManagedImageRecord,
-  stateDir?: string,
-  context = captureManagedImageContext(stateDir),
-): Promise<boolean> {
-  const result = await mutateManagedImageRecords(
-    [{ type: "managedImages.claimCleanup", input: planned }],
-    context,
-  );
-  context.admission.assertCurrent();
-  return result;
+function createManagedImageCleanup(
+  type: "managedImages.claimCleanup" | "managedImages.deleteClaimed",
+) {
+  return async (
+    planned: ManagedImageRecord,
+    stateDir?: string,
+    context = captureManagedImageContext(stateDir),
+  ): Promise<boolean> => {
+    const result = await mutateManagedImageRecords([{ type, input: planned }], context);
+    context.admission.assertCurrent();
+    return result;
+  };
 }
 
-export async function deleteClaimedManagedImageRecord(
-  planned: ManagedImageRecord,
-  stateDir?: string,
-  context = captureManagedImageContext(stateDir),
-): Promise<boolean> {
-  const result = await mutateManagedImageRecords(
-    [{ type: "managedImages.deleteClaimed", input: planned }],
-    context,
-  );
-  context.admission.assertCurrent();
-  return result;
-}
+export const claimManagedImageRecordCleanupIfCurrent = createManagedImageCleanup(
+  "managedImages.claimCleanup",
+);
+export const deleteClaimedManagedImageRecord = createManagedImageCleanup(
+  "managedImages.deleteClaimed",
+);

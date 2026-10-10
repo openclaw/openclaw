@@ -4,7 +4,6 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import type { ReleaseAsset } from "./install-signal-cli.js";
 
 type CapturedArchiveLimits = {
   maxArchiveBytes?: number;
@@ -62,16 +61,10 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
   };
 });
 
-const {
-  downloadToFile,
-  extractSignalCliArchive,
-  installSignalCli,
-  installSignalCliFromRelease,
-  looksLikeArchive,
-  pickAsset,
-} = await import("./install-signal-cli.js");
+const { downloadToFile, extractSignalCliArchive, installSignalCli, installSignalCliFromRelease } =
+  await import("./install-signal-cli.js");
 
-const SAMPLE_ASSETS: ReleaseAsset[] = [
+const SAMPLE_ASSETS = [
   {
     name: "signal-cli-0.13.14-Linux-native.tar.gz",
     browser_download_url: "https://example.com/linux-native.tar.gz",
@@ -140,13 +133,6 @@ afterEach(() => {
   Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
 });
 
-function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
-  if (!asset) {
-    throw new Error(`expected release asset for ${label}`);
-  }
-  return asset;
-}
-
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -165,76 +151,79 @@ async function expectTempDownloadDirMissing(): Promise<void> {
   await expectPathMissing(path.dirname(tmpPath));
 }
 
-describe("looksLikeArchive", () => {
-  it("recognises .tgz", () => {
-    expect(looksLikeArchive("foo.tgz")).toBe(true);
-  });
-});
+describe("installSignalCli asset selection", () => {
+  it.each([
+    { assets: SAMPLE_ASSETS.toReversed(), expected: "https://example.com/linux-native.tar.gz" },
+    {
+      assets: [
+        { name: "other.zip", browser_download_url: "https://example.com/other.zip" },
+        { name: "signal-cli-linux.tgz", browser_download_url: "https://example.com/linux.tgz" },
+      ],
+      expected: "https://example.com/linux.tgz",
+    },
+    {
+      assets: [
+        { name: "signal-cli.zip.asc", browser_download_url: "https://example.com/signature" },
+        { name: "signal-cli.tgz", browser_download_url: "https://example.com/fallback.tgz" },
+      ],
+      expected: "https://example.com/fallback.tgz",
+    },
+  ])("downloads the selected Linux archive: $expected", async ({ assets, expected }) => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(okDownloadResponse(JSON.stringify({ tag_name: "v0.0.0", assets })))
+      .mockRejectedValueOnce(new Error("download stopped"));
 
-describe("pickAsset", () => {
-  describe("linux", () => {
-    it("selects the Linux-native asset on x64", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
-      expect(result.name).toContain("Linux-native");
-      expect(result.name).toMatch(/\.tar\.gz$/);
-    });
-
-    it("returns undefined on arm64 (triggers brew fallback)", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "arm64");
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe("darwin", () => {
-    it("selects the macOS-native asset", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "arm64"), "darwin arm64");
-      expect(result.name).toContain("macOS-native");
-    });
-
-    it("does not fall back to Linux client archives when macOS assets are absent", () => {
-      const currentUpstreamAssets: ReleaseAsset[] = [
-        {
-          name: "signal-cli-0.14.5-Linux-client.tar.gz",
-          browser_download_url: "https://example.com/linux-client.tar.gz",
-        },
-        {
-          name: "signal-cli-0.14.5-Linux-native.tar.gz",
-          browser_download_url: "https://example.com/linux-native.tar.gz",
-        },
-        {
-          name: "signal-cli-0.14.5.tar.gz",
-          browser_download_url: "https://example.com/jvm.tar.gz",
-        },
-      ];
-
-      expect(pickAsset(currentUpstreamAssets, "darwin", "arm64")).toBeUndefined();
-    });
+    await expect(installSignalCli(createRuntimeSpies())).rejects.toThrow("download stopped");
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: expected }),
+    );
+    await expectTempDownloadDirMissing();
   });
 
-  describe("win32", () => {
-    it("selects the Windows-native asset", () => {
-      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "win32", "x64"), "win32 x64");
-      expect(result.name).toContain("Windows-native");
-      expect(result.name).toMatch(/\.zip$/);
+  it("rejects a release with only signatures or incomplete assets", async () => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      okDownloadResponse(
+        JSON.stringify({
+          tag_name: "v0.0.0",
+          assets: [
+            { name: "signal-cli.tar.gz" },
+            { browser_download_url: "https://example.com/file.tar.gz" },
+            { name: "signal-cli.tgz.asc", browser_download_url: "https://example.com/signature" },
+          ],
+        }),
+      ),
+    );
+    await expect(installSignalCli(createRuntimeSpies())).resolves.toEqual({
+      ok: false,
+      error: "No compatible release asset found for this platform.",
     });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
   });
 
-  describe("edge cases", () => {
-    it("skips assets with missing name or url", () => {
-      const partial: ReleaseAsset[] = [
-        { name: "signal-cli.tar.gz" },
-        { browser_download_url: "https://example.com/file.tar.gz" },
-      ];
-      expect(pickAsset(partial, "linux", "x64")).toBeUndefined();
+  it.each([
+    ["linux", "arm64"],
+    ["darwin", "arm64"],
+    ["freebsd", "x64"],
+  ] as const)("uses Homebrew on %s/%s instead of release archives", async (platform, arch) => {
+    setProcessPlatform(platform, arch);
+    resolveBrewExecutableMock.mockReturnValue(undefined);
+    await expect(installSignalCli(createRuntimeSpies())).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Install Homebrew"),
     });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
 
-    it("falls back to first archive for unknown platform", () => {
-      const result = requireAsset(
-        pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64"),
-        "unknown platform",
-      );
-      expect(result.name).toMatch(/\.tar\.gz$/);
+  it("rejects unsupported Windows installs before fetching assets", async () => {
+    setProcessPlatform("win32", "x64");
+    await expect(installSignalCli(createRuntimeSpies())).resolves.toEqual({
+      ok: false,
+      error: "Signal CLI auto-install is not supported on Windows yet.",
     });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });
 

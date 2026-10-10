@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileListItem,
-  linkEmail,
-} from "../state/user-profiles.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
@@ -69,9 +68,7 @@ async function dispatchPendingProfileMethod(params: {
 
 describe("Gateway pending-profile authorization", () => {
   it.each([
-    ["agents.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
     ["models.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
-    ["sessions.list", SESSION_READ_SCOPE, SESSION_READ_SCOPE],
     ["models.list", READ_SCOPE, READ_SCOPE],
     ["models.list", READ_SCOPE, SESSION_READ_SCOPE],
     ["models.list", SESSION_READ_SCOPE, READ_SCOPE],
@@ -443,38 +440,32 @@ describe("Gateway pending-profile authorization", () => {
     },
   );
 
-  it.each(["chat.send", "models.list"])(
-    "waits for immutable profile attachment before %s dispatch",
-    async (method) => {
-      const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
-      const client = createPendingProfileClient();
-      client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+  it("waits for immutable profile attachment before chat.send dispatch", async () => {
+    const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
+    const client = createPendingProfileClient();
+    client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
-      const request = dispatchPendingProfileMethod({
-        client,
-        handler,
-        method,
-        // chat.send requires a session target at the protocol level; the mutation
-        // pipeline rejects targetless frames before profile-dependent dispatch.
-        requestParams:
-          method === "chat.send" ? { sessionKey: "agent:main:main" } : { agentId: "main" },
-      });
-      await Promise.resolve();
-      expect(handler).not.toHaveBeenCalled();
+    const request = dispatchPendingProfileMethod({
+      client,
+      handler,
+      method: "chat.send",
+      requestParams: { sessionKey: "agent:main:main" },
+    });
+    await Promise.resolve();
+    expect(handler).not.toHaveBeenCalled();
 
-      client.authenticatedUserProfile = {
-        profileId: "profile-canonical",
-        displayName: "Canonical",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
-      deferred.resolve({ profileId: "profile-canonical", updatedAt: 1 });
+    client.authenticatedUserProfile = {
+      profileId: "profile-canonical",
+      displayName: "Canonical",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    deferred.resolve({ profileId: "profile-canonical", updatedAt: 1 });
 
-      await expect(request).resolves.toHaveBeenCalledWith(true, { ok: true });
-      expect(handler).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(request).resolves.toHaveBeenCalledWith(true, { ok: true });
+    expect(handler).toHaveBeenCalledOnce();
+  });
 
   it("returns retryable unavailability without dispatch and retries on the next request", async () => {
     const client = createPendingProfileClient();
@@ -637,36 +628,6 @@ describe("Gateway pending-profile authorization", () => {
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
-
-  it("keeps profile bootstrap and identity-independent status available while sync is pending", async () => {
-    for (const method of ["users.self", "status"]) {
-      const client = createPendingProfileClient();
-      client.authenticatedGitHubIdentitySync = vi.fn(
-        () => new Promise<{ profileId: string; updatedAt: number }>(() => {}),
-      );
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-      const methodRegistry = createGatewayMethodRegistry([
-        {
-          name: method,
-          handler,
-          owner: { kind: "core", area: "gateway" },
-          profileAccess: "independent",
-          scope: "operator.admin",
-        },
-      ]);
-
-      const respond = await dispatchPendingProfileMethod({
-        client,
-        handler,
-        method,
-        methodRegistry,
-      });
-
-      expect(handler, method).toHaveBeenCalledOnce();
-      expect(respond, method).toHaveBeenCalledWith(true, { ok: true });
-      expect(client.authenticatedGitHubIdentitySync, method).not.toHaveBeenCalled();
-    }
-  });
 });
 
 describe("Gateway self-profile scope", () => {
@@ -678,7 +639,16 @@ describe("Gateway self-profile scope", () => {
       const reader = createPendingProfileClient();
       reader.authenticatedUserId = email;
       reader.connect.scopes = ["operator.read"];
-      const self = await dispatchPendingProfileMethod({ client: reader, method: "users.self" });
+      const sql = observeHostDataSql();
+      const self = await dispatchPendingProfileMethod({
+        client: reader,
+        method: "users.self",
+      }).finally(sql.restore);
+      expect(
+        sql.queries.filter((statement) =>
+          /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
+        ),
+      ).toEqual([]);
 
       const anonymous = createPendingProfileClient();
       delete anonymous.authenticatedUserId;

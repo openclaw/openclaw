@@ -4,6 +4,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusHealthRows,
   buildStatusHeartbeatValue,
+  buildStatusMemoryValue,
   buildStatusModelSelectionLines,
   buildStatusSecurityAuditLines,
 } from "./status.command-sections.js";
@@ -21,6 +22,20 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it("renders native provider health without legacy index counters", () => {
+  const value = buildStatusMemoryValue({
+    memory: {
+      agentId: "main",
+      provider: "records",
+      health: { status: "degraded", message: "warming" },
+    },
+    memoryPlugin: { enabled: true, slot: "records" },
+  });
+
+  expect(value).toBe("plugin records · degraded · warming");
+});
+
 const baseHealth: HealthSummary = {
   ok: true,
   ts: 0,
@@ -96,7 +111,7 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
   expect(lines).not.toContain("  WARN Warn 5");
   expect(lines.slice(-2)).toEqual([
     "Full report: openclaw security audit",
-    "Deep probe: openclaw security audit --deep",
+    "Deep check: openclaw security audit --deep",
   ]);
 });
 

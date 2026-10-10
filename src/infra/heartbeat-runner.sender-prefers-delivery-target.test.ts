@@ -31,9 +31,13 @@ describe("runHeartbeatOnce", () => {
           lastTo: "1644620762",
         });
 
-        replySpy.mockImplementation(async (ctx: { To?: string; From?: string }) => {
-          expect(ctx.To).toBe("C0A9P2N8QHY");
-          expect(ctx.From).toBe("C0A9P2N8QHY");
+        replySpy.mockImplementation(async (ctx) => {
+          expect(ctx).toMatchObject({
+            From: "C0A9P2N8QHY",
+            To: "C0A9P2N8QHY",
+            OriginatingChannel: "slack",
+            OriginatingTo: "C0A9P2N8QHY",
+          });
           return { text: "ok" };
         });
 
@@ -52,7 +56,11 @@ describe("runHeartbeatOnce", () => {
           },
         });
 
-        expect(sendSlack).toHaveBeenCalled();
+        expect(sendSlack).toHaveBeenCalledWith(
+          "C0A9P2N8QHY",
+          expect.any(String),
+          expect.any(Object),
+        );
       },
       { prefix: "openclaw-hb-" },
     );

@@ -1,4 +1,3 @@
-// DNS setup helper for wide-area discovery using Tailscale addresses and CoreDNS.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -112,14 +111,13 @@ function detectBrewPrefix(): string {
   return prefix;
 }
 
-function ensureImportLine(corefilePath: string, importGlob: string): boolean {
+function ensureImportLine(corefilePath: string, importGlob: string): void {
   const existing = fs.readFileSync(corefilePath, "utf-8");
   if (existing.includes(importGlob)) {
-    return false;
+    return;
   }
   const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
   writeFileSudoIfNeeded(corefilePath, next);
-  return true;
 }
 
 export function registerDnsCli(program: Command) {

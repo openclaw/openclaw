@@ -61,12 +61,10 @@ function pluginFrameGrantCoversTab(
   if (!tabPath) {
     return false;
   }
-  if (grant.match === "exact") {
-    return tabPath === grant.path;
-  }
   return (
     tabPath === grant.path ||
-    (tabPath.startsWith(grant.path) &&
+    (grant.match !== "exact" &&
+      tabPath.startsWith(grant.path) &&
       (grant.path.endsWith("/") || tabPath.at(grant.path.length) === "/"))
   );
 }
@@ -117,15 +115,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private pluginThemeFrame: HTMLIFrameElement | null = null;
   private releasePluginTheme: (() => void) | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.updateGatewaySource(gateway),
     )
-    .watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-    );
+    .watchStore(() => this.context?.plugins);
 
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState !== "visible" || !this.externalAuthTargetKey) {
@@ -276,18 +270,14 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     info: GatewayControlUiPluginTab | undefined,
     hasBundledDescriptor: boolean,
   ): string | null {
+    // Secure cross-site cookies work on HTTPS and browser-trusted loopback.
+    // Insecure LAN HTTP must not fall back to an ambient bearer substitute.
     return info?.path &&
       info.requiresGatewayAuth === true &&
       !hasBundledDescriptor &&
-      this.isExternalTabAuthSupported()
+      window.isSecureContext
       ? `${this.tabKey()}\n${info.path}`
       : null;
-  }
-
-  private isExternalTabAuthSupported(): boolean {
-    // Secure cross-site cookies work on HTTPS and browser-trusted loopback.
-    // Insecure LAN HTTP must not fall back to an ambient bearer substitute.
-    return window.isSecureContext;
   }
 
   protected probeExternalTabAuth(path: string, signal: AbortSignal): Promise<boolean> {
@@ -372,18 +362,23 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         this.requestExternalTabAuthRestart(targetKey);
       }
     }, EXTERNAL_AUTH_REFRESH_TIMEOUT_MS);
+    const finish = () => {
+      if (
+        this.externalAuthRefreshAbortController !== abortController ||
+        this.externalAuthTargetKey !== targetKey
+      ) {
+        return false;
+      }
+      if (this.finishExternalTabAuthRefreshAttempt(targetKey)) {
+        this.refreshExternalTabAuth(targetKey);
+        return false;
+      }
+      return true;
+    };
     void context.config
       .refresh({ signal: abortController.signal })
       .then((refreshed) => {
-        if (
-          this.externalAuthRefreshAbortController !== abortController ||
-          this.externalAuthTargetKey !== targetKey
-        ) {
-          return;
-        }
-        const shouldRestart = this.finishExternalTabAuthRefreshAttempt(targetKey);
-        if (shouldRestart) {
-          this.refreshExternalTabAuth(targetKey);
+        if (!finish()) {
           return;
         }
         const info = this.tabInfo();
@@ -404,16 +399,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         }
       })
       .catch(() => {
-        if (
-          this.externalAuthRefreshAbortController !== abortController ||
-          this.externalAuthTargetKey !== targetKey
-        ) {
-          return;
-        }
-        const shouldRestart = this.finishExternalTabAuthRefreshAttempt(targetKey);
-        if (shouldRestart) {
-          this.refreshExternalTabAuth(targetKey);
-        } else {
+        if (finish()) {
           this.scheduleExternalTabAuthRefresh(targetKey, false);
         }
       });
@@ -481,9 +467,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       this.externalAuthRefreshAbortController?.abort();
       return;
     }
-    if (this.externalAuthProbeAbortController) {
-      this.cancelExternalTabAuthProbe();
-    }
+    this.cancelExternalTabAuthProbe();
     this.refreshExternalTabAuth(targetKey);
   }
 
@@ -638,7 +622,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       });
     }
     if (info?.path) {
-      if (info.requiresGatewayAuth === true && !this.isExternalTabAuthSupported()) {
+      if (info.requiresGatewayAuth === true && !window.isSecureContext) {
         return html`
           <section class="card lazy-view-state" role="status">
             <div class="card-title">${t("login.failure.insecure.title")}</div>

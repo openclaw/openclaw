@@ -1,6 +1,4 @@
 /**
- * Browser action limits and timeout normalization.
- *
  * Shared by the tool schema and runtime action handlers so model-facing limits
  * and browser-control enforcement stay aligned.
  */
@@ -16,15 +14,10 @@ import type { BrowserActRequest } from "./client-actions.types.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
-/** Maximum number of actions accepted in a batched browser action request. */
 export const ACT_MAX_BATCH_ACTIONS = 100;
-/** Maximum nested action depth accepted by recursive browser actions. */
 export const ACT_MAX_BATCH_DEPTH = 5;
-/** Maximum click delay accepted from model/tool input. */
 export const ACT_MAX_CLICK_DELAY_MS = 5_000;
-/** Maximum explicit wait duration accepted from model/tool input. */
 export const ACT_MAX_WAIT_TIME_MS = 30_000;
-/** Maximum viewport side length accepted by resize actions. */
 export const ACT_MAX_VIEWPORT_DIMENSION = 8192;
 /** Existing-session actions whose runtime accepts a per-call timeout override. */
 export const EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS: ReadonlySet<BrowserActRequest["kind"]> =
@@ -117,10 +110,6 @@ function addNavigationGraceMs(durationMs: number, count = 1): number {
   );
 }
 
-function isActionObject(value: unknown): value is BrowserActRequest {
-  return isRecord(value);
-}
-
 function resolveLeafExecutionBudgetMs(
   request: Exclude<BrowserActRequest, { kind: "batch" | "wait" }>,
 ): number {
@@ -184,7 +173,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
   if (request.kind === "batch") {
     // Model-facing schemas keep child actions permissive for provider compatibility.
     // Budget valid entries only; the browser route remains the validation owner.
-    const actions = Array.isArray(request.actions) ? request.actions.filter(isActionObject) : [];
+    const actions = Array.isArray(request.actions) ? request.actions.filter(isRecord) : [];
     return actions.reduce(
       (totalMs, action) => addExecutionBudgetMs(totalMs, resolveExecutionBudgetMs(action)),
       0,

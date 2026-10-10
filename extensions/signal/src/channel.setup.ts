@@ -3,9 +3,7 @@ import type { ResolvedSignalAccount } from "./accounts.js";
 import { signalSetupContract } from "./setup-core.js";
 import { createSignalPluginBase, signalSetupWizard } from "./shared.js";
 
-export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  ...createSignalPluginBase({
-    setupWizard: signalSetupWizard,
-    setupContract: signalSetupContract,
-  }),
-};
+export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = createSignalPluginBase({
+  setupWizard: signalSetupWizard,
+  setupContract: signalSetupContract,
+});

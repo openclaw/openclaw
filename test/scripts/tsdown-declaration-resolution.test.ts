@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
@@ -217,13 +217,10 @@ console.log("standalone package boundary verified");
     "starts the checkout compiler when its Windows executable uses an extended-length path",
     ({ command }) =>
       command.lifetime.run(async () => {
-        const root = path.join(
-          fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-")),
-          "nested-checkout-".repeat(5),
-          "nested-install-".repeat(5),
-        );
+        const base = fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-"));
+        const root = path.join(base, "nested-checkout-".repeat(5), "nested-install-".repeat(5));
         fs.mkdirSync(root, { recursive: true });
-        const native = materializeNativeCompiler(root);
+        const native = materializeNativeCompiler(root, { javaScriptApi: false });
         expect(native.length).toBeGreaterThanOrEqual(248);
         const require = createRequire(path.join(root, "package.json"));
         const getExePath: { default: () => string } = require(
@@ -233,7 +230,7 @@ console.log("standalone package boundary verified");
         const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
         expect(compilerCommand?.bin).toBe(getExePath.default());
         const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
-          cwd: root,
+          cwd: base,
           encoding: "utf8",
           timeout: 10_000,
         });
@@ -736,10 +733,10 @@ console.log("workspace/AI native compilation settled after success and failure")
     {
       name: "SDK",
       groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-      run: async (command: CommandFixture, root: string, env = {}) =>
+      run: async (command: CommandFixture, root: string, env?: NodeJS.ProcessEnv) =>
         await runWriter(command, root, false, env),
     },
-    { name: "unified", groups: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
+    { name: "unified", groups: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
   ])(
     "uses local explicit references and seals real inputs for $name",
     ({ groups, run }, { command }) =>
@@ -787,7 +784,7 @@ for (const config of configs) {
         expectStagingClean(root);
         // Both writers seal through the same owner. Replay its mutation cycle once;
         // the unified suite separately covers failed and mixed-cache publication.
-        if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+        if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
           return;
         }
         const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));

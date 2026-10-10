@@ -12,6 +12,7 @@ import {
   applyControlUiFaviconStatus,
   invalidateControlUiFaviconPalette,
 } from "./control-ui-environment-presentation.runtime.ts";
+import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   createQuestionPromptState,
@@ -24,7 +25,8 @@ import {
 
 export function connectControlUiFavicon(
   shell: HTMLElement,
-  context: Pick<ApplicationContext, "gateway" | "agentSelection" | "sessions" | "overlays">,
+  context: Parameters<typeof connectControlUiFaviconArtwork>[0] &
+    Pick<ApplicationContext, "sessions" | "overlays">,
   startedAt = Date.now(),
 ): () => void {
   invalidateControlUiFaviconPalette();
@@ -178,7 +180,9 @@ export function connectControlUiFavicon(
   shell.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);
   shell.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize);
   synchronizeGateway();
+  const stopArtwork = connectControlUiFaviconArtwork(context);
   return () => {
+    stopArtwork();
     disposed = true;
     stops.forEach((stop) => stop());
     palette.disconnect();

@@ -38,6 +38,5 @@ export {
   parseTerminalToolCallArguments,
   sanitizeTransportPayloadText,
   withProviderAcceptanceObserver,
-  type ProviderAcceptance,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

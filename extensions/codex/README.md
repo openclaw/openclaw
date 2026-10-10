@@ -34,9 +34,13 @@ These shell commands differ from the in-chat `/codex` runtime commands. In parti
 
 Native Codex plugin catalogs are discoverable with `/codex plugins available`, including repository marketplaces declared in `.agents/plugins/marketplace.json` in the bound workspace. An owner or `operator.admin` can install and authorize an exact plugin with `/codex plugins install <plugin>@<marketplace>`. The owner-scoped `codex_plugins` agent tool only reads marketplace metadata; installation and policy changes stay on authenticated `/codex` management commands. Explicitly installing a plugin trusts its skills, apps, MCP servers, and hooks.
 
+Cached app inventory diagnostics reflect the current refresh or invalidation. Failures from superseded requests remain logged without replacing that newer status.
+
 For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the canonical harness thread with exactly that returned pair. Codex persists the canonical thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
 
 The visible-history mirror keeps at most 200 user or assistant messages, 512 KiB total, and 64 KiB per message. Image inputs become `[Image attachment]`; image data and local paths are not copied.
+
+When assembled context bootstraps a Codex thread, redacted tool payloads retain literal JSON field names. Tool inputs retain their shape; tool results retain redacted content.
 
 Settled-turn finalization uses the same configured Codex App Server transport as the supervised conversation. Remote websocket App Server configurations stay on their configured transport. Managed user-home stdio launches running inside an Agent home, and not through the proxy launcher, use a private stdio side turn for native-tool isolation. The bounded finalizer preserves the selected model, provider, and native authorization returned by Codex, and rejects native tool evidence outside the finalization contract. It may mirror a final answer after completed tool work; it does not diagnose why a model omitted a visible final message.
 

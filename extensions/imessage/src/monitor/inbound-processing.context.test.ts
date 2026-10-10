@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 
 type InboundProcessingModule = typeof import("./inbound-processing.js");
@@ -7,12 +7,14 @@ type InboundDecisionParams = Parameters<
   InboundProcessingModule["resolveIMessageInboundDecision"]
 >[0];
 
+type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 const cfg = {} as OpenClawConfig;
 
 beforeAll(async () => {
-  await loadFreshIMessageReplyCacheForTest();
+  ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
   ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
     await import("./inbound-processing.js"));
 });
@@ -85,6 +87,8 @@ describe("buildIMessageInboundContext presentation", () => {
     expect(fromLabel).toBe("Alice id:+15555550123");
     expect(ctxPayload.ConversationLabel).toBe("Alice");
     expect(ctxPayload.SenderName).toBe("Alice");
+    expect(ctxPayload.CommandSource).toBeUndefined();
+    expect(ctxPayload.CommandTurn).toMatchObject({ kind: "normal", source: "message" });
   });
 
   it("keeps group route IDs out of named session presentation", async () => {
@@ -189,44 +193,85 @@ describe("resolveIMessageInboundDecision command auth", () => {
       commandName: "new",
     });
   });
+});
 
-  it("does not mark authorized non-command iMessage DMs as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 103,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "hello there",
+describe("iMessage bot-owned thread mention policy", () => {
+  const rootGuid = "imessage-bot-thread-root";
+
+  beforeAll(async () => {
+    await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: rootGuid,
+      chatId: 123,
+      timestamp: Date.now(),
+      isFromMe: true,
     });
+    await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "imessage-human-thread-root",
+      chatId: 123,
+      timestamp: Date.now(),
+      isFromMe: false,
+    });
+  });
 
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(false);
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message: {
-        id: 103,
-        guid: "p:0/GUID-non-command",
-        sender: "+15555550123",
-        text: "hello there",
-        is_from_me: false,
-        is_group: false,
+  async function resolveThreadReply(overrides: Parameters<typeof resolveDecision>[0] = {}) {
+    return resolveDecision({
+      isKnownFromMeMessageId: undefined,
+      cfg: {
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+        channels: {
+          imessage: {
+            groupPolicy: "open",
+            groups: {
+              "*": { requireMention: true, requireMentionInBotThreads: false },
+              "123": {},
+            },
+          },
+        },
       },
-      historyLimit: 0,
-      groupHistories: new Map(),
+      ...overrides,
+      message: {
+        is_group: true,
+        chat_id: 123,
+        text: "follow-up",
+        thread_originator_guid: rootGuid,
+        ...overrides.message,
+      },
     });
+  }
 
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.CommandSource).toBeUndefined();
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      commandName: undefined,
-    });
+  it.each([
+    { name: "human root", message: { thread_originator_guid: "imessage-human-thread-root" } },
+    { name: "another account", accountId: "other" },
+    { name: "another group", message: { chat_id: 456 } },
+    {
+      name: "reply to the bot without a native thread root",
+      message: { thread_originator_guid: undefined, reply_to_guid: rootGuid },
+    },
+  ])("retains the mention requirement for $name", async ({ name: _name, ...overrides }) => {
+    expect(await resolveThreadReply(overrides)).toEqual({ kind: "drop", reason: "no mention" });
+  });
+
+  it("recognizes the native part-prefixed root and keeps sender authorization", async () => {
+    const message = { thread_originator_guid: `p:0/${rootGuid}` };
+    expect((await resolveThreadReply({ message })).kind).toBe("dispatch");
+    expect(
+      await resolveThreadReply({
+        message,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15555550999"],
+      }),
+    ).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
+  });
+
+  it("restores normal mention gating when the remembered root expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 7 * 60 * 60 * 1000);
+      expect(await resolveThreadReply()).toEqual({ kind: "drop", reason: "no mention" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

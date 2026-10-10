@@ -240,7 +240,6 @@ const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
   "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
-  "src/infra/state-migrations.acp-replay.ts",
   "src/infra/state-migrations.tui-last-session.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
@@ -4026,16 +4025,23 @@ export async function main() {
   const nativeSourceRoots = databaseFirstNativeSourceRoots.map((root) => path.join(repoRoot, root));
   const nativeFiles = (await Promise.all(nativeSourceRoots.map(collectNativeSourceFiles))).flat();
   const violations = [];
-  for (const filePath of files) {
-    const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
-    const content = await fs.readFile(filePath, "utf8");
-    const sourceFile = parser.parseSourceFile(filePath, content);
-    for (const violation of collectDatabaseFirstLegacyStoreViolations(
-      content,
-      relativePath,
-      sourceFile,
-    )) {
-      violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
+  // Amortize native root reloads while releasing syntax trees after each batch.
+  const batchSize = 32;
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    const sources: Array<{ fileName: string; text: string }> = [];
+    for (const fileName of files.slice(offset, offset + batchSize)) {
+      sources.push({ fileName, text: await fs.readFile(fileName, "utf8") });
+    }
+    for (const [index, sourceFile] of parser.parseSourceFiles(sources).entries()) {
+      const { fileName, text } = sources[index]!;
+      const relativePath = path.relative(repoRoot, fileName).replaceAll(path.sep, "/");
+      for (const violation of collectDatabaseFirstLegacyStoreViolations(
+        text,
+        relativePath,
+        sourceFile,
+      )) {
+        violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
+      }
     }
   }
   for (const filePath of nativeFiles) {

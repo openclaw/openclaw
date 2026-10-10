@@ -13,7 +13,7 @@ import {
   resolvePendingComposerSessions,
   clearStoredComposerDraftInput,
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
+  storageTargetForComposer,
   writeStoredOutboxStore as writeStore,
   type ChatComposerScope,
 } from "../../lib/chat/outbox-store.ts";
@@ -25,6 +25,7 @@ import { getSafeSessionStorage } from "../../local-storage.ts";
 import { normalizeChatComposerDraft } from "./composer-draft.ts";
 import {
   captureChatComposerOwner,
+  isChatComposerOwnerCurrent,
   isIncognitoComposerScope,
   type DurableChatComposerPersistenceState,
   type ChatComposerDraftSnapshot,
@@ -47,7 +48,7 @@ export function loadCapturedChatComposerState(
     return empty;
   }
   try {
-    const target = storageTargetForGateway(state.settings?.gatewayUrl);
+    const target = storageTargetForComposer(state);
     const store = readStore(storage, target);
     const migrated = resolvePendingComposerSessions(store, state);
     if (migrated) {
@@ -102,27 +103,32 @@ export function loadCapturedChatComposerState(
 
 export function captureChatComposerDraftSnapshot(
   state: DurableChatComposerPersistenceState,
-  durableScope: DurableComposerDraftScope | null,
+  candidateDurableScope: DurableComposerDraftScope | null,
   draftRevision: number,
   expectedDraftRevision: number,
+  previous?: ChatComposerDraftSnapshot | null,
 ): ChatComposerDraftSnapshot {
+  // The client is mutable across hello: capture retained presentation provenance
+  // before an old pane can stamp its input with the replacement account.
+  const replaced =
+    previous?.owner.recoveryScope &&
+    !isChatComposerOwnerCurrent({ ...state, connected: false }, previous.owner);
+  const durableScope = replaced ? (previous.durable?.scope ?? null) : candidateDurableScope;
   const scope = resolveUiConversationIdentity(state, state.sessionKey);
   const text = normalizeChatComposerDraft(state.chatMessage);
   const goalMode = state.chatGoalDraftMode ? { ...state.chatGoalDraftMode } : undefined;
   const replyTarget = state.chatReplyTarget ? { ...state.chatReplyTarget } : undefined;
   const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
-  const attachments = (state.chatAttachments ?? []).map((attachment) =>
-    Object.assign(
-      {},
-      attachment,
-      attachment.browserAnnotation
-        ? { browserAnnotation: Object.assign({}, attachment.browserAnnotation) }
-        : {},
-      attachment.selectionAnnotation
-        ? { selectionAnnotation: Object.assign({}, attachment.selectionAnnotation) }
-        : {},
-    ),
-  );
+  const attachments =
+    state.chatAttachments?.map((attachment) => ({
+      ...attachment,
+      ...(attachment.browserAnnotation
+        ? { browserAnnotation: { ...attachment.browserAnnotation } }
+        : {}),
+      ...(attachment.selectionAnnotation
+        ? { selectionAnnotation: { ...attachment.selectionAnnotation } }
+        : {}),
+    })) ?? [];
   const durable = durableScope
     ? {
         scope: durableScope,
@@ -137,7 +143,7 @@ export function captureChatComposerDraftSnapshot(
       }
     : undefined;
   return {
-    owner: captureChatComposerOwner(state),
+    owner: replaced ? previous.owner : captureChatComposerOwner(state),
     scope,
     incognito: isIncognitoComposerScope(state, scope),
     awaitingDefaults: !hasUiSessionDefaults(state),

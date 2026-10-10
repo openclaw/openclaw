@@ -1,15 +1,10 @@
-import { createSetupTranslator } from "openclaw/plugin-sdk/setup-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createSetupTranslator, splitSetupEntries } from "openclaw/plugin-sdk/setup-runtime";
 import { applyTlonSetupConfig, createTlonSetupWizardBase } from "./setup-core.js";
 import { normalizeShip } from "./targets.js";
 import { resolveTlonAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const t = createSetupTranslator();
-
-function parseList(value: string): string[] {
-  return normalizeStringEntries(value.split(/[\n,;]+/g));
-}
 
 export const tlonSetupWizard = createTlonSetupWizardBase(async ({ cfg, accountId, prompter }) => {
   let next = cfg;
@@ -49,7 +44,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase(async ({ cfg, accountId
     next = applyTlonSetupConfig({
       cfg: next,
       accountId,
-      input: { groupChannels: parseList(entry ?? "") },
+      input: { groupChannels: splitSetupEntries(entry ?? "") },
     });
   }
 
@@ -68,7 +63,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase(async ({ cfg, accountId
       cfg: next,
       accountId,
       input: {
-        dmAllowlist: parseList(entry ?? "").map((ship) => normalizeShip(ship)),
+        dmAllowlist: splitSetupEntries(entry ?? "").map((ship) => normalizeShip(ship)),
       },
     });
   }

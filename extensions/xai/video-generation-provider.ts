@@ -135,16 +135,15 @@ function resolveInputVideoUrl(input: VideoGenerationSourceAsset | undefined): st
   throw new Error("xAI video editing input is missing video data.");
 }
 
-function resolveDurationSeconds(params: {
-  durationSeconds?: number;
-  min?: number;
-  max?: number;
-}): number | undefined {
-  if (typeof params.durationSeconds !== "number" || !Number.isFinite(params.durationSeconds)) {
+function resolveDurationSeconds(
+  value: number | undefined,
+  min: number,
+  max: number,
+): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
-  const rounded = Math.round(params.durationSeconds);
-  return Math.max(params.min ?? 1, Math.min(params.max ?? 15, rounded));
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function resolveAspectRatio(value: string | undefined): string | undefined {
@@ -175,26 +174,7 @@ function resolveResolution(
   return undefined;
 }
 
-function resolveXaiVideoMode(
-  req: VideoGenerationRequest,
-): "generate" | "referenceToVideo" | "edit" | "extend" {
-  const hasVideoInput = (req.inputVideos?.length ?? 0) > 0;
-  if (!hasVideoInput && (req.inputImages ?? []).some(isReferenceImage)) {
-    return "referenceToVideo";
-  }
-  if (!hasVideoInput) {
-    return "generate";
-  }
-  return typeof resolveDurationSeconds({
-    durationSeconds: req.durationSeconds,
-    min: 2,
-    max: 10,
-  }) === "number"
-    ? "extend"
-    : "edit";
-}
-
-function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
+function prepareCreateRequest(req: VideoGenerationRequest) {
   validateXaiVideo15Request(req);
   const inputImages = req.inputImages ?? [];
   const hasReferenceImages = inputImages.some(isReferenceImage);
@@ -216,7 +196,6 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     throw new Error("xAI video generation does not support image and video inputs together.");
   }
 
-  const mode = resolveXaiVideoMode(req);
   const body: Record<string, unknown> = {
     // Aliases are API-owned routing choices. Preserve the selected identifier
     // instead of silently pinning it to the canonical 1.5 model.
@@ -224,55 +203,44 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     prompt: req.prompt,
   };
 
-  if (mode === "generate" || mode === "referenceToVideo") {
-    const isVideo15 = mode === "generate" && isXaiVideo15Model(req.model);
-    const inputImage = mode === "generate" ? inputImages[0] : undefined;
-    const imageUrl = inputImage ? resolveImageUrl(inputImage) : undefined;
-    if (mode === "referenceToVideo") {
-      body.reference_images = inputImages.map((image) => ({ url: resolveImageUrl(image) }));
-    } else if (imageUrl) {
-      body.image = { url: imageUrl };
-    }
-    body.duration =
-      resolveDurationSeconds({
-        durationSeconds: req.durationSeconds,
-        min: 1,
-        max: mode === "generate" ? 15 : 10,
-      }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
-    const aspectRatio = resolveAspectRatio(req.aspectRatio);
-    // Image-to-video inherits the source frame's ratio when callers omit it;
-    // text-to-video retains xAI's 16:9 default.
-    if (aspectRatio || !imageUrl) {
-      body.aspect_ratio = aspectRatio ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
-    }
-    body.resolution =
-      resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
-    return body;
-  }
-
-  body.video = { url: resolveInputVideoUrl(req.inputVideos?.[0]) };
-  if (mode === "extend") {
-    const duration = resolveDurationSeconds({
-      durationSeconds: req.durationSeconds,
-      min: 2,
-      max: 10,
-    });
-    if (typeof duration === "number") {
+  if ((req.inputVideos?.length ?? 0) > 0) {
+    const duration = resolveDurationSeconds(req.durationSeconds, 2, 10);
+    body.video = { url: resolveInputVideoUrl(req.inputVideos?.[0]) };
+    if (duration !== undefined) {
       body.duration = duration;
     }
+    return {
+      body,
+      mode: duration === undefined ? "edit" : "extend",
+      endpoint: duration === undefined ? "/videos/edits" : "/videos/extensions",
+    };
   }
-  return body;
-}
 
-function resolveCreateEndpoint(req: VideoGenerationRequest): string {
-  switch (resolveXaiVideoMode(req)) {
-    case "edit":
-      return "/videos/edits";
-    case "extend":
-      return "/videos/extensions";
-    default:
-      return "/videos/generations";
+  const inputImage = hasReferenceImages ? undefined : inputImages[0];
+  const imageUrl = inputImage ? resolveImageUrl(inputImage) : undefined;
+  if (hasReferenceImages) {
+    body.reference_images = inputImages.map((image) => ({ url: resolveImageUrl(image) }));
+  } else if (imageUrl) {
+    body.image = { url: imageUrl };
   }
+  body.duration =
+    resolveDurationSeconds(req.durationSeconds, 1, hasReferenceImages ? 10 : 15) ??
+    XAI_VIDEO_DEFAULT_DURATION_SECONDS;
+  const aspectRatio = resolveAspectRatio(req.aspectRatio);
+  // Image-to-video inherits the source frame's ratio when callers omit it;
+  // text-to-video retains xAI's 16:9 default.
+  if (aspectRatio || !imageUrl) {
+    body.aspect_ratio = aspectRatio ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
+  }
+  body.resolution =
+    resolveResolution(req.resolution, {
+      allow1080p: !hasReferenceImages && isXaiVideo15Model(req.model),
+    }) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
+  return {
+    body,
+    mode: hasReferenceImages ? "referenceToVideo" : "generate",
+    endpoint: "/videos/generations",
+  };
 }
 
 export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
@@ -281,8 +249,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.
-      const createBody = buildCreateBody(req);
-      const createEndpoint = resolveCreateEndpoint(req);
+      const { body, endpoint, mode } = prepareCreateRequest(req);
       const auth = await resolveApiKeyForProvider({
         provider: "xai",
         cfg: req.cfg,
@@ -318,9 +285,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       const submitHeaders = new Headers(headers);
       submitHeaders.set("x-idempotency-key", crypto.randomUUID());
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}${createEndpoint}`,
+        url: `${baseUrl}${endpoint}`,
         headers: submitHeaders,
-        body: createBody,
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
@@ -408,7 +375,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             requestId,
             status: completed.status,
             videoUrl,
-            mode: resolveXaiVideoMode(req),
+            mode,
           },
         };
       } finally {

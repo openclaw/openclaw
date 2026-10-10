@@ -3,9 +3,15 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseDocument } from "yaml";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 
-export function noteSourceInstallIssues(root: string | null) {
+export async function noteSourceInstallIssues(root: string | null) {
   if (!root) {
+    return;
+  }
+  const installOwner = await readInstallOwner(root);
+  if (installOwner) {
+    note(formatInstallOwnerMessage(installOwner), "Install");
     return;
   }
 
@@ -60,34 +66,30 @@ function isSelfLink(root: string, value: unknown): boolean {
 
 function detectSelfLinkWarnings(root: string): string[] {
   const warnings: string[] = [];
-
-  const packageJsonPath = path.join(root, "package.json");
-  try {
-    const manifest = asOptionalRecord(JSON.parse(fs.readFileSync(packageJsonPath, "utf8")));
-    const selfLink = [manifest?.dependencies, manifest?.devDependencies].some((deps) =>
-      isSelfLink(root, asOptionalRecord(deps)?.openclaw),
-    );
-    if (selfLink) {
-      warnings.push(
-        `- package.json has a self-referential "openclaw": "link:" dependency, which can break frozen pnpm installs. If the link is unintended: ${SELF_LINK_RECOVERY}`,
-      );
+  for (const [filename, description] of [
+    ["package.json", 'has a self-referential "openclaw": "link:" dependency'],
+    ["pnpm-workspace.yaml", 'contains a self-referential "openclaw: link:" entry'],
+  ] as const) {
+    try {
+      const source = fs.readFileSync(path.join(root, filename), "utf8");
+      let links: unknown[];
+      if (filename === "package.json") {
+        const manifest = asOptionalRecord(JSON.parse(source));
+        links = [manifest?.dependencies, manifest?.devDependencies].map(
+          (deps) => asOptionalRecord(deps)?.openclaw,
+        );
+      } else {
+        const workspace = parseDocument(source);
+        links = workspace.errors.length === 0 ? [workspace.toJS()?.overrides?.openclaw] : [];
+      }
+      if (links.some((link) => isSelfLink(root, link))) {
+        warnings.push(
+          `- ${filename} ${description}, which can break frozen pnpm installs. If the link is unintended: ${SELF_LINK_RECOVERY}`,
+        );
+      }
+    } catch {
+      // Unreadable or malformed files must not abort the remaining install checks.
     }
-  } catch {
-    // Missing or unparseable package.json is reported by other checks.
   }
-
-  const workspacePath = path.join(root, "pnpm-workspace.yaml");
-  try {
-    const workspace = parseDocument(fs.readFileSync(workspacePath, "utf8"));
-    const selfLink = workspace.errors.length === 0 && workspace.toJS()?.overrides?.openclaw;
-    if (isSelfLink(root, selfLink)) {
-      warnings.push(
-        `- pnpm-workspace.yaml contains a self-referential "openclaw: link:" entry, which can break frozen pnpm installs. If the link is unintended: ${SELF_LINK_RECOVERY}`,
-      );
-    }
-  } catch {
-    // A malformed or unreadable workspace file must not abort the remaining Doctor checks.
-  }
-
   return warnings;
 }

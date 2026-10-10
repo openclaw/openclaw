@@ -8,10 +8,8 @@ import { admitChatSubmission } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 
-type ChatPaneStartupContext = Pick<ApplicationContext, "placementStartup">;
-
 export function subscribeChatPaneStartup(
-  context: ChatPaneStartupContext,
+  context: Pick<ApplicationContext, "placementStartup">,
   getState: () => ChatPageHost | undefined,
 ): () => void {
   return context.placementStartup.subscribe(() => {
@@ -30,12 +28,14 @@ export function subscribeChatPaneStartup(
 export function subscribeChatPaneSnapshotInvalidation(
   getState: () => ChatPageHost | undefined,
 ): () => void {
-  return subscribeSnapshotInvalidation(({ sessionKey, reason }) => {
+  return subscribeSnapshotInvalidation(({ sessionKey, scopePrefix, reason }) => {
     // Cache eviction must preserve the active transcript and its completed load.
     const state = getState();
     if (
       reason === "cache-eviction" ||
       !state ||
+      (scopePrefix &&
+        !resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }).startsWith(scopePrefix)) ||
       (sessionKey && resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }) !== sessionKey)
     ) {
       return;

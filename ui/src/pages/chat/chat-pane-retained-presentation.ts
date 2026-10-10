@@ -1,13 +1,10 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing, type TemplateResult } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import { html, nothing } from "lit";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { patchSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import "../../components/modal-dialog.ts";
-import {
-  renderSessionProgressCard,
-  type SessionProgressCardRefreshAction,
-} from "../../components/session-progress-card.ts";
+import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -21,7 +18,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
-import { ChatFloatingProgress } from "./chat-floating-progress.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -32,24 +28,21 @@ import {
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
+import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
-import {
-  resolveChatProgressPlacement,
-  progressNeighborPanelKey,
-} from "./chat-pane-progress-placement.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import { cancelChatModelRecovery, refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
-import type { ChatProps } from "./chat-view.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import {
   dismissThreadPortals,
@@ -57,33 +50,31 @@ import {
   resetTranscriptSession,
 } from "./components/chat-thread-interactions.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import { lockChatScroll } from "./scroll.ts";
-import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  protected readonly activeSessionResources = new ChatPaneActiveResources();
+
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
-    const state = this.state;
     const scope = this.captureConnectionScope();
-    if (!state || !scope) {
+    if (!scope) {
       return undefined;
     }
+    const { state } = scope;
     const sessionKey = state.sessionKey;
     const sessionId = state.currentSessionId;
     const agentId = resolveChatAgentId(state);
     return {
       state: this.progressCard.refreshState,
       onRefresh: (card) => {
-        const current = this.state;
         if (
-          current &&
           this.isConnectionScopeCurrent(scope) &&
-          current.sessionKey === sessionKey &&
-          current.currentSessionId === sessionId &&
-          resolveChatAgentId(current) === agentId
+          state.sessionKey === sessionKey &&
+          state.currentSessionId === sessionId &&
+          resolveChatAgentId(state) === agentId
         ) {
           this.progressCard.refresh(card);
         }
@@ -91,105 +82,59 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     };
   }
 
-  private readonly floatingProgress = new ChatFloatingProgress(() => this.requestUpdate());
-
-  protected createProgressCardView(params: {
-    state: ChatPageHost;
-    layout: SidebarLayout;
-    selectedSession: GatewaySessionRow | undefined;
-    runActive: boolean;
-    canDismiss: boolean;
-    canRefresh: boolean;
-  }): {
-    composer: Pick<
-      ChatProps,
-      | "progressCard"
-      | "progressCardIdentity"
-      | "progressCardLifetime"
-      | "gatewayScope"
-      | "progressCardInitialLoading"
-      | "progressCardRefresh"
-      | "collapseTaskProgress"
-      | "readingHistory"
-      | "onProgressManipulate"
-      | "onDismissProgressCard"
-    >;
-    floating: TemplateResult | typeof nothing;
-  } {
-    const { state, selectedSession, runActive } = params;
-    const presentation = this.progressCardPresentation;
-    const placement = resolveChatProgressPlacement({
-      showProgress: this.presented && state.settings.chatShowTaskProgress !== false,
-      preferFloating: state.settings.chatFloatTaskProgress === true,
-      layout: params.layout,
-      paneWidth: this.paneWidth,
-      compact: this.compact,
-    });
-    const gatewayScope = gatewayPresentationScope(this.context.gateway);
-    if (this.presented) {
-      this.floatingProgress.sync(
-        presentation
-          ? {
-              gateway: gatewayScope,
-              identity: presentation.identity,
-              sessionId: state.currentSessionId,
-              lifetime: presentation.lifetime,
-            }
-          : undefined,
-        progressNeighborPanelKey(params.layout),
-        state.settings.chatCollapseTaskProgress === true,
-      );
+  protected captureProgressCardActions(canWrite: boolean) {
+    const state = this.state;
+    if (!state) {
+      return {};
     }
-    const refresh =
-      params.canDismiss && params.canRefresh && presentation
-        ? this.captureProgressCardRefreshAction()
-        : undefined;
+    const { sessionKey, currentSessionId } = state;
+    const agentId = resolveChatAgentId(state);
+    const gatewayUrl = state.settings.gatewayUrl;
+    const scope = gatewayPresentationScope(this.context.gateway);
+    const current = () =>
+      this.isConnected &&
+      this.presented &&
+      this.state === state &&
+      state.sessionKey === sessionKey &&
+      state.currentSessionId === currentSessionId &&
+      resolveChatAgentId(state) === agentId &&
+      gatewayPresentationScope(this.context.gateway) === scope;
     return {
-      composer: {
-        progressCard: placement === "composer" ? (presentation?.card ?? null) : null,
-        progressCardIdentity: presentation?.identity,
-        progressCardLifetime: presentation?.lifetime,
-        gatewayScope,
-        // Keep the existing initial-read feedback until there is a card to float.
-        progressCardInitialLoading:
-          (placement === "composer" || (placement === "floating" && !presentation)) &&
-          this.progressCardInitialLoading,
-        progressCardRefresh: refresh,
-        collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
-        readingHistory: state.chatReadingHistory,
-        onProgressManipulate: () => {
-          lockChatScroll(state);
-          this.transcript.cancelScroll();
-        },
-        onDismissProgressCard: params.canDismiss
-          ? (card: ProgressCard) =>
-              void this.progressCard
-                .dismiss(card)
-                .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }))
-          : undefined,
+      onHideTaskProgress: () => {
+        if (!current()) {
+          return;
+        }
+        state.settings = patchSettings({ chatShowTaskProgress: false });
+        showToast({
+          message: t("chat.sessionDetails.progressHidden"),
+          actionLabel: t("common.undo"),
+          onAction: () => {
+            if (
+              loadSettings().gatewayUrl === gatewayUrl &&
+              gatewayPresentationScope(this.context.gateway) === scope
+            ) {
+              patchSettings({ chatShowTaskProgress: true });
+            }
+          },
+        });
       },
-      floating:
-        placement === "floating" && presentation
-          ? renderSessionProgressCard(
-              presentation.card,
-              "floating",
-              undefined,
-              selectedSession?.status,
-              selectedSession?.startedAt,
-              selectedSession?.endedAt,
-              runActive,
-              false,
-              undefined,
-              state.connected ? refresh : undefined,
-              this.floatingProgress.disclosure(
-                `floating-progress-${encodeURIComponent(this.presentationId)}`,
-                () => {
-                  state.settings = patchSettings({ chatShowTaskProgress: false });
-                  state.requestUpdate?.();
-                },
-              ),
-            )
-          : nothing,
+      onCollapseTaskProgressChange: (collapsed: boolean) => {
+        if (current()) {
+          state.settings = patchSettings({ chatCollapseTaskProgress: collapsed });
+        }
+      },
+      onOpenTaskProgressSettings: () => {
+        if (current()) {
+          this.context.navigate("appearance");
+        }
+      },
+      onClearSavedProgressCard: canWrite
+        ? (card: ProgressCard) => {
+            if (current() && this.progressCardPresentation?.card === card) {
+              this.clearSavedProgressCard(card);
+            }
+          }
+        : undefined,
     };
   }
 
@@ -268,6 +213,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   private progressPresentationSessionKey: string | undefined;
   private progressPresentationReady = false;
+  private hiddenProgressCardScope: object | undefined;
+  private readonly hiddenProgressCards = new Map<
+    string,
+    { lifetime: object | undefined; revision: number }
+  >();
   private retainedProgressCard:
     | {
         gatewayScope: object;
@@ -298,6 +248,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return null;
     }
     const gatewayScope = gatewayPresentationScope(this.context.gateway);
+    if (this.hiddenProgressCardScope !== gatewayScope) {
+      this.hiddenProgressCardScope = gatewayScope;
+      this.hiddenProgressCards.clear();
+    }
     const agentId = resolveUiSelectedSessionAgentId(state);
     const previous = this.retainedProgressCard;
     if (
@@ -328,8 +282,44 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     } else if (!this.progressCard.loading) {
       this.retainedProgressCard = undefined;
     }
-    // Reconnect retires read admission, not the mounted card's disclosure state.
-    return this.retainedProgressCard ?? null;
+    // The X only hides this presentation. The Gateway card remains available to
+    // other clients and read-only surfaces; a new card lifetime restores this view.
+    const presented = this.retainedProgressCard;
+    if (!presented) {
+      return null;
+    }
+    const hidden = this.hiddenProgressCards.get(presented.identity);
+    if (!hidden) {
+      return presented;
+    }
+    if (
+      hidden.lifetime
+        ? hidden.lifetime === presented.lifetime
+        : hidden.revision === presented.card.revision
+    ) {
+      return null;
+    }
+    this.hiddenProgressCards.delete(presented.identity);
+    return presented;
+  }
+
+  protected readonly clearSavedProgressCard = (card: ProgressCard): void => {
+    void this.progressCard
+      .dismiss(card)
+      .catch(() => showToast({ message: t("sessionProgressCard.clearFailed") }));
+  };
+
+  protected hideProgressCard(card: ProgressCard): void {
+    const presented = this.progressCardPresentation;
+    if (!presented || presented.card !== card) {
+      return;
+    }
+    this.hiddenProgressCards.delete(presented.identity);
+    this.hiddenProgressCards.set(presented.identity, {
+      lifetime: presented.lifetime,
+      revision: card.revision,
+    });
+    this.requestUpdate();
   }
 
   protected override initialProgressCardTarget() {
@@ -423,12 +413,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (this.resetConfirmation) {
       return this.resetConfirmation.promise;
     }
-    let resolve!: (confirmed: boolean) => void;
-    const promise = new Promise<boolean>((next) => {
-      resolve = next;
-    });
+    const { promise, resolve } = createDeferredCore<boolean>();
     this.resetConfirmation = { scopeKey, promise, resolve };
-    this.resetConfirmationOpen = true;
     return promise;
   }
 
@@ -445,12 +431,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     this.resetConfirmation = undefined;
-    this.resetConfirmationOpen = false;
     pending.resolve(confirmed);
   }
 
   protected renderResetConfirmation() {
-    if (!this.resetConfirmationOpen) {
+    if (!this.resetConfirmation) {
       return nothing;
     }
     const title = t("chat.board.resetTitle");
@@ -512,6 +497,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!presented) {
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
+      this.syncSessionCompanionPresentation(false);
+      this.activeSessionResources.sync(null);
+      if (this.state) {
+        cancelChatModelRecovery(this.state);
+      }
+      if (this.context) {
+        publishChatWorkContext(this.context, this);
+      }
     }
     if (!this.isConnected) {
       return;
@@ -539,14 +532,12 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           // authoritative start time and activity after a foreground return.
           void loadChatHistory(state, { deferBranches: true });
         }
-      }
-      if (
-        state &&
-        !deferredHydrationActive &&
-        (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey) ||
-          state.chatBranchesConnectionEpoch !== state.connectionEpoch)
-      ) {
-        void loadChatBranches(state);
+        if (
+          !areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey) ||
+          state.chatBranchesConnectionEpoch !== state.connectionEpoch
+        ) {
+          void loadChatBranches(state);
+        }
       }
       this.refreshSwarmRoster();
       void this.refreshSessionPullRequests();

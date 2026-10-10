@@ -34,87 +34,41 @@ function failInvalidOption(message: string): never {
   throw new AcpRuntimeError("ACP_INVALID_RUNTIME_OPTION", message);
 }
 
-function validateNoControlChars(value: string, field: string): string {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+function validateBoundedText(value: unknown, field: string, maxLength: number): string {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    failInvalidOption(`${field} must not be empty.`);
+  }
+  if (normalized.length > maxLength) {
+    failInvalidOption(`${field} must be at most ${maxLength} characters.`);
+  }
+  for (let i = 0; i < normalized.length; i += 1) {
+    const code = normalized.charCodeAt(i);
     if (code < 32 || code === 127) {
       failInvalidOption(`${field} must not include control characters.`);
     }
   }
-  return value;
-}
-
-function validateBoundedText(params: { value: unknown; field: string; maxLength: number }): string {
-  const normalized = normalizeText(params.value);
-  if (!normalized) {
-    failInvalidOption(`${params.field} must not be empty.`);
-  }
-  if (normalized.length > params.maxLength) {
-    failInvalidOption(`${params.field} must be at most ${params.maxLength} characters.`);
-  }
-  return validateNoControlChars(normalized, params.field);
-}
-
-function validateBackendOptionKey(rawKey: unknown): string {
-  const key = validateBoundedText({
-    value: rawKey,
-    field: "ACP config key",
-    maxLength: MAX_BACKEND_OPTION_KEY_LENGTH,
-  });
-  if (!SAFE_OPTION_KEY_RE.test(key)) {
-    failInvalidOption(
-      "ACP config key must use letters, numbers, dots, colons, underscores, or dashes.",
-    );
-  }
-  return key;
-}
-
-function validateBackendOptionValue(rawValue: unknown): string {
-  return validateBoundedText({
-    value: rawValue,
-    field: "ACP config value",
-    maxLength: MAX_BACKEND_OPTION_VALUE_LENGTH,
-  });
+  return normalized;
 }
 
 export function validateRuntimeModeInput(rawMode: unknown): string {
-  return validateBoundedText({
-    value: rawMode,
-    field: "Runtime mode",
-    maxLength: MAX_RUNTIME_MODE_LENGTH,
-  });
+  return validateBoundedText(rawMode, "Runtime mode", MAX_RUNTIME_MODE_LENGTH);
 }
 
 export function validateRuntimeModelInput(rawModel: unknown): string {
-  return validateBoundedText({
-    value: rawModel,
-    field: "Model id",
-    maxLength: MAX_MODEL_LENGTH,
-  });
+  return validateBoundedText(rawModel, "Model id", MAX_MODEL_LENGTH);
 }
 
 function validateRuntimeThinkingInput(rawThinking: unknown): string {
-  return validateBoundedText({
-    value: rawThinking,
-    field: "Thinking level",
-    maxLength: MAX_THINKING_LENGTH,
-  });
+  return validateBoundedText(rawThinking, "Thinking level", MAX_THINKING_LENGTH);
 }
 
 export function validateRuntimePermissionProfileInput(rawProfile: unknown): string {
-  return validateBoundedText({
-    value: rawProfile,
-    field: "Permission profile",
-    maxLength: MAX_PERMISSION_PROFILE_LENGTH,
-  });
+  return validateBoundedText(rawProfile, "Permission profile", MAX_PERMISSION_PROFILE_LENGTH);
 }
 
 export function validateRuntimeCwdInput(rawCwd: unknown): string {
-  const cwd = validateBoundedText({
-    value: rawCwd,
-    field: "Working directory",
-    maxLength: MAX_CWD_LENGTH,
-  });
+  const cwd = validateBoundedText(rawCwd, "Working directory", MAX_CWD_LENGTH);
   if (!isAbsolute(cwd)) {
     failInvalidOption(`Working directory must be an absolute path. Received "${cwd}".`);
   }
@@ -149,9 +103,15 @@ export function validateRuntimeConfigOptionInput(
   key: string;
   value: string;
 } {
+  const key = validateBoundedText(rawKey, "ACP config key", MAX_BACKEND_OPTION_KEY_LENGTH);
+  if (!SAFE_OPTION_KEY_RE.test(key)) {
+    failInvalidOption(
+      "ACP config key must use letters, numbers, dots, colons, underscores, or dashes.",
+    );
+  }
   return {
-    key: validateBackendOptionKey(rawKey),
-    value: validateBackendOptionValue(rawValue),
+    key,
+    value: validateBoundedText(rawValue, "ACP config value", MAX_BACKEND_OPTION_VALUE_LENGTH),
   };
 }
 
@@ -219,40 +179,36 @@ export function validateRuntimeOptionPatch(
 export function normalizeRuntimeOptions(
   options: AcpSessionRuntimeOptions | undefined,
 ): AcpSessionRuntimeOptions {
-  const runtimeMode = normalizeText(options?.runtimeMode);
-  const model = normalizeText(options?.model);
-  const thinking = normalizeText(options?.thinking);
-  const cwd = normalizeText(options?.cwd);
-  const permissionProfile = normalizeText(options?.permissionProfile);
-  let timeoutSeconds: number | undefined;
+  const normalized: AcpSessionRuntimeOptions = {};
+  for (const key of ["runtimeMode", "model", "thinking", "cwd", "permissionProfile"] as const) {
+    const value = normalizeText(options?.[key]);
+    if (value) {
+      normalized[key] = value;
+    }
+  }
   if (typeof options?.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds)) {
     const rounded = Math.round(options.timeoutSeconds);
     if (rounded > 0) {
-      timeoutSeconds = rounded;
+      normalized.timeoutSeconds = rounded;
     }
   }
   const backendExtrasEntries = Object.entries(options?.backendExtras ?? {})
     .map(([key, value]) => [normalizeText(key), normalizeText(value)] as const)
     .filter(([key, value]) => Boolean(key && value)) as Array<[string, string]>;
-  const backendExtras =
-    backendExtrasEntries.length > 0 ? Object.fromEntries(backendExtrasEntries) : undefined;
-  return {
-    ...(runtimeMode ? { runtimeMode } : {}),
-    ...(model ? { model } : {}),
-    ...(thinking ? { thinking } : {}),
-    ...(cwd ? { cwd } : {}),
-    ...(permissionProfile ? { permissionProfile } : {}),
-    ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
-    ...(backendExtras ? { backendExtras } : {}),
-  };
+  if (backendExtrasEntries.length > 0) {
+    normalized.backendExtras = Object.fromEntries(backendExtrasEntries);
+  }
+  return normalized;
 }
 
-export function mergeRuntimeOptions(params: {
+/** Inputs have already passed manager validation and metadata normalization. */
+export function mergeRuntimeOptions({
+  current = {},
+  patch = {},
+}: {
   current?: AcpSessionRuntimeOptions;
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
-  const current = normalizeRuntimeOptions(params.current);
-  const patch = validateRuntimeOptionPatch(params.patch);
   return normalizeRuntimeOptions({
     ...current,
     ...patch,
@@ -299,13 +255,9 @@ export function reconcileAcceptedRuntimeOptions(
 }
 
 export function resolveRuntimeOptionsFromMeta(meta: SessionAcpMeta): AcpSessionRuntimeOptions {
-  const normalized = normalizeRuntimeOptions(meta.runtimeOptions);
-  if (normalized.cwd || !meta.cwd) {
-    return normalized;
-  }
   return normalizeRuntimeOptions({
-    ...normalized,
-    cwd: meta.cwd,
+    ...meta.runtimeOptions,
+    cwd: normalizeText(meta.runtimeOptions?.cwd) ?? meta.cwd,
   });
 }
 
@@ -317,16 +269,15 @@ export function runtimeOptionsEqual(
 }
 
 export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions): string {
-  const normalized = normalizeRuntimeOptions(options);
-  const extras = Object.entries(normalized.backendExtras ?? {}).toSorted(([a], [b]) =>
+  const extras = Object.entries(options.backendExtras ?? {}).toSorted(([a], [b]) =>
     a.localeCompare(b),
   );
   return JSON.stringify({
-    runtimeMode: normalized.runtimeMode ?? null,
-    model: normalized.model ?? null,
-    thinking: normalized.thinking ?? null,
-    permissionProfile: normalized.permissionProfile ?? null,
-    timeoutSeconds: normalized.timeoutSeconds ?? null,
+    runtimeMode: options.runtimeMode ?? null,
+    model: options.model ?? null,
+    thinking: options.thinking ?? null,
+    permissionProfile: options.permissionProfile ?? null,
+    timeoutSeconds: options.timeoutSeconds ?? null,
     backendExtras: extras,
   });
 }
@@ -335,28 +286,27 @@ export function buildRuntimeConfigOptionPairs(
   options: AcpSessionRuntimeOptions,
   advertisedConfigOptionKeys?: readonly string[],
 ): Array<[string, string]> {
-  const normalized = normalizeRuntimeOptions(options);
   const pairs = new Map<string, string>();
   const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
   const resolveKey = (key: string) => resolveRuntimeConfigOptionKeyFromMap(key, advertisedKeys);
   const shouldEmit = (aliases: readonly string[]) =>
     advertisedKeys.size === 0 || aliases.some((alias) => advertisedKeys.has(alias));
-  if (normalized.model) {
-    pairs.set(resolveKey("model"), normalized.model);
+  if (options.model) {
+    pairs.set(resolveKey("model"), options.model);
   }
-  if (normalized.thinking && shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.thinking)) {
-    pairs.set(resolveKey("thinking"), normalized.thinking);
+  if (options.thinking && shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.thinking)) {
+    pairs.set(resolveKey("thinking"), options.thinking);
   }
-  if (normalized.permissionProfile) {
-    pairs.set(resolveKey("approval_policy"), normalized.permissionProfile);
+  if (options.permissionProfile) {
+    pairs.set(resolveKey("approval_policy"), options.permissionProfile);
   }
   if (
-    typeof normalized.timeoutSeconds === "number" &&
+    options.timeoutSeconds !== undefined &&
     shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds)
   ) {
-    pairs.set(resolveKey("timeout"), String(normalized.timeoutSeconds));
+    pairs.set(resolveKey("timeout"), String(options.timeoutSeconds));
   }
-  for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
+  for (const [key, value] of Object.entries(options.backendExtras ?? {})) {
     const wireKey = resolveKey(key);
     if (!pairs.has(wireKey)) {
       pairs.set(wireKey, value);
@@ -371,22 +321,11 @@ function buildAdvertisedConfigOptionKeyMap(
   const advertisedKeys = new Map<string, string>();
   for (const rawKey of advertisedConfigOptionKeys ?? []) {
     const key = normalizeText(rawKey);
-    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
-    if (key && normalizedKey && !advertisedKeys.has(normalizedKey)) {
-      advertisedKeys.set(normalizedKey, key);
+    if (key && !advertisedKeys.has(key.toLowerCase())) {
+      advertisedKeys.set(key.toLowerCase(), key);
     }
   }
   return advertisedKeys;
-}
-
-function resolveRuntimeConfigOptionAliases(key: string): readonly string[] {
-  const normalizedKey = normalizeLowercaseStringOrEmpty(key);
-  for (const aliases of Object.values(RUNTIME_CONFIG_OPTION_ALIASES)) {
-    if (aliases.some((alias) => alias === normalizedKey)) {
-      return aliases;
-    }
-  }
-  return [key];
 }
 
 export function resolveRuntimeConfigOptionKey(
@@ -404,7 +343,7 @@ function resolveRuntimeConfigOptionKeyFromMap(
   advertisedKeys: ReadonlyMap<string, string>,
 ): string {
   const normalizedKey = normalizeText(key) ?? "";
-  const normalizedLookupKey = normalizeLowercaseStringOrEmpty(normalizedKey);
+  const normalizedLookupKey = normalizedKey.toLowerCase();
   if (!normalizedKey || advertisedKeys.size === 0) {
     return normalizedKey;
   }
@@ -412,8 +351,11 @@ function resolveRuntimeConfigOptionKeyFromMap(
   if (exactAdvertisedKey) {
     return exactAdvertisedKey;
   }
-  for (const alias of resolveRuntimeConfigOptionAliases(normalizedKey)) {
-    const advertisedAlias = advertisedKeys.get(normalizeLowercaseStringOrEmpty(alias));
+  const aliases = Object.values(RUNTIME_CONFIG_OPTION_ALIASES).find((group) =>
+    group.some((alias) => alias === normalizedLookupKey),
+  );
+  for (const alias of aliases ?? []) {
+    const advertisedAlias = advertisedKeys.get(alias);
     if (advertisedAlias) {
       return advertisedAlias;
     }
@@ -425,26 +367,25 @@ export function inferRuntimeOptionPatchFromConfigOption(
   key: string,
   value: string,
 ): Partial<AcpSessionRuntimeOptions> {
-  const validated = validateRuntimeConfigOptionInput(key, value);
-  const normalizedKey = normalizeLowercaseStringOrEmpty(validated.key);
+  const normalizedKey = key.toLowerCase();
   if (normalizedKey === "model") {
-    return { model: validateRuntimeModelInput(validated.value) };
+    return { model: validateRuntimeModelInput(value) };
   }
   if (isThinkingConfigKey(normalizedKey)) {
-    return { thinking: validateRuntimeThinkingInput(validated.value) };
+    return { thinking: validateRuntimeThinkingInput(value) };
   }
   if (RUNTIME_CONFIG_OPTION_ALIASES.permissionProfile.some((alias) => alias === normalizedKey)) {
-    return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
+    return { permissionProfile: validateRuntimePermissionProfileInput(value) };
   }
   if (RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) => alias === normalizedKey)) {
-    return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };
+    return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(value) };
   }
   if (normalizedKey === "cwd") {
-    return { cwd: validateRuntimeCwdInput(validated.value) };
+    return { cwd: validateRuntimeCwdInput(value) };
   }
   return {
     backendExtras: {
-      [validated.key]: validated.value,
+      [key]: value,
     },
   };
 }

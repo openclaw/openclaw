@@ -8,7 +8,7 @@ function measurementClock() {
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
   const observers = new Set<ControlledResizeObserver>();
-  const visibilityCallbacks: Array<(entries: { isIntersecting: boolean }[]) => void> = [];
+  const visibilityObservers = new Set<ControlledIntersectionObserver>();
   const motion = Object.assign(new EventTarget(), { matches: false });
   class ControlledResizeObserver implements ResizeObserver {
     readonly targets = new Set<Element>();
@@ -25,27 +25,37 @@ function measurementClock() {
       this.targets.clear();
     }
   }
+  class ControlledIntersectionObserver {
+    readonly targets = new Set<Element>();
+    constructor(readonly callback: (entries: { isIntersecting: boolean }[]) => void) {
+      visibilityObservers.add(this);
+    }
+    observe(target: Element) {
+      this.targets.add(target);
+    }
+    disconnect() {
+      this.targets.clear();
+    }
+  }
   vi.stubGlobal("ResizeObserver", ControlledResizeObserver);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.set(++nextFrame, callback);
     return nextFrame;
   });
   vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
-        visibilityCallbacks.push(callback);
-      }
-      observe() {}
-      disconnect() {}
-    },
-  );
+  vi.stubGlobal("IntersectionObserver", ControlledIntersectionObserver);
   vi.stubGlobal("matchMedia", () => motion);
   return {
     motion,
-    visible(isIntersecting: boolean) {
-      visibilityCallbacks.forEach((callback) => callback([{ isIntersecting }]));
+    visible(isIntersecting: boolean, target?: Element) {
+      for (const observer of visibilityObservers) {
+        if (target ? observer.targets.has(target) : observer.targets.size > 0) {
+          observer.callback([{ isIntersecting }]);
+        }
+      }
+    },
+    observesSize(target: Element) {
+      return [...observers].some((observer) => observer.targets.has(target));
     },
     flush() {
       const pending = [...frames.values()];
@@ -113,9 +123,38 @@ function denseTitles(count: number, options: Parameters<typeof renderHoverMarque
 }
 
 describe("hover marquee measurement budget", () => {
+  it.each([false, true])("defers unseen label measurement and observers (loop=%s)", (loop) => {
+    const clock = measurementClock();
+    const { labels, operations } = denseTitles(2, { loop });
+    const style = vi.spyOn(globalThis, "getComputedStyle");
+    const observeContent = vi.spyOn(MutationObserver.prototype, "observe");
+    clock.flush();
+    clock.visible(false);
+    clock.flush();
+    expect(operations).toEqual([]);
+    expect(style).not.toHaveBeenCalled();
+    expect(observeContent).not.toHaveBeenCalled();
+    expect(labels.some((label) => clock.observesSize(label))).toBe(false);
+
+    clock.visible(true, labels[0]);
+    clock.flush();
+    expect(labels[0]!.classList.contains("hover-marquee--overflowing")).toBe(true);
+    expect(clock.observesSize(labels[0]!)).toBe(true);
+    expect(labels[1]!.classList.contains("hover-marquee--overflowing")).toBe(false);
+    expect(clock.observesSize(labels[1]!)).toBe(false);
+    expect(style.mock.calls.some(([element]) => element === labels[1])).toBe(false);
+
+    clock.visible(true, labels[1]);
+    clock.flush();
+    expect(labels[1]!.classList.contains("hover-marquee--overflowing")).toBe(true);
+    expect(clock.observesSize(labels[1]!)).toBe(true);
+  });
+
   it("reads a dense title batch before writing overflow styles", () => {
     const clock = measurementClock();
     const { labels, operations } = denseTitles(100);
+    clock.flush();
+    clock.visible(true);
     clock.flush();
     expect(labels.every((label) => label.classList.contains("hover-marquee--overflowing"))).toBe(
       true,
@@ -159,6 +198,8 @@ describe("hover marquee measurement budget", () => {
     // Focusing collapses jsdom's selection and queues a separate selectionchange event.
     vi.advanceTimersByTime(0);
     clock.flush();
+    clock.visible(true);
+    clock.flush();
     expectResting();
     expectNoLabelStyleRead();
 
@@ -190,6 +231,8 @@ describe("hover marquee measurement budget", () => {
   it("skips unchanged titles but refreshes content, class, direction, and viewport changes", async () => {
     const clock = measurementClock();
     const { show, labels, operations } = denseTitles(100);
+    clock.flush();
+    clock.visible(true);
     clock.flush();
     operations.length = 0;
     for (let index = 0; index < 5; index += 1) {
@@ -240,6 +283,8 @@ describe("hover marquee measurement budget", () => {
     const { labels, container } = denseTitles(1, { loop: true, delay: 50 });
     const label = labels[0]!;
     const host = container.querySelector("a")!;
+    clock.flush();
+    clock.visible(true);
     clock.flush();
     expect(label.classList.contains("hover-marquee--scrolling")).toBe(false);
     host.setAttribute("aria-expanded", "true");

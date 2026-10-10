@@ -126,13 +126,6 @@ function isOpenAIProvider(provider: string | undefined): boolean {
   return normalized === PROVIDER_ID;
 }
 
-function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  return (
-    trimmed !== undefined && /^https?:\/\/api\.githubcopilot\.com(?:\/v1)?\/?$/iu.test(trimmed)
-  );
-}
-
 function normalizeCodexTransportFields(params: {
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
@@ -141,10 +134,7 @@ function normalizeCodexTransportFields(params: {
   baseUrl?: string;
 } {
   const useCodexTransport =
-    !params.baseUrl ||
-    isOpenAIApiBaseUrl(params.baseUrl) ||
-    isOpenAICodexBaseUrl(params.baseUrl) ||
-    isLegacyCodexCompatBaseUrl(params.baseUrl);
+    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
   const api =
     useCodexTransport &&
     (!params.api || params.api === "openai-responses" || params.api === "openai-completions")
@@ -155,29 +145,6 @@ function normalizeCodexTransportFields(params: {
       ? OPENAI_CODEX_RESPONSES_BASE_URL
       : params.baseUrl;
   return { api, baseUrl };
-}
-
-function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string): boolean {
-  return [modelId, modelName]
-    .filter((value): value is string => typeof value === "string")
-    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS));
-}
-
-// Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
-function applyOpenAICodexImageInputCapability(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  if (Array.isArray(params.model.input) && params.model.input.includes("image")) {
-    return undefined;
-  }
-  if (!matchesOpenAICodexImageCapableModel(params.modelId, params.model.name)) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    input: ["text", "image"],
-  };
 }
 
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
@@ -563,13 +530,19 @@ export function buildOpenAICodexProviderHooks(): Required<
       if (!isOpenAIProvider(ctx.provider)) {
         return undefined;
       }
-      const transportNormalized = normalizeCodexTransport(ctx.model);
-      const imageCapable =
-        applyOpenAICodexImageInputCapability({
-          modelId: ctx.modelId,
-          model: transportNormalized,
-        }) ?? transportNormalized;
-      return imageCapable === ctx.model ? undefined : imageCapable;
+      let model = normalizeCodexTransport(ctx.model);
+      // Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
+      if (
+        !(Array.isArray(model.input) && model.input.includes("image")) &&
+        [ctx.modelId, model.name].some(
+          (candidate) =>
+            typeof candidate === "string" &&
+            matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS),
+        )
+      ) {
+        model = { ...model, input: ["text", "image"] };
+      }
+      return model === ctx.model ? undefined : model;
     },
     normalizeTransport: ({ provider, api, baseUrl }) => {
       if (!isOpenAIProvider(provider)) {

@@ -1,5 +1,3 @@
-// Entry capability helpers validate explicit media capability tags and infer
-// shared provider entries from registry metadata.
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import type {
@@ -13,11 +11,6 @@ function isMediaCapability(value: unknown): value is MediaUnderstandingCapabilit
   return typeof value === "string" && (MEDIA_CAPABILITIES as readonly string[]).includes(value);
 }
 
-function resolveEntryType(entry: MediaUnderstandingModelConfig): "provider" | "cli" {
-  return entry.type ?? (entry.command ? "cli" : "provider");
-}
-
-/** Returns valid explicit capability tags from a media model entry. */
 export function resolveConfiguredMediaEntryCapabilities(
   entry: MediaUnderstandingModelConfig,
 ): MediaUnderstandingCapability[] | undefined {
@@ -37,7 +30,7 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
   if (configured) {
     return configured;
   }
-  if (resolveEntryType(params.entry) === "cli") {
+  if ((params.entry.type ?? (params.entry.command ? "cli" : "provider")) === "cli") {
     return undefined;
   }
   const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
@@ -47,7 +40,6 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
   return params.providerRegistry.get(providerId)?.capabilities;
 }
 
-/** Tests whether an entry should be considered for a requested media capability. */
 export function matchesMediaEntryCapability(params: {
   entry: MediaUnderstandingModelConfig;
   capability: MediaUnderstandingCapability;

@@ -11,6 +11,7 @@ import {
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway, waitForCommittedChatRoute } from "./new-session-page.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Configured fresh-session defaults",
@@ -356,6 +357,8 @@ suite.define(() => {
             }
             if (policy === "configured") {
               await waitForCommittedChatRoute(page);
+              // Replacing the document must not interrupt the submitted draft's cleanup.
+              await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);
               await page.goto(suite.server.baseUrl + "new");
               await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
               await expect

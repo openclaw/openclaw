@@ -3,7 +3,16 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { renderDashboards, type DashboardsRouteData } from "./view.ts";
+import {
+  renderDashboards,
+  type DashboardGalleryFilters,
+  type DashboardsRouteData,
+} from "./view.ts";
+
+const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
+const handlers = {
+  onFilterChange: vi.fn(),
+};
 
 function routeData(sessions: SessionsListResult["sessions"], basePath = ""): DashboardsRouteData {
   return {
@@ -27,7 +36,7 @@ describe("dashboards index", () => {
     "replaces the accessible loading skeleton with the resolved %s state",
     (outcome) => {
       const container = document.createElement("div");
-      render(renderDashboards(undefined), container);
+      render(renderDashboards(undefined, filters, handlers), container);
 
       const busy = container.querySelector('[aria-busy="true"]');
       expect(busy).not.toBeNull();
@@ -52,7 +61,7 @@ describe("dashboards index", () => {
         data.result = null;
         data.error = "Dashboard service unavailable";
       }
-      render(renderDashboards(data), container);
+      render(renderDashboards(data, filters, handlers), container);
 
       expect(container.querySelector('[aria-busy="true"]')).toBeNull();
       expect(container.querySelector(".skeleton")).toBeNull();
@@ -92,11 +101,9 @@ describe("dashboards index", () => {
             ],
             basePath,
           ),
-          undefined,
+          filters,
           {
-            onQueryChange: vi.fn(),
-            onOwnerChange: vi.fn(),
-            onSortChange: vi.fn(),
+            onFilterChange: vi.fn(),
             onNavigate,
           },
         ),
@@ -148,7 +155,7 @@ describe("dashboards index", () => {
 
   it("explains how to create a dashboard when the list is empty", () => {
     const container = document.createElement("div");
-    render(renderDashboards(routeData([])), container);
+    render(renderDashboards(routeData([]), filters, handlers), container);
 
     const empty = container.querySelector("[data-dashboards-empty]");
     expect(empty?.textContent).toContain("No dashboards yet");

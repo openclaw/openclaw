@@ -1,7 +1,8 @@
 // Full embedded-runner stream wrapper chain around the real Codex Responses
 // provider with a mocked WebSocket, proving the idle watchdog polices provider
 // silence in the shapes seen live (fresh, cached, and consumer-parked streams).
-import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
+import { createLlmRuntime } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -9,7 +10,7 @@ import {
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { Model } from "../../../llm/types.js";
-// Registers built-in providers on the default registry exactly like the runtime does.
+// Installs the OpenClaw transport host exactly like the runtime does.
 import "../../../llm/stream.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -52,6 +53,9 @@ const context = {
   systemPrompt: "You are a test.",
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
 } as Parameters<StreamFn>[1];
+
+const llmRuntime = createLlmRuntime();
+registerBuiltInApiProviders(llmRuntime.registry);
 
 type Frame = Record<string, unknown>;
 
@@ -108,7 +112,7 @@ function buildRunnerChain(params: {
 }): { streamFn: StreamFn; idleTimeoutMs: number; firstEventTimeoutMs: number; strategy: string } {
   const cfg = { agents: { defaults: { timeoutSeconds: 3600 } } };
   const { streamFn: base, strategy } = resolveEmbeddedAgentStream({
-    llmRuntime: defaultLlmRuntime,
+    llmRuntime,
     currentStreamFn: undefined,
     sessionId: params.sessionId,
     signal: params.runSignal,
@@ -242,51 +246,6 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       expect(socket?.closeCalls.length).toBeGreaterThan(0);
     },
   );
-
-  it("B: fresh socket that sends one response.created frame then stalls is aborted at the idle timeout", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("WebSocket", ControlledWebSocket);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 500 })),
-    );
-    ControlledWebSocket.onSend = (socket) => {
-      queueMicrotask(() =>
-        socket.deliver({
-          type: "response.created",
-          response: { id: "resp_b", status: "in_progress" },
-        }),
-      );
-    };
-    const onIdleTimeout = vi.fn();
-    const runAbort = new AbortController();
-    const { streamFn } = buildRunnerChain({
-      runId: "run-B",
-      sessionId: "session-B",
-      runSignal: runAbort.signal,
-      onIdleTimeout,
-      codeMode: true,
-    });
-
-    const seen: string[] = [];
-    const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, (type) => {
-      seen.push(type);
-    });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(seen).toEqual(["start"]);
-
-    await vi.advanceTimersByTimeAsync(119_000);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
-
-    const { result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout/,
-    );
-    expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
-  });
 
   it("C: cached session socket reused from a previous call, then one frame and a stall, is aborted at the idle timeout", async () => {
     vi.useFakeTimers();

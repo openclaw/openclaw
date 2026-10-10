@@ -1,5 +1,6 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
@@ -271,28 +272,23 @@ export async function detectSetupInference(
   // Preserve the shipped 30s discovery allowance.
   // This bounds asynchronous discovery; synchronous plugin loading shares the event loop.
   const timeoutMs = 30_000;
-  return await new Promise<SetupInferenceDetection>((resolve, reject) => {
-    const timer = setTimeout(() => {
+  return await raceWithTimeout(
+    () =>
+      discoverSetupInference(prepared, deps, controller.signal, (detection) => {
+        partial = detection;
+        deps.onPartial?.(detection);
+      }).catch((error: unknown) => {
+        throw toErrorObject(error, "Setup inference discovery failed");
+      }),
+    timeoutMs,
+    () => {
       controller.abort(new Error("Setup inference discovery timed out"));
       setupInferenceLog.warn(
         `Setup inference detection timed out after ${timeoutMs}ms; returning partial detection.`,
       );
-      resolve(partial);
-    }, timeoutMs);
-    void discoverSetupInference(prepared, deps, controller.signal, (detection) => {
-      partial = detection;
-      deps.onPartial?.(detection);
-    }).then(
-      (detection) => {
-        clearTimeout(timer);
-        resolve(detection);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(toErrorObject(error, "Setup inference discovery failed"));
-      },
-    );
-  });
+      return partial;
+    },
+  );
 }
 
 async function discoverSetupInference(

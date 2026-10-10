@@ -114,7 +114,8 @@ export function resolveCrabboxProvisionCallTimeoutMs(
   return (
     resolveCrabboxProvisionBaseTimeoutMs(profile) +
     countCrabboxProvisionSetupPhases(profile) * CRABBOX_SETUP_TIMEOUT_MS +
-    resolveCrabboxNodeEnrollmentTimeoutMs(nodeBootstrapTimeoutMs) +
+    // Runtime preparation and authenticated enrollment have separate live grants.
+    2 * resolveCrabboxNodeEnrollmentTimeoutMs(nodeBootstrapTimeoutMs) +
     CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS +
     CRABBOX_STOP_TIMEOUT_MS +
     // Diagnostics, heartbeat cancellation, and stop retain child/tree settlement.

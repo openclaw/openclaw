@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.node.parseJsonParamsObject
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -10,7 +11,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -80,7 +80,6 @@ internal class RealtimeAgentCoordinator(
   private val onUnhandledCompletion: (RealtimeAgentUnhandledCompletion) -> Unit = {},
   private val maxCachedCompletions: Int = MAX_CACHED_COMPLETIONS,
 ) {
-  private val json = Json { ignoreUnknownKeys = true }
   private val lock = Any()
   private val parentContext = parentScope.coroutineContext
   private val parentJob = parentContext[Job]
@@ -259,7 +258,7 @@ internal class RealtimeAgentCoordinator(
           if (args != null) put("args", args)
         }
       val response = requestGateway("talk.client.toolCall", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-      val ack = runCatching { json.parseToJsonElement(response) as? JsonObject }.getOrNull()
+      val ack = parseJsonParamsObject(response)
       val runId = ack?.get("runId").asJsonStringOrNull()
       if (runId.isNullOrBlank()) {
         if (finishPending(pendingCall)) submitError(session, callId, "tool call returned no run id")
@@ -363,7 +362,7 @@ internal class RealtimeAgentCoordinator(
           if (mode != null) put("mode", JsonPrimitive(mode))
         }
       val response = requestGateway("talk.session.steer", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-      val result = runCatching { json.parseToJsonElement(response) as? JsonObject }.getOrNull()
+      val result = parseJsonParamsObject(response)
       if (result == null) {
         submitError(session, callId, "control call returned no result")
       } else {

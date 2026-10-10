@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const { probeClaudeCliAuthStatus, runUtf8CommandWithTimeout } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
@@ -87,11 +88,14 @@ describe("anthropic Claude model refs", () => {
   });
 
   it.each([
+    ["haiku", "claude-haiku-5-5"],
+    ["haiku-5.5", "claude-haiku-5-5"],
+    ["haiku-5-5", "claude-haiku-5-5"],
     ["sonnet", "claude-sonnet-5-5"],
     ["sonnet-5.5", "claude-sonnet-5-5"],
     ["sonnet-5-5", "claude-sonnet-5-5"],
     ["sonnet-5", "claude-sonnet-5"],
-  ])("canonicalizes %s without changing explicit Sonnet versions", (alias, modelId) => {
+  ])("canonicalizes %s without changing explicit model versions", (alias, modelId) => {
     for (const provider of ["", "anthropic/", "claude-cli/"]) {
       expect(resolveKnownAnthropicModelRef(`${provider}${alias}`)).toBe(`anthropic/${modelId}`);
     }
@@ -110,9 +114,9 @@ describe("anthropic Claude model refs", () => {
     }
   });
 
-  it("preserves the current claude-haiku-4-5 model and its bare alias", () => {
+  it("preserves explicit claude-haiku-4-5 refs", () => {
     // claude-haiku-4-5 is a current production model (not retired), so neither
-    // its full ref, its dotted variant, nor the bare "haiku" family alias must
+    // its full ref nor its dotted variant must
     // be rewritten to sonnet.
     expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
       "anthropic/claude-haiku-4-5",
@@ -214,12 +218,13 @@ describe("anthropic cli migration", () => {
             "openai/gpt-5.2": {},
             "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-haiku-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -308,13 +313,14 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-haiku-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -358,13 +364,14 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-haiku-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -482,6 +489,7 @@ describe("anthropic cli migration", () => {
               alias: "Sonnet",
               agentRuntime: { id: "auto" },
             },
+            "anthropic/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -500,6 +508,7 @@ describe("anthropic cli migration", () => {
       alias: "Sonnet",
       agentRuntime: { id: "claude-cli" },
     });
+    expect(defaults.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "openclaw" } });
   });
 
   it("registered cli auth tells users to run claude auth login when local auth is missing", async () => {
@@ -654,25 +663,56 @@ describe("anthropic cli migration", () => {
     expect(defaults?.models?.["anthropic/claude-opus-5"]).toEqual({
       agentRuntime: { id: "claude-cli" },
     });
-    expect(defaults?.models?.["anthropic/claude-opus-4-8"]).toEqual({
-      agentRuntime: { id: "claude-cli" },
-    });
+    // Claude IDs outside the sign-in seed: catalog rows published later and typed IDs.
+    expect(defaults?.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "claude-cli" } });
     expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});
   });
 
-  it("registered non-interactive cli auth reports missing local auth and exits cleanly", async () => {
+  it("registered cli sign-in seeds no deprecated Claude CLI catalog rows", async () => {
+    probeClaudeCliAuthStatus.mockReturnValue({ status: "available" });
+    const method = await resolveAnthropicCliAuthMethod();
+    const deprecatedRefs = manifest.modelCatalog.providers["claude-cli"].models
+      .filter((model) => "status" in model && model.status === "deprecated")
+      .map(({ id }) => `anthropic/${id}`);
+    expect(deprecatedRefs).toContain("anthropic/claude-opus-4-8");
+
+    const fresh = await method.runNonInteractive?.(createProviderAuthMethodNonInteractiveContext());
+    const freshModels = fresh?.agents?.defaults?.models ?? {};
+    expect(Object.keys(freshModels)).toContain("anthropic/claude-opus-5-5");
+    for (const ref of deprecatedRefs) {
+      expect(freshModels).not.toHaveProperty([ref]);
+    }
+
+    const existing = await method.runNonInteractive?.(
+      createProviderAuthMethodNonInteractiveContext({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-8" },
+            models: { "anthropic/claude-opus-4-8": { alias: "Opus 4.8" } },
+          },
+        },
+      }),
+    );
+    expect(existing?.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-opus-4-8" });
+    expect(existing?.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]).toEqual({
+      alias: "Opus 4.8",
+      agentRuntime: { id: "claude-cli" },
+    });
+  });
+
+  it("registered non-interactive cli auth propagates missing local auth", async () => {
     probeClaudeCliAuthStatus.mockReturnValue({ status: "missing" });
     const method = await resolveAnthropicCliAuthMethod();
     const ctx = createProviderAuthMethodNonInteractiveContext();
 
-    await expect(method.runNonInteractive?.(ctx)).resolves.toBeNull();
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
       [
         'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
         "Run claude auth login first.",
       ].join("\n"),
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("registered non-interactive cli auth reports stored credentials that need interaction", async () => {
@@ -680,13 +720,13 @@ describe("anthropic cli migration", () => {
     const method = await resolveAnthropicCliAuthMethod();
     const ctx = createProviderAuthMethodNonInteractiveContext();
 
-    await expect(method.runNonInteractive?.(ctx)).resolves.toBeNull();
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
       [
         'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
         "Run claude auth status, then retry.",
       ].join("\n"),
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 });

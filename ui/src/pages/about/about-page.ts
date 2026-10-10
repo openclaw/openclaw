@@ -25,21 +25,16 @@ class AboutPage extends OpenClawLightDomElement {
 
   private copyResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private waveResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.theme);
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.copyResetTimer !== null) {
-      globalThis.clearTimeout(this.copyResetTimer);
-      this.copyResetTimer = null;
-    }
-    if (this.waveResetTimer !== null) {
-      globalThis.clearTimeout(this.waveResetTimer);
-      this.waveResetTimer = null;
-    }
+    globalThis.clearTimeout(this.copyResetTimer ?? undefined);
+    this.copyResetTimer = null;
+    globalThis.clearTimeout(this.waveResetTimer ?? undefined);
+    this.waveResetTimer = null;
     super.disconnectedCallback();
   }
 

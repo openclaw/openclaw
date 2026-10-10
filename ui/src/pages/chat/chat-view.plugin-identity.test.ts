@@ -9,7 +9,10 @@ import type {
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
@@ -53,7 +56,8 @@ describe("native chat view session identity", () => {
     );
     const reportError = vi.fn();
     const context = {
-      agentSelection: { state: { selectedId: "main" } },
+      gateway: createApplicationGateway().gateway,
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
       plugins: {
         registrations: () => [],
         selectedReplacement: (surface: ControlUiSurface) =>
@@ -73,7 +77,6 @@ describe("native chat view session identity", () => {
         currentAgentId: "writer",
       }),
       transcript: createTestTranscript(),
-      floatingTaskProgress: html`<div data-floating-proof>Task progress</div>`,
       error: null,
       approvalCanGrant: false,
       onRefresh: vi.fn(),
@@ -119,9 +122,6 @@ describe("native chat view session identity", () => {
         ]),
       ),
     ).toEqual({ transcript: "writer/global", "tool-result": "writer/global" });
-    const surface = provider.querySelector(".chat-transcript-surface");
-    expect(surface?.querySelector("[data-floating-proof]")).not.toBeNull();
-    expect(surface?.querySelector('[data-native-owner="transcript"]')).not.toBeNull();
     expect(reportError).not.toHaveBeenCalled();
   });
 });

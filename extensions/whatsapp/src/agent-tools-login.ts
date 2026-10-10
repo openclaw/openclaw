@@ -5,6 +5,7 @@ import {
 import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
@@ -41,11 +42,13 @@ export function createWhatsAppLoginTool(
           throw new Error("WhatsApp login authority is no longer active.");
         }
       };
-      const renderQrReply = (params: {
-        message: string;
-        qrDataUrl: string;
-        connected?: boolean;
-      }) => {
+      const renderReply = (
+        params: { message: string; qrDataUrl?: string; connected?: boolean },
+        noQrDetails: { connected: boolean } | { qr: false },
+      ) => {
+        if (!params.qrDataUrl) {
+          return textResult(params.message, noQrDetails);
+        }
         const text = [
           params.message,
           "",
@@ -53,13 +56,10 @@ export function createWhatsAppLoginTool(
           "",
           `![whatsapp-qr](${params.qrDataUrl})`,
         ].join("\n");
-        return {
-          content: [{ type: "text" as const, text }],
-          details: {
-            connected: params.connected ?? false,
-            qr: true,
-          },
-        };
+        return textResult(text, {
+          connected: params.connected ?? false,
+          qr: true,
+        });
       };
 
       const action = (args as { action?: string })?.action ?? "start";
@@ -73,17 +73,7 @@ export function createWhatsAppLoginTool(
             (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
           ),
         });
-        if (result.qrDataUrl) {
-          return renderQrReply({
-            message: result.message,
-            qrDataUrl: result.qrDataUrl,
-            connected: result.connected,
-          });
-        }
-        return {
-          content: [{ type: "text", text: result.message }],
-          details: { connected: result.connected },
-        };
+        return renderReply(result, { connected: result.connected });
       }
 
       await beforeCredentialPersistence();
@@ -97,23 +87,7 @@ export function createWhatsAppLoginTool(
             : false,
       });
 
-      if (!result.qrDataUrl) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: result.message,
-            },
-          ],
-          details: { qr: false },
-        };
-      }
-
-      return renderQrReply({
-        message: result.message,
-        qrDataUrl: result.qrDataUrl,
-        connected: result.connected,
-      });
+      return renderReply(result, { qr: false });
     },
   };
 }

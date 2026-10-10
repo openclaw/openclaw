@@ -1,4 +1,4 @@
-// API baseline helpers render public SDK exports for contract drift reports.
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
@@ -407,7 +407,9 @@ export async function renderPluginSdkApiBaseline(params?: {
   repoRoot?: string;
   entrypoints?: readonly string[];
 }): Promise<PluginSdkApiBaseline> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  // Native declaration emission roots at the canonical checkout; a symlinked
+  // alias (macOS temporary directories) would place every source outside it.
+  const repoRoot = fs.realpathSync.native(params?.repoRoot ?? resolveRepoRoot());
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   if (params?.entrypoints === undefined) {
     validateMetadata();

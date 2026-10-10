@@ -18,8 +18,13 @@ import {
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
-import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderRuntimeCoordinationFailureCopy,
+} from "../../agents/failover/assistant-request-failure-copy.js";
+import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -27,6 +32,7 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
   renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
@@ -45,6 +51,7 @@ import {
   readErrorCauses,
   readErrorName,
 } from "../../infra/errors.js";
+import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -146,28 +153,6 @@ export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): 
   return level === "on" || level === "full";
 }
 
-const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
-  /\bcodex app-server client closed before turn completed\b/iu;
-const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
-  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
-const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
-  /\bcodex session generation is no longer current\b/iu;
-
-function buildCodexAppServerFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
-  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
-    return "⚠️ This Codex session changed before your message could run. Please send it again.";
-  }
-  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
-  }
-  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
-  }
-  return null;
-}
-
-/** Formats the reply shown when preflight compaction fails before a run. */
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -185,8 +170,8 @@ export function buildPreflightCompactionFailureText(
   const isTimeout = classifyCompactionReason(reason) === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
-    ? "⚠️ Context is too large and auto-compaction timed out before it could finish."
-    : "⚠️ Context is too large and auto-compaction could not recover this turn.";
+    ? "⚠️ This conversation is too long, and shortening it took too long."
+    : "⚠️ This conversation is too long, and OpenClaw couldn't shorten it.";
   return `${summary}${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`;
 }
 
@@ -198,7 +183,6 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     reason: error.reason,
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
-    causeText: error.cause ? formatErrorMessage(error.cause).trim() : undefined,
     recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
   });
 }
@@ -243,6 +227,8 @@ export function buildExternalRunFailureReply(
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
     isHeartbeat?: boolean;
+    /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+    useHeartbeatFailureCopy?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -250,6 +236,34 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
+  const buildUnclassifiedReply = (includeHeartbeatDetails: boolean): ExternalRunFailureReply => {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(
+            includeHeartbeatDetails ? resolveExternalRunFailureDetail(sanitizedMessage) : undefined,
+          )
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  };
+  const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
+  if (approvalMessage) {
+    return { text: `⚠️ ${approvalMessage}`, isGenericRunnerFailure: false };
+  }
+  if (
+    collectErrorGraphCandidates(error, readErrorCauses).some(
+      (candidate) => candidate instanceof SkillResourceDeliveryLimitError,
+    )
+  ) {
+    return {
+      text: "⚠️ Selected skill resources exceed the 8 MiB delivery limit. Select fewer skills, then try again.",
+      isGenericRunnerFailure: false,
+    };
+  }
   // A preflight refusal is host-authored and names the next step. Heartbeats run
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
@@ -261,15 +275,7 @@ export function buildExternalRunFailureReply(
         isGenericRunnerFailure: false,
       };
     }
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    return {
-      text: options?.isHeartbeat
-        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
-    };
+    return buildUnclassifiedReply(true);
   }
   const failoverFacts =
     options?.failoverFacts ??
@@ -277,6 +283,13 @@ export function buildExternalRunFailureReply(
   const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
+  }
+  const runtimeCoordinationFailure =
+    failoverFacts.code && isNonProviderRuntimeCoordinationError(error)
+      ? renderRuntimeCoordinationFailureCopy(failoverFacts.code)
+      : undefined;
+  if (runtimeCoordinationFailure) {
+    return { text: runtimeCoordinationFailure, isGenericRunnerFailure: false };
   }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
@@ -355,14 +368,10 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
-    const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(
-          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
-        )
-      : undefined;
-    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
+    // Heartbeat-backed event turns remain visible even with generic wording.
+    return buildUnclassifiedReply(options.includeDetails === true);
   }
-  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
@@ -435,15 +444,18 @@ export function resolveAgentRunFailureText(params: {
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  useHeartbeatFailureCopy?: boolean;
   replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
 }): ReplyPayload {
+  const useHeartbeatFailureCopy = params.useHeartbeatFailureCopy ?? params.isHeartbeat === true;
   return markAgentRunFailureReplyPayload({
     text: resolveAgentRunFailureText({
       ...params,
-      text: params.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Visibility follows the execution surface, not which sentence we render.
       isGenericRunnerFailure: !params.isHeartbeat,
     }),
   });
@@ -460,7 +472,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
   });
 }
 
-/** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;

@@ -10,11 +10,12 @@ import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/sessi
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsListTool,
   describeSessionVisibilityScope,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
@@ -52,12 +53,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema(),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -99,11 +95,7 @@ const SessionsListOutputSchema = Type.Object(
           "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
-    sessionLinkRule: Type.Optional(
-      Type.String({
-        description: "How to build Control UI URLs for sessionKey values in this result.",
-      }),
-    ),
+    sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
     visibility: Type.Optional(
       Type.Object(
         {
@@ -181,8 +173,7 @@ export function createSessionsListTool(opts?: {
       const limit = readPositiveIntegerParam(params, "limit");
       const initialOffset = readNonNegativeIntegerParam(params, "offset") ?? 0;
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
-      const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
-      const messageLimit = Math.min(messageLimitRaw, 20);
+      const messageLimit = Math.min(readNonNegativeIntegerParam(params, "messageLimit") ?? 0, 20);
       const label = readToolStringParam(params, "label");
       const agentId = readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
@@ -254,8 +245,6 @@ export function createSessionsListTool(opts?: {
       const outputLimit = Math.min(limit ?? 100, 200);
       let offset = initialOffset;
       let nextOffset: number | undefined;
-      let hasMore = false;
-      let truncationReason: "scan-limit" | "byte-limit" | undefined;
       for (let pageIndex = 0; sessions.length < outputLimit; pageIndex += 1) {
         const page = await gatewayCall<{
           sessions?: GatewaySessionListRow[];
@@ -346,9 +335,8 @@ export function createSessionsListTool(opts?: {
               typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
                 ? (entry as { ownerSessionKey?: string }).ownerSessionKey
                 : undefined,
-            spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
-            parentSessionKey:
-              typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+            spawnedBy: readStringValue(entry.spawnedBy),
+            parentSessionKey: readStringValue(entry.parentSessionKey),
           });
           const kind = classifySessionListKind(entry);
           if (
@@ -359,8 +347,10 @@ export function createSessionsListTool(opts?: {
           ) {
             sessions.push({ entry, agentId: resolvedAgentId, offset: offset + index });
             if (sessions.length === outputLimit) {
-              hasMore = index + 1 < pageSessions.length || page?.hasMore === true;
-              nextOffset = hasMore ? offset + index + 1 : undefined;
+              nextOffset =
+                index + 1 < pageSessions.length || page?.hasMore === true
+                  ? offset + index + 1
+                  : undefined;
               break;
             }
           }
@@ -369,21 +359,18 @@ export function createSessionsListTool(opts?: {
           break;
         }
         if (pageNextOffset === undefined) {
-          hasMore = false;
           nextOffset = undefined;
           break;
         }
-        hasMore = true;
         nextOffset = pageNextOffset;
         // Continue in a later tool call instead of throwing away a sparse partial page.
         if (pageIndex + 1 >= SESSIONS_LIST_MAX_SCAN_PAGES) {
-          truncationReason = "scan-limit";
           break;
         }
         offset = pageNextOffset;
       }
 
-      const stateVersions = getSessionStateVersions(
+      const stateVersions = await getSessionStateVersions(
         sessions.map(({ entry, agentId: stateAgentId }) => ({
           sessionKey: entry.key,
           agentId: stateAgentId,
@@ -395,9 +382,7 @@ export function createSessionsListTool(opts?: {
         source: GatewaySessionListRow;
         row: SessionListRow;
         titleEntry: SessionEntry;
-        sessionId: string;
         sessionKey: string;
-        agentId: string;
       }> = [];
 
       for (const { entry, agentId: resolvedAgentId } of sessions) {
@@ -410,12 +395,9 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = readStringValue(entry.channel);
-        const entryOrigin = entry.origin;
-        const originChannel =
-          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext = entry.deliveryContext;
-        const deliveryChannel = readStringValue(deliveryContext?.channel);
-        const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
+        const originChannel = readStringValue(entry.origin?.provider);
+        const lastChannel =
+          readStringValue(entry.deliveryContext?.channel) ?? readStringValue(entry.lastChannel);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -433,11 +415,7 @@ export function createSessionsListTool(opts?: {
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
         const parentSessionKeyRaw =
-          typeof entry.parentSessionKey === "string"
-            ? entry.parentSessionKey
-            : typeof entry.spawnedBy === "string"
-              ? entry.spawnedBy
-              : undefined;
+          readStringValue(entry.parentSessionKey) ?? readStringValue(entry.spawnedBy);
         const parentSessionKey = parentSessionKeyRaw
           ? visibleReference(parentSessionKeyRaw)
           : undefined;
@@ -525,21 +503,11 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
-            sessionId,
-            sessionKey: resolveInternalSessionKey({
-              key,
-              alias,
-              mainKey,
-            }),
-            agentId: resolvedAgentId,
+            sessionKey: resolveInternalSessionKey({ key, alias }),
           });
         }
         if (messageLimit > 0) {
-          const resolvedKey = resolveInternalSessionKey({
-            key,
-            alias,
-            mainKey,
-          });
+          const resolvedKey = resolveInternalSessionKey({ key, alias });
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);
@@ -573,13 +541,13 @@ export function createSessionsListTool(opts?: {
                   ...(signal ? { signal } : {}),
                   params: {
                     key: target.sessionKey,
-                    agentId: target.agentId,
+                    agentId: target.row.agentId,
                     includeDerivedTitles,
                     includeLastMessage,
                   },
                 })
               : undefined;
-          if (described && described.session?.sessionId !== target.sessionId) {
+          if (described && described.session?.sessionId !== target.titleEntry.sessionId) {
             unavailableRows.add(target.row);
             return;
           }
@@ -645,7 +613,7 @@ export function createSessionsListTool(opts?: {
         const resultFor = (count: number) => ({
           count,
           sessions: retainedRows.slice(0, count),
-          hasMore: count < retainedRows.length || hasMore,
+          hasMore: count < retainedRows.length || nextOffset !== undefined,
           ...(count < retainedRows.length
             ? { nextOffset: retained[count]?.offset }
             : nextOffset !== undefined
@@ -655,8 +623,8 @@ export function createSessionsListTool(opts?: {
           ...(enrichmentOmitted ? { enrichmentOmitted: true } : {}),
           ...(count < retainedRows.length
             ? { truncationReason: "byte-limit" as const }
-            : truncationReason
-              ? { truncationReason }
+            : sessions.length < outputLimit && nextOffset !== undefined
+              ? { truncationReason: "scan-limit" as const }
               : {}),
           ...(opts?.sessionLinkBase
             ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }

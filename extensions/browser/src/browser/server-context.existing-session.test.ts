@@ -64,22 +64,8 @@ const chromeMcpMock = vi.hoisted(() => ({
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
 
-vi.mock("./chrome-mcp.runtime.js", () => ({
-  getChromeMcpModule: vi.fn(async () => chromeMcpMock),
-}));
-
 const { createBrowserRouteContext } = await import("./server-context.js");
 const chromeMcp = chromeMcpMock;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function tab(targetId: string, url: string, title = "") {
   return { targetId, title, url, type: "page" as const };
@@ -189,8 +175,8 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("eagerly closes MCP while attach readiness is pending and prevents retry", async () => {
-    const readinessEntered = deferred<void>();
-    const readiness = deferred<never>();
+    const readinessEntered = Promise.withResolvers<void>();
+    const readiness = Promise.withResolvers<never>();
     vi.mocked(chromeMcp.listChromeMcpTabs).mockImplementationOnce(async () => {
       readinessEntered.resolve();
       return await readiness.promise;
@@ -226,8 +212,8 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("drains an admitted MCP tab open before the final session sweep", async () => {
-    const openEntered = deferred<void>();
-    const opened = deferred<{
+    const openEntered = Promise.withResolvers<void>();
+    const opened = Promise.withResolvers<{
       targetId: string;
       title: string;
       url: string;

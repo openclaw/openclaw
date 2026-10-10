@@ -21,24 +21,18 @@ function hasNormalizedControlCommand(normalizedBody: string, cfg?: OpenClawConfi
   }
   const lowered = normalizeLowercaseStringOrEmpty(normalizedBody);
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
-  for (const command of commands) {
-    for (const alias of command.textAliases) {
+  return commands.some((command) =>
+    command.textAliases.some((alias) => {
       const normalized = normalizeOptionalLowercaseString(alias);
-      if (!normalized) {
-        continue;
-      }
-      if (lowered === normalized) {
-        return true;
-      }
-      if (command.acceptsArgs && lowered.startsWith(normalized)) {
-        const nextChar = normalizedBody.charAt(normalized.length);
-        if (nextChar && /\s/.test(nextChar)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
+      return Boolean(
+        normalized &&
+        (lowered === normalized ||
+          (command.acceptsArgs &&
+            lowered.startsWith(normalized) &&
+            /\s/.test(normalizedBody.charAt(normalized.length)))),
+      );
+    }),
+  );
 }
 
 /** Returns true when text starts with a configured control command alias. */
@@ -57,10 +51,7 @@ export function isControlCommandMessage(
   options?: CommandNormalizeOptions,
 ): boolean {
   const normalizedBody = normalizeControlCommandBody(text, options);
-  return (
-    hasNormalizedControlCommand(normalizedBody, cfg) ||
-    isAbortTrigger(normalizeLowercaseStringOrEmpty(normalizedBody))
-  );
+  return hasNormalizedControlCommand(normalizedBody, cfg) || isAbortTrigger(normalizedBody);
 }
 
 /** Returns true when a command starts a new transcript rather than resetting in place. */
@@ -82,18 +73,7 @@ export function isSessionBoundaryCommandText(
  * command/directive execution, not normal chat replies.
  */
 export function hasInlineCommandTokens(text?: string): boolean {
-  const body = text ?? "";
-  if (!body.trim()) {
-    return false;
-  }
-  return /(?:^|\s)[/!][a-z]/i.test(body);
-}
-
-function hasSpacedPluginCommand(text?: string): boolean {
-  const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
-  // Only active registered commands affect ingress authorization and mention gating.
-  // This keeps spaced syntax aligned with canonical `/name` command ownership.
-  return commandBody ? matchPluginCommand(commandBody) !== null : false;
+  return /(?:^|\s)[/!][a-z]/i.test(text ?? "");
 }
 
 /** Returns true when a message may need command authorization metadata. */
@@ -102,9 +82,11 @@ export function shouldComputeCommandAuthorized(
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  return (
-    isControlCommandMessage(text, cfg, options) ||
-    hasInlineCommandTokens(text) ||
-    hasSpacedPluginCommand(text)
-  );
+  if (isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text)) {
+    return true;
+  }
+  const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
+  // Only active registered commands affect ingress authorization and mention gating.
+  // This keeps spaced syntax aligned with canonical `/name` command ownership.
+  return commandBody ? matchPluginCommand(commandBody) !== null : false;
 }

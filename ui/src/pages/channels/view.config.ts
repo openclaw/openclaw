@@ -1,4 +1,3 @@
-// Control UI view renders channels screen content.
 import { html } from "lit";
 import {
   analyzeConfigSchema,
@@ -78,6 +77,7 @@ function renderChannelConfigForm(channelId: string, props: ChannelsProps, disabl
             unsupported,
             disabled,
             showLabel: false,
+            maskSensitive: true,
             onPatch: props.onConfigPatch,
           }),
       })}

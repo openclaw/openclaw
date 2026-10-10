@@ -1,4 +1,3 @@
-// Slack API module exposes the plugin public contract.
 export { slackPlugin } from "./src/channel.js";
 export { slackSetupPlugin } from "./src/channel.setup.js";
 export {

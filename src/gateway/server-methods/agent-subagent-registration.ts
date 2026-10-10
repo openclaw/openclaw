@@ -71,34 +71,38 @@ export async function registerPluginSubagentRunFromGateway(params: {
   cfg: OpenClawConfig;
   runId: string;
   childSessionKey: string;
+  childAgentId?: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent: () => SessionEntry | undefined;
 }): Promise<void> {
-  const childSessionKey = params.childSessionKey.trim();
-  if (!childSessionKey) {
-    return;
-  }
+  const { childSessionKey } = params;
   const ownerSessionKey = resolveAgentMainSessionKey({
     cfg: params.cfg,
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
-  const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
-    await import("../../agents/subagents/registry/subagent-registry.js");
+  const {
+    adoptPausedSubagentRunForFollowUp,
+    adoptPausedSubagentRunIntoSuccessor,
+    registerSubagentRun,
+  } = await import("../../agents/subagents/registry/subagent-registry.js");
   const sessionEntry = params.assertCurrent();
   // Resume a yielded run with its original audience unless the follow-up names
-  // a requester and therefore owns a separate delivery.
+  // a requester and therefore owns a separate delivery. Recheck after sibling
+  // registration in case the pause publishes while admission is in flight.
   if (
     !params.requester &&
-    adoptPausedSubagentRunForFollowUp({
+    (await adoptPausedSubagentRunForFollowUp({
       childSessionKey,
+      childAgentId: params.childAgentId,
       runId: params.runId,
       task: params.task,
       gatewayContextResolver: params.gatewayContextResolver,
-    })
+      assertCurrent: params.assertCurrent,
+    }))
   ) {
     return;
   }
@@ -106,6 +110,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
     {
       runId: params.runId,
       childSessionKey,
+      childAgentId: params.childAgentId,
       sessionEntry,
       controllerSessionKey: ownerSessionKey,
       requesterSessionKey,
@@ -120,4 +125,11 @@ export async function registerPluginSubagentRunFromGateway(params: {
     },
     { assertCurrent: params.assertCurrent },
   );
+  if (!params.requester) {
+    await adoptPausedSubagentRunIntoSuccessor({
+      childSessionKey,
+      childAgentId: params.childAgentId,
+      assertCurrent: params.assertCurrent,
+    });
+  }
 }

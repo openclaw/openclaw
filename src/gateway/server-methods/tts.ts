@@ -16,9 +16,8 @@ import {
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
-import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
-  getTtsPersona,
   isTtsProviderConfigured,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
@@ -251,20 +250,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   "tts.personas": async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      const active = getTtsPersona(config, prefsPath);
-      respond(true, {
-        active: active?.id ?? null,
-        personas: listTtsPersonas(config).map((persona) => ({
-          id: persona.id,
-          label: persona.label,
-          description: persona.description,
-          provider: persona.provider,
-          fallbackPolicy: persona.fallbackPolicy,
-          providers: Object.keys(persona.providers ?? {}),
-        })),
-      });
+      respond(true, resolveTtsPersonaList(cfg));
     });
   },
   "tts.setPersona": async ({ params, respond, context }) => {

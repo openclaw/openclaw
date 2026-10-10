@@ -6,6 +6,7 @@ import {
 import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
 import { withSubagentRunReadSnapshot } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { collectSubagentSessionReadKeys } from "../registry/subagent-session-read-scope.js";
 
 export function createRequesterDescendantReader(params: {
@@ -18,20 +19,18 @@ export function createRequesterDescendantReader(params: {
   signal?: AbortSignal;
   isSourceCurrent: () => boolean;
 }) {
-  const generation = params.settledEntry.generation;
   const rearmGeneration = params.settledEntry.requesterSettleWake?.rearmGeneration;
   const isCurrent = () => {
-    const wake = params.settledEntry.requesterSettleWake;
+    if (params.signal?.aborted || !params.isSourceCurrent()) {
+      return false;
+    }
+    const current = listSubagentRunsForRequester(params.requesterSessionKey, {
+      requesterAgentId: params.requesterAgentId,
+      requesterStorePath: params.requesterStorePath,
+    }).find((entry) => isSameSubagentRunOwner(entry, params.settledEntry));
     return (
-      !params.signal?.aborted &&
-      params.isSourceCurrent() &&
-      params.settledEntry.generation === generation &&
-      wake !== undefined &&
-      wake.rearmGeneration === rearmGeneration &&
-      listSubagentRunsForRequester(params.requesterSessionKey, {
-        requesterAgentId: params.requesterAgentId,
-        requesterStorePath: params.requesterStorePath,
-      }).includes(params.settledEntry)
+      current?.requesterSettleWake !== undefined &&
+      current.requesterSettleWake.rearmGeneration === rearmGeneration
     );
   };
   return async () => {
@@ -79,6 +78,7 @@ export function createRequesterDescendantReader(params: {
           ),
         };
       },
+      { sessionKeys: [params.requesterSessionKey], descendants: true },
     );
     return isCurrent() ? result : undefined;
   };

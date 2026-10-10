@@ -15,12 +15,8 @@ import {
   composerDisclosure,
   type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
-import {
-  renderFloatingProgress,
-  type FloatingProgressDisclosure,
-} from "./session-progress-floating.ts";
 
-type SessionProgressCardPlacement = "board" | "composer" | "floating";
+type SessionProgressCardPlacement = "board" | "composer" | "details";
 
 const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
   {
@@ -119,7 +115,10 @@ class ProgressActivityTimeDirective extends AsyncDirective {
   }
 
   protected override disconnected(): void {
-    this.stopTimer();
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
   }
 
   protected override reconnected(): void {
@@ -132,13 +131,6 @@ class ProgressActivityTimeDirective extends AsyncDirective {
       return;
     }
     this.timer = setInterval(() => this.setValue(this.renderTime()), 30_000);
-  }
-
-  private stopTimer(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
   }
 
   private renderTime() {
@@ -314,31 +306,32 @@ function renderSteps(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: 
   </ol>`;
 }
 
-export function renderSessionProgressCard(
-  card: ProgressCard | null | undefined,
-  placement: "board" | "composer",
-  onDismiss?: (card: ProgressCard) => void,
-  sessionStatus?: SessionRunStatus,
-  startedAt?: number,
-  endedAt?: number,
-  hasActiveRun?: boolean,
-  collapseComposerByDefault?: boolean,
-  composerDisclosureContext?: ComposerProgressDisclosureContext,
-  refreshAction?: SessionProgressCardRefreshAction,
-): TemplateResult | typeof nothing;
-export function renderSessionProgressCard(
-  card: ProgressCard | null | undefined,
-  placement: "floating",
-  onDismiss: undefined,
-  sessionStatus: SessionRunStatus | undefined,
-  startedAt: number | undefined,
-  endedAt: number | undefined,
-  hasActiveRun: boolean,
-  collapseComposerByDefault: boolean,
-  composerDisclosureContext: undefined,
-  refreshAction: SessionProgressCardRefreshAction | undefined,
-  floating: FloatingProgressDisclosure,
-): TemplateResult | typeof nothing;
+function renderProgressCardAction(
+  card: ProgressCard,
+  action: "dismiss" | "clear-saved",
+  onAction?: (card: ProgressCard) => void,
+) {
+  if (!onAction) {
+    return nothing;
+  }
+  const label = t(
+    action === "dismiss" ? "sessionProgressCard.dismiss" : "sessionProgressCard.clearSaved",
+  );
+  return html`<button
+    class="rail-header__action session-progress-card__${action}"
+    type="button"
+    aria-label=${label}
+    title=${label}
+    @click=${(event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onAction(card);
+    }}
+  >
+    ${action === "dismiss" ? icons.x : icons.trash}
+  </button>`;
+}
+
 export function renderSessionProgressCard(
   card: ProgressCard | null | undefined,
   placement: SessionProgressCardPlacement,
@@ -350,7 +343,8 @@ export function renderSessionProgressCard(
   collapseComposerByDefault = false,
   composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
-  floating?: FloatingProgressDisclosure,
+  onClearSaved?: (card: ProgressCard) => void,
+  headingMenu?: TemplateResult,
 ) {
   if (!card) {
     return nothing;
@@ -395,27 +389,9 @@ export function renderSessionProgressCard(
     ? (`sessionProgressCard.activity.${TERMINAL_RUN_OUTCOMES[sessionStatus!]!}` as const)
     : "sessionProgressCard.activity.updated";
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
-  const close =
-    placement === "floating" ? floating?.onHide : onDismiss ? () => onDismiss(card) : undefined;
-  const closeLabel = t(
-    placement === "floating" ? "sessionProgressCard.hide" : "sessionProgressCard.dismiss",
-  );
-  const dismiss = close
-    ? html`<button
-        class="rail-header__action session-progress-card__dismiss"
-        type="button"
-        aria-label=${closeLabel}
-        title=${closeLabel}
-        @click=${(event: MouseEvent) => {
-          event.preventDefault();
-          event.stopPropagation();
-          close();
-        }}
-      >
-        ${icons.x}
-      </button>`
-    : nothing;
-  if (placement === "composer") {
+  const dismiss = renderProgressCardAction(card, "dismiss", onDismiss);
+  const clearSaved = renderProgressCardAction(card, "clear-saved", onClearSaved);
+  if (placement === "composer" || placement === "details") {
     const steps = card.steps ?? [];
     const currentStep = currentProgressStep(steps);
     const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
@@ -448,8 +424,8 @@ export function renderSessionProgressCard(
           ? progressStepMarker(presentedCurrentStatus ?? "pending")
           : icons.clock;
     return html`<details
-      class="session-progress-card session-progress-card--composer"
-      data-progress-card-placement="composer"
+      class="session-progress-card session-progress-card--composer ${placement === "details" ? "session-progress-card--details" : ""}"
+      data-progress-card-placement=${placement}
       data-complete=${String(complete)}
       ${composerDisclosure(
         composerDisclosureContext?.sessionIdentity ?? card.sessionKey,
@@ -491,7 +467,7 @@ export function renderSessionProgressCard(
           >
         </span>
         <span class="session-progress-card__summary-controls">
-          ${renderRefresh(card, refreshAction)} ${dismiss}
+          ${renderRefresh(card, refreshAction)} ${headingMenu ?? nothing} ${clearSaved} ${dismiss}
           <span
             class="session-progress-card__summary-chevron session-progress-card__chevron"
             aria-hidden="true"
@@ -520,44 +496,22 @@ export function renderSessionProgressCard(
       </div>
     </details>`;
   }
-  const refreshStatus = refreshAction?.state
-    ? html`<span
-        class="session-progress-card__refresh-status"
-        data-state=${refreshAction.state}
-        role="status"
-        >${t(REFRESH_STATUS_LABEL_KEYS[refreshAction.state])}</span
-      >`
-    : nothing;
-  const body = html`${renderProgressCardMarkdown(card.markdown)}${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}`;
-  if (placement === "floating") {
-    if (!floating) {
-      throw new Error("Floating progress requires disclosure state");
-    }
-    return renderFloatingProgress({
-      disclosure: floating,
-      countLabel,
-      count: counts ? `${counts.completed}/${counts.total}` : undefined,
-      activity: lastActivity,
-      controls: html`${renderRefresh(card, refreshAction)}${dismiss}`,
-      refreshStatus,
-      body,
-    });
-  }
   return html`<section
-    class="session-progress-card session-progress-card--board"
-    data-progress-card-placement="board"
+    class="session-progress-card session-progress-card--${placement}"
+    data-progress-card-placement=${placement}
     aria-label=${countLabel}
   >
     <div class="session-progress-card__heading">
       <span>${t("sessionProgressCard.title")}</span>
       <span class="session-progress-card__heading-actions">
-        <span class="session-progress-card__activity"
+        <span
           >${lastActivity}${counts ? html` · ${counts.completed}/${counts.total}` : nothing}</span
-        >
-        ${dismiss}
+        >${dismiss}
       </span>
     </div>
-    ${refreshStatus}
-    <div class="session-progress-card__body">${body}</div>
+    <div class="session-progress-card__body">
+      ${renderProgressCardMarkdown(card.markdown)}
+      ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
+    </div>
   </section>`;
 }

@@ -1,6 +1,3 @@
-// Shared command-path matching helpers for CLI startup and registration policy.
-
-/** Matches a command path prefix, or the full path when `exact` is requested. */
 export function matchesCommandPath(
   commandPath: string[],
   pattern: readonly string[],

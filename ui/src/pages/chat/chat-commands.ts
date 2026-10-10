@@ -51,16 +51,6 @@ const remoteSlashCommandCache = new WeakMap<
   Map<string, RemoteSlashCommandCacheEntry>
 >();
 
-export type ChatCommandResetOptions = {
-  previousDraft?: string;
-  restoreDraft?: boolean;
-  target?: ChatCommandTarget;
-};
-
-type ChatCommandSendOptions = ChatCommandResetOptions & {
-  sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
-};
-
 type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
 
 export type ChatCommandTarget = {
@@ -176,20 +166,6 @@ export function readChatResetTargetAccess(
   return access.allowed ? { allowed: true } : access;
 }
 
-function requireChatResetTarget(host: ChatCommandHost, target: ChatCommandTarget): boolean {
-  const access = readChatResetTargetAccess(host, target);
-  if (access.allowed) {
-    return true;
-  }
-  setChatError(host, access.reason);
-  return false;
-}
-
-function failStaleChatCommand(host: ChatCommandHost): ChatCommandDispatchResult {
-  setChatError(host, "The Gateway connection changed. Retry the command.");
-  return "failed";
-}
-
 function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: string): string {
   return JSON.stringify([agentId ?? null, sessionKey ?? null]);
 }
@@ -272,15 +248,13 @@ export function invalidateSessionSlashCommands(
     ?.delete(remoteSlashCommandCacheKey(scope.agentId, scope.sessionKey));
 }
 
-export function applyRemoteSlashCommandsResult(params: {
-  client: GatewayBrowserClient | null;
-  agentId?: string | null;
-  result: CommandsListResult | null | undefined;
-}): boolean {
-  if (!Array.isArray(params.result?.commands)) {
+export function applyRemoteSlashCommandsResult(
+  result: CommandsListResult | null | undefined,
+): boolean {
+  if (!Array.isArray(result?.commands)) {
     return false;
   }
-  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
+  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;
@@ -337,7 +311,6 @@ export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
   args: string,
-  opts: ChatCommandSendOptions,
 ): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
@@ -352,25 +325,6 @@ export async function dispatchChatSlashCommand(
         return "failed";
       }
       return (await host.createChatSession()) ? "completed" : "cancelled";
-    case "reset": {
-      const target = captureChatCommandTarget(host);
-      if (!target || !requireChatResetTarget(host, target)) {
-        return "failed";
-      }
-      const confirmation = await confirmConversationResetForCurrentSession(host);
-      if (confirmation !== "confirmed") {
-        return confirmation;
-      }
-      if (!requireChatResetTarget(host, target)) {
-        return "failed";
-      }
-      await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", {
-        previousDraft: opts.previousDraft,
-        restoreDraft: opts.restoreDraft,
-        target,
-      });
-      return "completed";
-    }
     case "clear": {
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
@@ -384,12 +338,13 @@ export async function dispatchChatSlashCommand(
         return confirmation;
       }
       if (!isChatCommandTargetCurrent(host, target)) {
-        return failStaleChatCommand(host);
+        setChatError(host, "The Gateway connection changed. Retry the command.");
+        return "failed";
       }
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
       }
-      return await clearChatHistory(host);
+      return clearChatHistory(host);
     }
     case "compact":
       if (!requireChatSessionAction(host, "compact")) {
@@ -434,8 +389,6 @@ export async function dispatchChatSlashCommand(
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,
       chatModelCatalog: host.chatModelCatalog,
-      sessionsResult: host.sessionsResult,
-      sessionsResultAgentId: host.sessionsResultAgentId,
       defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: target.agentId,
       ownsModelOverride: () => isChatCommandModelCacheOwnerCurrent(host, target),

@@ -1,20 +1,24 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 
 afterEach(clearSessionStoreCacheForTest);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-store-");
 const sessionKey = "agent:main:main";
 
 function fixture(initialEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 }) {
   const scope = {
     agentId: "main",
     sessionKey,
-    storePath: path.join(tempDirs.make("openclaw-session-store-"), "sessions.json"),
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: initialEntry };
   return {
@@ -42,6 +46,7 @@ describe("persistAgentSession", () => {
       if (existing) {
         await seed(entry);
       }
+      const sql = observeHostDataSql();
       const persisted = await write({
         shouldPersist: () => true,
         creation: {
@@ -49,7 +54,8 @@ describe("persistAgentSession", () => {
           actor: { type: "human", source: "profile", id: "sandbox-creator" },
           sandbox: "required",
         },
-      });
+      }).finally(sql.restore);
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       const stored = read();
       expect(stored).toEqual(persisted);
       expect(sessionStore[sessionKey]).toEqual(stored);

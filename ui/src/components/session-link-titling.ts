@@ -16,7 +16,7 @@ import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
-import { SESSION_PROGRESS_HOVER_LINK_SELECTOR } from "./session-progress-hovercard-target.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -60,7 +60,7 @@ export class SessionLinkTitler {
   private scope = {};
   private presentationScope: number | undefined;
   private readonly titledAnchors = new WeakMap<
-    HTMLAnchorElement,
+    HTMLElement,
     { scope: object; key: string; title: string }
   >();
   private readonly observer = new MutationObserver((records) => {
@@ -117,10 +117,10 @@ export class SessionLinkTitler {
   refresh(root = this.host): void {
     // Share repeated references only within this synchronous roster projection.
     const targets = new Map<string, SessionTitleTarget | null>();
-    if (root.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+    if (root.matches(SESSION_TITLE_TARGET_SELECTOR)) {
       void this.decorate(root, false, targets);
     }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
       void this.decorate(anchor, false, targets);
     }
   }
@@ -136,7 +136,10 @@ export class SessionLinkTitler {
   ): Promise<void> {
     const scope = this.currentScope();
     const target = this.targetForAnchor(element, targets);
-    const anchor = element instanceof HTMLAnchorElement ? element : document.createElement("a");
+    const anchor =
+      element instanceof HTMLAnchorElement || element.hasAttribute("data-session-title-only")
+        ? element
+        : document.createElement("a");
     if (element !== anchor && element.classList.contains("markdown-session-link")) {
       anchor.dataset.sessionHref = element.dataset.sessionHref;
       anchor.setAttribute("href", element.getAttribute("href") ?? "");
@@ -297,7 +300,7 @@ export class SessionLinkTitler {
   }
 
   private stampAnchor(
-    anchor: HTMLAnchorElement,
+    anchor: HTMLElement,
     target: SessionTitleTarget,
     titleRecord?: SessionTitle,
   ): void {
@@ -312,11 +315,13 @@ export class SessionLinkTitler {
     if (anchor.dataset.sessionKey !== target.sessionKey) {
       anchor.dataset.sessionKey = target.sessionKey;
     }
-    if (!anchor.classList.contains("markdown-session-link")) {
-      anchor.classList.add("markdown-session-link");
-    }
-    if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
-      anchor.setAttribute("href", href);
+    if (!anchor.hasAttribute("data-session-title-only")) {
+      if (!anchor.classList.contains("markdown-session-link")) {
+        anchor.classList.add("markdown-session-link");
+      }
+      if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
+        anchor.setAttribute("href", href);
+      }
     }
     if (!title || anchor.classList.contains("markdown-session-link--titled")) {
       return;

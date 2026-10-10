@@ -43,7 +43,8 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
-import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   UpdateServiceDefinitionRecovery,
@@ -102,6 +103,10 @@ export async function rollbackFailedUpdate(params: {
     }
     executor?.assertCurrent();
   };
+  const { recordPhase } = createUpdateCommandExecutionGuards(opts, params.previousRoot, {
+    kind: "package-compensation",
+    assertCurrent,
+  });
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
   const pendingRecovery = (result: UpdateRunResult, pendingRecoveryReason: string) => ({
     result: {
@@ -292,7 +297,9 @@ export async function rollbackFailedUpdate(params: {
     // This existing recovery allowance belongs only to this guarded stop invocation.
     const stopped = await withOwnedManagedUpdateEnv(recoveryEnv, () =>
       maybeStopManagedServiceBeforeMutableUpdate({
-        updateRun: opts.run,
+        updateRun: run,
+        recordPhase,
+        assertCurrent,
         updateInstallKind: "package",
         root: result.root ?? params.previousRoot,
         shouldRestart: true,

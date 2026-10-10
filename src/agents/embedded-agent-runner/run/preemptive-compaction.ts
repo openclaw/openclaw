@@ -97,13 +97,9 @@ export function estimateToolSchemaTokenPressure(
   return Math.ceil(estimateToolSchemaTokens(tools) * SAFETY_MARGIN);
 }
 
-function estimateTranscriptBoundaryTokenPressure(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-  replay?: CompactionReplayPressureContext;
-  toolSchemaTokens?: number;
-}): TranscriptBoundaryTokenPressure {
+function estimateTranscriptBoundaryTokenPressure(
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
+): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
         params.messages,
@@ -177,9 +173,6 @@ function normalizeLlmBoundaryTokenPressure(
   return {
     estimatedPromptTokens,
     source: pressure.source.trim() || "rendered_llm_boundary",
-    ...(typeof pressure.renderedChars === "number" && Number.isFinite(pressure.renderedChars)
-      ? { renderedChars: Math.max(0, Math.ceil(pressure.renderedChars)) }
-      : {}),
   };
 }
 
@@ -203,18 +196,23 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
+  const estimateTranscriptPressure = (
+    messages: AgentMessage[],
+    replay?: CompactionReplayPressureContext,
+  ) =>
+    estimateTranscriptBoundaryTokenPressure({
+      messages,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+      replay,
+      ...(typeof params.toolSchemaTokens === "number"
+        ? { toolSchemaTokens: params.toolSchemaTokens }
+        : {}),
+    });
   const transcriptTokenPressure =
     llmBoundaryTokenPressure && !params.replay
       ? undefined
-      : estimateTranscriptBoundaryTokenPressure({
-          messages: params.messages,
-          systemPrompt: params.systemPrompt,
-          prompt: params.prompt,
-          replay: params.replay,
-          ...(typeof params.toolSchemaTokens === "number"
-            ? { toolSchemaTokens: params.toolSchemaTokens }
-            : {}),
-        });
+      : estimateTranscriptPressure(params.messages, params.replay);
   // The selected provider window owns its covered prefix, including when a
   // context engine supplied an estimate of the raw transcript instead.
   const boundaryPressure = transcriptTokenPressure?.hasCompactionReplay
@@ -233,14 +231,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   );
   let diagnosticDecision = outgoingDecision;
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedTokenPressure = estimateTranscriptBoundaryTokenPressure({
-      messages: params.unwindowedMessages,
-      systemPrompt: params.systemPrompt,
-      prompt: params.prompt,
-      ...(typeof params.toolSchemaTokens === "number"
-        ? { toolSchemaTokens: params.toolSchemaTokens }
-        : {}),
-    });
+    const unwindowedTokenPressure = estimateTranscriptPressure(params.unwindowedMessages);
     // Unwindowed history is diagnostic: neither its checkpoints nor its larger
     // raw estimate may authorize recovery of a different outgoing window.
     if (unwindowedTokenPressure.estimatedPromptTokens > outgoingDecision.estimatedPromptTokens) {
@@ -286,17 +277,15 @@ function resolveCompactionPressureDecision(
   );
   const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
 
-  let route: PreemptiveCompactionRoute = "fits";
-  if (overflowTokens > 0) {
-    // Choose truncate-only only when available reduction comfortably exceeds the overflow.
-    if (toolResultReducibleChars <= 0) {
-      route = "compact_only";
-    } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
-      route = "truncate_tool_results_only";
-    } else {
-      route = "compact_then_truncate";
-    }
-  }
+  // Choose truncate-only only when available reduction comfortably exceeds the overflow.
+  const route: PreemptiveCompactionRoute =
+    overflowTokens > 0
+      ? toolResultReducibleChars <= 0
+        ? "compact_only"
+        : toolResultReducibleChars >= truncateOnlyThresholdChars
+          ? "truncate_tool_results_only"
+          : "compact_then_truncate"
+      : "fits";
   return {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",

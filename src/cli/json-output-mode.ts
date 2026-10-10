@@ -5,6 +5,16 @@ import { isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 let resolvedJsonOutputMode: boolean | null = null;
+let stderrRoutingScopes = 0;
+let stderrRoutingAfterScopes = false;
+
+function setConsoleRouting(stderr: boolean): void {
+  if (stderrRoutingScopes > 0) {
+    stderrRoutingAfterScopes = stderr;
+  }
+  loggingState.forceConsoleToStderr = stderr || stderrRoutingScopes > 0;
+}
+
 // Read at write time so preaction refinement and later routeLogsToStderr() calls also move notes.
 const noteOutputForConsoleRouting = () =>
   loggingState.forceConsoleToStderr ? process.stderr : process.stdout;
@@ -47,20 +57,21 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
   if (!forceStderr && !options.restoreChanges) {
     return withNoteOutput(noteOutputForConsoleRouting, run);
   }
-  const previousForceStderr = loggingState.forceConsoleToStderr;
+  const previousForceStderr =
+    stderrRoutingScopes > 0 ? stderrRoutingAfterScopes : loggingState.forceConsoleToStderr;
   const previousEarlyRestore = loggingState.earlyConsoleRoutingRestore;
   const previousJsonOutputMode = resolvedJsonOutputMode;
   resolvedJsonOutputMode = null;
   if (forceStderr) {
     loggingState.earlyConsoleRoutingRestore = previousForceStderr;
-    loggingState.forceConsoleToStderr = true;
+    setConsoleRouting(true);
   }
   try {
     return await withNoteOutput(noteOutputForConsoleRouting, run);
   } finally {
     if (!options.retainRoutingUntilProcessExit) {
       // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.
-      loggingState.forceConsoleToStderr = previousForceStderr;
+      setConsoleRouting(previousForceStderr);
       loggingState.earlyConsoleRoutingRestore = previousEarlyRestore;
       resolvedJsonOutputMode = previousJsonOutputMode;
     }
@@ -75,17 +86,22 @@ export function applyResolvedCommandOutputMode(
   resolvedJsonOutputMode = jsonOutputMode;
   const restore = loggingState.earlyConsoleRoutingRestore;
   if (!machineOutputMode && restore !== null) {
-    loggingState.forceConsoleToStderr = restore;
+    setConsoleRouting(restore);
   }
 }
 
 /** Route startup diagnostics to stderr while a command's output mode is still being discovered. */
 export async function withConsoleLogsRoutedToStderr<T>(run: () => Promise<T>): Promise<T> {
-  const previousForceStderr = loggingState.forceConsoleToStderr;
+  if (stderrRoutingScopes++ === 0) {
+    stderrRoutingAfterScopes = loggingState.forceConsoleToStderr;
+  }
   loggingState.forceConsoleToStderr = true;
   try {
     return await run();
   } finally {
-    loggingState.forceConsoleToStderr = previousForceStderr;
+    // Overlapping loads can finish in either order; only the last releases temporary routing.
+    if (--stderrRoutingScopes === 0) {
+      loggingState.forceConsoleToStderr = stderrRoutingAfterScopes;
+    }
   }
 }

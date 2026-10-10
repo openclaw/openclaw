@@ -3,15 +3,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.js";
+import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.js";
+import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -105,6 +109,71 @@ it("preserves serialized records, first-answer wins, consumption and history thr
   );
 });
 
+it("publishes exact native postimages only after the outer commit and retention tombstones", () => {
+  const databaseOptions = options();
+  const facts = new Map<string, OperatorApprovalRow>();
+  const snapshots: string[][] = [];
+  const releaseFacts = operatorApprovalPublication.subscribeFacts((change) => {
+    if (change.kind !== "committed") {
+      return;
+    }
+    for (const [key, fact] of change.receipt.facts) {
+      if (fact.kind === "postimage") {
+        facts.set(key, fact.value);
+      }
+      if (fact.kind === "absent") {
+        facts.delete(key);
+      }
+    }
+  });
+  const releaseObserver = operatorApprovalPublication.subscribe(() => {
+    snapshots.push([...facts.values()].map((row) => `${row.approval_id}:${row.status}`));
+  });
+  try {
+    runOpenClawStateWriteTransaction(() => {
+      native.insertOperatorApprovalInDatabase({ approval: approval("first"), databaseOptions });
+      expect(() =>
+        runOpenClawStateWriteTransaction(() => {
+          nativeTransitions.forceDenyOperatorApprovalInDatabase({
+            id: "first",
+            status: "cancelled",
+            reason: "run-aborted",
+            resolver: { kind: "runtime", id: null },
+            nowMs: 2000,
+            databaseOptions,
+          });
+          throw new Error("rollback nested verdict");
+        }, databaseOptions),
+      ).toThrow("rollback nested verdict");
+      native.insertOperatorApprovalInDatabase({ approval: approval("second"), databaseOptions });
+      expect(facts.size).toBe(0);
+    }, databaseOptions);
+    expect(snapshots).toEqual([
+      ["first:pending", "second:pending"],
+      ["first:pending", "second:pending"],
+    ]);
+    native.getOperatorApprovalDetailedInDatabase({ id: "first", nowMs: 10_000, databaseOptions });
+    expect(facts.get("first")?.status).toBe("expired");
+    nativeTransitions.closeOrphanedOperatorApprovals({
+      runtimeEpoch: "next-runtime",
+      nowMs: 10_000,
+      databaseOptions,
+    });
+    expect(facts.get("second")?.status).toBe("cancelled");
+    expect(
+      nativeTransitions.pruneTerminalOperatorApprovals({
+        nowMs: 10_001,
+        retentionMs: 0,
+        databaseOptions,
+      }),
+    ).toBe(2);
+    expect(facts.size).toBe(0);
+  } finally {
+    releaseFacts();
+    releaseObserver();
+  }
+});
+
 it("runs lookup, pending scans, expiry and history without host SQLite calls through close", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("off-thread"), databaseOptions });
@@ -162,20 +231,6 @@ it("keeps native reads between earlier and later worker mutations", async () => 
   });
 });
 
-it("leaves the default approval clock to the worker when dispatching a public read", async () => {
-  const databaseOptions = options();
-  const input = approval("worker-clock");
-  await store.insertOperatorApproval({ approval: input, databaseOptions });
-  // Only the requesting thread sees this pre-expiry clock; the real worker must
-  // expire the historical fixture using its own transaction-time clock.
-  using _ = vi.spyOn(Date, "now").mockReturnValue(input.createdAtMs);
-
-  expect(await store.getOperatorApprovalDetailed({ id: input.id, databaseOptions })).toMatchObject({
-    outcome: "found",
-    record: { status: "expired", terminalReason: "timeout" },
-  });
-});
-
 it("revalidates live authority after dispatch and rolls back refused decisions", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("guarded"), databaseOptions });
@@ -204,62 +259,81 @@ it.each(["worker", "native-compatibility"] as const)(
   async (family) => {
     const databaseOptions = options();
     await store.insertOperatorApproval({ approval: approval("receipt-rollback"), databaseOptions });
-    const onCommitted = vi.fn();
-    let refuse = true;
-    let current = true;
-    if (family === "worker") {
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && refuse) {
-              current = false;
-            }
-            return admit(request, grant);
-          }, attachment),
-      );
-    }
-    const input = {
-      id: "receipt-rollback",
-      decision: "allow-once" as const,
-      resolver: { kind: "runtime" as const, id: null },
-      nowMs: 2000,
-      databaseOptions,
-      onCommitted,
-      guard: {
-        family,
-        assertCurrent: () => {
-          if (family === "native-compatibility" && refuse) {
-            const observed = native.getOperatorApprovalDetailedInDatabase({
-              id: "receipt-rollback",
-              nowMs: 2000,
-              databaseOptions,
-            });
-            current = observed.outcome !== "found" || observed.record.decision !== "allow-once";
-          }
-          if (!current) {
-            throw new Error("synthetic commit refusal");
-          }
-        },
-      },
-    };
-    await expect(store.resolveOperatorApproval(input)).rejects.toThrow("synthetic commit refusal");
-    expect(onCommitted).not.toHaveBeenCalled();
-    refuse = false;
-    current = true;
-    expect(
-      await store.getOperatorApprovalDetailed({ id: input.id, nowMs: 2000, databaseOptions }),
-    ).toMatchObject({ outcome: "found", record: { status: "pending" } });
-    const winner = await store.resolveOperatorApproval(input);
-    expect(winner.outcome).toBe("resolved");
-    assert(winner.outcome === "resolved", "Expected committed resolution");
-    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
-      getOperatorApprovalResolutionKey(winner.record),
-    );
-    expect(await store.resolveOperatorApproval(input)).toMatchObject({
-      outcome: "already-resolved",
+    const published: OperatorApprovalRow[] = [];
+    const unknown = vi.fn();
+    const releaseFacts = operatorApprovalPublication.subscribeFacts((change) => {
+      if (change.kind === "unknown") {
+        unknown();
+      }
+      if (change.kind === "committed") {
+        const fact = change.receipt.facts.get("receipt-rollback");
+        if (fact?.kind === "postimage") {
+          published.push(fact.value);
+        }
+      }
     });
-    expect(onCommitted).toHaveBeenCalledTimes(1);
+    const onCommitted = vi.fn(() => {
+      expect(published.at(-1)).toMatchObject({ status: "allowed", decision: "allow-once" });
+    });
+    try {
+      let refuse = true;
+      let current = true;
+      if (family === "worker") {
+        probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "commit" && refuse) {
+            current = false;
+          }
+          return admit(request, grant);
+        });
+      }
+      const input = {
+        id: "receipt-rollback",
+        decision: "allow-once" as const,
+        resolver: { kind: "runtime" as const, id: null },
+        nowMs: 2000,
+        databaseOptions,
+        onCommitted,
+        guard: {
+          family,
+          assertCurrent: () => {
+            if (family === "native-compatibility" && refuse) {
+              const observed = native.getOperatorApprovalDetailedInDatabase({
+                id: "receipt-rollback",
+                nowMs: 2000,
+                databaseOptions,
+              });
+              current = observed.outcome !== "found" || observed.record.decision !== "allow-once";
+            }
+            if (!current) {
+              throw new Error("synthetic commit refusal");
+            }
+          },
+        },
+      };
+      await expect(store.resolveOperatorApproval(input)).rejects.toThrow(
+        "synthetic commit refusal",
+      );
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
+      expect(unknown).not.toHaveBeenCalled();
+      refuse = false;
+      current = true;
+      expect(
+        await store.getOperatorApprovalDetailed({ id: input.id, nowMs: 2000, databaseOptions }),
+      ).toMatchObject({ outcome: "found", record: { status: "pending" } });
+      const winner = await store.resolveOperatorApproval(input);
+      expect(winner.outcome).toBe("resolved");
+      assert(winner.outcome === "resolved", "Expected committed resolution");
+      expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+        getOperatorApprovalResolutionKey(winner.record),
+      );
+      expect(await store.resolveOperatorApproval(input)).toMatchObject({
+        outcome: "already-resolved",
+      });
+      expect(onCommitted).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFacts();
+    }
   },
 );
 

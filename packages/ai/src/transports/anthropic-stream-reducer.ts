@@ -98,19 +98,55 @@ export async function consumeAnthropicStream(params: {
     let sawMessageStop = false;
     let sawStopReason = false;
     const pendingTextEnds: Array<Extract<AssistantMessageEvent, { type: "text_end" }>> = [];
-    // Hold text_end until tool-boundary classification is known.
-    const flushPendingTextEnds = () => {
+    // Proxies may label tool turns end_turn; classify their text before releasing text_end.
+    const flushPendingTextEnds = (classifyToolTurn = false) => {
+      if (
+        managed &&
+        classifyToolTurn &&
+        (output.stopReason === "toolUse" ||
+          output.content.some((block) => block.type === "toolCall"))
+      ) {
+        tagPendingCommentaryText(output.content);
+      }
       for (const event of pendingTextEnds) {
         eventSink.push(event);
       }
       pendingTextEnds.length = 0;
     };
-    const emitTextEnd = (event: Extract<AssistantMessageEvent, { type: "text_end" }>) => {
-      if (managed) {
+    const emitContentEnd = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+      deferText: boolean,
+    ) => {
+      const event: Extract<AssistantMessageEvent, { type: "thinking_end" | "text_end" }> = {
+        type: `${block.type}_end`,
+        contentIndex,
+        content: block.type === "thinking" ? block.thinking : block.text,
+        partial: output,
+      };
+      if (managed && deferText && event.type === "text_end") {
         pendingTextEnds.push(event);
       } else {
         eventSink.push(event);
       }
+    };
+    const emitContentStart = (kind: "thinking" | "text", contentIndex: number, delta = "") => {
+      eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
+      if (delta.length > 0) {
+        eventSink.push({ type: `${kind}_delta`, contentIndex, delta, partial: output });
+      }
+    };
+    const appendContentDelta = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+      delta: string,
+    ) => {
+      if (block.type === "thinking") {
+        appendAssistantThinking(block, delta);
+      } else {
+        block.text += delta;
+      }
+      eventSink.push({ type: `${block.type}_delta`, contentIndex, delta, partial: output });
     };
     const eventIndexKey = (eventIndex: unknown) =>
       typeof eventIndex === "number" ? eventIndex : -1;
@@ -138,15 +174,12 @@ export async function consumeAnthropicStream(params: {
         output.content.push(block);
         contentIndex = output.content.length - 1;
         indexes.set(key, contentIndex);
-        eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
+        emitContentStart(kind, contentIndex);
       }
       if (block.type === "thinking") {
-        appendAssistantThinking(block, text);
         block.thinkingSignature = "reasoning_content";
-      } else if (block.type === "text") {
-        block.text += text;
       }
-      eventSink.push({ type: `${kind}_delta`, contentIndex, delta: text, partial: output });
+      appendContentDelta(block, contentIndex, text);
       return true;
     };
     const finishReasoningContentSidecars = (eventIndex: unknown) => {
@@ -160,12 +193,7 @@ export async function consumeAnthropicStream(params: {
         indexes.delete(key);
         const block = output.content[contentIndex];
         if (block?.type === kind) {
-          eventSink.push({
-            type: `${kind}_end`,
-            contentIndex,
-            content: block.type === "thinking" ? block.thinking : block.text,
-            partial: output,
-          });
+          emitContentEnd(block, contentIndex, false);
         }
       }
     };
@@ -178,7 +206,10 @@ export async function consumeAnthropicStream(params: {
       }
       if (event.type === "error") {
         const error = asOptionalObjectRecord(event.error);
-        throw new Error(readStringField(error, "message") || "Anthropic Messages stream failed");
+        throw Object.assign(
+          new Error(readStringField(error, "message") || "Anthropic Messages stream failed"),
+          { error },
+        );
       }
       if (event.type === "message_start") {
         sawMessageStart = true;
@@ -242,25 +273,8 @@ export async function consumeAnthropicStream(params: {
               continue;
             }
             delete block.index;
-            eventSink.push({
-              type: "text_start",
-              contentIndex: i,
-              partial: output,
-            });
-            if (block.text) {
-              eventSink.push({
-                type: "text_delta",
-                contentIndex: i,
-                delta: block.text,
-                partial: output,
-              });
-            }
-            emitTextEnd({
-              type: "text_end",
-              contentIndex: i,
-              content: block.text,
-              partial: output,
-            });
+            emitContentStart("text", i, block.text);
+            emitContentEnd(block, i, true);
           }
           continue;
         }
@@ -297,24 +311,11 @@ export async function consumeAnthropicStream(params: {
                     redacted: true,
                     index,
                   };
-          const kind = block.type;
           const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
           const contentIndex = output.content.length - 1;
           blockIndexes.set(index, contentIndex);
-          eventSink.push({
-            type: `${kind}_start`,
-            contentIndex,
-            partial: output,
-          });
-          if (delta.length > 0) {
-            eventSink.push({
-              type: `${kind}_delta`,
-              contentIndex,
-              delta,
-              partial: output,
-            });
-          }
+          emitContentStart(block.type, contentIndex, delta);
           continue;
         }
         if (contentBlock?.type === "tool_use") {
@@ -376,13 +377,7 @@ export async function consumeAnthropicStream(params: {
             const text = sanitizeTransportPayloadText(delta.content);
             if (text.length > 0) {
               if (block?.type === "text" && index !== undefined) {
-                block.text += text;
-                eventSink.push({
-                  type: "text_delta",
-                  contentIndex: index,
-                  delta: text,
-                  partial: output,
-                });
+                appendContentDelta(block, index, text);
                 appendedContent = true;
               } else {
                 appendedContent = appendReasoningContentDelta("text", event.index, text);
@@ -401,11 +396,7 @@ export async function consumeAnthropicStream(params: {
           if (typeof event.index === "number") {
             blockIndexes.set(event.index, index);
           }
-          eventSink.push({
-            type: "text_start",
-            contentIndex: index,
-            partial: output,
-          });
+          emitContentStart("text", index);
         }
         if (index === undefined) {
           continue;
@@ -415,13 +406,7 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "text_delta" &&
           typeof delta.text === "string"
         ) {
-          block.text += delta.text;
-          eventSink.push({
-            type: "text_delta",
-            contentIndex: index,
-            delta: delta.text,
-            partial: output,
-          });
+          appendContentDelta(block, index, delta.text);
           continue;
         }
         if (
@@ -429,13 +414,7 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "thinking_delta" &&
           typeof delta.thinking === "string"
         ) {
-          appendAssistantThinking(block, delta.thinking);
-          eventSink.push({
-            type: "thinking_delta",
-            contentIndex: index,
-            delta: delta.thinking,
-            partial: output,
-          });
+          appendContentDelta(block, index, delta.thinking);
           continue;
         }
         if (
@@ -498,25 +477,13 @@ export async function consumeAnthropicStream(params: {
         }
         blockIndexes.delete(eventIndex);
         delete block.index;
-        if (block.type === "text") {
-          emitTextEnd({
-            type: "text_end",
-            contentIndex: index,
-            content: block.text,
-            partial: output,
-          });
-        } else if (block.type === "thinking") {
-          if (pendingSignature !== undefined) {
-            block.thinkingSignature = pendingSignature;
-          }
-          eventSink.push({
-            type: "thinking_end",
-            contentIndex: index,
-            content: block.thinking,
-            partial: output,
-          });
-        } else if (block.type === "toolCall") {
+        if (block.type === "thinking" && pendingSignature !== undefined) {
+          block.thinkingSignature = pendingSignature;
+        }
+        if (block.type === "toolCall") {
           sealedToolCalls.push({ block, contentIndex: index });
+        } else {
+          emitContentEnd(block, index, true);
         }
         finishReasoningContentSidecars(event.index);
         continue;
@@ -535,17 +502,7 @@ export async function consumeAnthropicStream(params: {
         }
         applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
         calculateCost(costModel, output.usage);
-        // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
-        // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
-        // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
-        if (
-          managed &&
-          (output.stopReason === "toolUse" ||
-            output.content.some((block) => block.type === "toolCall"))
-        ) {
-          tagPendingCommentaryText(output.content);
-        }
-        flushPendingTextEnds();
+        flushPendingTextEnds(true);
       }
     }
     // Anthropic completes every SSE response with message_stop. Compatible
@@ -588,18 +545,7 @@ export async function consumeAnthropicStream(params: {
       });
     }
     refusalBuffer?.flush();
-    // Backstop: streaming tags commentary at the tool-boundary above, but
-    // replay/non-streaming assembly may reach here with tool calls untagged.
-    // Idempotent, so it never double-tags the streaming path. Gate on the turn
-    // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
-    // that mislabel tool turns as "end_turn" still tag their narration.
-    if (
-      managed &&
-      (output.stopReason === "toolUse" || output.content.some((block) => block.type === "toolCall"))
-    ) {
-      tagPendingCommentaryText(output.content);
-    }
-    flushPendingTextEnds();
+    flushPendingTextEnds(true);
   } finally {
     logAnthropicThinkingDrops(inputTransformations);
   }

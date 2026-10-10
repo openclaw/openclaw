@@ -91,8 +91,8 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (entry?.fastMode === "auto") {
-    flags.push("fast:auto");
+  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
+    flags.push(`fast:${entry.fastMode}`);
   } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }

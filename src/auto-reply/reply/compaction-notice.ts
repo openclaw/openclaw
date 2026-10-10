@@ -1,4 +1,3 @@
-// Shared compaction formatting and user-facing notice payload helpers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,6 +8,7 @@ export type CompactionNoticePhase =
   | "end"
   | "incomplete"
   | "skipped"
+  | "context_bounded"
   | "memory_flush_degraded";
 
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
@@ -17,6 +17,8 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+  context_bounded:
+    "⚠️ Continuing with bounded recent context. Older history outside that window is omitted for this turn; resend any earlier details needed for your request. Full history remains saved.",
 };
 
 export function formatCompactionModelRef(provider?: string, model?: string): string {
@@ -49,16 +51,6 @@ export function createCompactionNoticePayload(
   params: CompactionNoticeOptions & { phase: CompactionNoticePhase; text?: string },
 ): ReplyPayload {
   return createNoticePayload(params.text ?? COMPACTION_NOTICE_TEXT[params.phase], params);
-}
-
-export function readCompactionHookMessages(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
 }
 
 export function createCompactionHookNoticePayload(

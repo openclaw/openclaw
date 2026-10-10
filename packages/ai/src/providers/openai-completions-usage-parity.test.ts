@@ -1,5 +1,5 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import type { AssistantMessageEventStreamLike, Context, Model } from "../types.js";
@@ -33,7 +33,7 @@ const tieredCost = {
 type UsageScenario = {
   name: string;
   package?: boolean;
-  usage: Record<string, unknown>;
+  usage?: Record<string, unknown>;
   expectedUsage: Record<string, unknown>;
   expectedCost?: number;
   cost?: typeof model.cost | typeof tieredCost;
@@ -41,6 +41,27 @@ type UsageScenario = {
 };
 
 const scenarios: UsageScenario[] = [
+  {
+    name: "successful stream without usage",
+    package: true,
+    expectedUsage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    },
+  },
+  {
+    name: "explicit coherent zero usage",
+    package: true,
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    expectedUsage: {
+      totalTokens: 0,
+      contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
+    },
+  },
   {
     name: "documented reasoning tokens and cache buckets",
     package: true,
@@ -57,6 +78,7 @@ const scenarios: UsageScenario[] = [
       cacheRead: 25,
       cacheWrite: 10,
       reasoningTokens: 7,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
       totalTokens: 120,
     },
     expectedCost: 0.00011625,
@@ -158,7 +180,14 @@ const scenarios: UsageScenario[] = [
       prompt_tokens_details: { cached_tokens: 4 },
       cost: -1,
     },
-    expectedUsage: { input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 },
+    expectedUsage: {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 0,
+      contextUsage: { state: "unavailable" },
+      totalTokens: 9,
+    },
     expectedCost: 0.000011,
   },
   {
@@ -176,7 +205,7 @@ const scenarios: UsageScenario[] = [
   },
 ];
 
-function installUsageChunk(scenario: UsageScenario): void {
+function installUsageChunk(scenario: Pick<UsageScenario, "name" | "usage" | "inChoice">): void {
   const choice = {
     index: 0,
     delta: { role: "assistant", content: "Usage preserved." },
@@ -224,6 +253,46 @@ beforeEach(() => {
 
 afterEach(() => {
   configureAiTransportHost(previousHost);
+});
+
+it.each([
+  { name: "custom endpoint without usage", warns: 1 },
+  { name: "custom endpoint with usage enabled", supportsUsageInStreaming: true, warns: 0 },
+  {
+    name: "custom endpoint reporting usage",
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    warns: 0,
+  },
+  { name: "local endpoint with usage disabled", endpointClass: "local", warns: 0 },
+])("emits one actionable hint for $name", async (scenario) => {
+  installUsageChunk(scenario);
+  const logWarn = vi.fn();
+  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
+  configureAiTransportHost({
+    ...getAiTransportHost(),
+    resolveProviderRequestCapabilities: () => ({
+      ...capabilities,
+      endpointClass: scenario.endpointClass ?? "custom",
+    }),
+    logWarn,
+  });
+  const requestModel = {
+    ...model,
+    id: scenario.name,
+    provider: "usage-hint",
+    baseUrl: "https://llm.example.com/v1",
+    compat: { supportsUsageInStreaming: scenario.supportsUsageInStreaming ?? false },
+  };
+  expect((await createManagedFixtureStream(requestModel).result()).stopReason).toBe("stop");
+  expect((await createManagedFixtureStream(requestModel).result()).stopReason).toBe("stop");
+  expect(logWarn).toHaveBeenCalledTimes(scenario.warns);
+  if (scenario.warns) {
+    expect(logWarn).toHaveBeenCalledWith(
+      "openai-transport",
+      expect.stringContaining("set compat.supportsUsageInStreaming: true"),
+      { provider: requestModel.provider, model: requestModel.id },
+    );
+  }
 });
 
 describe.each([

@@ -714,7 +714,7 @@ describe("buildWorkspaceSkillStatus", () => {
         }),
       ],
       agentId: "specialist",
-      config: { agents: { list: [{ id: "specialist", skills: ["workspace"] }] } },
+      config: { agents: { entries: { specialist: { skills: ["workspace"] } } } },
     });
 
     expect(report.agentId).toBe("specialist");
@@ -764,9 +764,8 @@ describe("buildWorkspaceSkillStatus", () => {
       agentId: "specialist",
       config: {
         agents: {
-          list: [
-            {
-              id: "specialist",
+          entries: {
+            specialist: {
               skills: [
                 "ready",
                 "needs-bin",
@@ -777,7 +776,7 @@ describe("buildWorkspaceSkillStatus", () => {
                 "bundled-blocked",
               ],
             },
-          ],
+          },
         },
         skills: {
           allowBundled: ["some-other-bundled-skill"],

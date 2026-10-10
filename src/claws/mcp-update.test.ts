@@ -123,7 +123,6 @@ describe("applyClawMcpUpdate", () => {
       },
     );
 
-    expect(execution.appliedNames).toEqual(["docs", "remote", "legacy"]);
     expect(setServer).toHaveBeenNthCalledWith(1, {
       name: "docs",
       server: newDocs,

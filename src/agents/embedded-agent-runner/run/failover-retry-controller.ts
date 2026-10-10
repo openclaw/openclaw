@@ -7,14 +7,14 @@ import {
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
 import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import {
   FailoverError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
-import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
+import type { FailoverReason } from "../../failover/signal.js";
+import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
@@ -75,29 +75,26 @@ type RateLimitAuthProfileContext = {
 };
 
 export function createEmbeddedRunFailoverRetryController(input: {
-  runParams: PreparedEmbeddedRunInput["runParams"];
-  provider: string;
-  modelId: string;
-  globalLane: string;
-  agentDir: string;
-  fallbackConfigured: boolean;
-  profileFailureStore: PreparedRuntime["profileFailureStore"];
-  getLastProfileId: () => string | undefined;
+  runInput: Pick<
+    PreparedEmbeddedRunInput,
+    "runParams" | "globalLane" | "agentDir" | "fallbackConfigured"
+  >;
+  preparedRuntime: Pick<
+    PreparedRuntime,
+    "provider" | "modelId" | "profileFailureStore" | "getApiKeyInfo" | "advanceAttemptAuthProfile"
+  > & {
+    snapshot: () => {
+      lastProfileId?: string;
+      pluginHarnessOwnsTransport: boolean;
+      agentHarness: { id: string };
+    };
+  };
   getSessionId: () => string;
-  harnessOwnsTransport: () => boolean;
-  getRuntimeAuthOwnerId: () => string;
-  getApiKeyInfo: () => ResolvedProviderAuth | null;
-  advanceAuthProfile: PreparedRuntime["advanceAttemptAuthProfile"];
 }) {
-  const {
-    runParams: params,
-    provider,
-    modelId,
-    globalLane,
-    agentDir,
-    fallbackConfigured,
-    profileFailureStore,
-  } = input;
+  const { runInput, preparedRuntime } = input;
+  const { runParams: params, globalLane, agentDir, fallbackConfigured } = runInput;
+  const { provider, modelId, profileFailureStore } = preparedRuntime;
+  const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
   let transientRetryCount = 0;
   let outputLimitRetryCount = 0;
@@ -124,32 +121,38 @@ export function createEmbeddedRunFailoverRetryController(input: {
     modelId?: string;
   }) => {
     const { profileId, reason } = failure;
-    if (input.harnessOwnsTransport() && (reason === "auth" || reason === "auth_permanent")) {
+    if (
+      preparedRuntime.snapshot().pluginHarnessOwnsTransport &&
+      (reason === "auth" || reason === "auth_permanent")
+    ) {
       revokeRuntimeAuthMaterializations({
         agentDir,
         provider,
-        runtimeOwnerId: input.getRuntimeAuthOwnerId(),
+        runtimeOwnerId: preparedRuntime.snapshot().agentHarness.id,
       });
     }
     if (params.authProfileStateMode === "read-only" || !reason) {
       return;
     }
-    if (input.harnessOwnsTransport() && reason === "timeout") {
+    if (preparedRuntime.snapshot().pluginHarnessOwnsTransport && reason === "timeout") {
       return;
     }
+    const failureParams = {
+      store: profileFailureStore,
+      reason,
+      cfg: params.config,
+      agentDir,
+      runId: params.runId,
+      modelId: failure.modelId,
+    };
     if (profileId) {
       await markAuthProfileFailure({
-        store: profileFailureStore,
+        ...failureParams,
         profileId,
-        reason,
-        cfg: params.config,
-        agentDir,
-        runId: params.runId,
-        modelId: failure.modelId,
       });
       return;
     }
-    const apiKeyInfo = input.getApiKeyInfo();
+    const apiKeyInfo = preparedRuntime.getApiKeyInfo();
     if (
       apiKeyInfo?.mode !== "api-key" ||
       !isConfigBackedInlineProviderApiKey({
@@ -162,14 +165,36 @@ export function createEmbeddedRunFailoverRetryController(input: {
       return;
     }
     await markInlineProviderApiKeyFailure({
-      store: profileFailureStore,
+      ...failureParams,
       provider,
-      reason,
-      cfg: params.config,
-      agentDir,
-      runId: params.runId,
-      modelId: failure.modelId,
     });
+  };
+
+  const advanceRateLimitAuthProfile = async (context: RateLimitAuthProfileContext) => {
+    if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
+      const status = resolveFailoverStatus("rate_limit");
+      log.warn(
+        `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+      );
+      context.logFallbackDecision("fallback_model", { status });
+      throw new FailoverError(
+        "The AI service is temporarily rate-limited. Please try again in a moment.",
+        {
+          reason: "rate_limit",
+          provider: context.failoverProvider,
+          model: context.failoverModel,
+          profileId: preparedRuntime.snapshot().lastProfileId,
+          sessionId: input.getSessionId(),
+          lane: globalLane,
+          status,
+        },
+      );
+    }
+    const rotated = await preparedRuntime.advanceAttemptAuthProfile();
+    if (rotated) {
+      rateLimitProfileRotations += 1;
+    }
+    return rotated;
   };
 
   return {
@@ -188,50 +213,25 @@ export function createEmbeddedRunFailoverRetryController(input: {
         transientRetryWindowStartMs = null;
       }
     },
-    advanceAuthProfile: input.advanceAuthProfile,
-    advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
-      if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
-        const status = resolveFailoverStatus("rate_limit");
-        log.warn(
-          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
-        );
-        context.logFallbackDecision("fallback_model", { status });
-        throw new FailoverError(
-          "The AI service is temporarily rate-limited. Please try again in a moment.",
-          {
-            reason: "rate_limit",
-            provider: context.failoverProvider,
-            model: context.failoverModel,
-            profileId: input.getLastProfileId(),
-            sessionId: input.getSessionId(),
-            lane: globalLane,
-            status,
-          },
-        );
-      }
-      const rotated = await input.advanceAuthProfile();
-      if (rotated) {
-        rateLimitProfileRotations += 1;
-      }
-      return rotated;
-    },
+    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) =>
+      reason === "rate_limit" ? advanceRateLimitAuthProfile(context) : advanceAttemptAuthProfile(),
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
     recoverThrownHarnessAuthFailure: async (error: unknown): Promise<AuthRetryTrace | null> => {
       // Native harnesses can throw before returning a terminal result. Recover only
       // provider-auth failures here; local harness faults must keep propagating.
-      if (!input.harnessOwnsTransport()) {
+      if (!preparedRuntime.snapshot().pluginHarnessOwnsTransport) {
         return null;
       }
       const failoverReason = resolveFailoverReasonFromError(error, provider);
       if (failoverReason !== "auth" && failoverReason !== "auth_permanent") {
         return null;
       }
-      const failedProfileId = input.getLastProfileId();
+      const failedProfileId = preparedRuntime.snapshot().lastProfileId;
       const profileFailureReason = resolveProfileFailureReason(failoverReason);
       const userPinnedProfile =
         params.authProfileIdSource === "user" && failedProfileId === params.authProfileId;
-      const rotated = userPinnedProfile ? false : await input.advanceAuthProfile();
+      const rotated = userPinnedProfile ? false : await preparedRuntime.advanceAttemptAuthProfile();
       try {
         await maybeMarkAuthProfileFailure({
           profileId: failedProfileId,

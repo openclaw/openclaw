@@ -11,7 +11,6 @@ final class CanvasManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "CanvasManager")
 
     private var panelController: CanvasWindowController?
-    private var panelSessionKey: String?
 
     private init() {}
 
@@ -58,7 +57,7 @@ final class CanvasManager {
 
     func hide(sessionKey: String) {
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard self.panelSessionKey == session else { return }
+        guard self.panelController?.sessionKey == session else { return }
         self.panelController?.hideCanvas()
     }
 
@@ -109,7 +108,7 @@ final class CanvasManager {
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let controller = panelController, panelSessionKey == session {
+        if let controller = panelController, controller.sessionKey == session {
             Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
             return (controller, false)
         }
@@ -117,7 +116,6 @@ final class CanvasManager {
         Self.logger.debug("ensureController creating new session=\(session, privacy: .public)")
         self.panelController?.close()
         self.panelController = nil
-        self.panelSessionKey = nil
 
         try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
         let controller = try CanvasWindowController(
@@ -128,7 +126,6 @@ final class CanvasManager {
             self?.onPanelVisibilityChanged?(visible)
         }
         self.panelController = controller
-        self.panelSessionKey = session
         return (controller, true)
     }
 }

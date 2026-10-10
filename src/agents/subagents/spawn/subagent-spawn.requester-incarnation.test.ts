@@ -26,55 +26,22 @@ import {
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
 const backendId = "requester-incarnation-fixture";
-
-it("captures the requester through spawn without host session-store reads", async () => {
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      writeSessionEntry(database, fixture.parentSessionKey, {
-        sessionId: "spawn-requester",
-        updatedAt: 1,
-      });
-      for (let index = 0; index < 4; index++) {
-        writeSessionEntry(database, `agent:main:synthetic-spawn-roster-${index}`, {
-          sessionId: `synthetic-spawn-roster-${index}`,
-          updatedAt: index + 1,
-          label: `Unrelated synthetic session ${index}`,
-        });
-      }
-    },
-    { agentId: "main" },
-  );
-  getRuntimeConfig();
-  const sql = observeHostDataSql();
-  try {
-    const result = await spawnSubagentDirect(
-      { task: "capture requester", context: "isolated", groupId: "requires-collect" },
-      { agentSessionKey: fixture.parentSessionKey },
-    );
-    expect(result).toEqual({
-      status: "error",
-      error: "sessions_spawn groupId requires collect=true.",
-    });
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
 
 it("rejects a spawn cancelled during requester acquisition before starting effects", async () => {
   await writeSubagentSessionEntry({
@@ -101,7 +68,7 @@ it("rejects a spawn cancelled during requester acquisition before starting effec
   expect(effectsStarted).not.toHaveBeenCalled();
 });
 
-it("retains dirty-sibling validation when a spawn reads its selected requester", async () => {
+it("reads the requester off-thread while retaining dirty-sibling validation", async () => {
   const sibling = "agent:main:matrix:channel:!mixed:example.org";
   const database = runOpenClawAgentWriteTransaction(
     (writer) => {
@@ -117,10 +84,17 @@ it("retains dirty-sibling validation when a spawn reads its selected requester",
       { task: "capture requester", context: "isolated", groupId: "requires-collect" },
       { agentSessionKey: fixture.parentSessionKey },
     );
-  expect(await readRequester()).toEqual({
-    status: "error",
-    error: "sessions_spawn groupId requires collect=true.",
-  });
+  getRuntimeConfig();
+  const sql = observeHostDataSql();
+  try {
+    expect(await readRequester()).toEqual({
+      status: "error",
+      error: "sessions_spawn groupId requires collect=true.",
+    });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
   database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
     JSON.stringify({
       sessionId: sibling,
@@ -134,6 +108,7 @@ it("retains dirty-sibling validation when a spawn reads its selected requester",
   database.db
     .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
     .run(sibling);
+  markCanonicalSessionValidationPending(database, [sibling]);
   expect(await readRequester()).toMatchObject({
     status: "error",
     error: expect.stringContaining("non-canonical persisted row"),
@@ -303,7 +278,7 @@ it.each([
         throw new Error("Expected an accepted child run");
       }
       await settleSubagentRegistryPersistenceWork();
-      const [restored] = loadSubagentRunsByRunIdsFromSqlite([runId]);
+      const restored = loadSubagentRegistryFromSqlite().get(runId);
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,

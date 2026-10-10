@@ -56,22 +56,10 @@ class SidebarAttention extends OpenClawLightDomElement {
   private panelGeneration = 0;
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.sidebarAttention,
-      (attention, notify) => attention.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    );
+    .watchStore(() => this.context?.sidebarAttention)
+    .watchStore(() => this.context?.sessions)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentIdentity);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -344,7 +332,7 @@ class SidebarAttention extends OpenClawLightDomElement {
               entries,
               onApprovalDecision: (event, approvalId, decision) =>
                 void this.decideApproval(event, approvalId, decision),
-              onClose: (restoreFocus) => this.closePanel(restoreFocus),
+              onClose: () => this.closePanel(true),
               onDismiss: (dismissal) => this.context?.sidebarAttention.dismiss(dismissal),
               onKeydown: this.handlePanelKeydown,
               onNavigate: (routeId, options) => {

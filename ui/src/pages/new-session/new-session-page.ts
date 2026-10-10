@@ -24,6 +24,7 @@ import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
+import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
@@ -31,6 +32,7 @@ import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
+import { renderNewSessionDraftComposer, renderNewSessionDraftErrors } from "./draft-composer.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
@@ -43,8 +45,10 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { NewSessionTitleController } from "./draft-title.ts";
-import { renderNewSessionDraftView } from "./draft-view.ts";
-import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
+import {
+  renderNewSessionIncognitoControl,
+  renderNewSessionIncognitoNotice,
+} from "./incognito-control.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
@@ -189,31 +193,15 @@ export class NewSessionPage extends OpenClawLightDomElement {
     });
     this.subscriptions = new SubscriptionsController(this)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (agentIdentity, notify) => agentIdentity.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         (sessions) => this.groupRouteRevalidation.synchronize(sessions),
       )
-      .watch(
-        () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-      )
+      .watchStore(() => this.context?.placementStartup)
+      .watchStore(() => this.context?.runtimeConfig)
       .watch(
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
@@ -419,21 +407,99 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private renderDraftBlock() {
-    return renderNewSessionDraftView({
-      context: this.context,
-      gateway: this.gateway,
-      place: this.place,
-      submission: this.submission,
-      dictation: this.dictation,
-      titlePreparation: this.titlePreparation,
-      draftOwnerKey: this.routeOwnerKey(),
-      isCatalogTarget: catalog.isTarget(this.data),
-      renderTargetBar: () => this.renderTargetBar(),
-      requestUpdate: () => this.requestUpdate(),
-      onMessage: (message, mentions) => this.setMessageFromUser(message, mentions),
-      onOpenImage: this.setImageLightbox,
-      onOpenSidebar: this.openAttachmentPanel,
-    });
+    const { context, gateway, place, submission, dictation, titlePreparation } = this;
+    const draftOwnerKey = this.routeOwnerKey();
+    const isCatalogTarget = catalog.isTarget(this.data);
+    const capabilities = submission.capabilities;
+    const preferences = context?.theme.settings;
+    const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
+    const dictationLocked = dictation.active;
+    return html`
+      <div
+        class="new-session-page__draft"
+        aria-busy=${String(submission.submitting)}
+        @compositionstart=${() => {
+          titlePreparation.setComposing(true);
+        }}
+        @compositionend=${() => {
+          titlePreparation.setComposing(false);
+        }}
+        @focusout=${() => {
+          // Browsers can drop compositionend on blur/detach mid-IME; a stuck
+          // composing flag would silently disable naming for the mounted page.
+          titlePreparation.setComposing(false);
+        }}
+      >
+        ${this.renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
+        ${renderNewSessionDraftComposer({
+          agent: place.selectedAgent(),
+          agentId: place.agentId,
+          attachmentDraft: submission.attachmentDraft,
+          canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
+          submitDisabledReason: submission.submitDisabledReason(),
+          blockedSubmitNotice: submission.blockedSubmitNotice(),
+          get dictationActive() {
+            return dictation.active;
+          },
+          dictationPreview: dictation.previewDraft(),
+          dictationStatus: dictation.renderStatus(),
+          context,
+          isCatalogTarget,
+          draftOwnerKey,
+          get message() {
+            return submission.message;
+          },
+          mentions: submission.mentions,
+          getMentions: () => submission.mentions,
+          visibility: submission.visibility,
+          draftAvailable: capabilities.canStartAsDraft(context),
+          ...capabilities.composerProps(context, gateway, place.agentId),
+          modelControl: place.modelControl,
+          permissionControl: isCatalogTarget
+            ? undefined
+            : renderChatPermissionPicker({
+                canSelectFull: place.isAdmin(),
+                defaultMode: place.selectedAgent()?.defaultPermissionMode,
+                disabled: submission.submitting || Boolean(submission.pendingPlacement.sessionKey),
+                disabledReason: submission.submitting ? t("newSession.starting") : undefined,
+                mode: submission.permissionMode,
+                onSelect: (permissionMode) =>
+                  submission.setPermissionMode(permissionMode ?? undefined),
+              }),
+          requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
+          requestUpdate: () => this.requestUpdate(),
+          get submitting() {
+            return submission.submitting;
+          },
+          textareaController: submission.composerTextarea,
+          voiceControl,
+          get messageLocked() {
+            return Boolean(submission.pendingPlacement.sessionKey);
+          },
+          nativeTerminal: isCatalogTarget,
+          onUnsupportedAttachment: () =>
+            submission.setError(t("newSession.terminalAttachmentsUnsupported")),
+          onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
+          onOpenImage: this.setImageLightbox,
+          onOpenSidebar: this.openAttachmentPanel,
+          onVisibilityChange: (visibility) => {
+            if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
+              submission.setVisibility(visibility);
+            }
+          },
+          onSubmit: () => void submission.submit(),
+          onBackgroundSubmit:
+            submission.visibility === "draft" || isCatalogTarget
+              ? undefined
+              : () => void submission.submit(undefined, true),
+        })}
+        ${
+          !isCatalogTarget
+            ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+            : nothing
+        }
+      </div>
+    `;
   }
 
   private renderWelcome() {

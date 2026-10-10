@@ -103,7 +103,13 @@ const SessionSwarmSummarySchema = closedObject({
 export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
+    /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
+    rowMode: Type.Optional(Type.Literal("compact")),
     sessionId: Type.Optional(Type.String()),
+    /** Incarnation revision for invalidating session-scoped client caches after resets. */
+    lifecycleRevision: Type.Optional(NonEmptyString),
+    /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
+    sessionModelRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
@@ -118,6 +124,8 @@ export const SessionRowSchema = Type.Object(
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    /** Prepared dashboard membership fact shared by list and change-event rows. */
+    hasBoard: Type.Optional(Type.Boolean()),
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
@@ -131,6 +139,8 @@ export const SessionRowSchema = Type.Object(
     peerKind: Type.Optional(SessionPeerKindSchema),
     isMain: Type.Optional(Type.Boolean()),
     isBackground: Type.Optional(Type.Boolean()),
+    /** Conversation owned by a plugin dock rather than ordinary session discovery. */
+    isDock: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
@@ -148,6 +158,8 @@ export const SessionRowSchema = Type.Object(
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
+    snoozedUntil: Type.Optional(Type.Number()),
+    snoozedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
     markedUnreadAt: Type.Optional(Type.Number()),
@@ -164,6 +176,8 @@ export const SessionRowSchema = Type.Object(
     parentSessionKey: Type.Optional(Type.String()),
     parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
+    /** Retained owners used by spawnedBy filtering at snapshotAt; empty retires child membership. */
+    childOwnerSessionKeys: Type.Optional(Type.Array(NonEmptyString, { maxItems: 2 })),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
     spawnDepth: Type.Optional(Type.Number()),
@@ -215,6 +229,8 @@ export const SessionRowSchema = Type.Object(
         Type.Literal("internal"),
       ]),
     ),
+    /** Immutable presentation surface; independent of creation provenance. */
+    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(

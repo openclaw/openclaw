@@ -922,7 +922,7 @@ describe("agents tools panel (browser)", () => {
       renderAgentTools(
         createBaseParams({
           configForm: {
-            agents: { entries: { main: { default: true, tools } } },
+            agents: { entries: { main: { tools } } },
           },
           toolsCatalogResult: {
             agentId: "main",

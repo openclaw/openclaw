@@ -16,14 +16,21 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
+import {
+  classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
+} from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
+  revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   ensureDevicePairSetupBootstrapToken: vi.fn(async ({ setupId }: { setupId: string }) => ({
     status: "pending",
     token: "bootstrap-token",
@@ -131,6 +138,7 @@ describe("worker node enrollment", () => {
         "export const recovery = true;",
       ),
       fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
+      fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
@@ -423,7 +431,9 @@ describe("worker node enrollment", () => {
     });
     const callback = createArtifactTransferHttpCallback(transfer);
     const server = http.createServer((req, res) => {
-      void handleWorkerBootstrapArtifactTransferHttpRequest({
+      void handleArtifactTransferHttpRequest({
+        classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+        routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
         req,
         res,
         clientIp: "127.0.0.1",
@@ -692,6 +702,7 @@ describe("worker node enrollment", () => {
         token: setup.bootstrapToken,
         deviceId: "paired-cloud-node",
         completedAtMs: 1_100,
+        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
       });
       expect(store.get(record.environmentId)).toMatchObject({
         nodeSetupId: enrollment.setupId,

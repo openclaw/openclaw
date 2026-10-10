@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createAndroidFirebaseDistribution } from "./lib/android-firebase-distribution.mjs";
 
 function run(command, args, cwd, options = {}) {
   const output = execFileSync(command, args, {
@@ -157,6 +158,7 @@ function releaseEnvironment(platform, recovery, sourceSha) {
       ? { OPENCLAW_ANDROID_RELEASE_PLAN: path.join(recovery, "android-plan.json") }
       : {
           OPENCLAW_IOS_RELEASE_PLAN: path.join(recovery, "ios-plan.json"),
+          OPENCLAW_IOS_RELEASE_SOURCE_ROOT: path.join(recovery, "source"),
           OPENCLAW_TESTFLIGHT_RESULT_FILE: path.join(recovery, "testflight-result.json"),
         }),
   };
@@ -248,7 +250,7 @@ function testflightNonUploadOutcome(root, plan, sourceSha) {
   return null;
 }
 
-function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
+async function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
   clean(root);
   const isGithubActions = process.env.GITHUB_ACTIONS === "true";
   if (isGithubActions && process.env.GITHUB_RUN_ATTEMPT !== "1") {
@@ -260,8 +262,8 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
   if (isGithubActions) {
     const eventAllowed =
       process.env.GITHUB_EVENT_NAME === "workflow_dispatch" ||
-      (platform === "ios" &&
-        destination === "testflight" &&
+      (((platform === "ios" && destination === "testflight") ||
+        (platform === "android" && destination === "internal")) &&
         process.env.GITHUB_EVENT_NAME === "schedule");
     if (
       !eventAllowed ||
@@ -270,7 +272,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
       sourceSha !== process.env.GITHUB_SHA
     ) {
       throw new Error(
-        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main; scheduled events are accepted only for iOS TestFlight.",
+        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main; scheduled events are accepted only for iOS TestFlight or Android internal testing.",
       );
     }
   } else if (git(root, "branch", "--show-current") !== "main") {
@@ -292,6 +294,11 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
       "This recovery directory already contains an attempt. Inspect its outcome or use a new directory; never repeat an upload blindly.",
     );
   }
+  const firebase =
+    platform === "android" && destination === "internal"
+      ? createAndroidFirebaseDistribution({ env: process.env })
+      : null;
+  await firebase?.preflight();
   fs.mkdirSync(recovery, { recursive: true, mode: 0o700 });
   const source = path.join(recovery, "source");
   const planPath = path.join(recovery, `${platform}-plan.json`);
@@ -330,8 +337,12 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
         { stdio: "inherit" },
       );
       plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+      plan.destination = destination;
     }
     plan.sourceSha = sourceSha;
+    if (firebase) {
+      plan.firebase = firebase.configuration;
+    }
     fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
     let stageExisting = false;
     if (destination === "testflight") {
@@ -419,7 +430,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
       [
         `scripts/${platform}-release-upload.sh`,
         ...(stageExisting ? ["--stage-only"] : []),
-        ...(platform === "ios" ? uploadArgs(plan) : []),
+        ...(platform === "ios" ? uploadArgs(plan) : ["--destination", destination]),
       ],
       source,
       {
@@ -427,7 +438,12 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
         env: releaseEnvironment(platform, recovery, sourceSha),
       },
     );
-    console.log(`Verified uploaded release: ${uploadedRef(root, platform, plan, planPath)}`);
+    const playRef = uploadedRef(root, platform, plan, planPath);
+    console.log(`Verified uploaded release: ${playRef}`);
+    if (firebase) {
+      collectArtifacts(source, recovery, platform);
+      await distributeAndroidFirebase(firebase, plan, recovery, playRef);
+    }
     completed = true;
   } finally {
     collectArtifacts(source, recovery, platform);
@@ -438,6 +454,63 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
         `Release attempt retained at ${recovery}. Inspect the first failure and store state before another upload.`,
       );
     }
+  }
+}
+
+async function distributeAndroidFirebase(firebase, plan, recovery, playRef) {
+  try {
+    const result = await firebase.distribute({
+      plan,
+      notes: JSON.parse(fs.readFileSync(path.join(recovery, "release-notes.json"), "utf8")),
+      artifactsDirectory: path.join(recovery, "artifacts"),
+      receiptPath: path.join(recovery, "firebase-result.json"),
+      playRef,
+    });
+    const summary = `Android Internal testing: Play upload confirmed; Firebase distribution complete (Wear OS, then Phone). Receipt: firebase-result.json\n`;
+    console.log(summary.trim());
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+    }
+    return result;
+  } catch (error) {
+    const summary =
+      "Android Internal testing: Play upload confirmed; Firebase incomplete. Preserve the recovery artifacts and inspect firebase-result.json before Firebase-only recovery.\n";
+    console.error(summary.trim());
+    console.error(
+      `Firebase-only recovery: node scripts/mobile-release.mjs firebase --platform android --recovery-dir <recovery-directory>`,
+    );
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+    }
+    throw error;
+  }
+}
+
+async function recoverAndroidFirebase(root, recovery) {
+  clean(root);
+  const planPath = path.join(recovery, "android-plan.json");
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  if (plan.destination !== "internal" || !/^[a-f0-9]{40}$/.test(plan.sourceSha) || !plan.firebase) {
+    throw new Error(
+      "Firebase recovery requires a saved Android internal plan with Firebase configuration.",
+    );
+  }
+  // The immutable Play record must exist before any Firebase-only recovery.
+  const playRef = uploadedRef(root, "android", plan, planPath);
+  const firebase = createAndroidFirebaseDistribution({ env: process.env });
+  await distributeAndroidFirebase(firebase, plan, recovery, playRef);
+  const source = path.join(recovery, "source");
+  const registered = git(root, "worktree", "list", "--porcelain")
+    .split("\n")
+    .includes(`worktree ${source}`);
+  if (registered) {
+    clean(source);
+    if (git(source, "rev-parse", "HEAD") !== plan.sourceSha) {
+      throw new Error(
+        "Firebase distribution completed; retained source changed, so it was preserved.",
+      );
+    }
+    git(root, "worktree", "remove", "--force", source);
   }
 }
 
@@ -458,8 +531,8 @@ function stageIos(root, recovery) {
   } else {
     git(root, "worktree", "add", "--detach", source, plan.sourceSha);
   }
-  bridgeLocalTools(root, source, "ios");
-  run("/bin/bash", ["scripts/ios-release-upload.sh", "--stage-only", ...uploadArgs(plan)], source, {
+  // Recover with corrected tooling while retaining the uploaded source for identity checks.
+  run("/bin/bash", ["scripts/ios-release-upload.sh", "--stage-only", ...uploadArgs(plan)], root, {
     stdio: "inherit",
     env: releaseEnvironment("ios", recovery, plan.sourceSha),
   });
@@ -469,11 +542,11 @@ function stageIos(root, recovery) {
   );
 }
 
-function runCli() {
+async function runCli() {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     console.log(
-      "Usage: node scripts/mobile-release.mjs run --platform ios|android [--destination app-store|testflight] [--recovery-dir <directory>]\n       node scripts/mobile-release.mjs stage --platform ios --recovery-dir <directory>\nRun prepares notes and uploads unchanged main source. TestFlight is iOS-only. Stage recovers the saved iOS destination without uploading again or making Git commits.",
+      "Usage: node scripts/mobile-release.mjs run --platform ios|android [--destination <destination>] [--recovery-dir <directory>]\n       node scripts/mobile-release.mjs stage --platform ios --recovery-dir <directory>\n       node scripts/mobile-release.mjs firebase --platform android --recovery-dir <directory>\nDestinations: iOS app-store (default) or testflight; Android play-store (default) or internal. Run prepares notes and uploads unchanged main source. Stage recovers the saved iOS destination without uploading again or making Git commits. Firebase recovers only the saved Android Firebase distribution; it never builds or uploads to Play.",
     );
     return;
   }
@@ -513,24 +586,28 @@ function runCli() {
       releaseArgs.push(arg, value);
     }
   }
-  if (!["run", "stage"].includes(operation) || !["ios", "android"].includes(platform)) {
-    throw new Error("Choose run or stage and --platform ios or android.");
+  if (!["run", "stage", "firebase"].includes(operation) || !["ios", "android"].includes(platform)) {
+    throw new Error("Choose run, stage, or firebase and --platform ios or android.");
   }
   if (releaseArgs.length && (operation !== "run" || platform !== "ios")) {
     throw new Error("Release overrides are accepted only for an iOS run.");
   }
   if (
     destination !== undefined &&
-    (platform !== "ios" ||
-      operation !== "run" ||
-      !["app-store", "testflight"].includes(destination))
+    (operation !== "run" ||
+      !(platform === "ios" ? ["app-store", "testflight"] : ["play-store", "internal"]).includes(
+        destination,
+      ))
   ) {
     throw new Error(
-      "Choose --destination app-store or testflight for an iOS run; recovery uses the saved destination.",
+      "Choose --destination app-store or testflight for iOS, or play-store or internal for Android; recovery uses the saved destination.",
     );
   }
   if (operation === "stage" && (platform !== "ios" || !recovery)) {
     throw new Error("Stage recovery requires --platform ios and --recovery-dir.");
+  }
+  if (operation === "firebase" && (platform !== "android" || !recovery)) {
+    throw new Error("Firebase recovery requires --platform android and --recovery-dir.");
   }
   const root = git(process.cwd(), "rev-parse", "--show-toplevel");
   if (!recovery) {
@@ -549,13 +626,21 @@ function runCli() {
   }
   if (operation === "stage") {
     stageIos(root, recovery);
+  } else if (operation === "firebase") {
+    await recoverAndroidFirebase(root, recovery);
   } else {
-    prepareAndUpload(root, platform, recovery, releaseArgs, destination ?? "app-store");
+    await prepareAndUpload(
+      root,
+      platform,
+      recovery,
+      releaseArgs,
+      destination ?? (platform === "ios" ? "app-store" : "play-store"),
+    );
   }
 }
 
 try {
-  runCli();
+  await runCli();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
