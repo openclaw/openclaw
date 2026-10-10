@@ -712,6 +712,7 @@ describe("update-cli", () => {
           verification: { serviceRunning: false, readyz: false, settled: false },
           steps: [
             expect.objectContaining({ exitCode: 1, stderrTail: formatErrorMessage(failure) }),
+            expect.objectContaining({ name: "post-stop-checks", exitCode: 0 }),
             recoveryVerificationStep([
               {
                 check: "settled",

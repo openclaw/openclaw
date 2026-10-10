@@ -180,6 +180,9 @@ the agent's current embedding settings; status inspection remains read-only.
 Search-triggered maintenance applies pending memory and session changes
 incrementally while searches remain available. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+Growing session transcripts retain unchanged indexed chunks and embed only new
+or changed chunks, even when the embedding cache is disabled. An explicit full
+rebuild still replaces the complete index.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
@@ -223,8 +226,9 @@ not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
 WAL/free pages are excluded.
 
 Chunk and embedding-cache vectors use little-endian 64-bit floating-point
-BLOBs. The software search fallback reads these full-precision vectors even
-when the optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
+BLOBs. The software search fallback scores these full-precision BLOBs directly
+in a worker, without allocating a numeric array per chunk, even when the
+optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
 separate 32-bit vector index. The keyword index uses each chunk's stable integer
 identity, so edits and deletion update the corresponding FTS rows directly.
 
