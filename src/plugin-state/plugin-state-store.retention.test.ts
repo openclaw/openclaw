@@ -6,12 +6,18 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { runWriteTransaction } from "./plugin-state-store.database.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   registerPluginStateSequencedJournalEntry,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
+import { PLUGIN_STATE_EXPIRY_BATCH_ROWS } from "./plugin-state-store.kernel.js";
+import {
+  readPluginStateRetention,
+  registerPluginStateEntry,
+} from "./plugin-state-store.retention.js";
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
@@ -39,6 +45,113 @@ afterAll(async () => {
 });
 
 describe("plugin state keyed store", () => {
+  it("shares quota and expiry facts while refreshing time and preserving sibling rows", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const scope = { pluginId: "discord", namespace: "operation-retention" };
+    const params = { ...scope, maxEntries: 2, overflowPolicy: "reject-new" as const };
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "stable", value: 1 },
+      { ...scope, key: "expiring", value: 2, expiresAt: 2_000 },
+      { ...scope, namespace: "sibling", key: "expired", value: 3, expiresAt: 800 },
+    ]);
+    const current = createPluginStateSyncKeyedStore("discord", {
+      namespace: scope.namespace,
+      maxEntries: 2,
+      overflowPolicy: "reject-new",
+    });
+    const sibling = createPluginStateSyncKeyedStore("discord", {
+      namespace: "sibling",
+      maxEntries: 2,
+    });
+    const counts = runWriteTransaction("register", (store) => {
+      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const statements = trackSqliteStatementExecutions(
+        store.db,
+        ["expiryProbe", "delete"],
+        (sql) =>
+          sql.startsWith('select "expires_at" from "plugin_state_entries"')
+            ? "expiryProbe"
+            : sql.startsWith('delete from "plugin_state_entries"')
+              ? "delete"
+              : null,
+      );
+      try {
+        registerPluginStateEntry(
+          store,
+          { ...params, key: "stable", valueJson: "4" },
+          retention,
+          true,
+        );
+      } finally {
+        statements.restore();
+      }
+      vi.setSystemTime(2_000);
+      registerPluginStateEntry(
+        store,
+        { ...params, key: "stable", valueJson: "5" },
+        retention,
+        true,
+      );
+      return statements.counts;
+    });
+    vi.setSystemTime(500);
+    expect(current.entries()).toEqual([{ key: "stable", value: 5, createdAt: 2_000 }]);
+    expect(sibling.lookup("expired")).toBe(3);
+
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "backward-visible", value: 6, expiresAt: 1_500 },
+    ]);
+    vi.setSystemTime(2_000);
+    expect(() =>
+      runWriteTransaction("register", (store) => {
+        const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+        vi.setSystemTime(1_000);
+        registerPluginStateEntry(
+          store,
+          { ...params, key: "over-capacity", valueJson: "7" },
+          retention,
+          false,
+        );
+      }),
+    ).toThrow("reached its 2-row limit");
+    expect(current.lookup("over-capacity")).toBeUndefined();
+    expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
+  });
+
+  it("continues bounded expiry cleanup when compound writes reuse retention facts", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000);
+    const scope = { pluginId: "discord", namespace: "operation-expiry-batch" };
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "stable", value: 1 },
+      ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS + 1 }, (_, index) => ({
+        ...scope,
+        key: `expired-${index}`,
+        value: index,
+        expiresAt: 1_000,
+      })),
+    ]);
+    runWriteTransaction("register", (store) => {
+      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const params = {
+        ...scope,
+        key: "stable",
+        maxEntries: 1,
+        overflowPolicy: "reject-new" as const,
+      };
+      registerPluginStateEntry(store, { ...params, valueJson: "2" }, retention, true);
+      registerPluginStateEntry(store, { ...params, valueJson: "3" }, retention, true);
+    });
+    vi.setSystemTime(500);
+    expect(
+      createPluginStateSyncKeyedStore("discord", {
+        namespace: scope.namespace,
+        maxEntries: 1,
+      }).entries(),
+    ).toEqual([{ key: "stable", value: 3, createdAt: 2_000 }]);
+  });
+
   it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);

@@ -207,30 +207,53 @@ export function renderFilterSelect<Value extends string>(params: {
   </div>`;
 }
 
-export function renderFilterChoices<Value extends string>(params: {
-  label: string;
-  value: Value;
-  options: readonly { value: Value; label: string; icon: keyof typeof icons; title?: string }[];
-  onChange: (value: Value) => void;
-}) {
-  return html`<div class="workboard-filter-choice">
-    <span class="workboard-filter-section__label">${params.label}</span>
-    <div class="workboard-view-toggle" role="group" aria-label=${params.label}>
-      ${params.options.map(
-        (option) => html`<button
-          class="btn ${params.value === option.value ? "is-active" : ""}"
+export function renderDisplayChoices(
+  state: WorkboardUiState,
+  requestUpdate: (() => void) | undefined,
+) {
+  const choice = <Field extends "viewMode" | "layout" | "emptyColumnMode">(
+    field: Field,
+    labelKey: string,
+    options: readonly (readonly [WorkboardUiState[Field], string, keyof typeof icons, string?])[],
+  ) => html`<div class="workboard-filter-choice">
+    <span class="workboard-filter-section__label">${t(`workboard.${labelKey}`)}</span>
+    <div class="workboard-view-toggle" role="group" aria-label=${t(`workboard.${labelKey}`)}>
+      ${options.map(
+        ([value, label, icon, title = label]) => html`<button
+          class="btn ${state[field] === value ? "is-active" : ""}"
           type="button"
-          aria-pressed=${params.value === option.value}
-          aria-label=${option.title ?? option.label}
-          title=${option.title ?? option.label}
-          @click=${() => params.onChange(option.value)}
+          aria-pressed=${state[field] === value}
+          aria-label=${t(`workboard.${title}`)}
+          title=${t(`workboard.${title}`)}
+          @click=${() => {
+            state[field] = value;
+            if (field === "emptyColumnMode") {
+              state.expandedEmptyStatuses.clear();
+            }
+            requestUpdate?.();
+          }}
         >
-          <span aria-hidden="true">${icons[option.icon]}</span>
-          <span>${option.label}</span>
+          <span aria-hidden="true">${icons[icon]}</span>
+          <span>${t(`workboard.${label}`)}</span>
         </button>`,
       )}
     </div>
   </div>`;
+  return [
+    choice("viewMode", "filterLayout", [
+      ["board", "viewBoard", "kanban"],
+      ["list", "viewList", "list"],
+    ]),
+    choice("layout", "filterDensity", [
+      ["comfortable", "densityComfortable", "layoutComfortable"],
+      ["compact", "densityCompact", "layoutCompact"],
+    ]),
+    choice("emptyColumnMode", "emptyColumns", [
+      ["show", "emptyColumnsShow", "eye", "showEmptyColumns"],
+      ["collapse", "emptyColumnsCollapse", "minimize", "collapseEmptyColumns"],
+      ["hide", "emptyColumnsHide", "eyeOff", "hideEmptyColumns"],
+    ]),
+  ];
 }
 
 export function renderMultiFilter<Value extends string>(params: {

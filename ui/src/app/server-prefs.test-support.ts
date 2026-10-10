@@ -1,12 +1,8 @@
 import { vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
-import {
-  applyServerUiPrefs,
-  pushServerUiPrefs,
-  refreshProfileAppearancePrefs,
-  resetServerUiPrefsSync,
-} from "./server-prefs.ts";
+import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
+import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { patchSettings } from "./settings.ts";
 
 export type RequestMock = ReturnType<
@@ -68,6 +64,66 @@ export function createServerPrefsWriter(
     },
   };
   return writer;
+}
+
+export function pinnedPage(keys: string[] = [], offset = 0, totalCount = offset + keys.length) {
+  const next = offset + keys.length;
+  return {
+    count: keys.length,
+    totalCount,
+    offset,
+    hasMore: next < totalCount,
+    nextOffset: next < totalCount ? next : null,
+    sessions: keys.map((key) => ({ key, pinned: true })),
+  };
+}
+export function createProfilePrefsServer(
+  initial: Record<string, Record<string, unknown>> = {},
+  scope = "ws://navigation",
+  config: unknown = {
+    ui: { prefs: { sidebarEntries: ["route:usage", "plugin:workboard/workboard"] } },
+  },
+) {
+  const profiles = structuredClone(initial);
+  const connect = (profileId: string) => {
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      async (method, params) => {
+        const entries = (profiles[profileId] ??= {});
+        if (method === "users.prefs.get") {
+          return { status: "ok", entries: structuredClone(entries) };
+        }
+        if (method === "sessions.list") {
+          return pinnedPage();
+        }
+        if (method !== "users.prefs.set") {
+          throw new Error("unexpected global mutation: " + method);
+        }
+        const update = params as {
+          entries: Record<string, unknown>;
+          expectedEntries: Record<string, unknown>;
+        };
+        for (const [key, expected] of Object.entries(update.expectedEntries)) {
+          if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
+            return { status: "conflict" };
+          }
+        }
+        Object.assign(entries, structuredClone(update.entries));
+        return { status: "ok" };
+      },
+    );
+    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+    const refresh = () =>
+      refreshProfileAppearancePrefs({
+        client: writer.state.client!,
+        profileId,
+        configObject: config,
+        scope,
+        canWrite: true,
+        onApplied: vi.fn(),
+      });
+    return { writer, request, refresh };
+  };
+  return { profiles, connect };
 }
 
 export function refreshServerPrefsProfile(

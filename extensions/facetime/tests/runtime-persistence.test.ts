@@ -1,4 +1,7 @@
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -21,11 +24,11 @@ function deferred() {
 }
 
 function emptyState() {
-  return createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  });
+  return createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  );
 }
 
 function suspendNextWrite(state: ReturnType<typeof emptyState>) {
@@ -60,9 +63,80 @@ describe("FaceTime runtime asynchronous persistence", () => {
     mocks.helper.findOutgoingCall.mockResolvedValue(pendingDialCarrierResult());
   });
 
+  it.each([false, true])(
+    "recovers and conditionally clears a dial without V2 on a supported host (replacement=%s)",
+    async (replacement) => {
+      const state = await pendingDialState();
+      const legacy = createPluginStateKeyedStoreForTests<unknown>("facetime", {
+        namespace: "pending-dial",
+        maxEntries: 1,
+        overflowPolicy: "reject-new",
+      });
+      const deletion = vi.spyOn(legacy, "deleteIf");
+      const openKeyedStore = vi.fn(() => ({
+        ...legacy,
+        observe: undefined,
+        compareAndApply: undefined,
+      }));
+      const runtime = await createRuntime(state, undefined, { openKeyedStore });
+      try {
+        expect((await runtime.status()).outboundCallPending).toMatchObject({
+          dialID: "approved-dial",
+        });
+        expect(await state.lookup("active")).toMatchObject({
+          dialID: "approved-dial",
+          ownerEpoch: 2,
+        });
+        if (replacement) {
+          await pendingDialState({ dialID: "replacement-dial" });
+        }
+        await mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
+
+        expect(openKeyedStore).toHaveBeenCalledOnce();
+        expect(deletion).toHaveBeenCalledOnce();
+        if (replacement) {
+          expect(await state.lookup("active")).toMatchObject({ dialID: "replacement-dial" });
+        } else {
+          expect(await state.lookup("active")).toBeUndefined();
+        }
+      } finally {
+        await runtime.stop();
+      }
+    },
+  );
+
+  it.each(["open", "lookup"] as const)(
+    "propagates a V2 %s failure without opening a legacy store",
+    async (stage) => {
+      const state = emptyState();
+      const failure = new Error("worker state unavailable");
+      const openKeyedStore = vi.fn(() => state);
+      const openKeyedStoreV2 = vi.fn(() => {
+        if (stage === "open") {
+          throw failure;
+        }
+        return state;
+      });
+      if (stage === "lookup") {
+        vi.spyOn(state, "lookup").mockRejectedValueOnce(failure);
+      }
+
+      await expect(
+        createRuntime(state, undefined, { openKeyedStore, openKeyedStoreV2 }),
+      ).rejects.toBe(failure);
+      expect(openKeyedStoreV2).toHaveBeenCalledOnce();
+      expect(openKeyedStore).not.toHaveBeenCalled();
+      expect(mocks.helper.start).not.toHaveBeenCalled();
+    },
+  );
+
   it("never dispatches a helper dial when its initial persistence fails", async () => {
     const state = emptyState();
-    const runtime = await createRuntime(state);
+    const openKeyedStore = vi.fn(() => state);
+    const runtime = await createRuntime(state, undefined, {
+      openKeyedStore,
+      openKeyedStoreV2: () => state,
+    });
     const failure = new Error("pending dial publication failed");
     vi.spyOn(state, "register").mockRejectedValueOnce(failure);
     try {
@@ -70,6 +144,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
       expect(mocks.helper.startCall).not.toHaveBeenCalled();
       expect(await state.lookup("active")).toBeUndefined();
+      expect(openKeyedStore).not.toHaveBeenCalled();
     } finally {
       await runtime.stop();
     }
@@ -322,7 +397,6 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
   it("closes a promoted call before pending deletion settles and fences delayed readiness", async () => {
     const state = await pendingDialState();
-    const runtime = await createRuntime(state);
     const readinessEntered = deferred();
     const releaseReadiness = deferred();
     const talkClosed = deferred();
@@ -344,6 +418,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
       await releaseDeletion.promise;
       return await observe(...args);
     });
+    const runtime = await createRuntime(state);
     const active = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 1));
     let ended: void | Promise<void> = undefined;
     try {
@@ -404,8 +479,6 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
   it("does not republish a terminal dial when stop overlaps delivery of its deletion result", async () => {
     const state = await pendingDialState();
-    const runtime = await createRuntime(state);
-    const register = vi.spyOn(state, "register");
     const deleted = deferred();
     const releaseResult = deferred();
     const compareAndApply = state.compareAndApply.bind(state);
@@ -415,6 +488,8 @@ describe("FaceTime runtime asynchronous persistence", () => {
       await releaseResult.promise;
       return result;
     });
+    const runtime = await createRuntime(state);
+    const register = vi.spyOn(state, "register");
     const ended = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
     let stopping: Promise<void> | undefined;
     try {

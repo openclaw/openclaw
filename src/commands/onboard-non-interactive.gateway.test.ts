@@ -66,6 +66,12 @@ describe("logNonInteractiveOnboardingFailure", () => {
     });
 
     const parsed = JSON.parse(readCapturedJson()) as { hints: string[] };
+    expect(parsed).toMatchObject({
+      ok: false,
+      error: { type: "cli_error", message: failure.message },
+      phase: failure.phase,
+      message: failure.message,
+    });
     expect(parsed.hints.filter((hint) => hint.startsWith("Fix:"))).toEqual([callerFix]);
   });
 
@@ -214,6 +220,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(output).toHaveBeenCalledOnce();
       expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
         ok: false,
+        error: { type: "cli_error", message },
         phase: "options",
         message,
       });

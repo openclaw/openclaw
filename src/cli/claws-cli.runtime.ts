@@ -74,6 +74,7 @@ import type {
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
 import { clawRemovalJournalGateway } from "./claws-cli.removal-journal.js";
+import { offlineClawAction } from "./claws-cli.state-owner.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -230,7 +231,9 @@ export async function runClawsInspectCommand(
   }
 }
 
-export async function runClawsAddCommand(
+export const runClawsAddCommand = offlineClawAction("add", runClawsAddCommandLocal);
+
+async function runClawsAddCommandLocal(
   sourcePath: string,
   opts: ClawsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -470,7 +473,9 @@ export async function runClawsAddCommand(
   }
 }
 
-export async function runClawsStatusCommand(
+export const runClawsStatusCommand = offlineClawAction("status", runClawsStatusCommandLocal);
+
+async function runClawsStatusCommandLocal(
   target: string | undefined,
   opts: ClawsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -496,7 +501,9 @@ export async function runClawsStatusCommand(
   }
 }
 
-export async function runClawsRemoveCommand(
+export const runClawsRemoveCommand = offlineClawAction("remove", runClawsRemoveCommandLocal);
+
+async function runClawsRemoveCommandLocal(
   target: string,
   opts: ClawsRemoveOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -606,7 +613,9 @@ export async function runClawsRemoveCommand(
   }
 }
 
-export async function runClawsExportCommand(
+export const runClawsExportCommand = offlineClawAction("export", runClawsExportCommandLocal);
+
+async function runClawsExportCommandLocal(
   agentId: string,
   opts: ClawsExportOptions,
   runtime: RuntimeEnv = defaultRuntime,

@@ -1,8 +1,11 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +14,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -99,44 +103,44 @@ describe("session state events", () => {
       }
       let changedAfterVerdict = false;
       let verdicts = 0;
-      const peer = new DatabaseSync(current.source.path);
+      const writer = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: current.source.path,
+        env: database.env,
+      });
       const check = {
         source: current.source,
         assertCurrent: (facts: { lifecycleRunId?: unknown } | undefined) => {
           current.assertSourceCurrent();
           expect(facts?.lifecycleRunId).toBe("original-run");
           if (++verdicts === verdict) {
-            peer
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-              )
-              .run(`$.${field}`, "successor-run", key);
+            const previous = readExactSessionEntryRow(writer, key)?.entry;
+            if (!previous) {
+              throw new Error("Expected an existing session for the owner write");
+            }
+            writeSessionEntry(writer, key, { ...previous, [field]: "successor-run" });
             changedAfterVerdict = true;
           }
         },
       };
-      try {
-        const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
-        const options = { ...database, now: 0, sessionEntryCurrent: check };
-        const recorded = await recordSessionStateEventAsync(input, options);
-        expect(changedAfterVerdict).toBe(true);
-        if (records) {
-          expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
-          expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
-        } else {
-          expect(recorded).toBeUndefined();
-          expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-        }
-
-        await upsertSessionEntryCore(target, entry);
-        expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
-          sessionKey: child,
-          sessionId: entry.sessionId,
-        });
+      const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
+      const options = { ...database, now: 0, sessionEntryCurrent: check };
+      const recorded = await recordSessionStateEventAsync(input, options);
+      expect(changedAfterVerdict).toBe(true);
+      if (records) {
+        expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
         expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
-      } finally {
-        peer.close();
+      } else {
+        expect(recorded).toBeUndefined();
+        expect(await getSessionStateVersion(child, "main", database)).toBe(0);
       }
+
+      await upsertSessionEntryCore(target, entry);
+      expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
+        sessionKey: child,
+        sessionId: entry.sessionId,
+      });
+      expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
     },
   );
 

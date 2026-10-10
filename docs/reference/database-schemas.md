@@ -11,12 +11,22 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+The Gateway process is the single owner of every OpenClaw database and its state.
+Its workers and native handles share that ownership. Committed write receipts
+invalidate in-process row caches before their next use; a cache without complete
+writer coverage must use a direct read instead. Runtime reads do not probe foreign
+commits with `PRAGMA data_version`, version observations, or foreign-observation
+scopes. SQLite statements outside an open read transaction already see committed
+data. A single-statement read needs no explicit transaction; multi-statement reads
+keep a transaction when their results require one consistent snapshot.
+CLI, Doctor, cron, and plugin child processes must route mutations through the
+Gateway or acquire exclusive ownership while it is stopped. First admission,
+migration, repair, and final live-authority checks retain their existing owners.
+
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
-Non-mutating WAL observations reuse the loaded library's admitted capability;
-they still observe current WAL frames and read freshness on each use. Quarantine
-decision readers and writers set their existing lock-wait timeout at connection
+Quarantine decision readers and writers set their existing lock-wait timeout at connection
 open. The quarantine store's format is admitted once per physical database per
 process, while existing guards retain the indexed durable quarantine-row lookup
 in one SQLite snapshot and validate any recorded file generation.
@@ -44,14 +54,21 @@ their checks, and observed corruption still revokes admission.
 
 Shared-state and agent read-only connections reuse bounded prepared statements
 under their native connection lifecycle. Prepared-statement reuse alone does not
-retain query results. Read admission shares one `PRAGMA data_version` freshness
-check within its synchronous operation; schema-fact lookups use the process's
-admitted facts without SQL. Write transactions refresh cached row facts after
-acquiring `BEGIN`. Explicit row-freshness checks still execute, even inside another
-read operation. Foreign commits invalidate cached row results without querying
-`schema_version`, `user_version`, or the catalog again. Active SQLite snapshots
-keep their view until they end. Closing a connection clears its prepared statements
+retain query results. Schema-fact lookups use the process's admitted facts without
+SQL. Writer receipts invalidate cached row results across connections without
+querying `data_version`, `schema_version`, `user_version`, or the catalog again.
+Current-row authority checks remain at their effect boundaries. Cached rows inside
+an active SQLite snapshot use that snapshot's identity and the connection's local
+mutation revision. They never carry a current committed-write revision or become
+reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
+Closing a connection clears its prepared statements
 and row caches, while physical-database admission survives for the process lifetime.
+
+Worker dispatch carries snapshots prepared by the admission owner when it publishes
+facts or writer custody. Unchanged requests reuse the registry revision without
+scanning every database or rebuilding fact maps. Shared revocation cells still
+invalidate transferred facts immediately; retirement removes the published snapshot.
+This changes no schema, stored bytes, or update behavior.
 
 Shared-state content-version checks reuse the physical database's admitted version
 facts across handles and workers. Ordinary commits, transactions, and connection
@@ -64,9 +81,9 @@ publication requires a positive match with the current committed admission. Each
 caller still applies its published-version floor. Schema versions, stored bytes,
 and upgrade or downgrade behavior are unchanged.
 
-New agent readers reuse the process's schema admission and probe row freshness;
-subsequent unpinned uses still probe again. Shared-state worker reads keep admission
-and query execution in the same freshness scope. Point transcript statistics, mutation clocks, pending-archive checks, and
+New agent readers reuse the process's schema admission. Shared-state worker reads
+consume writer-invalidated cache facts or current rows without a freshness probe.
+Point transcript statistics, mutation clocks, pending-archive checks, and
 hot/cold watermarks use a single statement's snapshot; composite reads retain
 their read transaction, and hot transcript reads reuse an existing transaction
 without a nested savepoint. Yielding write admission restores its temporary busy
@@ -83,12 +100,12 @@ transactional repair, and integrity checks remain with their existing owners.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the published facts. Missing objects use the existing installation
 transaction, which publishes the new schema facts on commit; rollback cannot
-publish a schema that did not commit. Ordinary connection replacement and foreign
-data commits do not repeat schema validation. Schemas, stored bytes, and update
-behavior are unchanged.
+publish a schema that did not commit. Ordinary connection replacement and data
+commits do not repeat schema validation. Schemas, stored bytes, and update behavior
+are unchanged.
 
-Admitted schema facts survive data-only transaction settlement. The next operation
-still checks foreign commits for cached row freshness. Transaction-local views of
+Admitted schema facts survive data-only transaction settlement. Committed write
+receipts invalidate cached row facts. Transaction-local views of
 schema facts end with their SQLite snapshot; the next transaction consumes the
 process's published facts without repeating validation.
 
@@ -104,7 +121,7 @@ worker transfers so alias publication revokes superseded proof while preserving
 acknowledged copies. Later revocation still refuses publication. Schemas, stored
 bytes, and update behavior are unchanged.
 
-Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes cached row facts when consuming data; schema facts come from process-wide admission. Canonical readiness owns the row-freshness check before reusing its clean-store decision.
+Retaining an already-open agent handle holds its lifetime without querying SQLite. Writer receipts invalidate its cached row facts; schema facts come from process-wide admission. Canonical readiness invalidates its clean-store decision when the owning writer changes the store.
 
 The agent ID and role in `schema_meta` describe the physical store's fixed schema
 owner. Creation and migration validate and publish these facts for every handle
@@ -139,7 +156,7 @@ Optional columns come from admitted schema facts and refresh with that owner.
 
 Shared-state read operations retain their admission revision through their
 synchronous domain read. ACP metadata reuses at most 128 rows per connection
-under that revision; foreign commits, local writes, schema changes, and close
+under that revision; writer receipts, schema changes, and close
 invalidate reuse. Transactions and pinned or authorizer-controlled reads still
 query SQLite. Supplied shared-state writers reuse their selected handle and check
 ownership after `BEGIN`, without a duplicate pre-transaction row read or schema
@@ -147,15 +164,11 @@ validation.
 Stored bytes, schemas, permissions, and update behavior are unchanged.
 
 Exact entry and participant readers retain their last result at the admitted
-connection revision. Repeated reads reuse those facts until a local write,
-rollback, schema change, or observed foreign commit invalidates them. A new
-transaction probes freshness before reusing unchanged facts; nested savepoints
-share the transaction's probe. Unexpected transaction loss expires both facts
-and freshness.
-Session revision guards and maintenance snapshots share that admitted transaction's
-freshness probe while continuing to check the local mutation generation. Unpinned
-uses and transactions without an admitted probe still check foreign commits;
-transaction entry, rollback, and settlement retain their existing invalidation.
+connection revision. Repeated reads reuse those facts until an owning writer's
+receipt, rollback, schema change, or connection retirement invalidates them.
+Session revision guards and maintenance snapshots retain their mutation and
+snapshot predicates; transaction entry, rollback, and settlement retain their
+existing invalidation without foreign-commit probing.
 No schema, stored bytes, permissions, or update behavior change.
 Returned entries and participant identities remain caller-owned. Transcript
 watermark reads select the hot generation and the retained cold or hot sequence
@@ -169,7 +182,41 @@ use the existing primary key and require no schema or data migration.
 Session entry writes batch their saved snapshot fields in one upsert, preserving
 per-field revision triggers and rollback.
 
-Canonical main-key policy reads reuse a connection-owned value at the current read revision, including within transactions and pinned snapshots. The connection owner tracks local SQL mutations, including raw and trigger-driven writes; its mutation revision, admitted schema facts, observed foreign-commit version, and pinned snapshot identity invalidate that value. Native mutation and transaction-control callbacks and authorizer-controlled reads continue querying the policy. Policy facts do not grant canonical admission or continuation authority.
+Canonical main-key policy, external-supervision ownership, and the machine-owned
+TTS preference path are loaded once for the physical database and shared across
+handles and workers. Their owning writers publish committed replacements;
+unrelated writes do not invalidate these facts. The Gateway owns runtime writes.
+Other processes must use that owner or run while it is stopped, except established
+updater handoff, restart-sentinel, and update-finalization writers, which retain their
+own lifecycle fences. Ownership claims require exclusive offline custody. Explicit
+ownership inspection and Doctor still read the database, and live lifecycle and lease checks
+remain at effect boundaries. Cached policy facts do not grant canonical admission
+or continuation authority. Main-key writer publications carry a host revision, so
+workers can retain an absent publication without polling after unrelated writes.
+Nested workers forward only the host completeness they actually received. The shared
+generation layout keeps write receipts in slot 5 and host-publication completeness
+in slot 6; these independent witnesses never share a counter.
+Present main-key values are data facts: unrelated DDL cannot retire a committed
+config postimage. A missing policy row stays with the connection's read revision
+until the schema owner's seed or canonical writer makes the policy available.
+Uncertain rollback can discard a data fact and require one repair read before reuse.
+
+The Mentions Inbox retains its committed head through the same physical owner.
+An unchanged head skips snapshot worker dispatch. A changed or uncertain mutation
+reads the head and retained sources in one atomic query before resuming its FIFO;
+an unknown write outcome never authorizes replay. Session-entry mutation generations
+live in JavaScript beside their connection. TEMP triggers observe exact session
+and participant writes, and rollback invalidates generations without selecting a
+TEMP counter row. Auth-profile readers use admitted catalog facts for tables,
+views, and absence instead of querying the catalog for each read. These changes
+preserve schemas, stored bytes, durability, retention, permissions, and update behavior.
+
+The device-pair notifier retains an empty subscriber and delivery-receipt state
+for its service lifetime, so idle scheduled scans do not reread both stores.
+Its own writes across Gateway and agent registries invalidate that fact, including
+uncertain outcomes, and service restart reloads it. Active notifications retain
+their current subscription checks and delivery receipts; persisted subscriptions
+and receipt retention are unchanged.
 
 The Gateway does not schedule daily full-database scans. Admission-requested
 background checks stay limited to the requested agent database: `quick_check`

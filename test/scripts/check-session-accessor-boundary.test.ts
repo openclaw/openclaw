@@ -281,6 +281,43 @@ describe("session accessor boundary guard", () => {
     ]);
   });
 
+  it("allows only the runtime SDK forwarding import, not legacy calls", () => {
+    const source = 'import { updateLastRoute } from "../../plugin-sdk/session-store-runtime.js";';
+    const runtimePath = "/repo/src/plugins/runtime/runtime-channel.ts";
+    const inspect = (content: string, fileName = runtimePath) =>
+      findSessionAccessorWriteBoundaryViolations(
+        content,
+        fileName,
+        parser.parseSourceFile(fileName, content),
+      );
+    expect(inspect(`${source}\nconst runtime = { updateLastRoute };`)).toEqual([]);
+    expect(inspect(`${source}\nupdateLastRoute(params);`)).toEqual([
+      { line: 2, reason: 'calls legacy session store writer "updateLastRoute"' },
+    ]);
+    const agentPath = "/repo/src/plugins/runtime/runtime-agent.ts";
+    const agentSource = source.replaceAll("updateLastRoute", "updateSessionStoreEntry");
+    expect(
+      inspect(`${agentSource}\nconst runtime = { updateSessionStoreEntry };`, agentPath),
+    ).toEqual([]);
+    expect(inspect(`${agentSource}\nupdateSessionStoreEntry(params);`, agentPath)).toEqual([
+      { line: 2, reason: 'calls legacy session store writer "updateSessionStoreEntry"' },
+    ]);
+    const registryPath = "/repo/src/plugins/registry-runtime-channel.ts";
+    expect(inspect("channel.session.updateLastRoute(params);", registryPath)).toEqual([]);
+    expect(inspect("other.session.updateLastRoute(params);", registryPath)).toEqual([
+      { line: 1, reason: 'references legacy session store writer "updateLastRoute"' },
+    ]);
+    for (const [content, fileName] of [
+      [source, "/repo/src/agents/other.ts"],
+      [source.replace("{ updateLastRoute }", "{ updateLastRoute as update }"), runtimePath],
+      [source.replace("plugin-sdk/session-store-runtime", "config/sessions"), runtimePath],
+    ] as const) {
+      expect(inspect(content, fileName)).toEqual([
+        { line: 1, reason: 'imports legacy session store writer "updateLastRoute"' },
+      ]);
+    }
+  });
+
   it("flags legacy transcript writer imports", () => {
     expect(
       findTranscriptWriterBoundaryViolations(
