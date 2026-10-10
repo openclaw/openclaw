@@ -91,10 +91,6 @@ export function acquireSqliteStagingToken(
     return isRecord(row) ? row.user_version : undefined;
   };
   const beginRetirement = (): SqliteStagingToken => {
-    assertIdentity();
-    if (!db.isOpen) {
-      return acquireSqliteStagingToken(directory, "reclaim");
-    }
     if (!db.isTransaction || !exclusive) {
       if (db.isTransaction) {
         execute(sql`ROLLBACK`);
@@ -102,16 +98,7 @@ export function acquireSqliteStagingToken(
       execute(sql`BEGIN EXCLUSIVE`);
       exclusive = true;
     }
-    // BEGIN cannot upgrade an existing transaction. Revalidate after the gap;
-    // a rival owner may have retired or replaced this directory in between.
     assertIdentity();
-    const version = readVersion();
-    if (version !== (retired ? 1 : 0)) {
-      // Reject the losing attempt without deleting bytes; a later ordinary
-      // cleanup may reclaim the same identity's authoritative retired marker.
-      retired = version === 1;
-      throw new SqliteStagingRetiredError();
-    }
     return token;
   };
   const release = (retiring = false) => {

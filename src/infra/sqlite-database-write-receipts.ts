@@ -182,7 +182,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     state.localScopeRevisions.set(database, revisions);
   }
 
-  /** Per-key receipts survive unrelated committed writes; unsettled native writes still fence reads. */
+  /** Per-key receipts survive unrelated committed writes. */
   function readSqliteDatabaseScopedWriteToken(
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
@@ -194,12 +194,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     } else {
       ensureLocalWriteScopes(database, keys);
     }
-    const before = owner.readRevision(database);
-    if (before === undefined) {
+    if (owner.readRevision(database) === undefined) {
       return undefined;
     }
-    const token = record ? scopedWriteToken(record, keys) : localScopedWriteToken(database, keys);
-    return owner.readRevision(database) === before ? token : undefined;
+    return record ? scopedWriteToken(record, keys) : localScopedWriteToken(database, keys);
   }
 
   function readSqliteDatabaseScopedWriteTokenForPath(
@@ -212,12 +210,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       return undefined;
     }
     ensureWriteScopes(record, keys);
-    const before = readWriteRevision(record, 0, owner.exchange);
-    if (before === undefined) {
-      return undefined;
-    }
-    const token = scopedWriteToken(record, keys);
-    return readWriteRevision(record, 0, owner.exchange) === before ? token : undefined;
+    return scopedWriteToken(record, keys);
   }
 
   /** Capture the exact post-commit token before any fallible publication executes. */
@@ -232,15 +225,13 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     } else {
       ensureLocalWriteScopes(database, keys);
     }
-    const before = owner.readRevision(database);
-    if (before === undefined) {
+    if (owner.readRevision(database) === undefined) {
       return undefined;
     }
     const pending = state.pendingWriteScopes.get(database);
-    const token = record
+    return record
       ? scopedWriteToken(record, keys, pending)
       : localScopedWriteToken(database, keys, pending);
-    return owner.readRevision(database) === before ? token : undefined;
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */
@@ -249,11 +240,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (!record || isRetired(record)) {
       return undefined;
     }
-    const revision = readWriteRevision(record, 0, owner.exchange);
-    return revision === undefined ? undefined : `${record.identity}:${revision}`;
+    return `${record.identity}:${readWriteRevision(record)}`;
   }
 
-  /** Predict a committed token while its native mutation still holds the writer fence. */
+  /** Predict the token published when the current native mutation settles. */
   function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
     if (
       !database.isOpen ||
@@ -267,8 +257,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (!record || isRetired(record)) {
       return undefined;
     }
-    const revision = readWriteRevision(record, 1, owner.exchange);
-    return revision === undefined ? undefined : `${record.identity}:${(revision + 1) | 0}`;
+    return `${record.identity}:${(readWriteRevision(record) + 1) | 0}`;
   }
 
   return {

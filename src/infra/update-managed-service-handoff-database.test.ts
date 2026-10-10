@@ -609,16 +609,12 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
   });
 
   describe.each(["admission", "release"] as const)("%s", (phase) => {
-    // Admission covers each guard; release repeats missing storage, identity and schema revocation.
+    // Admission covers each guard; release repeats missing storage and identity revocation.
     it.each(
       phase === "admission"
         ? damage
         : damage.filter(({ name }) =>
-            [
-              "missing database",
-              "replacement parent with the same database inode",
-              "missing authority table",
-            ].includes(name),
+            ["missing database", "replacement parent with the same database inode"].includes(name),
           ),
     )("preserves $name without repair", async ({ apply }) => {
       const existingAuthority = await authority();

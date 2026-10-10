@@ -197,7 +197,6 @@ vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),
   bootstrapOutboundChannelPluginAsync: vi.fn(() => undefined),
-  resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({

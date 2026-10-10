@@ -1,6 +1,6 @@
 // Verifies outbound channel resolution fast paths, active-registry reads,
 // bootstrap fallback, and runtime facade projection.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import {
   createChannelTestPluginBase,
@@ -60,18 +60,12 @@ vi.mock("../../utils/message-channel.js", () => ({
 
 let channelResolution: typeof import("./channel-resolution.js");
 let withPluginRuntimeRegistryScope: typeof import("../../plugins/runtime/gateway-request-scope.js").withPluginRuntimeRegistryScope;
-let resetOutboundChannelBootstrapStateForTests: typeof import("./channel-bootstrap.runtime.js").resetOutboundChannelBootstrapStateForTests;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ withPluginRuntimeRegistryScope } =
     await import("../../plugins/runtime/gateway-request-scope.js"));
   channelResolution = await import("./channel-resolution.js");
-  ({ resetOutboundChannelBootstrapStateForTests } = await import("./channel-bootstrap.runtime.js"));
-});
-
-afterAll(() => {
-  resetOutboundChannelBootstrapStateForTests();
 });
 
 function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
@@ -88,7 +82,6 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<s
 
 describe("outbound channel resolution", () => {
   beforeEach(() => {
-    resetOutboundChannelBootstrapStateForTests();
     tryResolveAmbientOwnerAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     getLoadedChannelPluginMock.mockReset();

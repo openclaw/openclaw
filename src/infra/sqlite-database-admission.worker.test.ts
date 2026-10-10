@@ -5,20 +5,17 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessagePort, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   captureSqliteDatabaseAdmissions,
   hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseAdmissions,
-  prepareSqliteDatabaseWriter,
-  publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseScopedWriteToken,
+  publishSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -26,7 +23,6 @@ import type {
 } from "./sqlite-database-admission.task.test-support.js";
 import {
   hostFactKey,
-  workerFactKey,
   type AdmissionOperations,
 } from "./sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
@@ -93,52 +89,6 @@ it.each([undefined, 42])(
   },
 );
 
-it("defers unknown writer and fact refresh until the worker releases its transaction", async () => {
-  const location = path.join(tempDirs.make("sqlite-transaction-facts-"), "shared.sqlite");
-  createDatabase(location, 1);
-  const database = openNodeSqliteDatabase(location);
-  admitSqliteSchema(database);
-  const broker = new SqliteWorkerBroker();
-  try {
-    const store = await broker.open<AdmissionOperations>({
-      moduleUrl,
-      databasePath: location,
-      input: undefined,
-    });
-    const result = await broker.runOperation(
-      store!,
-      (scope) => scope.execute({ type: "transactionFacts", input: undefined }),
-      undefined,
-      undefined,
-      () => ({
-        nativeLocations: [location],
-        admission: createSqliteWorkerOperationAdmission((_request, grant) => {
-          // This writer and its facts were absent from the worker's dispatch snapshot.
-          prepareSqliteDatabaseWriter(database);
-          publishSqliteDatabaseAdmission(database, hostFactKey, 42);
-          publishSqliteDatabaseAdmission(database, workerFactKey, 43);
-          grant();
-        }),
-      }),
-    );
-    expect(result).toMatchObject({
-      transactionLookups: 0,
-      transactionRevision: undefined,
-      transactionHostFact: undefined,
-      transactionWorkerFact: undefined,
-      pendingSchema: true,
-      transactionSchemaHasProof: true,
-      outsideHostFact: 42,
-      outsideWorkerFact: 43,
-    });
-    expect(result.outsideLookups).toBeGreaterThan(0);
-    expect(result.outsideRevision).toBeTypeOf("number");
-  } finally {
-    database.close();
-    await broker.close();
-  }
-});
-
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");
   const location = path.join(root, "target.sqlite");
@@ -182,69 +132,6 @@ it("joins host admission created after a worker's operation context before its f
     await broker.close();
   }
 });
-
-it.each([
-  { rollback: false, exit: false },
-  { rollback: true, exit: false },
-  { rollback: false, exit: true },
-])(
-  "holds schema publication across the native worker boundary, rollback=$rollback, exit=$exit",
-  async ({ rollback, exit }) => {
-    const location = path.join(tempDirs.make("sqlite-held-publication-"), "shared.sqlite");
-    const reader = openNodeSqliteDatabase(location);
-    reader.exec("PRAGMA journal_mode=WAL; CREATE TABLE original(value)");
-    admitSqliteSchema(reader);
-    const writeRevision = readSqliteDatabaseWriteRevision(reader);
-    expect(writeRevision).toBeTypeOf("number");
-    const broker = new SqliteWorkerBroker();
-    let held = false;
-    try {
-      const store = await broker.open<AdmissionOperations>({
-        moduleUrl,
-        databasePath: location,
-        input: undefined,
-      });
-      const mutation = broker.runOperation(
-        store!,
-        (scope) => scope.execute({ type: "mutateHeld", input: { rollback, exit } }),
-        undefined,
-        undefined,
-        () => ({
-          nativeLocations: [location],
-          admission: createSqliteWorkerOperationAdmission((_request, grant) => {
-            held = true;
-            expect(readSqliteDatabaseWriteRevision(reader)).toBeUndefined();
-            expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
-            expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
-              !rollback,
-            );
-            const visible =
-              reader
-                .prepare("SELECT name FROM sqlite_schema WHERE name='worker_publication'")
-                .get() !== undefined;
-            expect(visible).toBe(!rollback);
-            grant();
-          }),
-        }),
-      );
-      if (exit) {
-        await expect(mutation).rejects.toThrow(/exit/iu);
-      } else {
-        await mutation;
-      }
-      expect(held).toBe(true);
-      expect(readSqliteDatabaseWriteRevision(reader)).toBeTypeOf("number");
-      expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(writeRevision);
-      expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
-      expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
-        !rollback,
-      );
-    } finally {
-      reader.close();
-      await broker.close();
-    }
-  },
-);
 
 it("shares exact session receipts with existing writer isolates and fences unclassified writes", async () => {
   const location = path.join(tempDirs.make("sqlite-scoped-receipts-"), "shared.sqlite");
@@ -291,7 +178,6 @@ it("shares exact session receipts with existing writer isolates and fences uncla
     await broker.close();
   }
 });
-
 it("keeps one shared generation when the host opens a newly created worker database before publication", async () => {
   const location = path.join(tempDirs.make("sqlite-created-generation-"), "created.sqlite");
   const broker = new SqliteWorkerBroker();
@@ -451,80 +337,6 @@ it("publishes through a retained physical database after its original pathname i
     reader.close();
   }
 });
-
-it("retires joined descendant writer custody while preserving an independent sibling", async ({
-  signal,
-}) => {
-  const root = tempDirs.make("sqlite-descendant-custody-");
-  const locations = [path.join(root, "parent.sqlite"), path.join(root, "sibling.sqlite")];
-  const readers = locations.map((location) => {
-    const reader = openNodeSqliteDatabase(location);
-    reader.exec("CREATE TABLE original(value)");
-    admitSqliteSchema(reader);
-    return reader;
-  });
-  const pools = locations.map(() =>
-    createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
-      {
-        workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
-        maxWorkers: 1,
-        idleTimeoutMs: 0,
-      },
-      { retainedTransport: true },
-    ),
-  );
-  const gates = locations.map(
-    () => new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
-  );
-  const held = locations.map(() => createDeferredCore());
-  const abort = new AbortController();
-  const tasks = pools.map((pool, index) =>
-    pool.run(
-      { path: locations[index], broker: true, holdMutation: gates[index]!.buffer },
-      {
-        signal: index === 0 ? abort.signal : undefined,
-        onNotification(value) {
-          expect(value).toBe("descendant-held");
-          held[index]!.resolve();
-        },
-      },
-    ),
-  );
-  try {
-    await withinTest(
-      Promise.all(
-        held.map(({ promise }, index) =>
-          awaitGateBeforeSettlement(promise, tasks[index]!, "Descendant did not hold its writer"),
-        ),
-      ),
-      signal,
-    );
-    for (const reader of readers) {
-      expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
-    }
-    abort.abort(new Error("Stop parent task"));
-    await expect(tasks[0]).rejects.toThrow("Stop parent task");
-    await pools[0]!.close();
-    expect(hasPendingSqliteDatabaseSchemaMutation(readers[0]!)).toBe(false);
-    expect(getAdmittedSqliteSchemaFacts(readers[0]!)?.tables.has("worker_publication")).toBe(true);
-    expect(hasPendingSqliteDatabaseSchemaMutation(readers[1]!)).toBe(true);
-    Atomics.store(gates[1]!, 0, 1);
-    Atomics.notify(gates[1]!, 0);
-    await tasks[1];
-    expect(hasPendingSqliteDatabaseSchemaMutation(readers[1]!)).toBe(false);
-  } finally {
-    for (const gate of gates) {
-      Atomics.store(gate, 0, 1);
-      Atomics.notify(gate, 0);
-    }
-    await Promise.all(pools.map((pool) => pool.close()));
-    await Promise.allSettled(tasks);
-    for (const reader of readers) {
-      reader.close();
-    }
-  }
-});
-
 it("preserves a sibling writer's POSIX lock when an unhosted worker retires", async () => {
   const location = path.join(tempDirs.make("sqlite-unhosted-lock-"), "shared.sqlite");
   createDatabase(location, 1);

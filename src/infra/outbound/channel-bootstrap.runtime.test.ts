@@ -35,11 +35,8 @@ vi.mock("../../plugins/plugin-metadata-state-worker.js", () => ({
   readPluginMetadataStateRow: vi.fn(async () => undefined),
 }));
 
-const {
-  bootstrapOutboundChannelPlugin,
-  bootstrapOutboundChannelPluginAsync,
-  resetOutboundChannelBootstrapStateForTests,
-} = await import("./channel-bootstrap.runtime.js");
+const { bootstrapOutboundChannelPlugin, bootstrapOutboundChannelPluginAsync } =
+  await import("./channel-bootstrap.runtime.js");
 const bootstrapModes = [
   { mode: "sync", bootstrap: bootstrapOutboundChannelPlugin },
   { mode: "async", bootstrap: bootstrapOutboundChannelPluginAsync },
@@ -52,12 +49,6 @@ const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery 
 const discordConfig = {
   channels: {
     discord: {},
-  },
-} satisfies OpenClawConfig;
-
-const updatedDiscordConfig = {
-  channels: {
-    discord: { enabled: true },
   },
 } satisfies OpenClawConfig;
 
@@ -104,7 +95,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
   afterEach(() => {
     loaderMocks.loadPluginRegistryHandle.mockReset();
     loaderMocks.resolveDiscoverableScopedChannelPluginIds.mockClear();
-    resetOutboundChannelBootstrapStateForTests();
     resetPluginRuntimeStateForTest();
     vi.unstubAllEnvs();
   });
@@ -215,7 +205,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     );
   });
 
-  it("caches bootstrap outcomes per admitted agent", () => {
+  it("selects the workspace independently for each admitted agent", () => {
     installDiscordSetupShell();
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
@@ -485,62 +475,4 @@ describe("bootstrapOutboundChannelPlugin", () => {
       expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
     },
   );
-
-  it.each(bootstrapModes)(
-    "does not retry an unusable handle in the same generation ($mode)",
-    async ({ bootstrap }) => {
-      installDiscordSetupShell();
-      loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBeUndefined();
-      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBeUndefined();
-
-      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(bootstrapModes)(
-    "does not retry a thrown bootstrap with an implicit state directory ($mode)",
-    async ({ bootstrap }) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
-      installDiscordSetupShell();
-      loaderMocks.loadPluginRegistryHandle.mockImplementation(() => {
-        throw new Error("load failed");
-      });
-
-      await bootstrap({ channel: "discord", cfg: discordConfig });
-      await bootstrap({ channel: "discord", cfg: discordConfig });
-
-      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("bounds failed channel outcomes and refreshes misses by LRU recency", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-    for (let index = 0; index < 64; index += 1) {
-      bootstrapOutboundChannelPlugin({ channel: `channel-${index}`, cfg: discordConfig });
-    }
-    bootstrapOutboundChannelPlugin({ channel: "channel-0", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "channel-64", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "channel-0", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(65);
-
-    bootstrapOutboundChannelPlugin({ channel: "channel-1", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(66);
-  });
-
-  it("retains failed attempts when distinct runtime configs interleave", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
-  });
 });

@@ -93,9 +93,6 @@ export function stopActiveManagedProxyRegistration(
     return;
   }
   registration.stopped = true;
-  if (activeProxyUrl?.href !== registration.proxyUrl.href) {
-    return;
-  }
   activeProxyUrl = undefined;
   activeProxyLoopbackMode = undefined;
   activeProxyTlsOptions = undefined;
