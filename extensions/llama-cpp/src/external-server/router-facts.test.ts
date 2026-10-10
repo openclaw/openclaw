@@ -102,12 +102,11 @@ it("persists verified router facts and refreshes unknown fields without replacin
 
       provider.models = provider.models.map((model) =>
         model.id === "model-b"
-          ? {
-              ...model,
+          ? Object.assign({}, model, {
               contextWindow: 24000,
               contextTokens: 16000,
               compat: { supportsTools: false },
-            }
+            })
           : model,
       );
       expect((await refresh(saved)).find((model) => model.id === "model-b")).toMatchObject({

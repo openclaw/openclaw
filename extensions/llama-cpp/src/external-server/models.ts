@@ -144,13 +144,11 @@ export function buildLlamaServerProviderConfig(params: {
     const discovered = discoveredById.get(configured.id);
     discoveredById.delete(configured.id);
     return discovered
-      ? {
-          ...discovered,
-          ...configured,
+      ? Object.assign({}, discovered, configured, {
           contextWindow: configured.contextWindow ?? discovered.contextWindow,
           contextTokens: configured.contextTokens ?? discovered.contextTokens,
           compat: { ...discovered.compat, ...configured.compat },
-        }
+        })
       : configured;
   });
   models.push(...discoveredById.values());

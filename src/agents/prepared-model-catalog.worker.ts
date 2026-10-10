@@ -420,8 +420,18 @@ async function runCatalogRequest(
         }),
       { refresh: request.refresh },
     );
+    // Deferred catalog providers can expose pure synthetic auth only after loading.
+    // Capture it before the registry decides whether to admit their discovered models.
+    const discoveryCredentials = {
+      ...resolveSyntheticCredentials([...providerModels.keys()]),
+      ...credentials,
+    };
     const facts = await prepareFullCatalogFacts(
-      exactAgentFacts,
+      {
+        ...exactAgentFacts,
+        credentials: discoveryCredentials,
+        templateAuthStorage: AuthStorage.inMemory(discoveryCredentials),
+      },
       catalogGeneration,
       "live",
       source,
@@ -442,7 +452,7 @@ async function runCatalogRequest(
           )
           .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
       ),
-      ...credentials,
+      ...discoveryCredentials,
     };
     const runtimeModels = new Map<string, Model[]>();
     const { catalogModels } = facts;

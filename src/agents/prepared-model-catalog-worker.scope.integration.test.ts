@@ -165,11 +165,40 @@ describe("prepared model catalog worker plugin scope", () => {
           ? "context-engine"
           : undefined,
     );
+    const localProvider = "deferred-local-fixture";
+    const localPluginDir = path.join(root, localProvider);
+    fs.mkdirSync(localPluginDir);
+    const localPluginFile = path.join(localPluginDir, "index.cjs");
+    fs.writeFileSync(
+      path.join(localPluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: localProvider,
+        providers: [localProvider],
+        activation: { onStartup: false },
+        syntheticAuthRefs: [localProvider],
+        modelCatalog: { discovery: { [localProvider]: "refreshable" } },
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    );
+    fs.writeFileSync(
+      localPluginFile,
+      `module.exports = { id: ${JSON.stringify(localProvider)}, register(api) {
+        api.registerProvider({ id: ${JSON.stringify(localProvider)}, label: "Deferred local", auth: [],
+          resolveSyntheticAuth: () => ({ apiKey: "local-fixture-not-real", source: "local fixture", mode: "api-key" }),
+          catalog: { run: () => ({ provider: {
+            api: "openai-completions", baseUrl: "https://deferred-local.invalid/v1",
+            models: [{ id: "router-model", name: "Router model", contextWindow: 32768,
+              contextTokens: 32768, compat: { supportsTools: true } }],
+          } }) },
+        });
+      } };`,
+    );
     const config = {
       agents: {
         defaults: {
           model: `${PROVIDER_ID}/sqlite-model`,
           models: {
+            [`${localProvider}/router-model`]: { agentRuntime: { id: "openclaw" } },
             [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
             "published-fixture/published-model": { agentRuntime: { id: "openclaw" } },
           },
@@ -178,6 +207,20 @@ describe("prepared model catalog worker plugin scope", () => {
       },
       models: {
         providers: {
+          [localProvider]: {
+            api: "openai-completions",
+            baseUrl: "https://deferred-local.invalid/v1",
+            models: [
+              {
+                id: "router-model",
+                name: "Router model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1_024,
+              },
+            ],
+          },
           "published-fixture": {
             api: "openai-completions",
             baseUrl: "https://published-fixture.invalid/v1",
@@ -196,16 +239,17 @@ describe("prepared model catalog worker plugin scope", () => {
         },
       },
       plugins: {
-        allow: [PLUGIN_ID, UNRELATED_PLUGIN_ID],
+        allow: [PLUGIN_ID, UNRELATED_PLUGIN_ID, localProvider],
         ...(selection.slot === "memory"
           ? { slots: { memory: UNRELATED_PLUGIN_ID } }
           : selection.slot === "contextEngine"
             ? { slots: { contextEngine: UNRELATED_PLUGIN_ID } }
             : {}),
-        load: { paths: [pluginFile, unrelatedPluginFile] },
+        load: { paths: [pluginFile, unrelatedPluginFile, localPluginFile] },
         entries: {
           [PLUGIN_ID]: { enabled: true },
           [UNRELATED_PLUGIN_ID]: { enabled: true },
+          [localProvider]: { enabled: true },
         },
       },
     } satisfies OpenClawConfig;
@@ -484,6 +528,15 @@ describe("prepared model catalog worker plugin scope", () => {
       context,
     });
     await waitForPublication(previousCatalog);
+    expect(snapshot.readFullModelCatalog?.()?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: localProvider,
+        id: "router-model",
+        contextWindow: 32768,
+        contextTokens: 32768,
+        compat: expect.objectContaining({ supportsTools: true }),
+      }),
+    );
     respond.mockClear();
     await expectDefined(
       modelsHandlers["models.list"],
@@ -501,6 +554,12 @@ describe("prepared model catalog worker plugin scope", () => {
       expect.objectContaining({
         models: expect.arrayContaining([
           expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+          expect.objectContaining({
+            provider: localProvider,
+            id: "router-model",
+            contextWindow: 32768,
+            contextTokens: 32768,
+          }),
         ]),
       }),
       undefined,
