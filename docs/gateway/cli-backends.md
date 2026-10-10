@@ -380,6 +380,8 @@ Explicit caller-owned in-memory context remains caller-supplied input, not permi
 
 An admitted resume of the same native Claude session can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. This notice contains no transcript text or saved notes, does not authorize automatic replay, and is never added to a fresh session or after an authentication-profile or epoch change.
 
+The notice prefixes only that native user turn. OpenClaw keeps the original user text; native-history imports correlate the prefixed turn with its existing local row instead of adding a duplicate.
+
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes. A changed auth profile id, static API key, static token, or OAuth account identity all count, when the CLI exposes one. OAuth access and refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
 ## Fallback prelude from claude-cli sessions

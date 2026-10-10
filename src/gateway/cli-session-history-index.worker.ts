@@ -100,7 +100,15 @@ function extractComparableText(
     return visible.replace(/\s+/g, " ").trim();
   };
   const normalized = normalizeText(stripResult.text);
-  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
+  // Only use stripped native context to correlate with a canonical local turn;
+  // unmatched imports and literal user text retain their original content.
+  const withoutGapNote = isClaudeImport
+    ? rawText.replace(
+        /^\[OpenClaw: \d+ messages occurred outside this Claude session from [^\n]+\. Their contents are not included here\.[^\n]*\]\r?\n\r?\n/u,
+        "",
+      )
+    : rawText;
+  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(withoutGapNote) : rawText;
   const driftNoteText =
     withoutDriftNote !== rawText
       ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
