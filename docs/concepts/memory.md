@@ -246,6 +246,13 @@ Memory Core's file flush requires writable workspace access. Sessions whose sand
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.
 
+During that flush, `write` appends only to the daily note. Its `content` must
+contain only new text. Replayed whole notes and copied paragraphs are rejected
+without changing the file, so the model can retry with just the new entries.
+Reusing Markdown headings with new facts is allowed. This check compares text
+with normalized line endings; it does not deduplicate paraphrases or repair
+existing notes.
+
 A native provider's tools-based flush does not require a writable workspace;
 other flush plans are not resolved for sessions that cannot write it. It exposes
 `read`, the provider's declared persistence tools, and optional read-only lookup
