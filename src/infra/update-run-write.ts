@@ -164,18 +164,36 @@ export function mutateRun(
 
 export const UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS = 1_000;
 
+// Recovery requirements are independent of diagnostic history's eviction priority.
+const REQUIRED_UPDATE_RUN_STEPS = new Set<string>([
+  ...UPDATE_RUN_PHASES,
+  "candidate-admission",
+  "global update",
+  "global update (omit optional)",
+  "candidate-doctor-lint",
+  "previous generation restoration",
+  "post-update verification",
+  "task-delivery-recovery",
+  "openclaw doctor",
+  "package rollback",
+  "config rollback",
+  "git-runtime-rollback",
+]);
+
 /** Recovery reads these receipts as well as phases and terminal outcomes. */
 export function isRequiredUpdateRunStep(step: UpdateRunStep & { reason?: string }): boolean {
   const key = updateRunStepKey(step.step);
   return (
-    isRetainedStep({ ...step, step: key }) ||
+    REQUIRED_UPDATE_RUN_STEPS.has(key) ||
     step.status === "failed" ||
     step.reason !== undefined ||
-    key === "openclaw doctor" ||
-    key === "package rollback" ||
-    key === "config rollback" ||
-    key.startsWith("git-rollback-") ||
-    key === "git-runtime-rollback"
+    step.termination === "signal" ||
+    key.startsWith("finalize:") ||
+    key.startsWith("driver:") ||
+    key.startsWith("notice:") ||
+    key.startsWith("reconcile:") ||
+    key.startsWith("diagnostic:database ") ||
+    key.startsWith("git-rollback-")
   );
 }
 

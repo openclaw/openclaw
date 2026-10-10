@@ -1,6 +1,7 @@
 // Vitest ui config wires the ui test shard.
 import type { ViteUserConfig } from "vitest/config";
 import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales.ts";
+import { controlUiSolidPlugin } from "../../ui/vite.config.ts";
 import { nonBrowserTestBasenamePattern } from "./vitest.include-patterns.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
@@ -15,8 +16,10 @@ import {
 // Explicit nameable return type: inference reaches vite-internal names (TS4058/TS4082).
 export function createUiVitestConfig(env?: Record<string, string | undefined>): ViteUserConfig {
   const includePatterns = [
-    ...controlUiTestGlobs.map((pattern) =>
-      pattern.replace("*.test.ts", nonBrowserTestBasenamePattern),
+    ...new Set(
+      controlUiTestGlobs.map((pattern) =>
+        pattern.replace(/\*\.test\.tsx?$/u, nonBrowserTestBasenamePattern),
+      ),
     ),
     ...uiNodeDrivenBrowserTestFiles,
   ];
@@ -35,7 +38,10 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
     useNonIsolatedRunner: true,
   });
-  return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin(), controlUiSolidPlugin()],
+  };
 }
 
 export default createUiVitestConfig();

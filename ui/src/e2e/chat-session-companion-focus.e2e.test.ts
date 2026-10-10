@@ -377,6 +377,7 @@ suite.define(() => {
             .locator('[data-session-key="agent:main:sidebar-focus"] .sidebar-recent-session__link')
             .focus();
           await page.keyboard.press("Shift+F10");
+          await openSessionMenuSubmenu(page, "Session settings");
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });

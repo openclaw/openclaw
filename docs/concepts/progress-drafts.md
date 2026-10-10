@@ -389,6 +389,10 @@ the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
 characters; prose cuts at a word boundary, while long details such as paths or
 raw commands are shortened with a middle ellipsis so the suffix stays visible.
+The same budget applies to prepared tool titles, including paths embedded in a
+Read title, rather than only to separate tool details.
+On Telegram, the budget includes the tool icon, label, and status as well as the
+command or detail text.
 
 Tune the per-line budget:
 

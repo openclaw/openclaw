@@ -271,6 +271,24 @@ remain preparation-only. Native activation requires explicit
 control database. No `openclaw.json` option enables it. `--no-restart` keeps an
 enabled installation preparation-only for that invocation.
 
+Immutable preparation requires a separately adopted build account and toolchain.
+The build account must differ from the runtime account, have no supplementary
+groups, and match the recorded numeric identity. The updater runs dependency
+installation and builds in a restricted systemd service with a private home,
+temporary directory, memory limit, and task limit. Its environment excludes the
+runtime account's credentials and its filesystem view protects runtime state,
+service definitions, and existing releases. The updater waits for the entire
+build cgroup to stop before copying and sealing the new generation as root.
+
+Build storage admission and the runtime account's write/quota probe run
+separately. A failed admission, installation, build, or process-settlement check
+leaves the existing service and `current` pointer unchanged. Uncertain process
+settlement retains the build scratch for inspection. Installations without an
+adopted build identity can still inspect status, reuse an already prepared
+generation, and detect an already-current target; preparing a new target reports
+the missing adoption. Build-identity adoption is staged for the native immutable
+update rollout and is not exposed as an `openclaw.json` setting or CLI flag yet.
+
 `--drain-timeout <seconds>` sets the immutable drain budget independently of
 `--timeout`, which retains the canary/readiness phase budget. The default drain
 budget comes from the existing restart deferral policy (300 seconds). Drain
@@ -340,6 +358,29 @@ for adopted immutable installations. Gateway `update.run` still requires the
 root installation owner to run the CLI outside the Gateway service cgroup; it
 does not elevate chat requests. `update repair` directs immutable recovery to
 `update recover`.
+
+Immutable status and dry-run also explain migration coverage. JSON exposes
+`immutableCoverage` in status and `coverage` in dry-run. The report inventories
+default, configured external, and registered agent stores, including absent paths
+and the registry's original path aliases. It reports declared plugin migration
+resources and warnings for undeclared resources. External paths are identified;
+their presence does not establish candidate migration support.
+
+For an already-prepared target, inspection compares the current package, candidate
+package, and preparation receipt schema contracts and shows each store's schema
+version against that target. A crossing such as agent schema 24 → 25 names the
+reason immutable activation refuses it before drain. An unprepared SHA has
+**unknown** target coverage: inspection does not fetch, build, or boot it. Matching
+schema versions are not physical-schema, backup, migration, or activation readiness
+proof; plugin migration coverage remains unknown.
+
+Live inventory uses the adopted service's effective environment and configuration.
+If those cannot be read, the report retains the available preparation facts and
+explains the inventory gap. Run inspection as the installation owner for complete
+service visibility. Database inspection preserves live SQLite artifacts using
+private scratch copies, which are disposed afterward; large stores can make this
+read-only inspection expensive. It does not migrate data, write configuration,
+enable activation, or stop the serving Gateway.
 
 The serving Gateway must support committed suspension handoff. A new CLI cannot
 add that capability to an older running process. For the first native activation,
