@@ -1,5 +1,4 @@
 import { HTTPFetchError } from "@line/bot-sdk";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -69,10 +68,6 @@ function expectBatch(messages: readonly unknown[], target = to) {
   expect(mocks.pushMessagesLine).toHaveBeenCalledWith(target, messages, sendOptions);
 }
 
-function order(mock: { mock: { invocationCallOrder: number[] } }) {
-  return expectDefined(mock.mock.invocationCallOrder[0], "delivery invocation");
-}
-
 function delivery(messageIds: readonly string[], threadId = "c1") {
   return expect.objectContaining({
     channel: "line",
@@ -119,24 +114,29 @@ afterAll(() => {
   vi.resetModules();
 });
 
-it("sends oversized tables in source order with quick replies on the final card", async () => {
+it("keeps oversized tables bounded while batching mixed parts", async () => {
   mocks.resolveTextChunkLimit.mockReturnValue(5000);
   mocks.chunkMarkdownText.mockImplementation(chunkMarkdownTextForLine);
   const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
   await send({ text: markdown, line: { quickReplies: ["Continue"] } });
-  expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-  const oversized = mocks.pushMessageLine.mock.calls.flatMap((args, index) =>
-    args[1].includes("Large") ? [mocks.pushMessageLine.mock.invocationCallOrder[index]] : [],
+  expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  const batches = mocks.pushMessagesLine.mock.calls.map(([, messages]) => messages);
+  const messages = batches.flat();
+  expect(batches.length).toBeGreaterThan(0);
+  expect(batches.every((batch) => batch.length <= 5)).toBe(true);
+  const oversizedChunks = messages.filter(
+    (message) => message.type === "text" && message.text.includes("Large"),
   );
-  expect(oversized).toHaveLength(1);
-  expect(oversized[0]).toBeGreaterThan(order(mocks.pushFlexMessage));
-  expect(oversized[0]).toBeLessThan(order(mocks.pushMessagesLine));
-  expect(mocks.pushMessageLine.mock.calls.every((args) => args[1].length <= 5000)).toBe(true);
-  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
-    to,
-    [expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") })],
-    expect.any(Object),
-  );
+  expect(oversizedChunks).toHaveLength(1);
+  expect(
+    oversizedChunks.every((message) => message.type === "text" && message.text.length <= 5000),
+  ).toBe(true);
+  expect(messages.at(-1)).toMatchObject({
+    type: "flex",
+    altText: "Code",
+    quickReply: createQuickReply("Continue"),
+  });
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
 });
 
@@ -229,8 +229,13 @@ it("sends flex message without dropping text", async () => {
     },
     { to: "line:group:1" },
   );
-  expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", sendOptions);
+  expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+  expect(mocks.pushMessagesLine.mock.calls[0]?.[1]).toEqual([
+    { type: "flex", altText: "Now playing", contents: { type: "bubble" } },
+    { type: "text", text: "Now playing:" },
+  ]);
 });
 
 it("preserves inline batch receipts and bounds the Flex alternative text", async () => {
@@ -288,8 +293,13 @@ it("sends template message without dropping text", async () => {
     },
   });
   expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledOnce();
-  expect(mocks.pushTemplateMessage).toHaveBeenCalledOnce();
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "Choose one:", sendOptions);
+  expect(mocks.pushTemplateMessage).not.toHaveBeenCalled();
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+  expect(mocks.pushMessagesLine.mock.calls[0]?.[1].map(({ type }) => type)).toEqual([
+    "template",
+    "text",
+  ]);
 });
 
 it("sends quick-reply-only payloads with fallback text", async () => {
@@ -370,16 +380,18 @@ it("reports caption and media receipts through the registered media adapter", as
     mediaUrl: imageUrl,
     onDeliveryResult,
   });
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "", {
-    ...primaryOptions,
-    mediaUrl: imageUrl,
-  });
-  expect(result.receipt.platformMessageIds).toEqual(["m-media"]);
-  expect(onDeliveryResult).toHaveBeenCalledTimes(2);
-  expect(onDeliveryResult.mock.calls.map(([receipt]) => receipt.messageId)).toEqual([
-    "m-text",
-    "m-media",
-  ]);
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+    to,
+    [
+      { type: "text", text: "image" },
+      { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
+    ],
+    expect.any(Object),
+  );
+  expect(result.receipt.platformMessageIds).toEqual(["m-batch"]);
+  expect(onDeliveryResult).toHaveBeenCalledOnce();
+  expect(onDeliveryResult.mock.calls.map(([receipt]) => receipt.messageId)).toEqual(["m-batch"]);
 });
 
 it.each([
@@ -454,7 +466,7 @@ it.each([false, true])(
   async (observed) => {
     const rejection = refusal(429);
     const onDeliveryResult = observed ? vi.fn() : undefined;
-    mocks.pushTextMessageWithQuickReplies.mockRejectedValueOnce(rejection);
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
     const fetchMock = stubLineApiFetch(
       Response.json({ type: "limited", value: 200 }),
       Response.json({ totalUsage: 200 }),
@@ -468,22 +480,14 @@ it.each([false, true])(
         },
         { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
       ),
-    ).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      cause: rejection,
-      deliveryResult: {
-        messageIds: ["m-media"],
-        receipt: { platformMessageIds: ["m-media"] },
-        visibleReplySent: true,
-      },
-    });
-    expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
+    ).rejects.toMatchObject({ cause: rejection });
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
     if (onDeliveryResult) {
-      expect(order(onDeliveryResult)).toBeLessThan(order(mocks.pushTextMessageWithQuickReplies));
-      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(delivery(["m-media"]));
+      expect(onDeliveryResult).not.toHaveBeenCalled();
     }
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
   },
 );
 

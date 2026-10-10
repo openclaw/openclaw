@@ -11,6 +11,13 @@ import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: logVerboseMock,
@@ -167,6 +174,10 @@ describe("the push delivery path", () => {
   });
 
   it("quotes a media send routed through the message adapter", async () => {
+    ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
     recordLineQuoteToken({
       accountId: "default",
       chatId: "Cmedia",
@@ -186,16 +197,18 @@ describe("the push delivery path", () => {
     });
 
     // The caption is the only part LINE lets a quote ride on; the image itself cannot.
-    expect(mocks.pushMessageLine.mock.calls).toEqual([
-      ["line:group:Cmedia", "here you go", expect.objectContaining({ quoteToken: "token-media" })],
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:group:Cmedia",
       [
-        "line:group:Cmedia",
-        "",
-        expect.objectContaining({ mediaUrl: "https://example.com/image.jpg" }),
+        { type: "text", text: "here you go", quoteToken: "token-media" },
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/image.jpg",
+          previewImageUrl: "https://example.com/image.jpg",
+        },
       ],
-    ]);
-    expect(expectDefined(mocks.pushMessageLine.mock.calls[1], "media push")[2]).not.toHaveProperty(
-      "quoteToken",
+      expect.any(Object),
     );
   });
 
@@ -226,11 +239,19 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
       "line:group:Cordered",
-      "After the card",
-      expect.objectContaining({ quoteToken: "token-ordered" }),
+      [
+        expect.objectContaining({
+          type: "flex",
+          altText: "Code",
+          contents: expect.objectContaining({ type: "bubble" }),
+        }),
+        { type: "text", text: "After the card", quoteToken: "token-ordered" },
+      ],
+      expect.any(Object),
     );
   });
 });

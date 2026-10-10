@@ -32,7 +32,11 @@ import {
   renderLinePresentation,
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import { explainLineRefusal } from "./send-retry.js";
+import {
+  explainLineRefusal,
+  findLineHttpError,
+  resolveLineNonDispatchRetryable,
+} from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -91,29 +95,48 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     };
 
     const acceptedResults: LineSendResult[] = [];
+    const withAcceptedResults = (error: unknown) => {
+      if (acceptedResults.length === 0) {
+        return error;
+      }
+      const partial = isChannelPartialDeliveryError(error) ? error : undefined;
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: [
+          ...acceptedResults,
+          ...(partial?.deliveryResult.receipt
+            ? [{ receipt: partial.deliveryResult.receipt }]
+            : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({ messageId }))),
+        ],
+      });
+      return createChannelPartialDeliveryError(partial?.cause ?? error, {
+        ...partial?.deliveryResult,
+        messageIds: listMessageReceiptPlatformIds(receipt),
+        receipt,
+        visibleReplySent: true,
+      });
+    };
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
+      {
+        deferFailureToBatchRecovery = false,
+        includeAcceptedResults = true,
+      }: { deferFailureToBatchRecovery?: boolean; includeAcceptedResults?: boolean } = {},
     ): Promise<LineSendResult> => {
       let result: LineSendResult;
       try {
         result = await resultPromise;
       } catch (error) {
+        if (
+          deferFailureToBatchRecovery &&
+          findLineHttpError(error)?.status === 400 &&
+          resolveLineNonDispatchRetryable(error) !== undefined
+        ) {
+          throw isChannelPartialDeliveryError(error) && includeAcceptedResults
+            ? withAcceptedResults(error)
+            : error;
+        }
         if (acceptedResults.length > 0) {
-          const partial = isChannelPartialDeliveryError(error) ? error : undefined;
-          const receipt = createMessageReceiptFromOutboundResults({
-            results: [
-              ...acceptedResults,
-              ...(partial?.deliveryResult.receipt
-                ? [{ receipt: partial.deliveryResult.receipt }]
-                : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({ messageId }))),
-            ],
-          });
-          throw createChannelPartialDeliveryError(partial?.cause ?? error, {
-            ...partial?.deliveryResult,
-            messageIds: listMessageReceiptPlatformIds(receipt),
-            receipt,
-            visibleReplySent: true,
-          });
+          throw includeAcceptedResults ? withAcceptedResults(error) : error;
         }
         // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
         const refusal = isChannelPartialDeliveryError(error)
@@ -151,11 +174,74 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const quickReplyLabels = quickReplyItems.length
       ? quickReplyItems.map((item) => item.label)
       : quickReplies;
+    let shouldBatchMixedPayload = false;
+    const pendingMessages: messagingApi.Message[] = [];
 
     const sendMessageBatch = async (messages: messagingApi.Message[]) => {
+      if (messages.length === 0) {
+        return;
+      }
       for (let i = 0; i < messages.length; i += 5) {
         const batch = messages.slice(i, i + 5);
-        await recordResult(sendBatch(to, batch, sendOptions));
+        try {
+          await recordResult(sendBatch(to, batch, sendOptions), {
+            deferFailureToBatchRecovery: true,
+          });
+        } catch (error) {
+          const httpError = findLineHttpError(error);
+          if (
+            !isChannelPartialDeliveryError(error) &&
+            httpError?.status === 400 &&
+            resolveLineNonDispatchRetryable(error) !== undefined
+          ) {
+            const retryCandidates = [...batch, ...messages.slice(i + batch.length)];
+            const recoveryErrors: unknown[] = [];
+            for (const message of retryCandidates) {
+              try {
+                await recordResult(sendBatch(to, [message], sendOptions), {
+                  includeAcceptedResults: false,
+                });
+              } catch (recoveryError) {
+                recoveryErrors.push(recoveryError);
+              }
+            }
+            if (recoveryErrors.length === 0) {
+              return;
+            }
+            const partialRecoveryErrors = recoveryErrors.filter(isChannelPartialDeliveryError);
+            const recoveryResults: Array<
+              Parameters<typeof createMessageReceiptFromOutboundResults>[0]["results"][number]
+            > = [...acceptedResults];
+            for (const recoveryError of partialRecoveryErrors) {
+              const deliveryResult = recoveryError.deliveryResult;
+              if (deliveryResult.receipt) {
+                recoveryResults.push({ receipt: deliveryResult.receipt });
+              } else {
+                recoveryResults.push(
+                  ...(deliveryResult.messageIds ?? []).map((messageId) => ({ messageId })),
+                );
+              }
+            }
+            const receipt = createMessageReceiptFromOutboundResults({ results: recoveryResults });
+            const messageIds = listMessageReceiptPlatformIds(receipt);
+            if (acceptedResults.length > 0 || messageIds.length > 0) {
+              const partialRecoveryError = partialRecoveryErrors[0];
+              throw createChannelPartialDeliveryError(
+                partialRecoveryError?.cause ?? recoveryErrors[0] ?? error,
+                {
+                  ...partialRecoveryError?.deliveryResult,
+                  messageIds,
+                  receipt,
+                  visibleReplySent: true,
+                },
+              );
+            }
+            if (partialRecoveryErrors[0] instanceof Error) {
+              throw partialRecoveryErrors[0];
+            }
+          }
+          throw isChannelPartialDeliveryError(error) ? error : withAcceptedResults(error);
+        }
       }
     };
 
@@ -168,6 +254,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       messageId: replyToId,
     });
     const sendTextWithQuickReply = async (text: string, quoteToken?: string) => {
+      if (shouldBatchMixedPayload && quickReply) {
+        pendingMessages.push({ type: "text", text, quickReply, ...quotedOption(quoteToken) });
+        return;
+      }
       if (quickReplyItems.length > 0 && quickReply) {
         await sendMessageBatch([{ type: "text", text, quickReply, ...quotedOption(quoteToken) }]);
         return;
@@ -200,43 +290,96 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       durationMs: lineData.durationMs,
       trackingId: lineData.trackingId,
     };
+    const mediaPreparationErrors: unknown[] = [];
     const shouldSendQuickRepliesInline = !hasText && hasQuickReplies;
+    const templateMessage = lineData.templateMessage
+      ? buildTemplate(lineData.templateMessage)
+      : undefined;
+    const mediaMessageCount = mediaUrls.filter((url) => Boolean(url?.trim())).length;
+    const messageKinds = new Set<string>();
+    if (lineData.flexMessage) {
+      messageKinds.add("flex");
+    }
+    if (templateMessage) {
+      messageKinds.add("template");
+    }
+    if (locationMessage) {
+      messageKinds.add(locationMessage.type);
+    }
+    for (const message of orderedMessages) {
+      messageKinds.add(message.type);
+    }
+    if (mediaMessageCount > 0) {
+      messageKinds.add("media");
+    }
+    shouldBatchMixedPayload = !shouldSendQuickRepliesInline && messageKinds.size > 1;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
         const trimmed = url?.trim();
         if (!trimmed) {
           continue;
         }
-        await recordResult(
-          sendText(to, "", {
-            ...sendOptions,
-            ...mediaOptions,
-            mediaUrl: trimmed,
-          }),
-        );
+        if (shouldBatchMixedPayload) {
+          try {
+            pendingMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
+          } catch (error) {
+            mediaPreparationErrors.push(error);
+          }
+        } else {
+          await recordResult(
+            sendText(to, "", {
+              ...sendOptions,
+              ...mediaOptions,
+              mediaUrl: trimmed,
+            }),
+          );
+        }
       }
     };
 
     if (!shouldSendQuickRepliesInline) {
       if (lineData.flexMessage) {
         const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-        await recordResult(sendFlex(to, lineData.flexMessage.altText, flexContents, sendOptions));
+        if (shouldBatchMixedPayload) {
+          pendingMessages.push(
+            outboundRuntime.createFlexMessage(lineData.flexMessage.altText, flexContents),
+          );
+        } else {
+          await recordResult(sendFlex(to, lineData.flexMessage.altText, flexContents, sendOptions));
+        }
       }
 
-      if (lineData.templateMessage) {
-        const template = buildTemplate(lineData.templateMessage);
-        if (template?.type === "template") {
-          await recordResult(sendTemplate(to, template, sendOptions));
-        } else if (template) {
-          await recordResult(
-            sendText(to, template.text, { ...sendOptions, ...quotedOption(replyQuoteToken) }),
-          );
+      if (templateMessage) {
+        if (templateMessage.type === "template") {
+          if (shouldBatchMixedPayload) {
+            pendingMessages.push(templateMessage);
+          } else {
+            await recordResult(sendTemplate(to, templateMessage, sendOptions));
+          }
+        } else if (templateMessage) {
+          if (shouldBatchMixedPayload) {
+            pendingMessages.push({
+              ...templateMessage,
+              ...quotedOption(replyQuoteToken),
+            });
+          } else {
+            await recordResult(
+              sendText(to, templateMessage.text, {
+                ...sendOptions,
+                ...quotedOption(replyQuoteToken),
+              }),
+            );
+          }
           replyQuoteToken = undefined;
         }
       }
 
       if (location) {
-        await recordResult(sendLocation(to, location, sendOptions));
+        if (shouldBatchMixedPayload && locationMessage) {
+          pendingMessages.push(locationMessage);
+        } else {
+          await recordResult(sendLocation(to, location, sendOptions));
+        }
       }
     }
 
@@ -255,16 +398,26 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         const quoteToken = index === quotedIndex ? replyQuoteToken : undefined;
         if (message.type === "flex") {
           if (isLast && quickReply) {
-            await sendMessageBatch([{ ...message, quickReply }]);
+            if (shouldBatchMixedPayload) {
+              pendingMessages.push({ ...message, quickReply });
+            } else {
+              await sendMessageBatch([{ ...message, quickReply }]);
+            }
+          } else if (shouldBatchMixedPayload) {
+            pendingMessages.push(message);
           } else {
             await recordResult(sendFlex(to, message.altText, message.contents, sendOptions));
           }
         } else if (isLast && hasQuickReplies) {
           await sendTextWithQuickReply(message.text, quoteToken);
         } else {
-          await recordResult(
-            sendText(to, message.text, { ...sendOptions, ...quotedOption(quoteToken) }),
-          );
+          if (shouldBatchMixedPayload) {
+            pendingMessages.push({ ...message, ...quotedOption(quoteToken) });
+          } else {
+            await recordResult(
+              sendText(to, message.text, { ...sendOptions, ...quotedOption(quoteToken) }),
+            );
+          }
         }
       }
     } else {
@@ -316,6 +469,30 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
 
     if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && sendMediaAfterText) {
       await sendMediaMessages();
+    }
+
+    if (shouldBatchMixedPayload) {
+      await sendMessageBatch(pendingMessages);
+    }
+
+    if (mediaPreparationErrors.length > 0) {
+      const preparationError =
+        mediaPreparationErrors.length === 1
+          ? mediaPreparationErrors[0]
+          : new AggregateError(
+              mediaPreparationErrors,
+              "Some LINE media parts could not be prepared",
+            );
+      const receipt = createMessageReceiptFromOutboundResults({ results: acceptedResults });
+      const messageIds = listMessageReceiptPlatformIds(receipt);
+      if (messageIds.length > 0) {
+        throw createChannelPartialDeliveryError(preparationError, {
+          messageIds,
+          receipt,
+          visibleReplySent: true,
+        });
+      }
+      throw preparationError;
     }
 
     const completedResult = acceptedResults.at(-1);
