@@ -83,6 +83,7 @@ function createCatalogFetchGuard(params: {
       return guardedResponse(url, upstreamCatalog(params.metadata));
     }
     if (url === MODELS_URL) {
+      expect(new Headers(init?.headers).get("user-agent")).toMatch(/^openclaw\/\S+$/);
       const authorization = new Headers(init?.headers).get("authorization");
       const ids =
         typeof params.advertised === "function"
@@ -399,7 +400,7 @@ describe("opencode provider plugin", () => {
     },
   );
 
-  it("discovers previously unknown trusted models and their upstream-owned transport", async () => {
+  it("discovers listed chat models with metadata enrichment or the native default route", async () => {
     const fetchGuard = createCatalogFetchGuard({
       metadata: [
         { id: "x-preview-f-free", name: "Ox Alpha Free", reasoningEfforts: ["low", "high", "max"] },
@@ -414,7 +415,10 @@ describe("opencode provider plugin", () => {
         "fresh-gemini-fixture",
         "fresh-gpt-fixture",
         "retired-zen-fixture",
-        "untrusted-live-only-fixture",
+        "listed-only-fixture",
+        "listed-only-fixture-free",
+        "test",
+        "text-embedding-3-small",
       ],
     });
     const provider = await registerSingleProviderPlugin(plugin);
@@ -442,6 +446,9 @@ describe("opencode provider plugin", () => {
       "fresh-claude-fixture",
       "fresh-gemini-fixture",
       "fresh-gpt-fixture",
+      "listed-only-fixture",
+      "listed-only-fixture-free",
+      "test",
     ]);
     expect(second.apiKey).toBe("other-runtime-key");
     expect(second.models.map((model) => model.id)).toEqual(first.models.map((model) => model.id));
@@ -467,13 +474,20 @@ describe("opencode provider plugin", () => {
       api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
     });
+    for (const id of ["listed-only-fixture", "listed-only-fixture-free", "test"]) {
+      expect(first.models.find((model) => model.id === id)).toMatchObject({
+        api: "openai-completions",
+        baseUrl: "https://opencode.ai/zen/v1",
+        provider: "opencode",
+      });
+    }
     expect(
       provider.resolveDynamicModel?.({ modelId: "retired-zen-fixture" } as never),
     ).toMatchObject({
       id: "retired-zen-fixture",
     });
     expect(
-      provider.resolveDynamicModel?.({ modelId: "untrusted-live-only-fixture" } as never),
+      provider.resolveDynamicModel?.({ modelId: "listed-only-fixture" } as never),
     ).toBeUndefined();
   });
 
