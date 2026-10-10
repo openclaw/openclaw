@@ -42,7 +42,6 @@ export async function preflightUpdateCandidatePlugins(
     channel: execution.channel,
     timeoutMs: execution.updateStepTimeoutMs,
   });
-  await params.readAdmission();
   for (const warning of warnings) {
     defaultRuntime[execution.opts.json ? "error" : "log"](warning.message);
   }

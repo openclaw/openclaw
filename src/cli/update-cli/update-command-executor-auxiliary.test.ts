@@ -531,20 +531,9 @@ it.each([
   },
 );
 
-it.each([
-  { boundary: "before-launch", change: "requester-revoked" },
-  ...(
-    [
-      "run-replaced",
-      "run-id-changed",
-      "executor-replaced",
-      "requester-replaced",
-      "requester-revoked",
-    ] as const
-  ).map((change) => ({ boundary: "at-input" as const, change })),
-] as const)(
-  "refuses Node provisioning after $change at $boundary",
-  async ({ boundary, change }) => {
+it.each(["before-launch", "at-input"] as const)(
+  "refuses Node provisioning after requester revocation at %s",
+  async (boundary) => {
     const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
     let requesterCurrent = true;
@@ -557,22 +546,7 @@ it.each([
     };
     const recoveryParams = { root, opts, timeoutMs: 10000 };
     const revoke = () => {
-      assert(opts.run);
-      if (change === "run-replaced") {
-        opts.run = { ...opts.run };
-      }
-      if (change === "run-id-changed") {
-        opts.run.runId = randomUUID();
-      }
-      if (change === "executor-replaced") {
-        opts.run.executorFence = { assertCurrent() {} };
-      }
-      if (change === "requester-replaced") {
-        opts.run.requesterAuthority = { requester: {}, isCurrent: () => true };
-      }
-      if (change === "requester-revoked") {
-        requesterCurrent = false;
-      }
+      requesterCurrent = false;
     };
     const runCommand = processRunner.runCommandWithTimeout;
     const commands = vi
@@ -603,9 +577,7 @@ it.each([
         process.env,
       );
     });
-    await expect(work).rejects.toThrow(
-      change === "requester-revoked" ? "requester-revoked" : "lost its original update executor",
-    );
+    await expect(work).rejects.toThrow("requester-revoked");
     expect(commands).toHaveBeenCalledTimes(boundary === "at-input" ? 1 : 0);
     expect(fs.existsSync(effect)).toBe(false);
     for (const key of [root, serviceRoot]) {

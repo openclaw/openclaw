@@ -289,7 +289,7 @@ describe("mutable update execution", () => {
     },
   );
 
-  it.each(["available", "incompatible", "changed-owner"] as const)(
+  it.each(["available", "incompatible"] as const)(
     "admits local artifacts from the staged version before rehearsal: %s",
     async (outcome) => {
       await withTestDir({ prefix: "openclaw-staged-plugin-admission-" }, async (stage) => {
@@ -313,12 +313,6 @@ describe("mutable update execution", () => {
             ];
           }
           return [];
-        });
-        mocks.revalidateSchemaContext.mockImplementation(async (context) => {
-          if (outcome === "changed-owner" && events.includes("preflight")) {
-            throw new UpdatePreMutationError("database-schema-preflight", "fixture owner changed");
-          }
-          return context;
         });
         mocks.validateCanary.mockImplementation(async () => {
           events.push("rehearsal");
@@ -345,19 +339,10 @@ describe("mutable update execution", () => {
             packageTargetVersion: undefined,
           }),
         );
-        expect(events).toEqual(
-          outcome === "changed-owner"
-            ? ["staged", "preflight"]
-            : ["staged", "preflight", "rehearsal"],
-        );
+        expect(events).toEqual(["staged", "preflight", "rehearsal"]);
         expect(execution?.mutationStarted).toBe(false);
         expect(mocks.serviceStopped).toBe(false);
-        expect(execution?.result.status).toBe(outcome === "changed-owner" ? "error" : "ok");
-        if (outcome === "changed-owner") {
-          expect(mocks.validateCanary).not.toHaveBeenCalled();
-          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-          expect(execution?.result.reason).toBe("database-schema-preflight");
-        }
+        expect(execution?.result.status).toBe("ok");
       });
     },
   );
@@ -600,29 +585,6 @@ describe("mutable update execution", () => {
     }
     expect((await execution)?.result).toBe(successfulUpdate);
     expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("refuses configuration drift during plugin admission before mutable preparation", async () => {
-    let configChanged = false;
-    mocks.pluginPreflight.mockImplementation(async () => {
-      configChanged = true;
-      return [];
-    });
-    mocks.revalidateSchemaContext.mockImplementation(async (context) => {
-      if (configChanged) {
-        throw new UpdatePreMutationError("database-schema-preflight", "Configuration changed");
-      }
-      return context;
-    });
-
-    const execution = await executeMutableUpdate(
-      await bindExecutionGuards(executionParams("package")),
-    );
-
-    expect(execution?.result.reason).toBe("database-schema-preflight");
-    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-    expect(mocks.serviceStopped).toBe(false);
-    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
   });
 
   it("captures the package target and admitted service environment before schema awaits", async () => {

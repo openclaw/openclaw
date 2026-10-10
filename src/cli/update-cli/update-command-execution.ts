@@ -149,7 +149,7 @@ export async function executeMutableUpdate(
     preflightUpdateCandidatePlugins(params, {
       targetVersion,
       candidateAdmissionChecks,
-      readAdmission: () => recheckSchemas(admittedTargetSchemaVersions),
+      readAdmission: async () => admission!,
     });
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
@@ -374,7 +374,7 @@ export async function executeMutableUpdate(
               await tryReadJson<unknown>(path.join(root, "package.json")),
             ) ?? admittedTargetSchemaVersions)
           : admittedTargetSchemaVersions;
-      await recheckSchemas(versions);
+      admittedTargetSchemaVersions = versions;
       if (stagedPluginAdmission) {
         // Explicit artifacts acquire their version before rehearsal or activation.
         await preflightPlugins(await readPackageVersion(root));
@@ -479,8 +479,6 @@ export async function executeMutableUpdate(
         preManagedServiceStop,
       );
     }
-    // Health and candidate work can outlive the inspected service/config generation.
-    await recheckSchemas(admittedTargetSchemaVersions);
     assertExecutionCurrent();
     const activationTimeoutMs =
       params.timeoutMs === undefined
@@ -516,7 +514,6 @@ export async function executeMutableUpdate(
       servicePrepared = true;
     }
     const postStopStartedAt = Date.now();
-    await recheckSchemas(admittedTargetSchemaVersions);
     assertExecutionCurrent();
     await assertManagedGatewayArtifactPublication({
       ...publication,
@@ -589,7 +586,6 @@ export async function executeMutableUpdate(
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
         onTransaction,
       };
-      await recheckSchemas(params.packageTargetSchemaVersions);
       result = await withMutableUpdateForwardScope(opts, () =>
         params.stagedPackage
           ? params.stagedPackage.run(packageUpdate)
@@ -610,7 +606,7 @@ export async function executeMutableUpdate(
           retentionInstallTarget = installTarget;
           await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
           assertExecutionCurrent();
-          await recheckSchemas(target.schemaVersions);
+          admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared) {
             await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
             await prepareMutableUpdate(admission?.managedEnv);

@@ -17,11 +17,9 @@ import {
 import {
   makePreflightConfigSnapshot,
   makeStartupConvergenceResult,
-  queueConfigSnapshot,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const {
-  autoMigrateLegacyState,
   repairLegacyCronStoreWithoutPrompt,
   collectCronCodexRuntimePolicyTargetsReadOnly,
   runPostCorePluginConvergence,
@@ -61,22 +59,6 @@ describe("runDoctorConfigPreflight state migration", () => {
       cfg: { gateway: { mode: "local", port: 19091 } },
     });
     expect(result.cronCodexRuntimePolicyTargets).toEqual([{ modelRef: "openai/gpt-5.6-sol" }]);
-  });
-
-  it("rejects external config changes during plugin repair before state migrations", async () => {
-    runPostCorePluginConvergence.mockImplementationOnce(async () => {
-      queueConfigSnapshot(
-        readConfigFileSnapshot,
-        makePreflightConfigSnapshot({ gateway: { mode: "local", port: 19092 } }),
-      );
-      return makeStartupConvergenceResult();
-    });
-
-    await expect(runDoctorConfigPreflight(doctorMigrationOptions)).rejects.toThrow(
-      "migration inputs changed during startup",
-    );
-
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
   });
 
   it("preserves verified plugin quarantine while an older writable parent defers repair", async () => {

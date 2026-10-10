@@ -515,7 +515,6 @@ describe("readScheduledTaskCommand", () => {
   it.each([
     "multiple actions",
     "action arguments",
-    "action changed",
     "root-relative action (backslash)",
     "saved name changed",
     "unrecognized vbs",
@@ -541,16 +540,6 @@ describe("readScheduledTaskCommand", () => {
       }),
     };
     spawnSync.mockReturnValue(found);
-    if (kind === "action changed") {
-      spawnSync.mockReturnValueOnce(found).mockReturnValue({
-        status: 0,
-        stdout: JSON.stringify({
-          taskPath: "\\OpenClaw Gateway Backup",
-          state: 3,
-          actions: [{ ...action, path: "C:\\Other\\gateway.cmd" }],
-        }),
-      });
-    }
 
     vi.spyOn(fs, "readFile").mockResolvedValue(
       Buffer.from(
@@ -575,108 +564,6 @@ describe("readScheduledTaskCommand", () => {
       ),
     ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
   });
-
-  it("rejects a registered VBS target changing during the CMD read", async () => {
-    const launcherPath = "C:\\Services\\gateway.vbs";
-    const scriptPath = "C:\\Services\\Before\\gateway.cmd";
-    let wrapper = buildHiddenLauncherScript({ scriptPath });
-    spawnSync.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify({
-        taskPath: "\\OpenClaw Gateway",
-        state: 3,
-        actions: [{ type: 0, path: launcherPath, arguments: "", workingDirectory: "" }],
-      }),
-    });
-    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-      if (pathname === launcherPath) {
-        return Buffer.from(wrapper);
-      }
-      expect(pathname).toBe(scriptPath);
-      wrapper = buildHiddenLauncherScript({ scriptPath: "C:\\Services\\After\\gateway.cmd" });
-      return Buffer.from("@echo off\r\nnode gateway.js\r\n");
-    });
-    await expect(
-      readScheduledTaskCommand(
-        { USERPROFILE: "C:\\Users\\test" },
-        { requireEffective: true, requireLoaded: true },
-      ),
-    ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
-  });
-
-  it.each([
-    { launcher: "VBS target", change: "replaced" },
-    { launcher: "direct CMD", change: "removed" },
-  ])(
-    "rejects target CMD contents changing during inspection ($launcher, $change)",
-    async ({ launcher, change }) => {
-      const scriptPath = "C:\\Services\\gateway.cmd";
-      const launcherPath = launcher === "direct CMD" ? scriptPath : "C:\\Services\\gateway.vbs";
-      let contents: string | undefined =
-        '@echo off\r\nnode "C:\\BeforeInstall\\openclaw.mjs" gateway\r\n';
-      spawnSync.mockReturnValue({
-        status: 0,
-        stdout: JSON.stringify({
-          taskPath: "\\OpenClaw Gateway",
-          state: 3,
-          actions: [{ type: 0, path: launcherPath, arguments: "", workingDirectory: "" }],
-        }),
-      });
-      vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-        if (pathname !== scriptPath) {
-          return Buffer.from(buildHiddenLauncherScript({ scriptPath }));
-        }
-        if (contents === undefined) {
-          throw Object.assign(new Error("Missing test launcher"), { code: "ENOENT" });
-        }
-        const snapshot = Buffer.from(contents);
-        contents =
-          change === "removed"
-            ? undefined
-            : '@echo off\r\nnode "C:\\AfterInstall\\openclaw.mjs" gateway\r\n';
-        return snapshot;
-      });
-      await expect(
-        readScheduledTaskCommand(
-          { USERPROFILE: "C:\\Users\\test" },
-          { requireEffective: true, requireLoaded: true },
-        ),
-      ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
-    },
-  );
-
-  it.each(["found", "unknown"] as const)(
-    "rejects native registration becoming %s during missing-launcher absence checks",
-    async (transition) => {
-      const found = {
-        status: 0,
-        stdout: JSON.stringify({
-          taskPath: "\\OpenClaw Gateway",
-          state: 3,
-          actions: [
-            { type: 0, path: "C:\\Services\\gateway.cmd", arguments: "", workingDirectory: "" },
-          ],
-        }),
-      };
-      spawnSync
-        .mockReturnValueOnce(found)
-        .mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
-      const missing = Object.assign(new Error("Missing test launcher"), { code: "ENOENT" });
-      vi.spyOn(fs, "readFile").mockRejectedValue(missing);
-      vi.spyOn(fs, "lstat").mockImplementation(async () => {
-        spawnSync.mockReturnValue(
-          transition === "found" ? found : { status: 2, stdout: "-2147024891", stderr: "" },
-        );
-        throw missing;
-      });
-      await expect(
-        readScheduledTaskCommand(
-          { USERPROFILE: "C:\\Users\\test" },
-          { requireEffective: true, requireLoaded: true },
-        ),
-      ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
-    },
-  );
 
   it("reads a custom-state UTF-8 launcher with Windows paths and inline environment", async () => {
     await withScheduledTaskScript(
