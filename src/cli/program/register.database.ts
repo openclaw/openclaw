@@ -80,7 +80,7 @@ async function runDatabaseOwnership(
 export function registerDatabaseCommand(program: Command): void {
   const database = program
     .command("database")
-    .description("Inspect database compatibility, migration preservation, and write ownership")
+    .description("Inspect database schema compatibility and shared-state write ownership")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
 
   database

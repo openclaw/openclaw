@@ -201,10 +201,11 @@ it("binds semantic preservation to original backups across a partial migration a
         expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(25);
         const registryVersions = () =>
           openOpenClawStateDatabase()
-            .db.prepare("SELECT schema_version FROM agent_databases WHERE agent_id = 'external'")
+            .db.prepare(
+              "SELECT schema_version FROM agent_databases WHERE agent_id = 'external' ORDER BY schema_version",
+            )
             .all()
-            .map((row) => row.schema_version)
-            .sort();
+            .map((row) => row.schema_version);
         expect(registryVersions()).toEqual([24, 24]);
         const partial = (await capture("witness-partial")).ref;
         expect(

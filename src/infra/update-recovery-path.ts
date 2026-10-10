@@ -22,7 +22,7 @@ export function resolveCapturedRegistryPath(
   const split = (text: string) =>
     (path.sep === "\\" ? text.replaceAll("/", "\\") : text).split(path.sep);
   let current = root;
-  const parts = split(value.slice(root.length)).reverse();
+  const parts = split(value.slice(root.length)).toReversed();
   let followed = 0;
   while (parts.length > 0) {
     const part = parts.pop()!;
@@ -34,7 +34,9 @@ export function resolveCapturedRegistryPath(
       ) {
         throw new Error("Captured registry traversal requires a recorded directory");
       }
-      if (part === "..") current = path.dirname(current);
+      if (part === "..") {
+        current = path.dirname(current);
+      }
       continue;
     }
     current = path.join(current, part);
@@ -47,7 +49,7 @@ export function resolveCapturedRegistryPath(
     }
     const targetRoot = path.parse(target).root;
     current = targetRoot || path.dirname(current);
-    parts.push(...split(target.slice(targetRoot.length)).reverse());
+    parts.push(...split(target.slice(targetRoot.length)).toReversed());
   }
   return current;
 }

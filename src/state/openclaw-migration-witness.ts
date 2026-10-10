@@ -68,7 +68,9 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   assertUnique(witness.tables.map((table) => table.name));
   for (const table of witness.tables) {
     assertUnique(table.columns);
-    if (table.registryRows) assertUnique(table.registryRows.map((row) => row.locator));
+    if (table.registryRows) {
+      assertUnique(table.registryRows.map((row) => row.locator));
+    }
     if (
       table.registryRows &&
       !(
@@ -258,7 +260,9 @@ function captureTable(
         registryKey = key;
         registryLocator = `${agentId}\0${storedPath}`;
         registryVersion = Number(registryText(row, "schema_version"));
-        if (registryVersion === 25) readyRegistrations.add(key);
+        if (registryVersion === 25) {
+          readyRegistrations.add(key);
+        }
         const observedAt = registryText(row, "last_seen_at");
         const sizeBytes = registryText(row, "size_bytes");
         if (
@@ -276,7 +280,9 @@ function captureTable(
       : undefined;
     for (let index = 0; index < names.length; index++) {
       hashCell(sha256, row[`type_${index}`], row[`value_${index}`]);
-      if (registryRowHash) hashCell(registryRowHash, row[`type_${index}`], row[`value_${index}`]);
+      if (registryRowHash) {
+        hashCell(registryRowHash, row[`type_${index}`], row[`value_${index}`]);
+      }
       if (retained[index] && migrationSha256) {
         if (
           migratingRegistration &&
@@ -583,8 +589,9 @@ export function assertOpenClawMigrationWitnessPreserved(
     const currentRows = current.tables.find(
       (table) => table.name === "agent_databases",
     )?.registryRows;
-    if (!currentRows || originalRows.size !== currentRows.length)
+    if (!currentRows || originalRows.size !== currentRows.length) {
       throw new Error("Missing registry row witnesses");
+    }
     for (const row of currentRows) {
       const before = originalRows.get(row.locator);
       if (
