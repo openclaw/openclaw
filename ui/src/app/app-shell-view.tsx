@@ -101,6 +101,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         class={[
           "shell",
           {
+            "shell--navigation-rail": view().railAvailable,
             "shell--chat": view().chatLikeRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
@@ -110,7 +111,8 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             "shell--embed": view().nativeEmbed,
             "shell--embed-settings": view().embedSettings,
             "shell--settings": view().settingsTakeover,
-            "shell--home-control": view().collapsedControls && view().homePanelAvailable,
+            "shell--home-control":
+              view().collapsedControls && view().homePanelAvailable && !view().railAvailable,
             "shell--connection-status": Boolean(view().shellConnectionStatus),
             "shell--floating-attention": floatingSidebarAttentionVisible(view().floatingUpdateCard),
             "shell--nav-resizing": (props.host.shellRevision(), props.host.navResizing),
@@ -119,7 +121,10 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         data-background-managed={
           !view().backgroundReady || view().uiSettings.background !== undefined ? "" : undefined
         }
-        style={{ "--shell-nav-expanded-width": `${view().navigationSnapshot.navWidth}px` }}
+        style={{
+          "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
+          "--shell-nav-rail-width": `${view().railWidth}px`,
+        }}
         onTheme-change={(event: CustomEvent<ThemeModeChangeDetail>) =>
           props.host.handleThemeChange(event)
         }
@@ -195,7 +200,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
                 ref={litContent(() => icons.search)}
               />
             </openclaw-tooltip>
-            <Show when={view().homePanelAvailable}>
+            <Show when={view().homePanelAvailable && !view().railAvailable}>
               <LitRouteHost
                 renderValue={() => {
                   props.host.shellRevision();
@@ -243,10 +248,10 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <resizable-divider
             class="sidebar-resizer"
             prop:label={t("nav.resize")}
-            prop:splitRatio={view().navigationSnapshot.navWidth / view().shellWidth}
-            prop:minRatio={NAV_WIDTH_MIN / view().shellWidth}
-            prop:maxRatio={NAV_WIDTH_MAX / view().shellWidth}
-            aria-valuetext={`${view().navigationSnapshot.navWidth} pixels`}
+            prop:splitRatio={view().expandedNavWidth / view().shellWidth}
+            prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
+            prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
+            aria-valuetext={`${view().expandedNavWidth} pixels`}
             title={t("nav.resize")}
             onResize-start={() => {
               props.host.navResizing = true;

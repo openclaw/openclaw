@@ -90,8 +90,8 @@ function serviceObservation(): ImmutableServiceObservation {
     },
   };
 }
-const health = (overrides: Parameters<typeof gatewayHealthResponse>[0] = {}) =>
-  gatewayHealthResponse({
+const health = (overrides: Parameters<typeof gatewayHealthResponse>[0] = {}) => {
+  const respond = gatewayHealthResponse({
     ...overrides,
     server: {
       version: "2026.10.3",
@@ -100,6 +100,20 @@ const health = (overrides: Parameters<typeof gatewayHealthResponse>[0] = {}) =>
       ...overrides.server,
     },
   });
+  return async (options: Parameters<typeof respond>[0]) => {
+    const result = await respond(options);
+    options.assertDispatchCurrent?.();
+    return options.method === "sessions.list"
+      ? {
+          ts: 1,
+          path: "/synthetic/state/sessions",
+          count: 0,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [],
+        }
+      : result;
+  };
+};
 const observe = (assertCurrent = () => {}) =>
   waitForImmutableGateway({ descriptor, generation, timeoutMs: 120_000, assertCurrent });
 
@@ -202,6 +216,21 @@ it("leaves an unavailable health RPC unverified rather than authorizing rollback
   callGateway.mockRejectedValue(new Error("connection refused"));
   expect((await observe()).outcome).toBe("unverified");
   expect(monotonicClock.nowMs).toBe(120_000);
+});
+
+it("does not verify a healthy HTTP Gateway when sessions.list fails", async () => {
+  callGateway.mockImplementation(async (options) => {
+    if (options.method === "sessions.list") {
+      throw new Error("session store unavailable");
+    }
+    return health()(options);
+  });
+
+  const result = await observe();
+
+  expect(mocks.http).toHaveBeenCalled();
+  expect(result.outcome).toBe("unverified");
+  expect(result.verification).toBeUndefined();
 });
 
 it.each(["process", "boot", "definition", "readiness", "physical-generation"])(

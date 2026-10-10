@@ -199,6 +199,44 @@ describe("Skill Workshop page", () => {
     expect(button(page, "Undo")).toBeUndefined();
   });
 
+  it("opens the skill a chat notice links to, even when it is archived", async () => {
+    const archivedVersion = "20260930T010000000Z-archive";
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.workshop.list") {
+        return {
+          ...list,
+          archived: [
+            ...list.archived,
+            {
+              name: "release-notes",
+              live: false,
+              versions: [{ id: archivedVersion, action: "archive", createdAtMs: Date.now() }],
+            },
+          ],
+        };
+      }
+      return method === "skills.workshop.changes"
+        ? { changes: [] }
+        : { content: "", files: ["SKILL.md"] };
+    });
+    const page = await mount(createContext(request, { search: "?skill=release-notes" }));
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.read", {
+        agentId: "research",
+        name: "release-notes",
+        filePath: "SKILL.md",
+        versionId: archivedVersion,
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "skills.workshop.read",
+      expect.objectContaining({ name: SKILL }),
+    );
+    // The Archived list is shown, so the linked skill is visible: sorting exists only on Active.
+    await vi.waitFor(() => expect(page.querySelector(".sw-sort")).toBeNull());
+  });
+
   it("offers no undo to an operator without admin scope", async () => {
     const page = await mount(
       createContext(workshopGateway(), {

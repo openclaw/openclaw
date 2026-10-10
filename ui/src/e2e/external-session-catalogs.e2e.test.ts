@@ -98,6 +98,11 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
+        // Shared imports have no current-viewer owner; selecting All must not rewrite their authors.
+        await page
+          .locator(".sidebar-navigation-scope")
+          .getByRole("button", { name: "All", exact: true })
+          .click();
         for (const catalogId of catalogIds) {
           await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
           // Every catalog has the same transcript; wait for the clicked pane before reading it.

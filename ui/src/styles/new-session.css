@@ -932,8 +932,8 @@ wa-popover.new-session-page__where-popover {
 
 .connect-machine-dialog .login-gate__command code {
   min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   user-select: all;
 }
 

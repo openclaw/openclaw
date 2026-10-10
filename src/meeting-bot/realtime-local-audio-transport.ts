@@ -7,8 +7,7 @@ import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-en
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import {
   terminateMeetingBridgeProcess,
-  writeMeetingOutputChunk,
-  type MeetingOutputWriteWaiter,
+  MeetingOutputProcessOwner,
   type MeetingBridgeProcess,
 } from "./bridge-process.js";
 import { splitCommandArgv } from "./command-argv.js";
@@ -116,8 +115,9 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   let fatalSignaled = false;
   let fatalHandler: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
-  const retiredOutputStops = new Set<Promise<void>>();
-  const outputWriteWaiters = new Set<MeetingOutputWriteWaiter<BridgeProcess>>();
+  const outputOwner = new MeetingOutputProcessOwner<BridgeProcess>(
+    LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+  );
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
@@ -167,30 +167,12 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       prefix: `${params.logScope} audio ${role}`,
     });
   };
-  const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
-    for (const waiter of outputWriteWaiters) {
-      if (!proc || waiter.process === proc) {
-        waiter.release();
-      }
-    }
-  };
   const stop = () => {
     stopPromise ??= (async () => {
       stopped = true;
       outputLoopbackVerifier.cancelOutput();
-      releaseOutputWriteWaiters();
-      await Promise.all([
-        terminateMeetingBridgeProcess(inputProcess, {
-          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        }),
-        terminateMeetingBridgeProcess(outputProcess, {
-          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        }),
-        terminateMeetingBridgeProcess(bargeInInputProcess, {
-          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        }),
-        ...retiredOutputStops,
-      ]);
+      outputOwner.release();
+      await outputOwner.stop(inputProcess, outputProcess, bargeInInputProcess);
     })();
     return stopPromise;
   };
@@ -230,7 +212,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
       outputLoopbackVerifier.recordOutput(audio);
       try {
-        await writeMeetingOutputChunk(outputWriteWaiters, proc, stdin, audio);
+        await outputOwner.write(proc, stdin, audio);
       } catch (error) {
         if (stopped || proc !== outputProcess || fatalSignaled) {
           return;
@@ -248,18 +230,11 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       const previousOutput = outputProcess;
       outputProcess = spawnOutputProcess();
       attachAudioProcessHandlers(outputProcess, "output");
-      releaseOutputWriteWaiters(previousOutput);
+      outputOwner.release(previousOutput);
       params.logger.debug?.(
         `${params.logScope} cleared realtime audio output buffer by restarting playback command`,
       );
-      const retiredOutputStop = terminateMeetingBridgeProcess(previousOutput, {
-        graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        initialSignal: "SIGKILL",
-      });
-      retiredOutputStops.add(retiredOutputStop);
-      void retiredOutputStop.finally(() => {
-        retiredOutputStops.delete(retiredOutputStop);
-      });
+      outputOwner.retire(previousOutput, "SIGKILL");
     },
     dispose: async () => {
       await transport.stop();

@@ -31,6 +31,7 @@ import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./nat
 import {
   floatingSidebarAttentionVisible,
   navigationSurfaceIsHidden,
+  NAVIGATION_RAIL_WIDTH,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
@@ -172,11 +173,15 @@ export function readShellView(host: ShellViewHost) {
     !host.desktopNavigationExpanded &&
     !navDrawerOpen &&
     !settingsTakeover;
+  const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
+  const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
+  const expandedNavWidth = navigationSnapshot.navWidth + railWidth;
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
     onboarding,
     navCollapsed,
     navDrawerOpen,
     mobileNavLayout,
+    railAvailable,
   });
   const floatingAttentionVisible =
     !nativeEmbed &&
@@ -236,7 +241,9 @@ export function readShellView(host: ShellViewHost) {
     canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
     preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
     sidebarEntries: navigationSnapshot.sidebarEntries,
+    navigationScope: navigationSnapshot.navigationScope,
     navigationVisible: !navigationSurfaceHidden,
+    navigationCollapsed: navCollapsed,
     sidebarAgentsMode: uiSettings.sidebarAgentsMode ?? "chip",
     sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
     pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
@@ -249,6 +256,7 @@ export function readShellView(host: ShellViewHost) {
     onToggleSidebar: callbacks.toggleSidebar,
     onOpenNewSession: callbacks.requestOpenNewSession,
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
+    onUpdateNavigationScope: callbacks.updateNavigationScope,
     onPairMobile: callbacks.openDevicePairSetup,
     onNavigate: host.navigate,
     onPreloadRoute: callbacks.preloadRoute,
@@ -373,6 +381,9 @@ export function readShellView(host: ShellViewHost) {
     nativeWebChrome,
     mergedChatChrome,
     navCollapsed,
+    railAvailable,
+    railWidth,
+    expandedNavWidth,
     navigationSurfaceHidden,
     floatingAttentionVisible,
     shellWidth,

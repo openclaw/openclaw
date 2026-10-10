@@ -66,7 +66,13 @@ async function expectReports(page: Page, pathname = "/reports") {
       id: element.tabId,
     })),
   ).toEqual({ pluginId, id: tabId });
-  const sidebarEntry = page.locator(`[data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`);
+  await page
+    .locator("openclaw-app-sidebar")
+    .getByRole("button", { name: "Pages", exact: true })
+    .click();
+  const sidebarEntry = page.locator(
+    `.sidebar-pages [data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`,
+  );
   expect(await sidebarEntry.getAttribute("href")).toBe("/reports");
   expect(await sidebarEntry.getAttribute("aria-current")).toBe("page");
   expect(await sidebarEntry.isVisible()).toBe(true);
@@ -77,7 +83,13 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installReports(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const entry = page.getByRole("link", { name: "Reports", exact: true });
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "Pages", exact: true })
+        .click();
+      const entry = page
+        .locator(".sidebar-pages")
+        .getByRole("link", { name: "Reports", exact: true });
       await entry.waitFor();
       expect(await entry.getAttribute("href")).toBe("/reports");
       await entry.click();
@@ -155,7 +167,14 @@ suite.define(() => {
             evaluateControlUiContext(page, (context) => context.config.current.embedSandboxMode),
           )
           .toBe("scripts");
-        await page.getByRole("link", { name: "Reports", exact: true }).click();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Pages", exact: true })
+          .click();
+        await page
+          .locator(".sidebar-pages")
+          .getByRole("link", { name: "Reports", exact: true })
+          .click();
         // The first frame must receive the script policy without a corrective reload.
         const sandbox = await page.locator("openclaw-plugin-page iframe").getAttribute("sandbox");
         expect(sandbox?.split(/\s+/u)).toContain("allow-scripts");

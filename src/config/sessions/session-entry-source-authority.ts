@@ -10,7 +10,7 @@ import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
 import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
-  type SessionSourceAssertion,
+  type PreparedSessionSourceAssertion,
   type SessionSourceConversationPredicate,
 } from "./session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
@@ -152,7 +152,7 @@ export function captureSessionEntrySourceAssertion(params: {
     acceptMatches: (alternatives: readonly number[]) => number[];
   }>;
   refuse: () => never;
-}): SessionSourceAssertion {
+}): PreparedSessionSourceAssertion {
   const incognito = captureSessionEntryMetadataRead(params.scope);
   if (incognito) {
     if (params.prepareConversations) {
@@ -206,7 +206,12 @@ export function captureSessionEntrySourceAssertion(params: {
     });
   }
   if (isIncognitoSessionKey(params.scope.sessionKey)) {
-    return Object.assign(() => params.assertCurrent(), { nativeSource: true });
+    return Object.assign(() => params.assertCurrent(), {
+      nativeSource: true,
+      async prepareSessionSource() {
+        return { nativeSource: true, checks: [], assertCurrent: params.assertCurrent };
+      },
+    });
   }
   const locator = captureSessionStoreReadCandidate(
     resolveUnsuffixedSqliteTargetFromSessionStorePath(params.scope.storePath).path,

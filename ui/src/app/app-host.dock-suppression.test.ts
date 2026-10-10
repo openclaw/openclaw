@@ -150,6 +150,10 @@ describe("OpenClaw shell dock suppression", () => {
           | null
       )?.available ?? false;
 
+    const homeAvailable = () =>
+      container.querySelector<HTMLElement & { homeAvailable: boolean }>("openclaw-assistant-panel")
+        ?.homeAvailable ?? false;
+
     shell.routeState = { routeId: "appearance" };
     mountShellView(shell);
     refreshShellView(shell);
@@ -278,34 +282,46 @@ describe("OpenClaw shell dock suppression", () => {
     refreshShellView(shell);
     expect(desktopAvailable()).toBe(true);
 
-    // The collapsed toolbar opens the shared dock through Home.
+    // Home now lives in the retained rail, not duplicate floating chrome.
+    // The shell still projects its access through permission, reconnect, and Gateway changes.
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.navigation.snapshot.navCollapsed = true;
     refreshShellView(shell);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.hello!.auth = {
       role: "operator",
       scopes: ["operator.read", "operator.write"],
     };
     refreshShellView(shell);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.phase = "offline";
     refreshShellView(shell);
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
     refreshShellView(shell);
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
     context.gateway.snapshot.phase = "connected";
     refreshShellView(shell);
-    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
     refreshShellView(shell);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
     context.gateway.snapshot.phase = "offline";
     refreshShellView(shell);
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
   });
 });

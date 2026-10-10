@@ -13,7 +13,6 @@ const sourceKey = "agent:main:main";
 const destinationKey = "agent:main:dashboard:12345678-1111-4222-8333-abcdefabcdef";
 const destinationText = "The linked conversation recovered after reconnect.";
 const destinationPath = "/chat/main/linked-conversation-12345678";
-const sidebarConfig = { ui: { prefs: { sidebarEntries: ["route:activity"] } } };
 
 suite.define(() => {
   it.each([false, true])(
@@ -35,12 +34,6 @@ suite.define(() => {
             },
           },
           methodResponses: {
-            "config.get": {
-              config: sidebarConfig,
-              raw: JSON.stringify(sidebarConfig),
-              hash: "session-link-prefs",
-              valid: true,
-            },
             "sessions.resolve": {
               cases: [
                 {
@@ -62,6 +55,7 @@ suite.define(() => {
           `.chat-thread a.markdown-session-link[href="${destinationPath}"]`,
         );
         await link.waitFor({ state: "visible" });
+        await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
         await page
           .locator('openclaw-app-sidebar a[href="/activity"]')
           .waitFor({ state: "visible" });

@@ -211,10 +211,16 @@ function resolveModelConfig(params: {
   if (!modelId || !Array.isArray(params.providerConfig?.models)) {
     return undefined;
   }
-  return params.providerConfig.models.find(
-    (entry) =>
-      modelEntryMatchKind({ entryId: entry.id, provider: params.provider, modelId }) === "exact",
-  );
+  // Catalog projection resolves every row against its provider's authored rows, so this scan
+  // runs rows² times. An exact match ends with the model id; skip parsing rows that cannot match.
+  return params.providerConfig.models.find((entry) => {
+    const entryId = entry.id.trim();
+    return (
+      entryId === modelId ||
+      (entryId.endsWith(modelId) &&
+        modelEntryMatchKind({ entryId, provider: params.provider, modelId }) === "exact")
+    );
+  });
 }
 
 /** Resolves the effective runtime policy for an agent/model/provider selection. */

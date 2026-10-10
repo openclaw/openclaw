@@ -314,7 +314,7 @@ export class ShellOwner
       watch(theme.appliedPalette);
       watch(projectRuntimeConfig(context.runtimeConfig), () => {
         this.ensureRuntimeConfig(context.gateway.snapshot, context.runtimeConfig);
-        this.shellGateway.reconcileServerUiPrefs(context.runtimeConfig);
+        void this.shellGateway.reconcileServerUiPrefs(context.runtimeConfig);
       });
       watch(projectRouter(runtime.router), () => {
         this.shellNavigation.updateRouteState(selectShellRouteState(runtime.router.getState()));
@@ -367,12 +367,13 @@ export class ShellOwner
       if (prefs && runtimeConfig) {
         pushServerUiPrefs(runtimeConfig, prefs, {
           profile: this.context?.gateway.snapshot,
-          afterCommit: ({ needsRefresh, retainedLocal }) =>
-            this.shellGateway.reconcileCommittedServerUiPrefs(
+          afterCommit: ({ needsRefresh, retainedLocal }) => {
+            void this.shellGateway.reconcileCommittedServerUiPrefs(
               runtimeConfig,
               needsRefresh,
               retainedLocal,
-            ),
+            );
+          },
         });
       }
     });
