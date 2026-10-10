@@ -756,7 +756,7 @@ describe("matrix thread bindings", () => {
           : store;
       });
       const mutation = original
-        ? getSessionBindingService().unbind({ bindingId: original.bindingId })
+        ? getSessionBindingService().unbind({ bindingId: original.bindingId, reason: "manual" })
         : bindCurrentThread();
       try {
         await entered.promise;
