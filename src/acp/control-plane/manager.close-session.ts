@@ -3,6 +3,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { logVerbose } from "../../globals.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
@@ -89,6 +90,8 @@ export async function runManagerCloseSession(params: {
   let runtimeClosed = false;
   let runtimeNotice: string | undefined;
   if (shouldSkipRuntimeClose) {
+    // Fast-reset discards the record; an owner-repair verdict from fresh-prep
+    // describes the record's provenance, not a reason to keep residue forever.
     input.assertActive?.();
     await tryPrepareFreshManagerRuntimeSession({
       deps: params.deps,
@@ -97,6 +100,13 @@ export async function runManagerCloseSession(params: {
       sessionKey,
       agentId,
       logPrefix: "acp close fast-reset",
+    }).catch((freshError: unknown) => {
+      if (!isAcpOwnerRepairRequired(freshError)) {
+        throw freshError;
+      }
+      logVerbose(
+        `acp close fast-reset: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; proceeding with discard`,
+      );
     });
     assertCurrent();
     params.runtimeHandles.clear(params);
@@ -135,20 +145,28 @@ export async function runManagerCloseSession(params: {
         throw acpError;
       }
       input.assertActive?.();
+      const ownerRepairDiscarding =
+        isAcpOwnerRepairRequired(acpError) &&
+        input.discardPersistentState &&
+        acpError.code === "ACP_SESSION_INIT_FAILED";
       if (
-        !isAcpOwnerRepairRequired(acpError) &&
         input.allowBackendUnavailable &&
-        (acpError.code === "ACP_BACKEND_MISSING" ||
-          acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
-          (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
-          (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
-          isRecoverableManagerAcpxExitError(acpError.message))
+        ((!isAcpOwnerRepairRequired(acpError) &&
+          (acpError.code === "ACP_BACKEND_MISSING" ||
+            acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
+            (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
+            (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
+            isRecoverableManagerAcpxExitError(acpError.message))) ||
+          ownerRepairDiscarding)
       ) {
         if (expectedControlBinding) {
           await refreshControlBinding();
         }
         assertCurrent();
         if (input.discardPersistentState) {
+          // Discard-close tolerates owner-repair verdicts from fresh-prep: the
+          // residue record is being destroyed, so its provenance verdict cannot
+          // block the teardown that would remove it.
           input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
@@ -158,6 +176,13 @@ export async function runManagerCloseSession(params: {
             agentId,
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
+          }).catch((freshError: unknown) => {
+            if (!isAcpOwnerRepairRequired(freshError)) {
+              throw freshError;
+            }
+            logVerbose(
+              `acp close recovery: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; proceeding with discard`,
+            );
           });
           assertCurrent();
         }
