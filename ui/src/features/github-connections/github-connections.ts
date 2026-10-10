@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -32,7 +32,8 @@ import {
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
 export class GitHubConnections extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
-  private context!: ApplicationContext;
+  @property({ attribute: false })
+  context!: ApplicationContext;
   @state() private purpose: "personal" | "system" = "personal";
   @state() private setupOpen = false;
   private snapshot: ApplicationGatewaySnapshot | null = null;
@@ -418,3 +419,9 @@ if (!customElements.get("openclaw-github-connections")) {
 }
 
 registerGitHubEnglish();
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-github-connections": GitHubConnections;
+  }
+}

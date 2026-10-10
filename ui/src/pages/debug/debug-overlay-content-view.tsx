@@ -1,0 +1,247 @@
+import {
+  createComponent,
+  createEffect,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  untrack,
+} from "solid-js";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { projectGateway, projectGatewayEventLog } from "../../lib/reactive/application.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
+import "../../styles/debug-data.css";
+import { DebugOverlaySectionLoading } from "./debug-overlay-loading-view.tsx";
+import {
+  DEBUG_OVERLAY_SECTIONS,
+  DebugOverlayWidget,
+  type DebugOverlayStatusSample,
+  type DebugOverlayStatusSnapshot,
+} from "./debug-overlay-sections.tsx";
+
+type SectionState = { status: "loading" | "unavailable" } | { status: "ready"; value: unknown };
+
+export function DebugOverlayContent(props: { context: ApplicationContext; minimized: boolean }) {
+  return (
+    <Show when={props.context.gateway} keyed>
+      {(gateway) => <Content gateway={gateway} minimized={props.minimized} />}
+    </Show>
+  );
+}
+
+function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
+  // The keyed parent gives each Gateway source its own request lifetime.
+  const source = untrack(() => props.gateway);
+  const gateway = projectGateway(source);
+  const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
+  const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
+  const [sections, setSections] = createSignal(new Map<string, SectionState>());
+  const [history, setHistory] = createSignal<readonly DebugOverlayStatusSample[]>([]);
+  const requests = new Map<string, AbortController>();
+  let generation = 0;
+  let disposed = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+
+  const updateSection = (id: string, state: SectionState) => {
+    setSections((previous) => new Map(previous).set(id, state));
+  };
+  const stopPolling = () => {
+    clearInterval(timer);
+    timer = undefined;
+  };
+  const startPolling = () => {
+    if (timer === undefined) {
+      timer = setInterval(refresh, SYSTEM_INFO_POLL_INTERVAL_MS);
+    }
+  };
+  const reset = () => {
+    generation += 1;
+    for (const controller of requests.values()) {
+      controller.abort();
+    }
+    requests.clear();
+    setHistory([]);
+    setSections(
+      new Map(
+        DEBUG_OVERLAY_SECTIONS.map((section) => [
+          section.id,
+          {
+            status: lifecycle.capture() ? "loading" : "unavailable",
+          },
+        ]),
+      ),
+    );
+  };
+  function refresh() {
+    const scope = lifecycle.capture();
+    if (disposed || !scope || document.visibilityState === "hidden") {
+      return;
+    }
+    const requestGeneration = generation;
+    for (const section of DEBUG_OVERLAY_SECTIONS) {
+      if (
+        requests.has(section.id) ||
+        (section.id !== "status" && untrack(() => props.minimized)) ||
+        (section.id === "status" && !canReadSystemInfo(source.snapshot))
+      ) {
+        continue;
+      }
+      const controller = new AbortController();
+      requests.set(section.id, controller);
+      void section
+        .load({ client: scope.client, gateway: source }, controller.signal)
+        .then(
+          (value) => {
+            if (
+              disposed ||
+              controller.signal.aborted ||
+              requestGeneration !== generation ||
+              !lifecycle.isCurrent(scope)
+            ) {
+              return;
+            }
+            if (section.id === "status") {
+              // The status descriptor is the only producer of this snapshot.
+              const sample = value as DebugOverlayStatusSnapshot;
+              setHistory((previous) =>
+                previous.at(-1)?.at === sample.sampledAt
+                  ? previous
+                  : [...previous.slice(-89), { at: sample.sampledAt, status: sample }],
+              );
+              // Measure the next status interval from the completed sample.
+              stopPolling();
+              if (document.visibilityState !== "hidden") {
+                startPolling();
+              }
+            }
+            updateSection(section.id, { status: "ready", value });
+          },
+          () => {
+            if (
+              !disposed &&
+              !controller.signal.aborted &&
+              requestGeneration === generation &&
+              lifecycle.isCurrent(scope)
+            ) {
+              updateSection(section.id, { status: "unavailable" });
+            }
+          },
+        )
+        .finally(() => {
+          if (requests.get(section.id) === controller) {
+            requests.delete(section.id);
+          }
+        });
+    }
+  }
+  const visibilityChanged = () => setVisible(document.visibilityState !== "hidden");
+  document.addEventListener("visibilitychange", visibilityChanged);
+  function syncPolling(initial = false) {
+    const snapshot = gateway.read().snapshot;
+    const changed = lifecycle.transition(snapshot);
+    if (initial || changed) {
+      reset();
+    }
+    const statusAllowed = canReadSystemInfo(snapshot);
+    if (!statusAllowed) {
+      requests.get("status")?.abort();
+      requests.delete("status");
+      setHistory([]);
+      updateSection("status", { status: "unavailable" });
+    }
+    if (
+      document.visibilityState === "hidden" ||
+      !lifecycle.capture() ||
+      (props.minimized && !statusAllowed)
+    ) {
+      stopPolling();
+    } else {
+      const starting = timer === undefined;
+      startPolling();
+      if (starting || initial || changed) {
+        refresh();
+      }
+    }
+  }
+  const stopGateway = gateway.subscribe(() => untrack(syncPolling));
+  untrack(() => syncPolling(true));
+  createEffect(
+    () => ({ minimized: props.minimized, visible: visible() }),
+    () => syncPolling(),
+  );
+  const eventLog = projectGatewayEventLog(source);
+  const eventRevision = () =>
+    !props.minimized && visible() ? eventLog.read().revision : undefined;
+  onCleanup(() => {
+    disposed = true;
+    stopPolling();
+    reset();
+    stopGateway();
+    lifecycle.dispose();
+    document.removeEventListener("visibilitychange", visibilityChanged);
+  });
+  const state = (id: string) => sections().get(id) ?? { status: "loading" as const };
+  const value = (id: string) => {
+    const current = state(id);
+    return current.status === "ready" ? current.value : undefined;
+  };
+  return (
+    <Show
+      when={!props.minimized}
+      fallback={
+        <Show
+          when={state("status").status === "ready"}
+          fallback={
+            <div class="debug-overlay__compact-loading" role="status">
+              {t(
+                state("status").status === "loading"
+                  ? "common.loading"
+                  : "debug.overlay.unavailable",
+              )}
+            </div>
+          }
+        >
+          <DebugOverlayWidget
+            status={value("status") as DebugOverlayStatusSnapshot}
+            history={history()}
+          />
+        </Show>
+      }
+    >
+      <For each={DEBUG_OVERLAY_SECTIONS}>
+        {(entry) => (
+          <section
+            class="debug-overlay__section"
+            aria-busy={state(entry.id).status === "loading" ? "true" : "false"}
+          >
+            <h3>{t(entry.titleKey)}</h3>
+            <Show
+              when={state(entry.id).status !== "loading"}
+              fallback={<DebugOverlaySectionLoading id={entry.id} />}
+            >
+              <Show
+                when={state(entry.id).status === "ready"}
+                fallback={<div class="debug-overlay__empty">{t("debug.overlay.unavailable")}</div>}
+              >
+                {createComponent(entry.render, {
+                  get value() {
+                    if (entry.id === "events") {
+                      eventRevision();
+                    }
+                    return value(entry.id);
+                  },
+                  get history() {
+                    return history();
+                  },
+                })}
+              </Show>
+            </Show>
+          </section>
+        )}
+      </For>
+    </Show>
+  );
+}

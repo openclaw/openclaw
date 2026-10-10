@@ -38,7 +38,7 @@ afterAll(async () => {
 
 describe("transcript English loading", () => {
   it.each([
-    { surface: "library", load: () => import("../pages/meetings/view.ts") },
+    { surface: "library", load: () => import("../pages/meetings/view.tsx") },
     { surface: "settings", load: () => import("../pages/config/meeting-capture.ts") },
   ])("keeps startup labels and loads complete fallback copy from $surface", async ({ load }) => {
     const manager = createI18nManagerForTesting(async () => ({ common: { health: "Gesundheit" } }));

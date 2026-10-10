@@ -10,7 +10,7 @@ export const page = definePage({
     void context.agents.ensureList();
   },
   component: () =>
-    import("./profile-page.ts").then(() => ({
+    import("./profile-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-profile-page></openclaw-profile-page>`,
     })),

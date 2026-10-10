@@ -208,3 +208,9 @@ class SparklineTile extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-sparkline")) {
   customElements.define("openclaw-sparkline", SparklineTile);
 }
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-sparkline": SparklineTile;
+  }
+}

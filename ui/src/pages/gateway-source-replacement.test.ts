@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { TaskStatus } from "@lit/task";
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +9,6 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { clawhubVerdictKey } from "../lib/skills/index.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
 import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
@@ -22,7 +20,6 @@ import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import { cacheSnapshot } from "./usage/usage-page.test-support.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
-import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.ts";
 import "./sessions/sessions-page.ts";
@@ -855,63 +852,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.logsEntries).toEqual([]);
     expect(page.logsFile).toBeNull();
     expect(page.logsCursor).toBeNull();
-  });
-
-  it("clears diagnostics data and errors loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-debug-page", contextWithClient(client)) as TestPage & {
-      debugStatus: unknown;
-      debugHealth: unknown;
-      debugModels: unknown[];
-      debugHeartbeat: unknown;
-      debugDiagnosticsError: string | null;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.debugStatus = { version: "old" };
-    page.debugHealth = { ok: true };
-    page.debugModels = [{ id: "old" }];
-    page.debugHeartbeat = { provider: "old" };
-    page.debugDiagnosticsError = "old diagnostics failure";
-
-    await replaceContext(page, client);
-
-    expect(page.debugStatus).toBeNull();
-    expect(page.debugHealth).toBeNull();
-    expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
-    expect(page.debugDiagnosticsError).toBeNull();
-  });
-
-  it("discards diagnostics from a replaced provider that reuses its client", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const page = createPage("openclaw-debug-page", context) as TestPage & {
-      debugStatus: unknown;
-      debugHealth: unknown;
-      debugModels: unknown[];
-      debugHeartbeat: unknown;
-      debugLanes: unknown[];
-      diagnosticsTask: { readonly status: TaskStatus };
-    };
-    document.body.append(page);
-    await page.updateComplete;
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
-    await replaceContext(page, client);
-    pending.resolve({ models: [{ id: "stale" }], stale: true });
-    await pending.promise;
-    await settleLitElement(page);
-
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(page.diagnosticsTask.status).not.toBe(TaskStatus.PENDING);
-    expect(page.debugStatus).toBeNull();
-    expect(page.debugHealth).toBeNull();
-    expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
-    expect(page.debugLanes).toEqual([]);
   });
 
   it("clears cron data loaded by the previous provider", async () => {

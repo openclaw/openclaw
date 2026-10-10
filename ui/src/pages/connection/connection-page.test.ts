@@ -17,7 +17,8 @@ import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import "../debug/debug-overlay-content.ts";
-import { DebugOverlay } from "../debug/debug-overlay.ts";
+import type { DebugOverlayElement } from "../debug/debug-overlay-state.ts";
+import "../debug/debug-overlay.ts";
 import { ConnectionPage } from "./connection-page.ts";
 
 const gatewayActivity = {
@@ -169,10 +170,12 @@ describe("ConnectionPage ping", () => {
     const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
     expect(statusReads()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(5_000);
-    const overlay = new DebugOverlay();
+    const overlay = document.createElement("openclaw-debug-overlay") as DebugOverlayElement & {
+      readonly updateComplete: Promise<boolean>;
+    };
     provider.append(overlay);
     overlay.open("minimized");
-    await settleLitElement(overlay);
+    await overlay.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(55_000);
