@@ -108,6 +108,19 @@ function mapJsonText(
   return value;
 }
 
+function compactConfigWriteRefusal(value: unknown): unknown {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.keys) ||
+    !value.keys.some((key) => typeof key === "string" && key.length > 0)
+  ) {
+    return undefined;
+  }
+  return mapJsonText(value, (text, key) =>
+    key === "keys" ? truncateUtf16Safe(text, Math.floor(text.length / 2)) : text,
+  );
+}
+
 export function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
@@ -141,7 +154,12 @@ function boundedJson(
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "diagnostic:database rollback" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
-            ? { ...item, detail: undefined, failureFacts: undefined }
+            ? {
+                ...item,
+                detail: undefined,
+                failureFacts: undefined,
+                configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
+              }
             : item,
         );
         if (JSON.stringify(compacted) === json) {

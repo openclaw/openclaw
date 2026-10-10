@@ -288,12 +288,20 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
   });
 
   it("reports Git candidate copy, startup and cleanup timing in the update result", async () => {
-    const canarySteps: UpdateStepResult[] = [
-      { name: "candidate-state-snapshot", durationMs: 1_200, exitCode: 0 },
-      { name: "candidate-doctor", durationMs: 2_400, exitCode: 0 },
-      { name: "candidate-gateway-startup", durationMs: 308_123, exitCode: 0 },
-      { name: "candidate-state-cleanup", durationMs: 900, exitCode: 0 },
-    ].map((step) => ({ ...step, command: step.name, cwd: "/candidate" }));
+    const canarySteps: UpdateStepResult[] = (
+      [
+        ["candidate-state-snapshot", 1_200],
+        ["candidate-doctor", 2_400],
+        ["candidate-gateway-startup", 308_123],
+        ["candidate-state-cleanup", 900],
+      ] as const
+    ).map(([name, durationMs]) => ({
+      name,
+      durationMs,
+      exitCode: 0,
+      command: name,
+      cwd: "/candidate",
+    }));
     mocks.validateCanary.mockResolvedValue({
       status: "ok",
       phase: "readiness",
