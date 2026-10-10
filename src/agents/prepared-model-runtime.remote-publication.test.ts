@@ -257,6 +257,46 @@ it("re-admits an uncovered selection on the configured generation after a catalo
   expect(next.pluginGeneration).toBe(configured.pluginGeneration);
 });
 
+it("rejects re-admission when the run is aborted while its selection resolves", async () => {
+  await setup();
+  const input = fixture.agentInput("default", config);
+  await using parent = scopePreparedModelRuntimeLease(
+    await acquirePublishedPreparedModelRuntime(input),
+  );
+  expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+  const controller = new AbortController();
+  // Revocation lands inside acquisition, after the superseded generation was inspected.
+  const ownersSpy = vi
+    .spyOn(runtimePluginLoadPlan, "resolveAgentRuntimePluginSelectionOwners")
+    .mockImplementation(() => {
+      controller.abort(new Error("run revoked"));
+      return { pluginIds: ["openai"], forceActivatedPluginIds: ["openai"] };
+    });
+  try {
+    await expect(
+      parent.run(() =>
+        acquireAgentRunPreparedModelRuntime(
+          {
+            ...input,
+            workspaceDir: parent.snapshot.workspaceDir,
+            runtimePluginSelections: [
+              { provider: "custom", modelId: "remote-200", agentId: "default" },
+            ],
+          },
+          {
+            catalogMode: "static",
+            pluginGeneration: parent.pluginGeneration,
+            abortSignal: controller.signal,
+          },
+        ),
+      ),
+    ).rejects.toThrow("Prepared model runtime lease admission aborted");
+    expect(ownersSpy).toHaveBeenCalled();
+  } finally {
+    ownersSpy.mockRestore();
+  }
+});
+
 it("keeps derived parents confined to their selections after a catalog publication", async () => {
   await setup();
   const input = fixture.agentInput("default", config);
