@@ -19,10 +19,10 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
-import {
+import type {
   ControlUiReadiness,
-  type ControlUiReadinessShell,
-  type ControlUiCommittedPresentation,
+  ControlUiReadinessShell,
+  ControlUiCommittedPresentation,
 } from "./control-ui-readiness.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
@@ -72,7 +72,27 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
 
   private runtime: ApplicationRuntime | undefined;
-  private readonly readiness = new ControlUiReadiness(this);
+  private readiness: ControlUiReadiness | undefined;
+  private readinessLoad: Promise<void> | undefined;
+  // Automation opts in by reading its hook; normal navigation needs no observer graph.
+  private readonly loadReadiness = () => {
+    const runtime = this.runtime;
+    if (runtime && !this.readiness && !this.readinessLoad) {
+      this.readinessLoad = import("./control-ui-readiness.ts")
+        .then(({ ControlUiReadiness }) => {
+          if (this.runtime !== runtime) {
+            return;
+          }
+          this.readiness = new ControlUiReadiness(this);
+          this.readiness.connect(runtime, () => this.settleReadiness());
+          this.requestUpdate();
+        })
+        .catch((error: unknown) => {
+          console.error("[openclaw] automation readiness could not load", error);
+        });
+    }
+    return this.readiness?.hook;
+  };
   private disconnectViewport: (() => void) | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -154,7 +174,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
       this.requestLazyDocument(QUESTION_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
-    this.readiness.connect(runtime, () => this.settleReadiness());
+    const window = this.ownerDocument.defaultView;
+    if (window) {
+      Object.defineProperty(window, "openclawControlUi", {
+        configurable: true,
+        get: this.loadReadiness,
+      });
+    }
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
     // Context identity changes only across a full app-tree connection epoch;
     // descendants reconnect and rebuild their controller-owned state afterward.
@@ -177,7 +203,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.readiness.disconnect();
+    this.readiness?.disconnect();
+    const window = this.ownerDocument.defaultView;
+    if (
+      window &&
+      Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === this.loadReadiness
+    ) {
+      delete window.openclawControlUi;
+    }
+    this.readiness = undefined;
+    this.readinessLoad = undefined;
     // Stop reactive subscriptions before disposing their application sources.
     this.subscriptions.clear();
     this.disconnectViewport?.();
@@ -202,11 +237,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   protected override willUpdate(): void {
-    this.readiness.invalidateRoot();
+    this.readiness?.invalidateRoot();
   }
 
   protected override updated(): void {
-    this.readiness.commitRoot();
+    this.readiness?.commitRoot();
   }
 
   private async settleReadiness() {

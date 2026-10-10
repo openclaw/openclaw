@@ -122,7 +122,11 @@ export class ControlUiReadiness {
     ];
     const window = this.root.ownerDocument.defaultView;
     if (window) {
-      window.openclawControlUi = this.hook;
+      Object.defineProperty(window, "openclawControlUi", {
+        configurable: true,
+        writable: true,
+        value: this.hook,
+      });
     }
     this.invalidate();
   }
