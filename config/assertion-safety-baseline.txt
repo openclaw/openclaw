@@ -2607,7 +2607,7 @@ src/tts/tts-settings.ts	3
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1
-src/tui/embedded-backend.ts	2
+src/tui/embedded-backend.ts	1
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
