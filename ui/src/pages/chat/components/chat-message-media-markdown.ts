@@ -37,7 +37,7 @@ export function prepareMarkdownMedia(
 }
 
 /** Translate the retained media lifecycle without exposing the renderer to the DOM owner. */
-export function markdownMediaRenderer(media?: MarkdownMedia): MarkdownDomMedia | undefined {
+function markdownMediaRenderer(media?: MarkdownMedia): MarkdownDomMedia | undefined {
   if (!media) {
     return undefined;
   }
@@ -59,14 +59,27 @@ export function markdownMediaRenderer(media?: MarkdownMedia): MarkdownDomMedia |
   };
 }
 
+type MarkdownContent =
+  | string
+  | {
+      messageKey: string;
+      source: string;
+      parts: readonly [string, string];
+    };
+
 class MarkdownMediaDirective extends AsyncDirective {
   private readonly container = document.createDocumentFragment();
   private readonly owner = new MarkdownDomReconciler(this.container);
   private rendered = false;
 
-  render(sanitizedHtml: string, media?: MarkdownMedia, incremental = false) {
+  render(content: MarkdownContent, media?: MarkdownMedia, incremental = false) {
     this.owner.setConnected(this.isConnected);
-    this.owner.updateHtml(sanitizedHtml, markdownMediaRenderer(media), incremental);
+    const renderer = markdownMediaRenderer(media);
+    if (typeof content === "string") {
+      this.owner.updateHtml(content, renderer, incremental);
+    } else {
+      this.owner.update(content.messageKey, content.source, content.parts, renderer);
+    }
     if (this.rendered) {
       return noChange;
     }

@@ -1,6 +1,4 @@
-import { html, nothing } from "lit";
-import { AsyncDirective, directive } from "lit/async-directive.js";
-import type { ElementPart } from "lit/directive.js";
+import { html } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -14,10 +12,9 @@ import {
 } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import { MarkdownDomReconciler } from "../../../lib/markdown-dom-reconciler.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
-import { markdownMediaRenderer, type MarkdownMedia } from "./chat-message-media-markdown.ts";
+import { renderMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -266,11 +263,9 @@ export function renderMessageMarkdown(
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
   }
   const text = html`
-    <div
-      class="chat-text"
-      dir="${detectTextDirection(media?.text ?? source)}"
-      ${markdownParts(messageKey, source, parts, media)}
-    ></div>
+    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">
+      ${renderMarkdownMedia({ messageKey, source, parts }, media)}
+    </div>
   `;
   // Exhausted recovery keeps the preview visible and offers manual re-entry.
   if (recoverFullMessage && disclosure?.onRetryFullMessage) {
@@ -341,44 +336,6 @@ export type AssistantMessageDisclosure = {
   /** Set when automatic full-message retries exhausted; invoking re-enters the loader. */
   onRetryFullMessage?: () => void;
 };
-
-class MarkdownPartsDirective extends AsyncDirective {
-  private owner?: MarkdownDomReconciler;
-  private container?: Element;
-
-  render(
-    _messageKey: string,
-    _source: string,
-    _parts: readonly [string, string],
-    _media?: MarkdownMedia,
-  ) {
-    return nothing;
-  }
-
-  override update(
-    part: ElementPart,
-    [messageKey, source, parts, media]: [string, string, readonly [string, string], MarkdownMedia?],
-  ) {
-    if (part.element !== this.container) {
-      this.owner?.dispose();
-      this.container = part.element;
-      this.owner = new MarkdownDomReconciler(part.element);
-    }
-    this.owner!.setConnected(this.isConnected);
-    this.owner!.update(messageKey, source, parts, markdownMediaRenderer(media));
-    return nothing;
-  }
-
-  protected override disconnected() {
-    this.owner?.setConnected(false);
-  }
-
-  protected override reconnected() {
-    this.owner?.setConnected(true);
-  }
-}
-
-const markdownParts = directive(MarkdownPartsDirective);
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
   const template = document.createElement("template");
