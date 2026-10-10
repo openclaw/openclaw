@@ -153,9 +153,9 @@ function anotherRecorder() {
     ["W", 1],
     ["W", 4],
   ]);
-  expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
-    "createPlacementTurnClaimOps.releaseTurn",
-  );
+  expect(rows.find(({ tier }) => tier === "W")?.calls[0]).toMatchObject({
+    operation: "createPlacementTurnClaimOps.releaseTurn",
+  });
   expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
     Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
   );
