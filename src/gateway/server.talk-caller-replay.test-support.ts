@@ -527,7 +527,7 @@ export async function runTalkCallerReplay({
     expect(legacy.ok, JSON.stringify(legacy)).toBe(true);
     await waitRun(legacy.payload?.runId);
     const originalLegacyVoice = readLegacyVoiceBinding(
-      expectDefined(clients.get("writer"), "legacy caller").connId,
+      expectDefined(clients.get("writer")?.connId, "legacy caller connection"),
       sessionKey,
     );
     legacyVoiceForCleanup = originalLegacyVoice;
@@ -546,7 +546,7 @@ export async function runTalkCallerReplay({
       await waitRun(legacyRetry.payload?.runId);
     }
     const regeneratedLegacyVoice = readLegacyVoiceBinding(
-      expectDefined(clients.get("writer"), "reconnected legacy caller").connId,
+      expectDefined(clients.get("writer")?.connId, "reconnected legacy caller connection"),
       sessionKey,
     );
     legacyVoiceForCleanup = regeneratedLegacyVoice;
