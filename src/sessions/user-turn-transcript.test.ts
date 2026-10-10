@@ -542,7 +542,7 @@ describe("user turn transcript persistence", () => {
       }
       expect(work.counts).toEqual({ fts: 0, size: 0 });
 
-      expect(recorder.getAdmissionReceipt()?.generation).not.toBe(initialGeneration);
+      expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
       expect(recorder.getPersistedMessage?.()).toMatchObject({
         __openclaw: {
           senderId: "operator-1",

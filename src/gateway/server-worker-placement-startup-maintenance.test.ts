@@ -608,7 +608,12 @@ describe("worker placement session maintenance ownership", () => {
       expect(prepared.capture().providerKeys).not.toContain(failedLive.sessionKey);
     } finally {
       await sidecar.stop();
-      expect(() => prepared.capture()).toThrow("providers changed");
+      expect(() => prepared.capture()).toThrow(
+        expect.objectContaining({
+          name: "SqliteSessionMutationConflictError",
+          operationLabel: "session maintenance",
+        }),
+      );
       prepared.dispose();
     }
     expect((await preservedSessionKeys()).has("agent:main:placement-requested")).not.toBe(true);
@@ -627,7 +632,12 @@ describe("worker placement session maintenance ownership", () => {
     try {
       expect(prepared.capture().providerKeys).toContain(placement.sessionKey);
       const firstStop = sidecar.stop();
-      expect(() => prepared.capture()).toThrow("providers changed");
+      expect(() => prepared.capture()).toThrow(
+        expect.objectContaining({
+          name: "SqliteSessionMutationConflictError",
+          operationLabel: "session maintenance",
+        }),
+      );
       expect(sidecar.stop()).toBe(firstStop);
       await expect(firstStop).rejects.toBe(stopError);
       await expect(sidecar.stop()).resolves.toBeUndefined();

@@ -51,7 +51,6 @@ import {
 } from "./components/chat-session-workspace.ts";
 import {
   getChatSessionProjection,
-  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   retireChatSubmissionDisplay,
@@ -381,24 +380,6 @@ function handleSessionsChangedEvent(
   }
   if (result.applied) {
     reconcileChatRunAfterSessionStatePublication(state);
-  }
-  const modelRunId = event?.clientRunId ?? event?.runId;
-  if (
-    matchesChat &&
-    source?.phase === "model" &&
-    modelRunId &&
-    result.admittedRow &&
-    (state.chatSending
-      ? state.chatQueue.some(
-          (item) =>
-            item.sendState === "sending" &&
-            (item.queueMode === "steer" && state.chatRunId
-              ? state.chatRunId === modelRunId
-              : item.sendRunId === modelRunId),
-        )
-      : !state.chatRunId || state.chatRunId === modelRunId)
-  ) {
-    observeChatRunModel(state, modelRunId, result.admittedRow);
   }
   if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
     refreshChatEventHistory(state, presented);

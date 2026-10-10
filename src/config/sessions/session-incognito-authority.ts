@@ -108,9 +108,21 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return structuredClone(current(sessionKey)?.media);
         },
+        readModelSelection(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.modelSelection);
+        },
         readSteering(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.steering);
+        },
+        readPolicy(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.policy);
+        },
+        readCliHistory(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.cliHistory);
         },
         readCapability(this: void, sessionKey: string) {
           assertReadable();

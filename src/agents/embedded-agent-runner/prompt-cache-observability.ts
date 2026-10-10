@@ -518,12 +518,11 @@ export function beginPromptCacheObservation(
   const restarted = changes.some(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
-  const divergence =
-    previous && !restarted && !previous.declaredRewrites?.size
-      ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
-      : -1;
+  const divergence = previous
+    ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
+    : -1;
   const violation =
-    divergence < 0
+    divergence < 0 || restarted || previous?.declaredRewrites?.size
       ? undefined
       : {
           code: "historyRewrite" as const,
@@ -556,6 +555,7 @@ export function beginPromptCacheObservation(
   }
   return {
     snapshot,
+    prefixUnchanged: previous !== undefined && divergence < 0,
     changes: changes.length > 0 ? changes : null,
     previousCacheRead: previous?.lastCacheRead ?? null,
     requestGapMs: previous ? Math.max(0, requestedAt - previous.requestedAt) : undefined,
@@ -604,7 +604,11 @@ export function completePromptCacheObservation(
   tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
-  if (typeof cacheRead !== "number" || !Number.isFinite(cacheRead)) {
+  if (
+    params.usage?.cacheTelemetry?.state === "unavailable" ||
+    typeof cacheRead !== "number" ||
+    !Number.isFinite(cacheRead)
+  ) {
     return null;
   }
   const previousCacheRead = tracker.lastCacheRead;

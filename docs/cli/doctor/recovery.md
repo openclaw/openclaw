@@ -73,6 +73,12 @@ database integrity scans for unchanged receipts within the service manager's
 inspection deadline. New continuation or takeover receipts still use the
 validated ledger writer.
 
+On Linux, nested service-manager inspections share deadline accounting that
+excludes synchronous ownership and admission checks. Slow database inspection
+therefore does not consume the manager I/O allowance. Every authority check
+still runs; manager calls, cancellation, and service stop and drain deadlines
+remain bounded. Database inspection can still increase the total command time.
+
 After restoration, Doctor verifies the Gateway with the shared health probe used
 by `openclaw gateway start`. A running process or owned listener alone does not
 mean it is ready. If the readiness budget expires while the service is running,
@@ -197,6 +203,10 @@ path, rather than running `pnpm ui:build` in an unrelated project.
 Packaged installs without UI sources receive reinstall guidance instead of a
 source-build command. Doctor does not download a source checkout to repair a
 packaged installation.
+
+Doctor reports obsolete `cache/control-ui-assets` directories left by older
+installs. `openclaw doctor --fix` removes them; the update command's Doctor pass
+also runs this repair. Cleanup failures are warnings and do not abort Doctor.
 
 ## Invalid Gateway tokens
 

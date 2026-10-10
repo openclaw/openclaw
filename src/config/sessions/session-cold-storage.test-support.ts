@@ -97,8 +97,7 @@ export async function createSessionColdStorageFixture(
   }, options);
 
   const database = () => openOpenClawAgentDatabase(options).db;
-  const snapshot = () => {
-    const db = database();
+  const snapshot = (db = database()) => {
     return {
       events: executeSqliteQuerySync(
         db,

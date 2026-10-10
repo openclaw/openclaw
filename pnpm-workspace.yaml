@@ -4,6 +4,7 @@ packages:
   - packages/*
   - extensions/*
   - examples/*
+  - tools/solid-lint
 
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
@@ -62,7 +63,7 @@ overrides:
   source-map-js: 1.2.2
   file-type: 22.1.1
   form-data: 4.0.6
-  ip-address: 10.7.2
+  ip-address: 10.7.3
   "mailauth@7.1.0>nodemailer": 10.0.13
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
