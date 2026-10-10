@@ -29,15 +29,24 @@
 }
 
 .chat {
-  /* Keep the transcript navigation rail's measured 68px gutter while using
-     the wider inherited frame. The centered composer shares this same cap. */
-  --chat-thread-max-width: min(1280px, calc(100% - 136px));
+  /* The reading frame has a wider default without reserving navigation space
+     before a pane is wide enough to render that rail. The transcript geometry
+     enables the rail from its measured gutter, so embedded panes retain their
+     usable width. */
+  --chat-thread-max-width: min(1280px, 100%);
   --chat-message-max-width: 100%;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
   --chat-composer-side-inset: 36px;
   --chat-composer-bottom-gap: 14px;
   --chat-thread-side-inset: clamp(6px, 1vw, 12px);
+  /* Transcript and composer share the exact same usable column. Keeping this
+     calculation on the chat owner makes browser/side panes follow their own
+     width rather than the desktop viewport. */
+  --chat-content-max-width: min(
+    var(--chat-thread-max-width),
+    calc(100% - 2 * (var(--chat-thread-gutter) + var(--chat-thread-side-inset)))
+  );
 
   position: relative;
   display: flex;

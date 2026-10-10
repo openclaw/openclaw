@@ -33,7 +33,7 @@ suite.define(() => {
         const region = page.locator(".sidebar-region");
         const browser = page.locator('[data-panel-slot="browser"]');
         const composer = page.locator(".agent-chat__composer-shell");
-        const initialChatWidth = (await composer.boundingBox())!.width;
+        const transcript = page.locator(".chat-thread-inner");
         await openChatSidePanelType(page, "Browser");
         await browser.waitFor();
         const paneWidth = (await region.boundingBox())!.width;
@@ -41,9 +41,14 @@ suite.define(() => {
           browser.evaluate((element) => element.getBoundingClientRect().width);
         await expect.poll(browserWidth).toBeGreaterThan(paneWidth * 0.49);
         expect(await browserWidth()).toBeLessThanOrEqual(paneWidth * 0.6);
-        if (paneWidth > 1_600) {
-          expect((await composer.boundingBox())!.width).toBeCloseTo(initialChatWidth, 0);
-        }
+        const [composerBounds, transcriptBounds] = await Promise.all([
+          composer.boundingBox(),
+          transcript.boundingBox(),
+        ]);
+        expect(composerBounds).not.toBeNull();
+        expect(transcriptBounds).not.toBeNull();
+        expect(composerBounds!.x).toBeCloseTo(transcriptBounds!.x, 0);
+        expect(composerBounds!.width).toBeCloseTo(transcriptBounds!.width, 0);
         await page.screenshot({ path: path.join(suite.artifactDir, `browser-${width}.png`) });
         const divider = page.getByRole("separator", { name: "Resize side panel" });
         const defaultWidth = await browserWidth();
