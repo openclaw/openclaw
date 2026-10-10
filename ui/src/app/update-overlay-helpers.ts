@@ -266,15 +266,14 @@ export function createUpdateStatusRefresher(params: {
           checkoutRevision++;
           const preserveSchedule = progressRevisionAtStart !== progressRevision;
           // Runs carry their own monotonic revision; legacy sentinels do not.
+          // Supervisor guidance is current deployment metadata, independent of run progress.
           const { activeRun, lastRun, sentinel, externalSupervisorGuidance } = response;
-          if (!preserveSchedule || activeRun || lastRun) {
-            params.onStatus({
-              activeRun,
-              lastRun,
-              externalSupervisorGuidance,
-              ...(!preserveSchedule ? { sentinel } : {}),
-            });
-          }
+          params.onStatus({
+            activeRun,
+            lastRun,
+            externalSupervisorGuidance,
+            ...(!preserveSchedule ? { sentinel } : {}),
+          });
           params.onCheckout(response, preserveSchedule);
           // Discovery may finish after the fast read captured an empty schedule.
           // Let that read settle before reconciling, without extending the button's lifetime.
