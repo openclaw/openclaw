@@ -15,11 +15,9 @@ import {
   FULL_RELEASE_CHILD_EVIDENCE_JOB as PUBLISHER_JOB,
   serializeReleaseArtifact,
 } from "./lib/full-release-evidence.mjs";
-import { execGhRead } from "./lib/plain-gh.mjs";
+import { createReleaseEvidenceClient } from "./release-ci-summary.mjs";
 
 const MAX_INPUT_BYTES = 128 * 1024;
-// Twenty 100-job pages; the ceiling stays the same at any fallback page size.
-const MAX_ATTEMPT_JOBS = 2000;
 function required(name, pattern) {
   const value = process.env[name] ?? "";
   if (!pattern.test(value)) {
@@ -33,53 +31,6 @@ function readJson(path, maxBytes) {
     throw new Error("Child evidence input exceeds its byte limit");
   }
   return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function github(repository, endpoint, paginate = false) {
-  const args = ["api", `repos/${repository}/${endpoint}`];
-  if (paginate) {
-    args.push("--paginate", "--slurp");
-  }
-  return JSON.parse(
-    execGhRead(args, {
-      encoding: "utf8",
-      timeout: 60_000,
-      maxBuffer: 4 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
-}
-
-async function readJobs(repository, runId, runAttempt) {
-  // GitHub can persistently 5xx a 100-job page of a large attempt while smaller pages succeed.
-  const jobs = await readReleaseJobListing(async (perPage) => {
-    const pages = github(
-      repository,
-      `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=${perPage}`,
-      true,
-    );
-    if (
-      !Array.isArray(pages) ||
-      pages.length === 0 ||
-      pages.length > Math.ceil(MAX_ATTEMPT_JOBS / perPage)
-    ) {
-      throw new Error("Child evidence job inventory is incomplete");
-    }
-    const pageJobs = pages.flatMap((page) => {
-      if (!Array.isArray(page.jobs) || page.total_count !== pages[0].total_count) {
-        throw new Error("Child evidence job inventory is incomplete");
-      }
-      return page.jobs;
-    });
-    if (pageJobs.length > MAX_ATTEMPT_JOBS || pageJobs.length !== pages[0].total_count) {
-      throw new Error("Child evidence job inventory is incomplete or belongs to another attempt");
-    }
-    return pageJobs;
-  });
-  if (jobs.some((job) => String(job.run_id) !== runId || job.run_attempt !== runAttempt)) {
-    throw new Error("Child evidence job inventory is incomplete or belongs to another attempt");
-  }
-  return jobs;
 }
 
 async function seal() {
@@ -108,7 +59,8 @@ async function seal() {
   if (!Number.isSafeInteger(runAttempt) || runAttempt > 32) {
     throw new Error("Child evidence attempt inventory exceeds its bound");
   }
-  const run = github(repository, `actions/runs/${runId}`);
+  const client = createReleaseEvidenceClient(repository);
+  const run = await client.getRun(runId);
   const expected = {
     key: role,
     repository,
@@ -134,7 +86,10 @@ async function seal() {
   const attempts = [];
   let publisher;
   for (let attempt = 1; attempt <= runAttempt; attempt += 1) {
-    const allJobs = await readJobs(repository, runId, attempt);
+    const allJobs = await client.getRunAttemptJobs(runId, attempt, { requireComplete: true });
+    if (allJobs.some((job) => String(job.run_id) !== runId || job.run_attempt !== attempt)) {
+      throw new Error("Child evidence job inventory belongs to another attempt");
+    }
     const publishers = allJobs.filter((job) => job.name === PUBLISHER_JOB);
     if (attempt === runAttempt) {
       if (publishers.length !== 1 || publishers[0].status !== "in_progress") {
