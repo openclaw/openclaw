@@ -61,10 +61,11 @@ an agent. Add `--update-result <path>` to include a saved update-failure artifac
 When another process saves configuration during database admission, OpenClaw
 warns and reads the current configuration again. It validates and uses that
 configuration before continuing, retaining concurrent changes when applying
-the requested update. If the root config or an included file changes after
-candidate checks, it repeats those checks against the current configuration
-before activation. A candidate that cannot accept the current configuration
-still fails validation; a concurrent save alone is not a refusal.
+the requested update. Candidate checks run once against the selected configuration;
+edits to the root config or included files after those checks are best effort and
+do not restart validation. Avoid editing configuration during an update; if a
+later edit causes startup to fail, correct it or run `openclaw doctor` before
+restarting. A candidate that rejects the selected configuration still fails validation.
 If the save changes an implicitly selected update channel, OpenClaw resolves
 the target again before execution. An explicit `--channel` keeps its selection.
 
