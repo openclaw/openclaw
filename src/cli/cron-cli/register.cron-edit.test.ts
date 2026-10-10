@@ -73,6 +73,7 @@ describe("cron edit", () => {
     ],
     [["--trigger-script", "", "--clear-trigger"], "--trigger-script must not be blank"],
     [["--script", " ", "--pacing-min", "30m"], "--script must not be blank"],
+    [["--tools", "", "--pacing-min", "30m"], "--tools must not be blank"],
     [["--tools", "", "--clear-tools", "--pacing-min", "30m"], "Use --tools or --clear-tools"],
     [["--agent", "main", "--clear-agent"], "Use --agent or --clear-agent"],
     [
@@ -268,7 +269,7 @@ describe("cron edit", () => {
 
   it.each([
     [{ kind: "agentTurn", message: "hello" }, ["--clear-tools"], ["*"]],
-    [{ kind: "command", argv: ["echo", "hello"] }, ["--tools", ""], []],
+    [{ kind: "command", argv: ["echo", "hello"] }, ["--tools", "exec"], ["exec"]],
     [{ kind: "script", script: "return {}" }, ["--tools", "read,write"], ["read", "write"]],
     [{ kind: "systemEvent", text: "hello" }, ["--tools", "read"], ["read"]],
   ] as const)("preserves %j when changing its tool policy", async (payload, args, toolsAllow) => {

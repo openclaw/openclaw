@@ -55,11 +55,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (hasThinking && opts.clearThinking) {
     throw new CronCliError("Use --thinking or --clear-thinking, not both");
   }
-  const fallbacks = parseCronStringList(opts.fallbacks);
+  const fallbacks = parseCronStringList(opts.fallbacks, "--fallbacks");
   if (typeof opts.fallbacks === "string" && opts.clearFallbacks) {
     throw new CronCliError("Use --fallbacks or --clear-fallbacks, not both");
   }
-  const toolsAllow = parseCronStringList(opts.tools);
+  const toolsAllow = parseCronStringList(opts.tools, "--tools");
   const timeoutSeconds = parseCronIntegerOption(
     opts.timeoutSeconds,
     "--timeout-seconds",

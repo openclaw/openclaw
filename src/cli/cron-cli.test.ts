@@ -502,13 +502,14 @@ describe("cron cli", () => {
     expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
-  it("keeps the default-agent warning off JSON stdout and preserves an empty tool grant", async () => {
-    const params = await namedAdd("--message", "hello", "--tools", "", "--json");
+  it("keeps the default-agent warning off JSON stdout", async () => {
+    const params = await namedAdd("--message", "hello", "--json");
     expect(params).toMatchObject({
       sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "hello", toolsAllow: [] },
+      payload: { kind: "agentTurn", message: "hello" },
     });
     expect(params.payload).toHaveProperty("timeoutSeconds", undefined);
+    expect(params.payload.toolsAllow).toBeUndefined();
     expectRuntimeErrorContaining("No --agent specified");
     expectRuntimeErrorContaining("configured default agent");
     expect(stdoutText()).not.toContain("No --agent specified");
@@ -809,6 +810,7 @@ describe("cron cli", () => {
   });
 
   it.each([
+    { args: [...AGENT_ADD, "--tools", ""], error: "--tools must not be blank" },
     { args: [...AGENT_ADD, "--script", "   "], error: "--script must not be blank" },
     {
       args: [...AGENT_ADD, "--webhook", "not-a-url"],

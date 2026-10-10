@@ -430,7 +430,7 @@ export function parseCronStaggerMs(params: {
   return parsed;
 }
 
-export function parseCronStringList(input: unknown): string[] | undefined {
+export function parseCronStringList(input: unknown, flag = "value"): string[] | undefined {
   if (input === undefined) {
     return undefined;
   }
@@ -439,7 +439,12 @@ export function parseCronStringList(input: unknown): string[] | undefined {
     : typeof input === "string"
       ? input
       : "";
-  return raw.split(/[,\s]+/u).filter(Boolean);
+  const list = raw.split(/[,\s]+/u).filter(Boolean);
+  // Explicit blank (e.g. --tools '') must not become toolsAllow:[] / empty fallbacks.
+  if (list.length === 0) {
+    throw new CronCliError(`${flag} must not be blank`);
+  }
+  return list;
 }
 
 const INVALID_CRON_TIMEZONE_MESSAGE =

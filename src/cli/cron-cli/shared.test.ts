@@ -578,6 +578,13 @@ describe("parseCronStringList", () => {
   ])("parses $input", ({ input, expected }) => {
     expect(parseCronStringList(input)).toEqual(expected);
   });
+
+  it("rejects blank string lists", () => {
+    expect(() => parseCronStringList("", "--tools")).toThrow("--tools must not be blank");
+    expect(() => parseCronStringList("  ,  ", "--fallbacks")).toThrow(
+      "--fallbacks must not be blank",
+    );
+  });
 });
 
 describe("coerceCronDeliveryPreviews", () => {
