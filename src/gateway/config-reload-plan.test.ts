@@ -35,6 +35,7 @@ describe("Gateway core reload policy", () => {
             registry.services.push({
               pluginId: "memory-core",
               source: "test",
+              origin: "bundled",
               id: service.id,
               service,
             });
