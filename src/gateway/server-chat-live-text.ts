@@ -168,9 +168,12 @@ export function mergeChatTextPayload(previous: unknown, next: unknown): ChatEven
   return { ...payload, deltaText: `${(previous as Delta).deltaText}${payload.deltaText}` };
 }
 
-export function cancelPendingLiveTextFlush(run: ChatRunRecord, stream: LiveTextStream): void {
-  const pending = run.pendingTextFlushes?.[stream];
-  if (!pending) {
+export function cancelPendingLiveTextFlush(
+  run: ChatRunRecord | undefined,
+  stream: LiveTextStream,
+): void {
+  const pending = run?.pendingTextFlushes?.[stream];
+  if (!run || !pending) {
     return;
   }
   clearTimeout(pending.timer);

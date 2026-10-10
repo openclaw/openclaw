@@ -161,6 +161,10 @@ or lock failures remain inconclusive and are logged, not relabeled as corruption
 Confirmation treats an empty WAL and an absent WAL as equivalent: SQLite readers
 can create or remove those empty sidecars without changing committed contents.
 Nonempty WALs, rollback journals, and the main file retain full generation checks.
+Terminal-failure and quarantine generation checks hash those files in an isolated
+child process. Closing a raw file descriptor in any Gateway thread would release
+that process's SQLite locks on the same inode. The child preserves the complete
+fingerprint without changing schemas, quarantine policy, or update behavior.
 
 The Gateway does not repeat full scans on a daily timer. For operator-requested or scheduled full verification,
 use `openclaw doctor --fix --non-interactive` during a planned maintenance window.

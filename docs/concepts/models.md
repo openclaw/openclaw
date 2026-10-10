@@ -93,7 +93,7 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 - Chat and New Session keep the Default reset choice pinned in its provider group, then the selected model, then that provider's [recommended models](/concepts/recommended-models). The provider's other models wait behind **All models (N)**; providers without recommendations list every model. The terminal `/models` picker shows the current and recommended models with an **All models (N)** row for the rest. Text `/models <provider>` pages put the current model first, then the recommended models, instead of alphabetizing the catalog. Models settings puts the selected model first. Other rows keep the Gateway's catalog order. Picker search checks the full list, not just the visible rows.
@@ -116,17 +116,25 @@ and native apps. Chat and session metadata read published rows without starting
 provider discovery. Ordinary `models.list` requests reuse the published catalog;
 provider response-cache expiry alone does not rebuild it. Startup, changed
 configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own catalog acquisition. Startup discovers the same full catalog as
-**Refresh**, in the background; a later configuration or credential change
-rediscovers only the affected providers. A provider whose discovery fails keeps its
+**Refresh** own provider catalog acquisition. Startup discovers provider inventory
+in the background; a later configuration or credential change rediscovers only
+the affected providers. Native harnesses such as Codex discover models and account
+readiness on demand for the selected agent: opening its model picker or catalog,
+creating a native session, or running a turn. Unused agents do not start native
+app-servers at boot. Prepared-only metadata reads retain configured model hints
+with unknown native readiness until discovery completes. A provider whose discovery fails keeps its
 saved or built-in rows and retries in the background after 30 seconds, backing off
 to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
 
-In chat apps, `/models` and model picker buttons return the newest completed list
-without waiting for discovery. Pending providers show `checking models…`.
+In chat apps, `/models` and model picker buttons reuse the newest completed provider
+list. First use of an idle native agent can take a few seconds to start its harness
+and discover models. Pending providers show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
-edit a list that was already sent.
+edit a list that was already sent. If optional native discovery fails, ordinary
+catalog requests keep the published rows and report `refreshFailed`; selecting a
+native model or explicitly refreshing still reports the discovery error. A failed
+harness does not prevent healthy runtimes from refreshing after their clients retire.
 
 Refreshing a selected account also keeps its last completed catalog available to
 other readers until discovery succeeds. Failed refreshes retain that catalog;
@@ -315,9 +323,9 @@ Additional choices must also support explicit session runtime selection; a
 registered harness that cannot be selected explicitly remains disabled here.
 ACP sessions keep their existing model controls; they cannot select a different
 harness here.
-Catalog preparation and explicit Refresh acquire the requested native inventories
-once per runtime while preserving the configured default.
-Opening the picker reuses prepared catalog facts; explicit Refresh owns discovery.
+Opening the picker acquires missing native inventories once per runtime while
+preserving the configured default, then reuses current observations. Explicit
+Refresh reacquires the requested inventories.
 Session-scoped pickers evaluate model and runtime choices together after checking
 session access, and recheck access before returning the catalog.
 
