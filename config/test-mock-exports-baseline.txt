@@ -3166,7 +3166,6 @@
 ["src/agents/subagents/announce/subagent-announce.requester-settle-dispatch-mocks.test-support.ts","../../../gateway/server-methods/request-authorization.js","54591962670acca23e7070637e22213e27db44818f31200efd093dcba839a565",1]
 ["src/agents/subagents/announce/subagent-announce.requester-settle-dispatch-mocks.test-support.ts","../registry/subagent-registry-read.js","190e231630d75a5f046c465e73e611f620a407e2b84acade5aa7edef64ca3aae",1]
 ["src/agents/subagents/announce/subagent-announce.requester-settle-dispatch-mocks.test-support.ts","../spawn/subagent-depth.js","cd7f96c588e4be6e90c77195bf6661318c1298780143354059886f4c24ccea00",1]
-["src/agents/subagents/announce/subagent-announce.requester-settle-dispatch-mocks.test-support.ts","./subagent-announce-delivery.js","108db1bb858ae93008359b0805dce343365c167712893a618d144da9d0c629d5",1]
 ["src/agents/subagents/announce/subagent-announce.requester-settle-dispatch-mocks.test-support.ts","./subagent-announce.requester-settle-descendants.js","888c5b2a9420028adc192baf1ba6fd3ac846d8d2d42b6eecc1a747e771806171",1]
 ["src/agents/subagents/announce/subagent-announce.requester-settle-fixture.test-support.ts","../../../config/sessions/session-accessor.js","e6236c81df4903d527bfbf922a59d56e1800eff969342bea048fb30f7317bf60",1]
 ["src/agents/subagents/announce/subagent-announce.requester-settle-fixture.test-support.ts","../registry/subagent-registry-read.js","d11466f3959952c69d5f188b5fa4feee7d009655d2fcd8482deb49d5d2365d6a",1]
