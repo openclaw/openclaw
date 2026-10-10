@@ -5,7 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
@@ -18,6 +18,7 @@ import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
 } from "../../../process/gateway-work-admission.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -492,4 +493,29 @@ export function createRestoredRequesterWakeRuns(params: {
       },
     );
   });
+}
+
+/** Fail the next registry persistence write once, then pass through. */
+export function rejectNextRegistryWrite(message: string): void {
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  let reject = true;
+  const spy = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      execute(
+        context,
+        (scope) =>
+          operation({
+            execute: async (...args) => {
+              if (reject && args[0].type === "subagents.persistChanges") {
+                reject = false;
+                throw new Error(message);
+              }
+              return scope.execute(...args);
+            },
+          }),
+        options,
+      ),
+    );
+  onTestFinished(() => spy.mockRestore());
 }

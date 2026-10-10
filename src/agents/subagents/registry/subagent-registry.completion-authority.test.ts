@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { createMessageReceiptFromOutboundResults } from "../../../channels/message/receipt.js";
 import type { ChannelPlugin } from "../../../channels/plugins/types.public.js";
@@ -44,7 +44,11 @@ import {
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import {
+  rejectNextRegistryWrite,
+  settleSubagentRegistryPersistenceWork,
+} from "./subagent-registry.persistence.test-support.js";
+import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   releaseSubagentRun,
@@ -64,30 +68,6 @@ async function updateRun(runId: string, update: (draft: SubagentRunRecord) => vo
     update(draft);
     return { value: undefined, postimages: new Map([[runId, draft]]) };
   });
-}
-
-function rejectNextRegistryWrite(message: string): void {
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  let reject = true;
-  const spy = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      execute(
-        context,
-        (scope) =>
-          operation({
-            execute: async (...args) => {
-              if (reject && args[0].type === "subagents.persistChanges") {
-                reject = false;
-                throw new Error(message);
-              }
-              return scope.execute(...args);
-            },
-          }),
-        options,
-      ),
-    );
-  onTestFinished(() => spy.mockRestore());
 }
 
 function registration(
@@ -565,6 +545,8 @@ describe("registered completion source custody", () => {
       });
     },
   );
+
+  registerRequesterCompletionCustodyTests({ registration, updateRun });
 
   it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
