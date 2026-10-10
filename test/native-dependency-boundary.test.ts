@@ -23,10 +23,6 @@ it("keeps first-party native capabilities out of Koffi", () => {
     if (!/\.(?:[cm]?[jt]sx?)$/u.test(file) || getChangedPathFacts(file).isTestOnly) {
       return [];
     }
-    // ReFS retains its existing binding until guarded copies preserve its metadata and symlinks.
-    if (file === "src/agents/worktrees/filesystem-refs.native.ts") {
-      return [];
-    }
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
     if (!source.includes("koffi")) {
       return [];
