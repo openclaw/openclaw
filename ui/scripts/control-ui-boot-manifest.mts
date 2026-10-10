@@ -108,7 +108,11 @@ async function collectBootChunkPaths(
             chunkPaths.add(pathname);
           }
         });
-        await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
+        // Capture normal boot without opting into the lazy automation observer.
+        await installMockGateway(page, {
+          serverBuildId: readDistBuildId(distDir),
+          awaitInitialRoster: false,
+        });
         const waitForRoute = async () => {
           await page
             .locator(
