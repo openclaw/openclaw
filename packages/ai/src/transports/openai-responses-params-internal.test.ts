@@ -1,6 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
 import {
   buildOpenAIResponsesCompactSystemMessage,
   buildOpenAIResponsesParams,
@@ -22,7 +26,7 @@ const reasoningModel = {
 
 describe("Responses explicit prompt caching", () => {
   const context = {
-    systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+    systemPrompt: `Stable instructions${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Retained facts${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime facts${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
     messages: [{ role: "user", content: "hello", timestamp: 0 }],
   } as const;
 
@@ -51,10 +55,10 @@ describe("Responses explicit prompt caching", () => {
           content: [
             {
               type: "input_text",
-              text: "Stable instructions",
+              text: "Stable instructions\nRetained facts",
               prompt_cache_breakpoint: { mode: "explicit" },
             },
-            { type: "input_text", text: "Dynamic turn context" },
+            { type: "input_text", text: "Dynamic turn context\nRuntime facts" },
           ],
         },
         { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] },
@@ -102,7 +106,9 @@ describe("Responses explicit prompt caching", () => {
 
     expect(params.prompt_cache_options).toEqual({ mode: "explicit" });
     expect(params.prompt_cache_key).toBeUndefined();
-    expect(params.instructions).toBe("Stable instructions\nDynamic turn context");
+    expect(params.instructions).toBe(
+      "Stable instructions\nRetained facts\nDynamic turn context\nRuntime facts",
+    );
     expect(JSON.stringify(params.input)).not.toContain("prompt_cache_breakpoint");
   });
 

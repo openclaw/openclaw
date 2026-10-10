@@ -284,7 +284,7 @@ function buildResponsesSystemPromptContent(
     return [
       {
         type: "input_text",
-        text: sanitizeTransportPayloadText(systemPrompt),
+        text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(systemPrompt)),
         prompt_cache_breakpoint: { mode: "explicit" },
       },
     ];
@@ -294,14 +294,14 @@ function buildResponsesSystemPromptContent(
   if (split.stablePrefix) {
     content.push({
       type: "input_text",
-      text: sanitizeTransportPayloadText(split.stablePrefix),
+      text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(split.stablePrefix)),
       prompt_cache_breakpoint: { mode: "explicit" },
     });
   }
   if (split.dynamicSuffix) {
     content.push({
       type: "input_text",
-      text: sanitizeTransportPayloadText(split.dynamicSuffix),
+      text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(split.dynamicSuffix)),
     });
   }
   return content.length > 0 ? content : [{ type: "input_text", text: "" }];

@@ -1,0 +1,131 @@
+{
+  "provenance": {
+    "release": "v2026.9.9",
+    "commit": "bcfc88812a35243893585dbeca87ca41b48272ca",
+    "sourceSha256": {
+      "packages/ai/src/transports/provider-replay-context.ts": "1c33c0eb7408a296fe0440a370532ec5064a35add64aa80f184f43f23f215a17",
+      "packages/ai/src/utils/hash.ts": "2890c87041beea0a6f45223a8fe714f4936d008cfb5bf5a32f05b62c00c8f375",
+      "packages/ai/src/transports/openai-responses-compaction-replay.ts": "aabb391f97a38e5b46cb770b4c3511b61e208deb7af2ba9f9d96231b1c52d124",
+      "packages/ai/src/transports/openai-responses-compaction-window.ts": "635376810357b13ff7aa5bf5f49a59a07c3fc1104972e8c6ebf4c164ac8d15b7",
+      "packages/ai/src/transports/openai-responses-payload-policy.ts": "a0c89bab6a81c4a335c4971432cfb87fab8e6bf3a39bb1a5de15af3e17f1bfa9",
+      "packages/ai/src/transports/openai-responses-params-internal.ts": "dfd2f7b66a826a7c4eeeeab16b48e8c7fe7e372e1b35ec32395f6db09f24b2f5",
+      "packages/ai/src/providers/openai-prompt-cache.ts": "d719bfd1b268931f8601c52a662c5327fa9b510570fe0b4ba9a6a6ce8232fac3",
+      "packages/ai/src/transports/openai-responses-context-usage.ts": "a9cfeba61e945618ffa57a74c6994287c9eead5a9a53bde5e2be944f05e9c110",
+      "packages/ai/src/transports/openai-responses-continuation.ts": "f724bf2362d6925e22110c1598ad9e6820bc0c11b45a83b1e72e293934e42e7d",
+      "packages/ai/src/transports/transport-utils.ts": "c2a3d464a4822c6f7b95f0c7e839397f9950ed86f36239ff95f24654d11050ee",
+      "packages/ai/src/transports/openai-responses-replay-messages-internal.ts": "d8603a5d2b5b9f5c84b5eb5b1307ae4aa8fae1187628c4fc2f82b691917bfe3e"
+    }
+  },
+  "settings": {
+    "model": {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "api": "openai-responses",
+      "provider": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "reasoning": true,
+      "input": ["text"],
+      "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+      "contextWindow": 256000,
+      "maxTokens": 8192,
+      "compat": { "supportsPromptCacheKey": false }
+    },
+    "options": {
+      "sessionId": "stable-upgrade-session",
+      "authProfileId": "stable-upgrade-profile",
+      "cacheRetention": "long"
+    }
+  },
+  "context": {
+    "systemPrompt": "Stable upgrade policy\n<!-- OPENCLAW_CACHE_BOUNDARY -->\nRuntime: upgrade fixture",
+    "messages": [
+      { "role": "user", "content": "Conversation before compaction", "timestamp": 0 },
+      {
+        "role": "assistant",
+        "content": [],
+        "api": "openai-responses",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 0,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 },
+          "contextUsage": { "state": "unavailable" }
+        },
+        "stopReason": "stop",
+        "timestamp": 1,
+        "providerReplay": {
+          "v": 1,
+          "type": "openai-responses-compaction",
+          "replayIndex": 0,
+          "id": "cmp_stable_upgrade",
+          "data": "synthetic-stable-compaction",
+          "provider": "openai",
+          "api": "openai-responses",
+          "model": "gpt-5.6-luna",
+          "baseUrlHash": "ozhevd1smnk8s",
+          "sessionHash": "1m9a9xpoxz2rq",
+          "authProfileHash": "1hd78ph1a072hy"
+        }
+      },
+      { "role": "user", "content": "Continue the saved conversation", "timestamp": 2 },
+      {
+        "role": "assistant",
+        "content": [],
+        "api": "openai-responses",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
+        "usage": {
+          "input": 500,
+          "output": 20,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 520,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 },
+          "contextUsage": { "state": "available", "promptTokens": 500, "totalTokens": 520 }
+        },
+        "stopReason": "stop",
+        "timestamp": 3,
+        "openclawResponsesInputReplay": {
+          "contextUsage": {
+            "provider": "openai",
+            "api": "openai-responses",
+            "model": "gpt-5.6-luna",
+            "baseUrlHash": "ozhevd1smnk8s",
+            "sessionHash": "1m9a9xpoxz2rq",
+            "authProfileHash": "1hd78ph1a072hy",
+            "projection": "transport",
+            "includeSystemPrompt": false,
+            "prefixHash": "f5ae186655b1a46c9c1aea82ab5ac5a9cd69b58e4d5d8cb6f9a41ea2c40e10b3",
+            "prefixLength": 2,
+            "promptTokens": 500,
+            "totalTokens": 520
+          }
+        }
+      }
+    ]
+  },
+  "admittedRequest": {
+    "model": "gpt-5.6-luna",
+    "input": [
+      {
+        "type": "compaction",
+        "id": "cmp_stable_upgrade",
+        "encrypted_content": "synthetic-stable-compaction"
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "Continue the saved conversation" }]
+      }
+    ],
+    "stream": true,
+    "instructions": "Stable upgrade policy\nRuntime: upgrade fixture",
+    "max_output_tokens": 8192,
+    "reasoning": { "effort": "none" },
+    "store": false
+  }
+}

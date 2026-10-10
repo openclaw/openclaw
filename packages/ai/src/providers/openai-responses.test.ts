@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
 
 const openAiMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -325,7 +329,31 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it("applies explicit GPT-5.6 caching to simple Responses completions", async () => {
+  it.each([
+    {
+      label: "stable and dynamic regions",
+      systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+      content: [
+        {
+          type: "input_text",
+          text: "Stable instructions",
+          prompt_cache_breakpoint: { mode: "explicit" },
+        },
+        { type: "input_text", text: "Dynamic turn context" },
+      ],
+    },
+    {
+      label: "a hook override without a cache boundary",
+      systemPrompt: `Stable instructions${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime facts${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+      content: [
+        {
+          type: "input_text",
+          text: "Stable instructions\nRuntime facts",
+          prompt_cache_breakpoint: { mode: "explicit" },
+        },
+      ],
+    },
+  ])("applies explicit GPT-5.6 caching with $label", async ({ systemPrompt, content }) => {
     await streamSimpleOpenAIResponses(
       model({
         id: "openai.gpt-5.6-luna",
@@ -339,7 +367,7 @@ describe("OpenAI Responses provider", () => {
         },
       }),
       {
-        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        systemPrompt,
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
       {
@@ -356,14 +384,7 @@ describe("OpenAI Responses provider", () => {
       {
         type: "message",
         role: "developer",
-        content: [
-          {
-            type: "input_text",
-            text: "Stable instructions",
-            prompt_cache_breakpoint: { mode: "explicit" },
-          },
-          { type: "input_text", text: "Dynamic turn context" },
-        ],
+        content,
       },
       {
         type: "message",
