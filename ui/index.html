@@ -596,11 +596,42 @@
         </div>
       </div>
     </section>
+    <script data-cfasync="false" data-openclaw-unsupported-browser>
+      // Module scripts cannot be polyfilled; without them the app never loads, so
+      // explain that up front instead of waiting for the startup timeout. Keep this
+      // script ES5: engines without module scripts cannot parse the recovery script below.
+      (function () {
+        if ("noModule" in HTMLScriptElement.prototype) return;
+        var fallback = document.getElementById("openclaw-mount-fallback");
+        if (!fallback) return;
+
+        var title = document.getElementById("openclaw-mount-fallback-title");
+        var summary = document.getElementById("openclaw-mount-fallback-summary");
+        var retry = document.getElementById("openclaw-mount-retry");
+        var wait = document.getElementById("openclaw-mount-wait");
+        if (title) title.textContent = "This browser is not supported";
+        if (summary) {
+          summary.textContent =
+            "The Control UI needs a newer browser engine. Open this page in an up-to-date browser, or update the app's system WebView.";
+        }
+        if (wait) wait.hidden = true;
+        if (retry) retry.hidden = true;
+        // Retry hints do not apply; keep only the troubleshooting link.
+        var hints = fallback.getElementsByTagName("li");
+        for (var i = 0; i < hints.length; i++) {
+          if (!hints[i].getElementsByTagName("a").length) hints[i].hidden = true;
+        }
+        fallback.hidden = false;
+        document.body.classList.add("openclaw-mount-fallback-active");
+      })();
+    </script>
     <script data-cfasync="false">
       (function () {
         var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
         if (!app || !fallback) return;
+        // The unsupported-browser notice above owns engines without module scripts.
+        if (!("noModule" in HTMLScriptElement.prototype)) return;
 
         var panel = fallback.querySelector(".mount-fallback__panel");
         var title = document.getElementById("openclaw-mount-fallback-title");
@@ -618,24 +649,6 @@
         var bootSettled = false;
         var documentLoaded = document.readyState === "complete";
         var recoveryController;
-
-        // Module scripts cannot be polyfilled; without them the app never loads, so
-        // explain that up front instead of waiting for the startup timeout.
-        if (!("noModule" in HTMLScriptElement.prototype)) {
-          title.textContent = "This browser is not supported";
-          setSummary(
-            "The Control UI needs a newer browser engine. Open this page in an up-to-date browser, or update the app's system WebView.",
-          );
-          if (wait) wait.hidden = true;
-          if (retry) retry.hidden = true;
-          // Retry hints do not apply; keep only the troubleshooting link.
-          fallback.querySelectorAll("li").forEach(function (item) {
-            if (!item.querySelector("a")) item.hidden = true;
-          });
-          fallback.hidden = false;
-          document.body.classList.add("openclaw-mount-fallback-active");
-          return;
-        }
 
         // The recovery page cannot import the app's drag helper when its bundle failed.
         fallback.addEventListener("mousedown", function (event) {

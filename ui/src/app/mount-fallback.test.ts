@@ -1,6 +1,7 @@
 // Control UI tests cover mount fallback behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { parse } from "acorn";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const indexHtmlPath = path.resolve(
@@ -54,13 +55,16 @@ function installFallbackShell(
   window.document.head.innerHTML = parsed.head.innerHTML;
   window.document.body.innerHTML = parsed.body.innerHTML;
 
-  const sentinel = Array.from(parsed.querySelectorAll<HTMLScriptElement>("script:not([src])")).find(
-    (script) => script.textContent?.includes("openclaw-mount-fallback"),
-  );
-  if (!sentinel?.textContent) {
+  const fallbackScripts = Array.from(
+    parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
+  ).filter((script) => script.textContent?.includes("openclaw-mount-fallback"));
+  if (fallbackScripts.length === 0) {
     throw new Error("Expected inline mount fallback script in index.html");
   }
-  window.eval(sentinel.textContent);
+  // Run every fallback script in document order, as the browser does.
+  for (const script of fallbackScripts) {
+    window.eval(script.textContent ?? "");
+  }
 }
 
 function requireElementById<T extends HTMLElement>(
@@ -172,6 +176,15 @@ describe("Control UI mount fallback", () => {
     expect(visibleHints.map((item) => item.querySelector("a")?.textContent?.trim())).toEqual([
       "Control UI troubleshooting",
     ]);
+  });
+
+  it("keeps the unsupported-browser notice parseable by engines without module scripts", async () => {
+    const notice = new DOMParser()
+      .parseFromString(await readIndexHtml(), "text/html")
+      .querySelector("script[data-openclaw-unsupported-browser]");
+    expect(notice?.textContent).toContain("This browser is not supported");
+    // Removing noModule here cannot expose a parse failure, so check the syntax itself.
+    expect(() => parse(notice?.textContent ?? "", { ecmaVersion: 5 })).not.toThrow();
   });
 
   it("keeps the fallback visible until the app completes its first render", async () => {
