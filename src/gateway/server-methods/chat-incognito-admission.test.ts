@@ -1,6 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
@@ -14,6 +14,8 @@ import {
   withIncognitoSessionBinding,
 } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import {
   openIncognitoTestActor,
   useIncognitoNoHostSql,
@@ -29,17 +31,26 @@ import { createActiveRun } from "./chat.abort.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const authority = { assertCurrent() {} };
+const cfg: OpenClawConfig = {
+  agents: {
+    defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
+    entries: { main: { runtime: "openclaw" } },
+  },
+};
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
 let client: ReturnType<typeof createOperatorClient>;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "chat-incognito-admission" });
-  setRuntimeConfigSnapshot({});
   client = createOperatorClient({
     profileName: "incognito-operator",
     scopes: ["operator.admin"],
   });
   actor = await openIncognitoTestActor(state.env, authority);
+});
+beforeEach(async () => {
+  setRuntimeConfigSnapshot(cfg);
+  await preparePluginMetadataMachineStateAsync({ env: state.env });
 });
 afterAll(async () => {
   await actor?.close();
@@ -80,7 +91,7 @@ it.each(["unchanged", "append", "rotation"] as const)(
   "chat.send stops only its retained active leaf after %s during preparation",
   async (change) => {
     const session = await create(`stop-${change}`);
-    const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const runId = `active-${change}`;
     const active = createActiveRun(session.canonicalKey, {
       sessionId: session.entry.sessionId,
@@ -214,7 +225,7 @@ it.each(["unchanged", "rotation"] as const)(
     const resume = createDeferred<void>();
     const settled = createDeferred<void>();
     const context = createDirectChatContext({
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       removeChatRun: vi.fn(() => settled.resolve()),
     });
     await withIncognitoSessionActor(actor, async () => {
@@ -307,7 +318,6 @@ it.each(["unchanged", "rotation"] as const)(
               message: expect.objectContaining({
                 role: "user",
                 content: message,
-                steerTargetRunId: activeRunId,
               }),
             }),
           );
@@ -402,7 +412,7 @@ it.each(["settle", "actor-loss"] as const)(
       }),
     } satisfies GatewayRecoveryRuntime;
     const context = createDirectChatContext({
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       recoveryRuntime,
     });
     await withIncognitoSessionBinding({ actor }, async () => {

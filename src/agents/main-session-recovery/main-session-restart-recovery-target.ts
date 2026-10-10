@@ -1,10 +1,12 @@
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils-store-lookup.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -41,6 +43,26 @@ export function resolveRestartRecoveryDispatchTarget(params: {
         resolveAgentIdFromSessionKey(params.sessionKey, storeAgentId ?? LEGACY_IMPLICIT_AGENT_ID),
       sessionKey: params.sessionKey,
     };
+  }
+  const source = captureIncognitoSessionSource({
+    agentId: storeAgentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  if (source) {
+    source.admissionSignal?.throwIfAborted();
+    if ("kind" in source) {
+      source.assertCurrent();
+      return undefined;
+    }
+    source.actor.assertReadable();
+    // The retained actor owns the physical store; routing needs no native row lookup.
+    const target = resolveSessionStoreIdentity({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      agentId: source.actor.agentId,
+    });
+    return { agentId: target.agentId, sessionKey: target.canonicalKey };
   }
   try {
     const target = resolveGatewaySessionStoreTarget({

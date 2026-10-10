@@ -557,6 +557,55 @@ export function prepareQualifiedSessionEntryTarget(
     entry: target.entry,
     readSource: target.readSource,
   };
+  const binding = captureIncognitoSessionBinding({
+    agentId: target.agentId,
+    storePath: qualified.storePath,
+    sessionKey: canonicalKey,
+    env,
+  });
+  if (binding) {
+    const { actor, admissionSignal } = binding;
+    const source = target.readSource;
+    if (
+      !target.entry ||
+      target.storeKey !== canonicalKey ||
+      !source ||
+      source.agentId !== actor.agentId ||
+      source.path !== actor.path ||
+      source.databaseIdentity !== actor.identity.incarnation ||
+      source.databaseBirthtime !== undefined ||
+      readSources.some((candidate) => !isDeepStrictEqual(candidate, source))
+    ) {
+      throw new Error("Incognito qualification requires its captured canonical entry");
+    }
+    // Actor keys are canonical; qualification never probes another store for aliases.
+    const claim = actor.sessions.captureCurrent(canonicalKey);
+    const entry = actor.sessions.readSharing(canonicalKey)?.entry;
+    if (
+      !entry ||
+      entry.sessionId !== target.entry.sessionId ||
+      entry.lifecycleRevision !== target.entry.lifecycleRevision
+    ) {
+      throw new Error("Incognito session generation is no longer current");
+    }
+    let active = true;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("Qualified session target is no longer active");
+      }
+      admissionSignal?.throwIfAborted();
+      actor.assertReadable();
+      claim.assertCurrent();
+    };
+    assertCurrent();
+    return {
+      target: qualified,
+      assertCurrent,
+      release: () => {
+        active = false;
+      },
+    };
+  }
   const sources: ReturnType<typeof retainSessionEntryKeyAbsence>[] = [];
   let active = true;
   const release = () => {
