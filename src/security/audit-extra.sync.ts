@@ -482,8 +482,8 @@ export function collectHooksHardeningFindings(
       severity: "critical",
       title: `Hooks token reuses the Gateway ${password ? "password" : "token"}`,
       detail: password
-        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth."
-        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
+        ? "hooks.token matches gateway.auth password; a stolen hooks token also grants Gateway password access."
+        : "hooks.token matches gateway.auth token; a stolen hooks token also grants Gateway API access.",
       remediation:
         reusedGatewayAuth.source === "override"
           ? "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env."

@@ -552,7 +552,7 @@ function* projectSessionPatchSteps(
         typeof patch.agentRuntime === "string" &&
         splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
       ) {
-        return invalid("agentRuntime requires an explicit canonical provider/model selection");
+        return invalid("agentRuntime requires an explicit provider/model selection using full IDs");
       }
       const runtime = resolveModelRuntimeDirective({
         cfg,
@@ -567,7 +567,7 @@ function* projectSessionPatchSteps(
         typeof patch.agentRuntime === "string" &&
         (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime)
       ) {
-        return invalid("Use a canonical agentRuntime id, or null to follow configured routing");
+        return invalid("Use a full agentRuntime ID, or null to follow configured routing");
       }
       applyModelRuntimeDirective(next, runtime);
       if (selection.profile && isUserModelAuthProfileId(selection.profile)) {

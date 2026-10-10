@@ -167,7 +167,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "wake agentId contradicts the agent that owns sessionKey; pass a single canonical wake target",
+          "wake agentId contradicts the agent that owns sessionKey; pass a single wake target",
         ),
       );
       return;
