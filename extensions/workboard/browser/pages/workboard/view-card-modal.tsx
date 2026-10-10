@@ -199,6 +199,11 @@ export function CardModal(props: WorkboardProps) {
 }
 
 function CardModalContent(props: WorkboardProps) {
+  const initialActiveElement = document.activeElement;
+  const initialReturnFocusTarget =
+    initialActiveElement instanceof HTMLElement && initialActiveElement !== document.body
+      ? initialActiveElement
+      : undefined;
   const [draftRevision, setDraftRevision] = createSignal(0);
   const state = () => {
     void props.revision;
@@ -285,10 +290,11 @@ function CardModalContent(props: WorkboardProps) {
   const draftDialog = (
     <Dialog
       {...{
+        returnFocusTarget: initialReturnFocusTarget,
         label: editing() ? t("workboard.editCard") : t("workboard.newCard"),
         description: editing() ? t("workboard.editCardHelp") : t("workboard.newCardHelp"),
         style:
-          "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px);",
+          "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --wa-color-overlay-modal: rgba(0, 0, 0, 0.32);",
         onCancel: dismissDraft,
       }}
     >
@@ -555,7 +561,8 @@ export function CardDiscardDialog(props: {
       {...{
         label: props.title,
         description: t("workboard.discardDraftHelp"),
-        style: "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none;",
+        style:
+          "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
         onCancel: () => {
           props.onKeepEditing();
           return true;
