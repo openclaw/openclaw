@@ -125,7 +125,7 @@ is on by default. Use `agent`, `tree`, or `self` to narrow visibility.
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
+    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the primary main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting is governed by `tools.agentToAgent`, which is on by default.
     - `self` has no main-session visibility exception. Incognito denial remains absolute. Narrowing visibility to `agent`, `tree`, or `self` blocks ordinary cross-agent access unless a per-agent `tools.agentToAgent.send` rule permits a send-only exception. `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that child exception, so keep explicit `tree` if your workflow relies on it.
@@ -144,7 +144,7 @@ A per-peer `session.dmScope` separates DM context but does not restrict session
 tools. For narrower access, explicitly choose `agent`, `tree`, or `self`, or
 restrict agent pairs with `tools.agentToAgent.allow`. Set
 `tools.agentToAgent.enabled: false` to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. `tree` retains the
-canonical main-session exception; `self` restricts even main to its current session.
+primary main-session exception; `self` restricts even main to its current session.
 
 ## `tools.sessions_spawn`
 

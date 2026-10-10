@@ -130,14 +130,14 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 - `session` (optional; route bindings only): `{ dmScope, groupScope }` overrides session routing for matched peers
 - `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
-**Deterministic match order:**
+**Fixed match order:**
 
 1. `match.peer`
 2. `match.guildId`
 3. `match.teamId`
 4. `match.accountId` (exact, no peer/guild/team)
 5. `match.accountId: "*"` (channel-wide)
-6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding fail closed)
+6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding reject the request)
 
 Within each tier, the first matching `bindings` entry wins.
 

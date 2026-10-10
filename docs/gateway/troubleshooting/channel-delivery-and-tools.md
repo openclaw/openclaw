@@ -62,7 +62,7 @@ Look for:
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
     - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → heartbeat monitor scratch only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → heartbeat monitor scratch only contains blank lines, comments, headings, code fences, or empty checklists, so OpenClaw skips the model call.
     - `heartbeat skipped` with `reason=no-route` → the default `owner` target has no concrete owner in `commands.ownerAllowFrom` or channel `allowFrom`, the owner cannot resolve to a DM, or no channel is configured. Explicit `last` also needs a session conversation route.
     - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
     - `session event wake failed; no wake retry scheduled` → a wake ended with a failure. The error log records its source, intent, agent/session target, wake reason, and error. Inspect that session and fix the reported cause before requesting another wake; the wake scheduler does not replay failed turns, which may already have performed work. Outbound messages already held by the durable delivery queue keep their separate recovery policy.
