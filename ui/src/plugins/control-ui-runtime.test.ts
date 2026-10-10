@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
   createGatewayEvent,
@@ -11,6 +12,93 @@ import { initializeControlUiPlugin } from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 vi.mock("./control-ui-loader.ts", () => ({ initializeControlUiPlugin: vi.fn() }));
+
+it.each([false, true])(
+  "preloads authorized config assets before connection (already published: %s)",
+  async (published) => {
+    const prefix = "/__openclaw__/plugins/control-ui/review/one/";
+    const descriptor = {
+      pluginId: "review",
+      name: "Review",
+      revision: "one",
+      entryUrl: `${prefix}index.js`,
+      styles: [`${prefix}index.css`],
+      imports: [`${prefix}chunk.js`],
+    };
+    let modules = [descriptor];
+    let granted = true;
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          pluginControlUiModules: modules,
+          pluginAssetsRequireAuth: true,
+          pluginFrameGrants: granted
+            ? [
+                {
+                  pluginId: "review",
+                  path: "/__openclaw__/plugins/control-ui/review/",
+                  match: "prefix",
+                },
+              ]
+            : [],
+        }),
+      ),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const context = {
+      config,
+      resourceBasePath: "",
+      gateway: {
+        snapshot: { phase: "connecting" },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const runtime = new ControlUiPluginRuntime(() => context);
+    const links = () => [
+      ...document.head.querySelectorAll<HTMLLinkElement>(`link[href*="${prefix}"]`),
+    ];
+    try {
+      if (published) await config.refresh();
+      runtime.start();
+      if (!published) await config.refresh();
+      const first = links();
+      expect(first.map((link) => [new URL(link.href).pathname, link.rel])).toEqual([
+        [descriptor.entryUrl, "modulepreload"],
+        [descriptor.imports[0], "modulepreload"],
+        [descriptor.styles[0], "preload"],
+      ]);
+      expect(first.find((link) => link.rel === "preload")?.as).toBe("style");
+      expect(runtime.registrations("navigation")).toEqual([]);
+      await config.refresh();
+      expect(links()).toEqual(first);
+      granted = false;
+      await config.refresh();
+      expect(links()).toEqual([]);
+      granted = true;
+      await config.refresh();
+      expect(links()).toHaveLength(3);
+      modules = [{ ...descriptor, imports: ["https://foreign.example/chunk.js"] }];
+      await config.refresh();
+      expect(links()).toEqual([]);
+      expect(runtime.errors).toContainEqual({
+        pluginId: "review",
+        message: "Native plugin assets must be served by this Control UI Gateway.",
+      });
+      modules = [];
+      await config.refresh();
+      expect(links()).toEqual([]);
+      modules = [descriptor];
+      await config.refresh();
+    } finally {
+      runtime.dispose();
+      vi.unstubAllGlobals();
+    }
+    expect(links()).toEqual([]);
+  },
+);
 
 describe("native plugin asset admission", () => {
   it.each([
@@ -119,11 +207,12 @@ describe("native plugin asset admission", () => {
           subscribe: () => () => undefined,
           subscribeEvents: () => () => undefined,
         },
-        config: { refresh },
+        config: { ...createApplicationConfigCapability({ resourceBasePath }), refresh },
       } as unknown as ApplicationContext;
       const runtime = new ControlUiPluginRuntime(() => context);
       try {
         runtime.start();
+        expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 1);
         await runtime.refresh();
         expect(runtime.errors).toEqual(error ? [{ pluginId: "review", message: error }] : []);
         expect(
@@ -138,7 +227,7 @@ describe("native plugin asset admission", () => {
               ]
             : [],
         );
-        expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 1);
+        expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 2);
         expect(initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
         expect(runtime.registrations("pages")).toEqual([]);
         expect(runtime.isLoading("review")).toBe(false);
@@ -200,7 +289,10 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
     const context = {
       gateway,
       resourceBasePath: "",
-      config: { refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }) },
+      config: {
+        ...createApplicationConfigCapability({ resourceBasePath: "" }),
+        refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }),
+      },
     } as unknown as ApplicationContext;
     vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
       const host = createControlUiPluginHost(getContext, runtime, owner);

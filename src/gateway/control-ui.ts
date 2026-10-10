@@ -681,21 +681,29 @@ async function prepareControlUiBootstrapConfig(
     return { config: undefined, requestAuth };
   }
   const config = opts?.config;
-  const resolvedIdentity = config
-    ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-    : undefined;
-  const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
-  const assistantAgentId = resolvedIdentity?.agentId;
-  const avatarProjection =
-    config && resolvedIdentity
-      ? await resolveGatewayAssistantAvatar({
-          cfg: config,
-          identity: resolvedIdentity,
-          httpBasePath: basePath,
-        })
-      : { avatar: identity.avatar, resolution: null };
+  const [assistant, pluginCatalog, devGitBranch] = await Promise.all([
+    (async () => {
+      const resolvedIdentity = config
+        ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
+        : undefined;
+      const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
+      const avatarProjection =
+        config && resolvedIdentity
+          ? await resolveGatewayAssistantAvatar({
+              cfg: config,
+              identity: resolvedIdentity,
+              httpBasePath: basePath,
+            })
+          : { avatar: identity.avatar, resolution: null };
+      return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
+    })(),
+    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+      listControlUiPluginCatalog(),
+    ),
+    resolveDevInstallGitBranch(),
+  ]);
+  const { identity, agentId: assistantAgentId, avatarProjection } = assistant;
   const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
-  const devGitBranch = (await resolveDevInstallGitBranch()) ?? undefined;
   requestAuth.assertCurrent();
   const bootstrapConfig = {
     basePath,
@@ -710,11 +718,12 @@ async function prepareControlUiBootstrapConfig(
       config?.gateway?.controlUi?.root === undefined
         ? (resolveRuntimeServiceBuildId() ?? undefined)
         : undefined,
-    devGitBranch,
+    devGitBranch: devGitBranch ?? undefined,
     ...resolveControlUiBootstrapPresentation(config),
     terminalEnabled,
     cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
     pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
+    pluginControlUiModules: pluginCatalog.plugins,
     pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
       pluginId,
       path: grantPath,
