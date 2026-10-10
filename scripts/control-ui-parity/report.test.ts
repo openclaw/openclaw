@@ -3,6 +3,7 @@ import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
+import { fingerprintFixtures } from "./fixture-fingerprint.ts";
 import { compareCaptures, hash, type Capture } from "./report.ts";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -142,4 +143,22 @@ it("rejects incompatible browser metadata even with identical images", async () 
   b.manifest.browser = "another-browser";
   await writeFile(path.join(b.directory, "manifest.json"), JSON.stringify(b.manifest));
   expect(await compareCaptures(a.directory, b.directory, temporary.make("parity-output-"))).toBe(1);
+});
+
+it("fingerprints resolved fixture changes independently of checkout location", () => {
+  const scenario = (checkout: string, type: string) => ({
+    methodResponses: { "config.schema": { schema: { type } } },
+    nativePlugins: [
+      {
+        pluginId: "workboard",
+        rootDir: path.join(checkout, "extensions/workboard"),
+        source: "browser/index.ts",
+      },
+    ],
+  });
+  const a = path.resolve("fixture-checkout-a");
+  const b = path.resolve("fixture-checkout-b");
+  const fingerprint = fingerprintFixtures([scenario(a, "string")], a);
+  expect(fingerprintFixtures([scenario(b, "string")], b)).toBe(fingerprint);
+  expect(fingerprintFixtures([scenario(a, "integer")], a)).not.toBe(fingerprint);
 });

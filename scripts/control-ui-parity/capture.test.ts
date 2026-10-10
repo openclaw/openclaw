@@ -10,6 +10,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { fingerprintFixtures } from "./fixture-fingerprint.ts";
 import { hash, writeGallery, type Capture } from "./report.ts";
 import { baseScenario, fixedTime, profiles, scenes } from "./scenarios.ts";
 
@@ -54,6 +55,10 @@ suite.define(() => {
       fixtures: hash(
         JSON.stringify({
           fixedTime,
+          resolvedFixtures: fingerprintFixtures(
+            [baseScenario, ...selectedScenes.map((scene) => scene.scenario ?? {})],
+            execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(),
+          ),
           profiles: selectedProfiles,
           scenes: selectedScenes.map((scene) => scene.id),
           // Hash the recipe source, not absolute fixture paths, so two worktrees compare.
@@ -62,6 +67,7 @@ suite.define(() => {
               "capture.test.ts",
               "scenarios.ts",
               "fixtures.ts",
+              "fixture-fingerprint.ts",
               "../../ui/src/test-helpers/control-ui-e2e-screenshot.ts",
             ].map(async (file) => hash(await readFile(new URL(file, import.meta.url)))),
           ),
