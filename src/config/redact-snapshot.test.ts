@@ -192,6 +192,44 @@ describe("redactConfigSnapshot", () => {
     });
     expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
   });
+
+  it.each<{ name: string; hints?: ConfigUiHints }>([
+    { name: "heuristic fallback" },
+    { name: "schema hints", hints: mainSchemaHints },
+  ])("redacts authored env fallback secrets with $name", ({ hints }) => {
+    const parsed = {
+      models: {
+        providers: {
+          openai: { apiKey: "${OPENAI_API_KEY:-synthetic-fallback-secret}" },
+          bare: { apiKey: "${BARE_API_KEY}" },
+          empty: { apiKey: "${EMPTY_API_KEY:-}" },
+        },
+      },
+    };
+    const config = {
+      models: {
+        providers: {
+          openai: { apiKey: "synthetic-env-secret" },
+          bare: { apiKey: "synthetic-bare-secret" },
+          empty: { apiKey: "synthetic-empty-secret" },
+        },
+      },
+    };
+    const result = redactConfigSnapshot(
+      { ...makeSnapshot(config, JSON.stringify(parsed)), parsed },
+      hints,
+    );
+    expect(result.parsed).toEqual({
+      models: {
+        providers: {
+          openai: { apiKey: REDACTED_SENTINEL },
+          bare: { apiKey: "${BARE_API_KEY}" },
+          empty: { apiKey: "${EMPTY_API_KEY:-}" },
+        },
+      },
+    });
+    expect(result.raw).toBeNull();
+  });
 });
 
 describe("generated redaction hints", () => {

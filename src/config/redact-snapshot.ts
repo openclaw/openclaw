@@ -23,6 +23,7 @@ import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const log = createSubsystemLogger("config/redaction");
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
+const ENV_VAR_FALLBACK_PATTERN = /:-[^}]/;
 
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
@@ -33,7 +34,10 @@ function isSensitivePath(path: string): boolean {
 
 function isConcreteSensitiveString(value: string): boolean {
   const trimmed = value.trim();
-  return trimmed !== "" && !ENV_VAR_PLACEHOLDER_PATTERN.test(trimmed);
+  return (
+    trimmed !== "" &&
+    (!ENV_VAR_PLACEHOLDER_PATTERN.test(trimmed) || ENV_VAR_FALLBACK_PATTERN.test(trimmed))
+  );
 }
 
 function isWholeObjectSensitivePath(path: string): boolean {
@@ -308,15 +312,19 @@ export function redactConfigSnapshot(
     };
   }
   const context = createRedactionContext(uiHints);
-  // Raw replacement uses only runtime-config secrets. Other projections can hold
-  // different values, so their redaction must not contribute to this collection.
   const sensitiveValues: string[] = [];
+  const parsedSensitiveValues: string[] = [];
   const redactedConfig = redactObject(snapshot.config, context, sensitiveValues);
-  const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, context) : snapshot.parsed;
+  const redactedParsed = snapshot.parsed
+    ? redactObject(snapshot.parsed, context, parsedSensitiveValues)
+    : snapshot.parsed;
   let redactedRaw = snapshot.raw
     ? replaceSensitiveValuesInRaw({
         raw: snapshot.raw,
-        sensitiveValues,
+        sensitiveValues: [
+          ...sensitiveValues,
+          ...parsedSensitiveValues.filter((value) => containsEnvVarReference(value)),
+        ],
         redactedSentinel: REDACTED_SENTINEL,
       })
     : null;
