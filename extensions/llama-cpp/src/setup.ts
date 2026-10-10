@@ -38,6 +38,7 @@ import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
+  resolveLlamaCppModelDownloadSize,
   type ManagedLlamaServer,
 } from "./managed-server.js";
 import { recommendLlamaCppModel, resolveLlamaCppModelCandidates } from "./model-catalog.js";
@@ -80,15 +81,11 @@ function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): stri
 
 function configuredCandidates(
   config: ProviderAppGuidedSetupContext["config"],
-  scope: "detection" | "setup",
 ): LlamaCppChatCandidate[] {
-  const existing = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const managedExisting = existing?.localService ? existing : undefined;
-  const provider = buildLlamaCppProviderConfig({
-    existing: managedExisting,
-    // Detection reports persisted inventory; interactive setup may still offer the default.
-    ...(managedExisting && scope === "detection" ? { modelInventory: managedExisting.models } : {}),
-  });
+  const provider = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (!provider?.localService) {
+    return [];
+  }
   const primary = readPrimaryModel(config);
   const primaryId = primary?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
     ? primary.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
@@ -193,7 +190,7 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   ) {
     return null;
   }
-  for (const candidate of configuredCandidates(ctx.config, "detection")) {
+  for (const candidate of configuredCandidates(ctx.config)) {
     if (await resolveCachedCandidate(candidate, ctx.signal)) {
       return {
         modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
@@ -281,6 +278,34 @@ async function resolveSetupPlan(
 
   const provider = candidate?.provider ?? buildLlamaCppProviderConfig();
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
+  if (candidate) {
+    const source = resolveLlamaCppModelSource(candidate.model);
+    let size: number | undefined;
+    try {
+      if (path.isAbsolute(source) || !/^[a-z][a-z\d+.-]*:/iu.test(source)) {
+        const cachedPath = await ensureLlamaCppModel({
+          source,
+          cacheDir,
+          download: false,
+          signal: ctx.signal,
+        });
+        return { kind: "chat", candidate, cachedPath };
+      }
+      size = await resolveLlamaCppModelDownloadSize(source, cacheDir, ctx.signal);
+    } catch (error) {
+      ctx.signal?.throwIfAborted();
+      await ctx.prompter.note(
+        `Cannot use configured model ${candidate.model.name}: ${error instanceof Error ? error.message : String(error)} Check params.modelPath and retry llama.cpp setup.`,
+        "Setup skipped",
+      );
+      return undefined;
+    }
+    const consent = await ctx.prompter.confirm({
+      message: `${runtimeNote ? `${runtimeNote}\n` : ""}Download ${candidate.model.name} (${size ? `${(size / BYTES_PER_GB).toFixed(1)} GB` : "size unknown"}), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime on Gateway host ${os.hostname()}, then use this model?`,
+      initialValue: false,
+    });
+    return consent ? { kind: "chat", candidate } : undefined;
+  }
   const cachedModels = new Map<string, string>();
   // A cancelled activation may leave a complete download without configured inventory.
   // Credit only verified artifacts, before charging disk space for a retry.
@@ -389,7 +414,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     asset = selectLlamaServerAsset(hardware.platform, hardware.arch, { kind: "cpu" });
     runtimeNote = `${error instanceof Error ? error.message : String(error)} This recommendation uses CPU execution.`;
   }
-  const candidates = configuredCandidates(ctx.config, "setup");
+  const candidates = configuredCandidates(ctx.config);
   const plan = await resolveSetupPlan(
     ctx,
     candidates,
