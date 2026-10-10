@@ -7,7 +7,6 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -144,7 +143,6 @@ it.for(["lifecycle", "logical source"] as const)(
           writerReady.resolve();
           await releaseWriter.promise;
         });
-        const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
         await writerReady.promise;
         let sql: ReturnType<typeof observeHostDataSql> | undefined;
         try {
@@ -188,14 +186,10 @@ it.for(["lifecycle", "logical source"] as const)(
               }),
             ).toMatchObject({ pendingFinalDelivery: { intentId: "pending-final" } });
           } else {
-            peer
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'replacement') WHERE session_key = ?",
-              )
-              .run(sessionKey);
-            peer
-              .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-              .run(sessionKey);
+            writeSessionEntry(database, sessionKey, {
+              ...entry,
+              lifecycleRevision: "replacement",
+            });
           }
           sql = observeHostDataSql();
           releaseWriter.resolve();
@@ -218,7 +212,8 @@ it.for(["lifecycle", "logical source"] as const)(
           await waitForSessionMaintenance(sessionKey);
           sql?.restore();
           reader.mockRestore();
-          peer.close();
+          memory.runMemoryFlushIfNeeded.mockClear();
+          memory.runSessionCompactionIfNeeded.mockClear();
         }
       },
     );
