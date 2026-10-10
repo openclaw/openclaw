@@ -313,11 +313,6 @@ export function resolveClaudeCliPromptTextCandidates(
 const SYSTEM_EVENT_BLOCK =
   /System: \[(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]\n]*|unknown-time)\] [^\n]*\n+(?:System: [^\n]*\n+)*/u
     .source;
-// At the very start, or right after OpenClaw's own fenced context block.
-const LEADING_SYSTEM_EVENTS = new RegExp(
-  `^((?:${/(?:Conversation info: )?⟦openclaw:ctx⟧\n```json\n[^\n]*\n```\n\n/u.source})?)${SYSTEM_EVENT_BLOCK}(?=\\S)`,
-  "u",
-);
 const INTERNAL_PROMPT_PREFIX = new RegExp(
   `^(?:${SYSTEM_EVENT_BLOCK})?${/(?:Note: The previous agent run was interrupted\. [^\n]*\n\n)?/u.source}`,
   "u",
@@ -325,7 +320,7 @@ const INTERNAL_PROMPT_PREFIX = new RegExp(
 
 /** Removes the resume note and queued system events OpenClaw put in front of a user turn. */
 export function stripClaudeCliGeneratedUserPrefixes(text: string): string {
-  return stripCliSessionDriftNote(text).replace(LEADING_SYSTEM_EVENTS, "$1");
+  return stripCliPromptDecorations(text);
 }
 
 /**
