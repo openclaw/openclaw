@@ -144,7 +144,7 @@ profiling results to this inventory.
 Source-checkout campaign tools can import `resolveResourceGatewayRuntime` and
 `runResourceGatewayCase` from `scripts/e2e/kitchen-sink-rpc-walk.mts`. Kitchen Sink
 uses this same host lifecycle. Run from one frozen, built OpenClaw package root
-per process; this is a testing seam, not a published plugin SDK API.
+per process; this is a testing interface, not a published plugin SDK API.
 
 The preparation callback receives an isolated config path, loopback port, test
 token and a local-archive installer that verifies the supplied SHA-256. Enable

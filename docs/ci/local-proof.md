@@ -134,9 +134,9 @@ pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.jso
 
 Native locale checks remain strict locally. With `CI=true` or `CI=1`, the native
 check warns about obsolete translation IDs, Android generated rows, and Apple catalog
-rows awaiting the serialized locale refresh. Android warnings require canonical, unreferenced,
+rows awaiting the serialized locale refresh. Android warnings require standard, unreferenced,
 noninterpolated obsolete rows whose removal leaves every other byte unchanged.
-Apple warnings require canonical plain generator rows absent from the active
+Apple warnings require standard plain generator rows absent from the active
 inventory; removing those rows must leave the exact generated catalog, including
 metadata. Obsolete rows still need valid dictionary and string-unit structure for
 Xcode, but do not need active locales or translated/nonempty copy. Unsupported
@@ -329,7 +329,7 @@ expressions, steps, and scripts through YAML anchors and aliases.
 
 ### Assertion inventory reports
 
-`pnpm check:assertion-safety --report <commit-or-ref>` writes a deterministic JSON
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a consistently ordered JSON
 inventory to stdout without changing the assertion baseline. The ref selects the
 committed source and baseline, including files omitted by a sparse checkout.
 Ordinary ratchet checks still inspect worktree or staged content; their `--base`
@@ -436,7 +436,7 @@ They use a newly warmed lease dedicated to that untrusted source, never a
 trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and stop unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and compare remote `git rev-parse HEAD` to the full
@@ -485,23 +485,23 @@ The mode does not replace the default hosted aggregate gate. After the exact
 prep head is pushed, the wrapper synchronously dispatches the protected-main
 publisher. That trusted workflow checksum-installs Crabbox v0.46, resolves its
 service principal through `/v1/whoami`, then runs sanitized brokered AWS with
-`umask 022`, the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
-a fail-closed PR-derived test plan. The existing changed-test owner evaluates
+`umask 022`, the standard untrusted bootstrap, `pnpm build`, `pnpm check`, and
+a PR-derived test plan that rejects incomplete selection. The existing changed-test owner evaluates
 every executable changed path independently and must resolve each one to
 concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
-The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
-are bound into the canonical command. The publisher streams a launcher through
+The exact PR base SHA, head SHA, bootstrap hash, and stable plan digest
+are bound into the prepared command. The publisher streams a launcher through
 Crabbox's `--script-stdin`. Short broker arguments bind the head SHA and the
-bootstrap, canonical command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
+bootstrap, prepared command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
 and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates its newly created authenticated broker
 run under the same service token, ordered complete events, independently rebuilt
-canonical command and launcher upload hash, and
+prepared command and launcher upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
 base of its immutable protected-main workflow SHA and adds that workflow SHA to
@@ -509,7 +509,7 @@ the strict check summary. Before and after the remote run, it proves that a
 candidate live `main` is identical to or descended from that workflow SHA, then
 rereads the ref and requires the candidate to remain unchanged. A descendant
 advance during the long remote run is allowed; movement inside either
-comparison-and-reread window fails closed.
+comparison-and-reread window stops publication.
 Retained broker logs are validated when non-empty but are optional because
 released Crabbox v0.46 can report zero retained log bytes after a successful
 run. Only after the publisher and exact-head check succeed does the local

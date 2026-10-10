@@ -15,12 +15,12 @@ when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
 event are unchanged. For each logical job, the newest observed attempt wins,
 including a newer failure; a job absent from a newer attempt carries forward
 from the last attempt that included it. Duplicate job names within one attempt,
-missing attempts, or provenance drift fail closed. During GitHub's rerun-attempt
+missing attempts, or provenance drift are rejected. During GitHub's rerun-attempt
 materialization window, `status` and `continue` re-read duplicate identities in
 the newest retry attempt for up to 60 seconds. The run identity and attempt stay
 pinned throughout; request timeouts, pagination, and transport backoff share
 the retry deadline. Persistent duplicates, duplicates in an earlier attempt, and
-changed identities still fail closed; ambiguous rows never become evidence.
+changed identities are still rejected; ambiguous rows never become evidence.
 
 Inspect or continue an existing parent:
 
@@ -108,7 +108,7 @@ workflow. Final verification must pass before recovery is reported successful.
 Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
-expires. It never repeats the mutation, and provenance drift fails closed.
+expires. It never repeats the mutation, and provenance drift stops the operation.
 `frv status` leads with qualification, evidence acceptance, diagnostic drain,
 workload failures, and the next supported command. A passing GitHub badge or green
 child list is not an accepted seal: terminal successful parents are checked by the
@@ -327,6 +327,6 @@ mapping remains authoritative even when `main` advances. The suffix records
 tag-creation provenance, not the current parent run id. Publication must re-read
 that exact tag and revalidate the exact parent run tuple immediately before each
 core or plugin npm publish or dist-tag mutation. A missing, moved, annotated, or
-wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
+wrong-SHA tag, parent mismatch, or disallowed parent state blocks publication. Other
 privileged writers require their dependent enforcement changes before the
 protected-tag publication route is globally complete.
