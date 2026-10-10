@@ -61,9 +61,9 @@ function mockOllama(modelId: string, thinking: unknown) {
       const result = await ollamaProviderDiscovery.catalog.run({
         config: { models: { providers: { ollama: { baseUrl, api, models: [] } } } },
         agentDir: "/unused",
-        env: {},
+        env: { OLLAMA_API_KEY: "ollama-local" },
         resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
-        resolveProviderAuth: () => ({ apiKey: "ollama-local", mode: "api_key", source: "test" }),
+        resolveProviderAuth: () => ({ apiKey: "ollama-local", mode: "api_key", source: "env" }),
       });
       expect(result?.outcomes).toEqual([{ provider: "ollama", status: "ready" }]);
       const provider = expectDefined(

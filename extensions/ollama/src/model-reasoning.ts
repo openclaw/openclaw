@@ -100,10 +100,9 @@ const OLLAMA_CLOUD_THINKING_FLOOR_MODEL_IDS = new Set(["glm-5.3", "glm-5.3-flash
 // configured values, agent runtime levels, and one-shot completions all get the floor.
 export function applyOllamaThinkingFloor(
   payload: unknown,
-  model: Pick<Model, "id" | "reasoning" | "thinkingLevelMap">,
+  model: Pick<Model, "id" | "thinkingLevelMap">,
 ): unknown {
   if (
-    !model.reasoning ||
     typeof payload !== "object" ||
     payload === null ||
     !("think" in payload) ||

@@ -168,7 +168,7 @@ sidebarTitle: "Advanced"
     and `xhigh` receives `xhigh` for High and Maximum. If the model cannot
     disable thinking, Off uses its lowest supported tier. OpenClaw keeps its
     existing Off default rather than adopting `thinking.default`. Discovery
-    refreshes this metadata with the model catalog; turns do not fetch it again.
+    caches these mappings with model metadata; turns do not fetch them again.
 
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
@@ -199,10 +199,11 @@ sidebarTitle: "Advanced"
     Per-model `params.think`/`params.thinking` can disable or force API
     thinking for a specific model. OpenClaw preserves that explicit config
     when the active run only has the implicit `off` default; a non-off
-    runtime command such as `/think medium` still overrides it. A truthy
-    thinking request is never sent to a model explicitly marked
-    `reasoning: false`. Models that cannot disable thinking use their lowest
-    supported tier for a configured `false` as well.
+    runtime command such as `/think medium` still overrides it. A model marked
+    `reasoning: false` suppresses enabled runtime selections. However, a
+    mandatory-thinking model still uses its lowest supported tier for Off or a
+    configured `false`, keeping reasoning out of the answer even when its
+    visibility is disabled.
 
   </Accordion>
 

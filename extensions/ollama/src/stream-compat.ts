@@ -127,18 +127,18 @@ function normalizeOllamaThinkValue(
   nativeMax: boolean,
   model?: ProviderRuntimeModel,
 ): OllamaThinkValue | undefined {
-  const level = value === false ? "off" : value === "adaptive" ? "high" : value;
-  const mapped = readOllamaThinkingMapValue(
-    Object.entries(model?.thinkingLevelMap ?? {}).find(([key]) => key === level)?.[1],
-  );
-  if (mapped !== undefined) {
-    return mapped;
-  }
   if (typeof value === "boolean") {
     return value;
   }
   if (value === "off") {
     return false;
+  }
+  const level = value === "adaptive" ? "high" : value;
+  const mapped = readOllamaThinkingMapValue(
+    Object.entries(model?.thinkingLevelMap ?? {}).find(([key]) => key === level)?.[1],
+  );
+  if (mapped !== undefined) {
+    return mapped;
   }
   if (value === "low" || value === "medium" || value === "high") {
     return value;
@@ -152,7 +152,7 @@ function normalizeOllamaThinkValue(
     return "low";
   }
   if (value === "xhigh" || value === "adaptive") {
-    // These OpenClaw-only tiers are not advertised by Ollama; keep their established high mapping.
+    // Without discovered tiers, preserve the legacy high mapping.
     return "high";
   }
   return undefined;
