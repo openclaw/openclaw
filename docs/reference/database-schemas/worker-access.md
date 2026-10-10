@@ -90,7 +90,12 @@ restore prior facts. Native settlement and result delivery remain separate:
 retained commit evidence survives a lost reply, while missing or conflicting
 evidence stays unknown. A confirmed identity mutation still notifies lifecycle
 observers when native settlement is unknown; retained read facts remain fenced.
-Unknown writes are never automatically repeated.
+Unknown writes are never automatically repeated. A failed session patch with confirmed
+native completion and explicitly absent commit evidence is a rollback, not an
+unknown write. Maintenance conflicts retain their typed identity across the
+worker boundary so reply initialization can refresh through its existing bounded
+conflict retry. Missing settlement or mismatched receipts remain unknown. This
+changes no schema, stored bytes, retention, or update behavior.
 
 This is a scoped completeness contract, not global writer certification. Conversation
 and plugin-state writers, approvals,
