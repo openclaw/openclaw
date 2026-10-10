@@ -1,5 +1,6 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -44,6 +45,7 @@ function select(container: Element, index: number, value: string) {
   const input = expectDefined(container.querySelectorAll("select")[index], "Build selection");
   input.value = value;
   input.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
 }
 
 async function openBuild(snapshots: Element) {

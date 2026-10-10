@@ -2835,7 +2835,6 @@ ui/src/pages/devices/devices-page.ts	1
 ui/src/pages/devices/view-exec-approvals.ts	4
 ui/src/pages/devices/view.ts	5
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	2
 ui/src/pages/model-providers/view.ts	2
 ui/src/pages/model-setup/provider-picker.ts	2
@@ -2853,4 +2852,4 @@ ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
-ui/src/pages/worktrees/worktrees-page.ts	2
+ui/src/pages/worktrees/worktrees-model.ts	1

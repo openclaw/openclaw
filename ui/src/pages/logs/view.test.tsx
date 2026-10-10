@@ -1,13 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { render as mountSolid } from "@solidjs/web";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import type { LogLevel } from "./log-lines.ts";
-import { renderLogs } from "./view.ts";
+import { LogsView, type LogsProps } from "./view.tsx";
 
-type LogsProps = Parameters<typeof renderLogs>[0];
+const views = new Map<Element, () => void>();
+function renderView(props: LogsProps, container: HTMLDivElement) {
+  views.get(container)?.();
+  views.set(
+    container,
+    mountSolid(() => <LogsView {...props} />, container),
+  );
+  flush();
+}
 
 function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) {
   return {
@@ -82,12 +91,16 @@ async function useTestPortugueseLogsLabels() {
 }
 
 afterEach(async () => {
+  for (const dispose of views.values()) {
+    dispose();
+  }
+  views.clear();
   vi.restoreAllMocks();
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
 });
 
-describe("renderLogs", () => {
+describe("LogsView", () => {
   it("bounds time formatting setup per render while preserving localized timestamps", async () => {
     const container = document.createElement("div");
     const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
@@ -114,7 +127,7 @@ describe("renderLogs", () => {
       ];
       timeCalls.mockClear();
       formatterSetups.mockClear();
-      render(renderLogs(props), container);
+      renderView(props, container);
       expect(Array.from(container.querySelectorAll(".log-time"), (row) => row.textContent)).toEqual(
         expected,
       );
@@ -128,7 +141,7 @@ describe("renderLogs", () => {
   it("does not claim the log is empty before the initial load completes", () => {
     const container = document.createElement("div");
 
-    render(renderLogs(createProps({ loading: true, entries: [] })), container);
+    renderView(createProps({ loading: true, entries: [] }), container);
 
     expect(container.textContent).not.toContain("No log entries.");
     expect(container.querySelector('[role="status"]')).not.toBeNull();
@@ -137,7 +150,7 @@ describe("renderLogs", () => {
   it("does not show loading when no initial request is pending", () => {
     const container = document.createElement("div");
 
-    render(renderLogs(createProps({ loading: false, entries: [] })), container);
+    renderView(createProps({ loading: false, entries: [] }), container);
 
     expect(container.textContent).not.toContain("No log entries.");
     expect(container.querySelector('[role="status"]')).toBeNull();
@@ -146,18 +159,16 @@ describe("renderLogs", () => {
   it("disables refresh actions while the gateway cannot accept them", () => {
     const container = document.createElement("div");
 
-    render(
-      renderLogs(
-        createProps({
-          refreshDisabled: true,
-          status: {
-            error: "logs unavailable",
-            hasLoaded: false,
-            stale: false,
-            awaitingGateway: false,
-          },
-        }),
-      ),
+    renderView(
+      createProps({
+        refreshDisabled: true,
+        status: {
+          error: "logs unavailable",
+          hasLoaded: false,
+          stale: false,
+          awaitingGateway: false,
+        },
+      }),
       container,
     );
 
@@ -177,7 +188,7 @@ describe("renderLogs", () => {
       const onExport = vi.fn();
       const container = document.createElement("div");
 
-      render(renderLogs(createProps({ filterText, onExport })), container);
+      renderView(createProps({ filterText, onExport }), container);
       buttonByText(container, buttonText).click();
 
       expect(onExport).toHaveBeenCalledWith(
@@ -190,17 +201,15 @@ describe("renderLogs", () => {
   it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
     const container = document.createElement("div");
 
-    render(
-      renderLogs(
-        createProps({
-          status: {
-            error: "logs unavailable",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
-          },
-        }),
-      ),
+    renderView(
+      createProps({
+        status: {
+          error: "logs unavailable",
+          hasLoaded: true,
+          stale: true,
+          awaitingGateway: false,
+        },
+      }),
       container,
     );
 

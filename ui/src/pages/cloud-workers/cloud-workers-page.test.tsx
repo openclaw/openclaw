@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { render as mountSolid } from "@solidjs/web";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   validateConfigPatchParams,
@@ -13,11 +15,12 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import "./cloud-workers-page.ts";
+import { CloudWorkersPage } from "./cloud-workers-page.tsx";
 
+// mock-isolation: Replace the imperative dialog so confirmations remain deterministic.
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 function actionButton(container: Element, label: string): HTMLButtonElement {
@@ -153,10 +156,20 @@ describe("Cloud Workers mutation requests", () => {
         runtimeConfig,
         navigate: vi.fn(),
       } as unknown as ApplicationContext;
-      const provider = createApplicationContextProvider(context);
-      const page = document.createElement("openclaw-cloud-workers-page");
-      provider.append(page);
-      document.body.append(provider);
+      const container = document.createElement("div");
+      document.body.append(container);
+      const dispose = mountSolid(
+        () => (
+          <ApplicationProvider value={context}>
+            <CloudWorkersPage />
+          </ApplicationProvider>
+        ),
+        container,
+      );
+      const page = expectDefined(
+        container.querySelector("openclaw-cloud-workers-page"),
+        "Cloud workers page",
+      );
       try {
         await waitForFast(() => {
           const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
@@ -174,8 +187,10 @@ describe("Cloud Workers mutation requests", () => {
         if (action === "delete") {
           await waitForFast(() => expect(actionButton(row, "Delete").disabled).toBe(false));
           actionButton(row, "Delete").click();
+          flush();
         } else {
           actionButton(row, "Edit").click();
+          flush();
           await waitForFast(() => expect(page.querySelector("textarea")).not.toBeNull());
           const operatingSystem = page.querySelector<HTMLSelectElement>(
             'select[aria-label="Operating system"]',
@@ -207,12 +222,15 @@ describe("Cloud Workers mutation requests", () => {
             }
             select.value = expectDefined(target, "Selected OS");
             select.dispatchEvent(new Event("change", { bubbles: true }));
+            flush();
           }
           const setup = expectDefined(page.querySelector("textarea"), "Setup editor");
           setup.value = "";
           setup.dispatchEvent(new Event("input", { bubbles: true }));
+          flush();
           await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
           actionButton(page, "Save").click();
+          flush();
           await waitForFast(() =>
             expect(page.textContent).toContain(
               "Enter a setup command or clear the setup environment names.",
@@ -226,11 +244,14 @@ describe("Cloud Workers mutation requests", () => {
           expect(setupEnv.value).toBe("QA_WORKER_FLAG");
           setupEnv.value = "";
           setupEnv.dispatchEvent(new Event("input", { bubbles: true }));
+          flush();
           await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
           actionButton(page, "Save").click();
+          flush();
         }
         await waitForFast(() => expect(patches).toHaveLength(1));
         await runtimeConfig.refresh();
+        flush();
         await waitForFast(() => {
           const retainedRow = [...page.querySelectorAll(".settings-row")].find(
             (entry) => entry.querySelector("code")?.textContent === "retained",
@@ -289,6 +310,7 @@ describe("Cloud Workers mutation requests", () => {
             expect(savedRow.textContent).not.toContain("Operating system:");
           }
           actionButton(savedRow, "Edit").click();
+          flush();
           await waitForFast(() => expect(page.querySelector("textarea")).not.toBeNull());
           const savedSelect = page.querySelector<HTMLSelectElement>(
             'select[aria-label="Operating system"]',
@@ -299,13 +321,16 @@ describe("Cloud Workers mutation requests", () => {
             expect(savedSelect).toBeNull();
           }
           actionButton(page, "Cancel").click();
+          flush();
           actionButton(page, "Add profile").click();
+          flush();
           await waitForFast(() =>
             expect(page.querySelector('input[aria-label="Profile ID"]')).not.toBeNull(),
           );
           expect(page.querySelector('select[aria-label="Operating system"]')).toBeNull();
         } else {
           gatewayHarness.publish(false);
+          flush();
           await waitForFast(() => {
             const retainedRow = [...page.querySelectorAll(".settings-row")].find(
               (entry) => entry.querySelector("code")?.textContent === "retained",
@@ -314,7 +339,8 @@ describe("Cloud Workers mutation requests", () => {
           });
         }
       } finally {
-        provider.remove();
+        dispose();
+        container.remove();
         runtimeConfig.dispose();
       }
     },
