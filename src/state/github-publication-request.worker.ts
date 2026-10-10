@@ -72,7 +72,6 @@ function assertRequestedSource(
               : input.row.session_lifecycle_revision,
         };
   if (
-    selector.purpose === "retire" ||
     selector.sessionId !== session.sessionId ||
     selector.sessionKey !== session.sessionKey ||
     selector.agentId !== session.agentId ||

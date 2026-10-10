@@ -104,13 +104,8 @@ export function readGitHubPublicationSourceFacts(
       selector.repositoryWorkspaceId,
     );
   }
-  const current = isGitHubPublicationSourceCurrent(selector, facts);
-  if (selector.purpose === "retire" ? current : !current) {
-    throw new Error(
-      selector.purpose === "retire"
-        ? "GitHub publication source is still current."
-        : "GitHub publication session changed.",
-    );
+  if (!isGitHubPublicationSourceCurrent(selector, facts)) {
+    throw new Error("GitHub publication session changed.");
   }
   if (selector.profileId) {
     const identity = selectUserProfileIdentityInDatabase(stateDb, selector.profileId);

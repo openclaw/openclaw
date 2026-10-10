@@ -111,6 +111,11 @@ request another host grant for each bookkeeping commit. This grants no authority
 for another push or pull request. New external effects always require current
 caller and source authority at the point of effect.
 
+Checkpoint-preparation failure and stale-request retirement also record outcomes
+without source reservations. A checkpoint becoming available or a session being
+restored after the check may require a new publication request; the original
+content and recorded GitHub effects remain intact.
+
 The deprecated methods retain their released signatures and completion timing;
 synchronous mutations still commit before returning. Actual legacy use emits one
 warning per plugin and the `github-publication` family per Gateway process,
