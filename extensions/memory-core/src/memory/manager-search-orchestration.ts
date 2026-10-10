@@ -40,6 +40,7 @@ const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
+type VectorSearchHit = MemoryRetrievalResult & { id: string };
 
 export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
   private readonly sessionWarm = new Set<string>();
@@ -406,26 +407,20 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (formatUpgradePendingKeywordOnly(effectiveIdentity)) {
         opts?.onDebug?.({ backend: "builtin", effectiveMode: "keyword-only" });
       }
-      const handleRetrievalError = (kind: "FTS keyword" | "vector", error: unknown): [] => {
-        opts?.signal?.throwIfAborted();
-        if (error instanceof WorkerTaskError && error.code === "overloaded") {
-          throw error;
-        }
-        log.warn(`memory search: ${kind} query failed: ${formatErrorMessage(error)}`);
-        return [];
-      };
       const loadKeywordResults = async () => {
         const initialResult = preparedKeyword;
         preparedKeyword = undefined;
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available
-            ? await this.searchKeywordWithFallback(
+            ? await this.searchKeyword(
                 normalizedQuery,
                 candidates,
                 keywordOptions,
                 sourceFilterList,
                 initialResult,
-              ).catch((error: unknown) => handleRetrievalError("FTS keyword", error))
+              ).catch((error: unknown) =>
+                this.handleRetrievalError("FTS keyword", error, opts?.signal),
+              )
             : [];
         if (!keywordOnly && opts?.onPartialResults) {
           const memoryResults = results.filter((entry) => entry.source === "memory");
@@ -509,16 +504,21 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         }
       }
       const hasVector = queryVec.some((v) => v !== 0);
-      const vectorResults = hasVector
+      const vector = hasVector
         ? await this.searchVector(
             queryVec,
             candidates,
             sourceFilterList,
             vectorProviderIdentity,
             indexState,
+            keywordResults.map((entry) => entry.id),
             opts?.signal,
-          ).catch((error: unknown) => handleRetrievalError("vector", error))
-        : [];
+          ).catch((error: unknown) => ({
+            results: this.handleRetrievalError("vector", error, opts?.signal),
+            candidates: [],
+          }))
+        : { results: [], candidates: [] };
+      const vectorResults = vector.results;
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
         const decayed = await applyTemporalDecayToHybridResults({
@@ -568,6 +568,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       return selectHybridSearchResults({
         merged,
         keyword: keywordResults,
+        vectorCandidates: vector.candidates,
         maxResults,
         minScore,
       });
@@ -596,14 +597,28 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     );
   }
 
+  private handleRetrievalError(
+    kind: "FTS keyword" | "vector",
+    error: unknown,
+    signal?: AbortSignal,
+  ): [] {
+    signal?.throwIfAborted();
+    if (error instanceof WorkerTaskError && error.code === "overloaded") {
+      throw error;
+    }
+    log.warn(`memory search: ${kind} query failed: ${formatErrorMessage(error)}`);
+    return [];
+  }
+
   private async searchVector(
     queryVec: number[],
     limit: number,
     sourceFilterList: MemorySource[],
     providerIdentity: { model: string; aliases: string[] },
     indexState: MemoryRetrievalIndexState,
+    keywordCandidateIds: string[],
     signal?: AbortSignal,
-  ): Promise<Array<MemoryRetrievalResult & { id: string }>> {
+  ): Promise<{ results: VectorSearchHit[]; candidates: VectorSearchHit[] }> {
     const query = {
       providerModel: providerIdentity.model,
       providerModelAliases: providerIdentity.aliases,
@@ -611,6 +626,17 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
     };
+    const readVectorRows = (candidateIds?: string[]) =>
+      runMemoryVectorFallback(
+        { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+        {
+          ...query,
+          candidateIds,
+          limit: candidateIds?.length ?? limit,
+          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+        },
+        signal,
+      );
     const results = await searchVector({
       vectorTable: VECTOR_TABLE,
       ...query,
@@ -631,18 +657,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           (indexState.meta?.vectorDims === undefined || indexState.meta.vectorDims === dimensions)
         );
       },
-      runFallback: () =>
-        runMemoryVectorFallback(
-          {
-            agentId: this.agentId,
-            databasePath: resolveUserPath(this.settings.store.databasePath),
-          },
-          {
-            ...query,
-            sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
-          },
-          signal,
-        ),
+      runFallback: readVectorRows,
       runVectorKnn: async (request, knnSignal) => {
         const response = await runVectorKnnInSubprocess({
           databasePath: resolveUserPath(this.settings.store.databasePath),
@@ -660,6 +675,18 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       },
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
     });
-    return this.attachRecallMetadata(results, signal);
+    // Keyword candidates outside the vector window still need their stored
+    // similarity; treating an unqueried vector as zero loses rare-term answers.
+    const candidates = [...results];
+    const scoredIds = new Set(candidates.map((entry) => entry.id));
+    const missingIds = keywordCandidateIds.filter((id) => !scoredIds.has(id));
+    if (missingIds.length > 0) {
+      results.push(
+        ...(await readVectorRows(missingIds).catch((error: unknown) =>
+          this.handleRetrievalError("vector", error, signal),
+        )),
+      );
+    }
+    return { results: await this.attachRecallMetadata(results, signal), candidates };
   }
 }

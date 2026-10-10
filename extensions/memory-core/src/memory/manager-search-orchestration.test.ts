@@ -383,7 +383,7 @@ describe("memory index", () => {
     }
   });
 
-  it("supplements thin strict FTS results for conversational queries", async () => {
+  it("keeps strict keyword hits without expanding thin conversational results", async () => {
     const cases = [
       {
         query: "that thing we discussed about the API",
@@ -411,19 +411,20 @@ describe("memory index", () => {
       }),
     );
     await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as EmbeddingProvider;
-    const embedSpy = vi.spyOn(provider, "embed");
+    const keywordSpy = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
 
-    for (const entry of cases) {
-      const results = await manager.search(entry.query, { maxResults: 6 });
-      expect(results.some((result) => result.path.endsWith(`memory/${entry.recallFile}`))).toBe(
-        true,
-      );
+    try {
+      for (const entry of cases) {
+        const results = await manager.search(entry.query, { maxResults: 6, lexicalOnly: true });
+        expect(results.map((result) => result.path)).toEqual([`memory/${entry.strictFile}`]);
+      }
+      expect(keywordSpy).toHaveBeenCalledTimes(cases.length);
+    } finally {
+      keywordSpy.mockRestore();
     }
-    expect(embedSpy).toHaveBeenCalledTimes(cases.length);
   });
 
-  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+  it("keeps zero-hit keyword fallback in one provider-backed worker request", async () => {
     const cfg = createCfg({
       minScore: 0.35,
     });
@@ -445,8 +446,7 @@ describe("memory index", () => {
       expect(partialResults).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
       );
-      expect(keywordSpy.mock.calls.length).toBeGreaterThan(1);
-      expect(keywordSpy.mock.calls.length).toBeLessThanOrEqual(7);
+      expect(keywordSpy).toHaveBeenCalledTimes(1);
     } finally {
       keywordSpy.mockRestore();
     }

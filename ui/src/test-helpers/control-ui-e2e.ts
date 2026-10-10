@@ -19,6 +19,7 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../api/types.ts";
+import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
@@ -228,31 +229,21 @@ export async function assertSessionSectionCountAlignment(
 
 export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
   const expectedPathname = await page.evaluate((sessionPath) => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: {
-        context: {
-          basePath: string;
-          navigate: (routeId: string, options: { pathname: string }) => void;
-        };
-      };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
+    const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
+    if (!app) {
+      throw new Error("Control UI readiness hook is unavailable");
     }
-    const pathname = `${app.runtime.context.basePath}${sessionPath}`;
+    const pathname = `${app.snapshot().basePath}${sessionPath}`;
     const url = new URL(window.location.href);
     url.pathname = pathname;
-    app.runtime.context.navigate("chat", { pathname });
+    app.navigate("chat", { pathname });
     return url.pathname;
   }, controlUiSessionPath(sessionKey));
   await page.waitForURL((url) => url.pathname === expectedPathname);
   await page.waitForFunction(
     (targetSessionKey) =>
-      [...document.querySelectorAll<HTMLElement>("openclaw-chat-pane")].some(
-        (pane) =>
-          pane.classList.contains("chat-pane-cache__pane--visible") &&
-          (pane as HTMLElement & { sessionKey?: string }).sessionKey === targetSessionKey,
-      ),
+      window.openclawControlUi?.snapshot().routeReady === true &&
+      window.openclawControlUi.snapshot().sessionKey === targetSessionKey,
     sessionKey,
   );
 }
@@ -304,22 +295,8 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
   try {
     const handle = await page.waitForFunction(
       (expected) => {
-        const app = document.querySelector<
-          HTMLElement & {
-            runtime?: {
-              router: {
-                getState: () => {
-                  status: string;
-                  resolvedLocation: { pathname: string } | null;
-                  matches: { routeId: string }[];
-                  pendingMatches: unknown[];
-                };
-              };
-            };
-          }
-        >("openclaw-app");
-        // Native popup events can arrive before the app element is parsed.
-        const state = app?.runtime?.router.getState();
+        const snapshot = window.openclawControlUi?.snapshot();
+        const state = snapshot?.route;
         const pathname = window.location.pathname;
         // Router paths retain literal characters that browser history percent-encodes.
         // Serialize as a pathname; decoding would alias encoded delimiters and percent data.
@@ -329,6 +306,7 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
           return url.pathname;
         };
         return (
+          snapshot?.routeReady === true &&
           state?.status === "success" &&
           state.matches[0]?.routeId === expected.routeId &&
           state.resolvedLocation !== null &&
@@ -347,19 +325,10 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
     await handle.dispose();
   } catch (error) {
     const state = await page.evaluate(() => {
-      const app = document.querySelector<
-        HTMLElement & {
-          runtime?: {
-            router: {
-              getState: () => unknown;
-            };
-          };
-        }
-      >("openclaw-app");
       return {
         hash: window.location.hash,
         pathname: window.location.pathname,
-        router: app?.runtime?.router.getState() ?? null,
+        router: window.openclawControlUi?.snapshot().route ?? null,
         search: window.location.search,
       };
     });
@@ -555,10 +524,7 @@ export async function reconnectMockGateway(
   await gateway.setOnline(false);
   await page.waitForFunction(
     () => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-      };
-      return app.runtime?.context.gateway.snapshot.phase === "reconnecting";
+      return window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting";
     },
     undefined,
     { timeout: controlUiE2eWaitTimeoutMs },
@@ -573,10 +539,7 @@ export async function reconnectMockGateway(
   await gateway.setOnline(true);
   await page.waitForFunction(
     () => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-      };
-      return app.runtime?.context.gateway.snapshot.phase === "connected";
+      return window.openclawControlUi?.snapshot().gatewayPhase === "connected";
     },
     undefined,
     { timeout: controlUiE2eWaitTimeoutMs },
@@ -2571,17 +2534,6 @@ function installControlUiMockGateway(
       if (this.readyState !== MockWebSocket.OPEN) {
         return;
       }
-      if (isRecord(frame) && frame.type === "res" && frame.ok === true) {
-        const request = requests.findLast((candidate) => candidate.id === frame.id);
-        if (
-          request?.method === "sessions.list" &&
-          isRecord(request.params) &&
-          request.params.includeGlobal === true &&
-          !request.params.spawnedBy
-        ) {
-          exposed.initialRosterDelivered = true;
-        }
-      }
       this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
     }
   }
@@ -2590,7 +2542,6 @@ function installControlUiMockGateway(
     get online() {
       return online;
     },
-    initialRosterDelivered: false,
     closeLatest(code, reason) {
       MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");
     },

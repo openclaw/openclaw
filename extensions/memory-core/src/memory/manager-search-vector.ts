@@ -71,19 +71,23 @@ export async function searchChunksByEmbedding(params: {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  candidateIds?: string[];
   signal?: AbortSignal;
 }): Promise<SearchRowResult[]> {
-  if (params.limit <= 0) {
+  if (params.limit <= 0 || params.candidateIds?.length === 0) {
     return [];
   }
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
   const modelFilter = buildMemoryModelFilter("model", providerModels);
+  const candidateFilter = params.candidateIds
+    ? ` AND id IN (${params.candidateIds.map(() => "?").join(", ")})`
+    : "";
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const projection = `SELECT rowid AS rowid, embedding
   FROM memory_index_chunks
- WHERE ${modelFilter}`;
+ WHERE ${modelFilter}${candidateFilter}`;
   const ordering = `${params.sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
   // The first batch includes zero and negative identities, including INT64_MIN;
   // later batches retain an indexed range predicate and the exact native cursor.
@@ -105,6 +109,7 @@ export async function searchChunksByEmbedding(params: {
   while (true) {
     const rows = (lastRowid === undefined ? firstStmt : stmt).iterate(
       ...providerModels,
+      ...(params.candidateIds ?? []),
       ...(lastRowid === undefined ? [] : [lastRowid]),
       ...params.sourceFilter.params,
       FALLBACK_VECTOR_BATCH_SIZE,

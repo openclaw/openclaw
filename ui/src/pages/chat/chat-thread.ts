@@ -152,6 +152,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "stream" &&
         previous.text === next.text &&
+        previous.thinking === next.thinking &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
@@ -293,6 +294,9 @@ function sameChatItemsStructuralInput(
     previous.guardianNotices === next.guardianNotices &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
+    previous.reasoning?.runId === next.reasoning?.runId &&
+    previous.reasoning?.itemId === next.reasoning?.itemId &&
+    previous.reasoning?.startedAt === next.reasoning?.startedAt &&
     previous.queue === next.queue &&
     previous.initialTurnId === next.initialTurnId &&
     // renderChat derives this list of immutable Gateway records on every render,
@@ -327,7 +331,7 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   const live = cached.liveStream;
   const item = live ? cached.items[live.index] : undefined;
   if (
-    input.stream === null ||
+    (input.stream === null && !input.reasoning) ||
     !live ||
     item?.kind !== "stream" ||
     !item.isStreaming ||
@@ -335,11 +339,11 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), live.prefix);
-  if (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip) {
+  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
+  if (!input.reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
-  cached.items[live.index] = { ...item, text };
+  cached.items[live.index] = { ...item, text, thinking: input.reasoning?.text };
   return true;
 }
 
@@ -387,10 +391,13 @@ export function buildCachedChatItems(
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
   if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
-    if (cached.input.stream === input.stream) {
+    if (
+      cached.input.stream === input.stream &&
+      cached.input.reasoning?.text === input.reasoning?.text
+    ) {
       return cached.items;
     }
-    if (cached.input.stream !== null && updateCachedLiveStream(cached, input)) {
+    if (updateCachedLiveStream(cached, input)) {
       cached.input = input;
       return cached.items;
     }
