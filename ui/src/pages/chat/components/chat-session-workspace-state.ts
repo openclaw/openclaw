@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import { normalizeChatWorkspaceDock } from "../../../app/settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
   scopedAgentParamsForSession,
@@ -14,22 +13,21 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { SidebarSelection } from "./chat-sidebar.ts";
+import type { SidebarSelection } from "./chat-sidebar-content-types.ts";
 
 function resolvePaneAgent(state: SessionScopeHostWithKey): string {
-  const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
-  const activeAgentId =
-    normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
-  const scopedAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
-  const fallback = normalizeAgentId(
-    state.assistantAgentId ??
-      state.agentsList?.defaultId ??
-      state.agentsList?.agents?.[0]?.id ??
-      "main",
+  if (normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "global") {
+    return resolveAgentIdFromSessionKey(state.sessionKey);
+  }
+  return (
+    scopedAgentParamsForSession(state, state.sessionKey).agentId ??
+    normalizeAgentId(
+      state.assistantAgentId ??
+        state.agentsList?.defaultId ??
+        state.agentsList?.agents?.[0]?.id ??
+        "main",
+    )
   );
-  return normalizedKey === "global"
-    ? (scopedAgentId ?? fallback)
-    : (activeAgentId ?? scopedAgentId ?? fallback);
 }
 
 export function clearWorkspaceTimer(workspace: SessionWorkspaceState | undefined) {
@@ -39,19 +37,10 @@ export function clearWorkspaceTimer(workspace: SessionWorkspaceState | undefined
   }
 }
 
-export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
-  clearWorkspaceTimer(state.sessionWorkspaceState);
-}
-
 const checkoutSidebarContents = new WeakSet<object>();
 
 export function trackSessionCheckoutSidebar(content: SidebarSelection) {
   checkoutSidebarContents.add(content);
-}
-
-export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarSelection) {
-  trackSessionCheckoutSidebar(content);
-  state.handleOpenSidebar(content);
 }
 
 function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
@@ -60,10 +49,7 @@ function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   }
 }
 
-function createSessionWorkspaceState(
-  state: SessionWorkspaceHost,
-  previous?: SessionWorkspaceState,
-): SessionWorkspaceState {
+function createSessionWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   return {
     previews: [],
     activePreviewId: null,
@@ -73,11 +59,7 @@ function createSessionWorkspaceState(
     browserSearch: "",
     filter: "all",
     browserSearchTimer: null,
-    collapsed: previous?.collapsed ?? true,
     connectionEpoch: state.connectionEpoch,
-    // Dock preference is app-wide, seeded from the host's loaded settings;
-    // per-session state just carries it forward.
-    dock: previous?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
     error: null,
     list: null,
     loading: false,
@@ -105,7 +87,7 @@ export function getSessionWorkspace(state: SessionWorkspaceHost): SessionWorkspa
   }
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
-  const next = createSessionWorkspaceState(state, current);
+  const next = createSessionWorkspaceState(state);
   state.sessionWorkspaceState = next;
   return next;
 }
@@ -173,15 +155,13 @@ export function loadSessionWorkspace(
       if (!isCurrentListing()) {
         return;
       }
-      const fileItems = files?.files ?? [];
-      const artifactItems = artifacts?.artifacts ?? [];
       workspace.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
         ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
-        files: fileItems,
+        files: files?.files ?? [],
         ...(files?.browser ? { browser: files.browser } : {}),
-        artifacts: artifactItems,
+        artifacts: artifacts?.artifacts ?? [],
       };
     } catch (error) {
       if (isCurrentListing()) {
@@ -208,11 +188,7 @@ export function refreshSessionWorkspaceState(
   const diffOpen =
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
-  if (!refreshFiles) {
-    workspace.pendingReload = true;
-    return diffOpen;
-  }
-  if (workspace.loading) {
+  if (!refreshFiles || workspace.loading) {
     workspace.pendingReload = true;
   } else {
     loadSessionWorkspace(state, workspace);
@@ -228,8 +204,7 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   }
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
-  const next = createSessionWorkspaceState(state, current);
-  state.sessionWorkspaceState = next;
+  state.sessionWorkspaceState = createSessionWorkspaceState(state);
   state.requestUpdate?.();
 }
 

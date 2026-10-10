@@ -1,6 +1,6 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
-  DEFAULT_MISSING_TOOL_RESULT_TEXT,
+  LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
@@ -11,13 +11,14 @@ export function projectModelContextEventSql(
   event: Expression<string | Uint8Array>,
   omitCheckpoint: Expression<number>,
   toolResultOmission?: Expression<string | null>,
+  role: Expression<unknown> = sql`json_extract(${event}, '$.message.role')`,
 ): RawBuilder<string> {
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = /* kysely-allow-raw: query-time JSON projection preserves durable transcript bytes. */ sql<string>`json_remove(${event}, ${sql.join(paths)})`;
-  const modelEvent = /* kysely-allow-raw: tool result details are not model input; other details can be runtime context. */ sql<string>`CASE WHEN json_extract(${event}, '$.message.role') = 'toolResult'
+  const modelEvent = /* kysely-allow-raw: tool result details are not model input; other details can be runtime context. */ sql<string>`CASE WHEN ${role} = 'toolResult'
     THEN json_remove(${projected}, '$.message.details') ELSE ${projected} END`;
   const boundedEvent = toolResultOmission
-    ? /* kysely-allow-raw: omit only selected result bodies before hydration; durable rows remain unchanged. */ sql<string>`CASE WHEN ${toolResultOmission} IS NOT NULL AND json_extract(${event}, '$.message.role') = 'toolResult'
+    ? /* kysely-allow-raw: omit only selected result bodies before hydration; durable rows remain unchanged. */ sql<string>`CASE WHEN ${toolResultOmission} IS NOT NULL AND ${role} = 'toolResult'
       THEN json_set(${modelEvent}, '$.message.content', json_array(json_object('type', 'text', 'text', ${toolResultOmission}))) ELSE ${modelEvent} END`
     : modelEvent;
   // The context owner classifies invalidated prefix checkpoints using the transport
@@ -73,7 +74,7 @@ const MODEL_CONTEXT_NAVIGATION_KEYS = [
   "name",
 ] as const;
 
-type JsonMemberAlias = "root_member" | "message_member" | "archive_internal" | "archive_details";
+type JsonMemberAlias = "root_member" | "message_member";
 
 function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
   const type =
@@ -94,11 +95,7 @@ function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
 /** Stored navigation serves SQL's first-key lookup and JavaScript's last-key parse. */
 export function projectTranscriptPayloadNavigationSql(
   event: Expression<string | Uint8Array>,
-  options: { archive?: boolean } = {},
 ): RawBuilder<string> {
-  if (options.archive) {
-    return projectArchiveTranscriptNavigationSql(event);
-  }
   const memberValue =
     /* kysely-allow-raw: fixed JSON member cursor declared in the message projection below. */ sql.ref(
       "message_member.value",
@@ -114,91 +111,6 @@ export function projectTranscriptPayloadNavigationSql(
       THEN json(${message}) ELSE ${jsonMemberValue("root_member")} END)
     FROM json_each(${event}) AS root_member
     WHERE root_member.key IN (${sql.join([...MODEL_CONTEXT_NAVIGATION_KEYS, "message"])}))`;
-}
-
-/** Large identity rows use the payload owner's conservative native eligibility; callers require UTF-8 storage. */
-export function projectSupportedTranscriptPayloadNavigationSql(
-  event: Expression<string>,
-  maxBytes: number,
-): RawBuilder<string | null> {
-  const projection = projectTranscriptPayloadNavigationSql(event, { archive: true });
-  return /* kysely-allow-raw: strict JSON and Unicode admission precede native traversal; metadata is capped before JS hydration. */ sql<
-    string | null
-  >`(
-    WITH native_navigation AS MATERIALIZED (
-      SELECT CASE WHEN json_valid(${event}) THEN CASE
-        WHEN instr(${event}, ${"\\u"}) = 0 AND instr(${event}, char(0)) = 0 AND json_type(${event}) = 'object'
-          THEN ${projection} END END AS value
-    )
-    SELECT CASE WHEN octet_length(value) <= ${maxBytes} THEN value END FROM native_navigation
-  )`;
-}
-
-function lastArchiveMemberIds(
-  value: Expression<unknown>,
-  keys?: readonly string[],
-): RawBuilder<unknown> {
-  return /* kysely-allow-raw: duplicate selection sorts only decoded keys and native IDs, never payload values. */ sql`(
-    SELECT max(id) FROM json_each(${value})
-    ${keys ? sql`WHERE key IN (${sql.join(keys)})` : sql``}
-    GROUP BY key
-  )`;
-}
-
-function lastArchiveObjectMembers(
-  value: Expression<unknown>,
-  alias: JsonMemberAlias,
-  projected: Expression<unknown> = jsonMemberValue(alias),
-  keys?: readonly string[],
-): RawBuilder<string> {
-  const member =
-    /* kysely-allow-raw: private JsonMemberAlias union contains only fixed JSON cursor names. */ sql.ref(
-      alias,
-    );
-  return /* kysely-allow-raw: fixed archive envelope members retain JSON.parse's last duplicate key without hydrating discarded values. */ sql<string>`(
-    SELECT json_group_object(${/* kysely-allow-raw: fixed key column on the private JsonMemberAlias union. */ sql.ref(`${alias}.key`)}, ${projected})
-    FROM json_each(${value}) AS ${member}
-    WHERE ${/* kysely-allow-raw: fixed id column on the private JsonMemberAlias union. */ sql.ref(`${alias}.id`)} IN ${lastArchiveMemberIds(value, keys)}
-  )`;
-}
-
-function projectArchiveTranscriptNavigationSql(
-  event: Expression<string | Uint8Array>,
-): RawBuilder<string> {
-  const internal = lastArchiveObjectMembers(
-    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
-      "message_member.value",
-    ),
-    "archive_internal",
-    undefined,
-    ["runId", "steerTargetRunId", "contextFreeCommand", "idempotencyKey"],
-  );
-  const message = lastArchiveObjectMembers(
-    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
-      "root_member.value",
-    ),
-    "message_member",
-    sql`CASE WHEN message_member.key = '__openclaw' AND message_member.type = 'object'
-      THEN json(${internal}) ELSE ${jsonMemberValue("message_member")} END`,
-    ["role", "display", "idempotencyKey", "provenance", "excludeFromContext", "__openclaw"],
-  );
-  const details = lastArchiveObjectMembers(
-    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
-      "root_member.value",
-    ),
-    "archive_details",
-    undefined,
-    ["runId"],
-  );
-  return lastArchiveObjectMembers(
-    event,
-    "root_member",
-    sql`CASE WHEN root_member.key = 'message' AND root_member.type = 'object'
-      THEN json(${message})
-      WHEN root_member.key = 'details' AND root_member.type = 'object'
-      THEN json(${details}) ELSE ${jsonMemberValue("root_member")} END`,
-    [...MODEL_CONTEXT_NAVIGATION_KEYS, "message", "role", "details"],
-  );
 }
 
 /** Cursor resolution needs only tree facts, even when a row has an opaque body. */
@@ -224,9 +136,19 @@ export function projectResetBoundaryNavigationSql(event: Expression<string>): Ra
     ELSE ${event} END`;
 }
 
+function systemUpdateKindSql(event: Expression<unknown>): RawBuilder<string | null> {
+  return /* kysely-allow-raw: only bounded operator kinds cross the navigation boundary. */ sql<
+    string | null
+  >`CASE
+    WHEN json_extract(${event}, '$.customType') = 'openclaw.system-update'
+      AND json_extract(${event}, '$.details.kind') IN ('prompt-update', 'runtime-context')
+    THEN json_extract(${event}, '$.details.kind') ELSE NULL END`;
+}
+
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(
   event: Expression<string | Uint8Array>,
+  entryType: Expression<unknown> = sql`json_extract(${event}, '$.type')`,
 ): RawBuilder<string> {
   const entry = pickJsonObject(event, MODEL_CONTEXT_NAVIGATION_KEYS);
   // Binary intermediates avoid serializing and reparsing the entire message.
@@ -251,6 +173,9 @@ export function projectModelContextNavigationSql(
     "customType",
     "display",
   ]);
+  const messageOperatorKind = systemUpdateKindSql(message);
+  const entryOperatorKind = systemUpdateKindSql(event);
+  const customMessage = /* kysely-allow-raw: custom-message navigation omits payload text. */ sql<string>`json_set(${entry}, '$.content', json('[]'))`;
   const calls = /* kysely-allow-raw: pairing needs call identities, never tool arguments or result bodies. */ sql<string>`(SELECT json_group_array(json_object(
     'type', ${contentPropertySql(event, "type")}, 'id', ${contentPropertySql(event, "id")},
     'name', ${contentPropertySql(event, "name")}))
@@ -258,13 +183,19 @@ export function projectModelContextNavigationSql(
     AND ${contentPropertySql(event, "type")} IN ('toolCall', 'toolUse', 'functionCall'))`;
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
-    AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${DEFAULT_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
+    AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
+  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${entryType}
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),
-      '$.details', json_object(${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}, json(CASE WHEN (${synthetic}) THEN 'true' ELSE 'false' END))))
-    WHEN 'custom_message' THEN json_set(${entry}, '$.content', json('[]'))
+      '$.details', json_patch(json_object(${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}, json(CASE WHEN (${synthetic}) THEN 'true' ELSE 'false' END)),
+        CASE WHEN ${messageOperatorKind} IS NULL THEN json('{}') ELSE json_object('kind', ${messageOperatorKind}) END)))
+    WHEN 'custom_message' THEN CASE WHEN ${entryOperatorKind} IS NULL THEN ${customMessage}
+      ELSE json_set(${customMessage}, '$.details', json_object('kind', ${entryOperatorKind})) END
+    WHEN 'custom' THEN CASE WHEN json_extract(${event}, '$.customType') = 'openclaw.system-prompt'
+      THEN json_set(${entry}, '$.data', json_object('restart', json(CASE
+        WHEN json_type(${event}, '$.data.restart') = 'true' THEN 'true' ELSE 'false' END)))
+      ELSE ${entry} END
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
     ELSE ${entry} END`;

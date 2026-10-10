@@ -1,4 +1,5 @@
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
@@ -9,19 +10,16 @@ import type { ComponentData, ModalInteraction } from "../internal/discord.js";
 import type { AgentComponentInteraction } from "./agent-components.types.js";
 import { formatDiscordUserTag } from "./format.js";
 
-function readParsedComponentId(data: ComponentData): unknown {
+function readParsedId(data: ComponentData, key: "cid" | "mid"): unknown {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  return "cid" in data
-    ? (data as Record<string, unknown>).cid
-    : (data as Record<string, unknown>).componentId;
+  return key in data ? data[key] : data[key === "cid" ? "componentId" : "modalId"];
 }
 
 function normalizeComponentId(value: unknown): string | undefined {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
+    return normalizeOptionalString(value);
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -41,7 +39,7 @@ function mapOptionLabels(
 }
 
 export function parseAgentComponentData(data: ComponentData): { componentId: string } | null {
-  const raw = readParsedComponentId(data);
+  const raw = readParsedId(data, "cid");
   const componentId =
     typeof raw === "string"
       ? decodeCustomIdComponent(raw)
@@ -61,9 +59,8 @@ export function parseDiscordComponentData(
   if (!data || typeof data !== "object") {
     return null;
   }
-  const rawComponentId = readParsedComponentId(data);
-  const rawModalId =
-    "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
+  const rawComponentId = readParsedId(data, "cid");
+  const rawModalId = readParsedId(data, "mid");
   let componentId = normalizeComponentId(rawComponentId);
   let modalId = normalizeComponentId(rawModalId);
   if (!componentId && customId) {
@@ -80,13 +77,9 @@ export function parseDiscordComponentData(
 }
 
 export function parseDiscordModalId(data: ComponentData, customId?: string): string | null {
-  if (data && typeof data === "object") {
-    const rawModalId =
-      "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
-    const modalId = normalizeComponentId(rawModalId);
-    if (modalId) {
-      return modalId;
-    }
+  const modalId = normalizeComponentId(readParsedId(data, "mid"));
+  if (modalId) {
+    return modalId;
   }
   if (customId) {
     return parseDiscordModalCustomId(customId);
@@ -103,32 +96,21 @@ export function resolveInteractionCustomId(
   if (!("data" in interaction.rawData)) {
     return undefined;
   }
-  const data = (interaction.rawData as { data?: { custom_id?: unknown } }).data;
-  const customId = data?.custom_id;
-  if (typeof customId !== "string") {
-    return undefined;
-  }
-  const trimmed = customId.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(interaction.rawData.data?.custom_id);
 }
 
 export function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string[] {
-  if (entry.selectType === "string") {
-    return mapOptionLabels(entry.options, values);
+  switch (entry.selectType) {
+    case "string":
+      return mapOptionLabels(entry.options, values);
+    case "user":
+    case "role":
+    case "mentionable":
+    case "channel":
+      return values.map((value) => `${entry.selectType}:${value}`);
+    default:
+      return values;
   }
-  if (entry.selectType === "user") {
-    return values.map((value) => `user:${value}`);
-  }
-  if (entry.selectType === "role") {
-    return values.map((value) => `role:${value}`);
-  }
-  if (entry.selectType === "mentionable") {
-    return values.map((value) => `mentionable:${value}`);
-  }
-  if (entry.selectType === "channel") {
-    return values.map((value) => `channel:${value}`);
-  }
-  return values;
 }
 
 export function resolveModalFieldValues(
@@ -158,7 +140,7 @@ export function resolveModalFieldValues(
       }
       case "user-select": {
         const users = fields.getUserSelect(field.id, required);
-        return users.map((user) => formatDiscordUserTag(user));
+        return users.map(formatDiscordUserTag);
       }
       default:
         return [];
@@ -173,16 +155,10 @@ export function formatModalSubmissionText(
   entry: DiscordModalEntry,
   interaction: ModalInteraction,
 ): string {
-  const lines: string[] = [`Form "${entry.title}" submitted.`];
-  for (const field of entry.fields) {
+  const title = `Form "${entry.title}" submitted.`;
+  const lines = entry.fields.flatMap((field) => {
     const values = resolveModalFieldValues(field, interaction);
-    if (values.length === 0) {
-      continue;
-    }
-    lines.push(`- ${field.label}: ${values.join(", ")}`);
-  }
-  if (lines.length === 1) {
-    lines.push("- (no values)");
-  }
-  return lines.join("\n");
+    return values.length > 0 ? [`- ${field.label}: ${values.join(", ")}`] : [];
+  });
+  return [title, ...(lines.length > 0 ? lines : ["- (no values)"])].join("\n");
 }

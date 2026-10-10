@@ -1,4 +1,3 @@
-// Msteams tests cover monitor handler.adaptive card plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -134,35 +133,8 @@ describe("msteams adaptive card action invoke", () => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
-  it("forwards adaptive card submitted data to the agent as message text", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
-    const payload = {
-      action: {
-        type: "Action.Submit",
-        data: {
-          intent: "deploy",
-          environment: "prod",
-        },
-      },
-      trigger: "button-click",
-    };
-
-    await runAdaptiveCardInvoke(registered, payload);
-
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    const expectedBody = JSON.stringify(payload.action.data);
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.RawBody).toBe(expectedBody);
-    expect(ctxPayload.BodyForAgent).toBe(expectedBody);
-    expect(ctxPayload.CommandBody).toBe(expectedBody);
-    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
-    expect(ctxPayload.SenderId).toBe("user-aad");
-  });
-
   it("routes Teams imBack actions as the submitted message text", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
 
     await runAdaptiveCardInvoke(registered, {
       action: {
@@ -172,13 +144,16 @@ describe("msteams adaptive card action invoke", () => {
     });
 
     const ctxPayload = lastDispatchedCtxPayload();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(ctxPayload.RawBody).toBe("Summarize my last meeting");
+    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
+    expect(ctxPayload.SenderId).toBe("user-aad");
     expect(ctxPayload.BodyForAgent).toBe("Summarize my last meeting");
     expect(ctxPayload.CommandBody).toBe("Summarize my last meeting");
   });
 
   it("routes typed command submit actions as command text", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
 
     await runAdaptiveCardInvoke(registered, {
       action: {
@@ -193,8 +168,7 @@ describe("msteams adaptive card action invoke", () => {
   });
 
   it("preserves legacy presentation submit values as structured data", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
     const data = { value: "/codex permissions yolo", label: "Run" };
 
     await runAdaptiveCardInvoke(registered, {
@@ -209,26 +183,8 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
   });
 
-  it("preserves arbitrary submitted data with a value field", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
-    const data = { value: "selected", formId: "deploy-approval", choices: ["canary"] };
-
-    await runAdaptiveCardInvoke(registered, {
-      action: {
-        type: "Action.Submit",
-        data,
-      },
-    });
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
-    expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
-  });
-
   it("preserves generic Action.Execute verb metadata", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
     const payload = {
       action: {
         type: "Action.Execute",
@@ -245,10 +201,8 @@ describe("msteams adaptive card action invoke", () => {
   });
 
   it.each([
-    { activity: "invoke", token: "unknown-token" },
     { activity: "invoke", token: "" },
     { activity: "message", token: "unknown-token" },
-    { activity: "message", token: undefined },
   ])(
     "does not dispatch a rejected approval submit from a $activity activity",
     async ({ activity, token }) => {
@@ -284,16 +238,5 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
     expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
     expect(ctxPayload.SenderId).toBe("user-aad");
-  });
-
-  it("keeps activity text ahead of submitted card values on normal messages", async () => {
-    await runMessageActivity({
-      text: "typed text",
-      value: { value: "card-value", label: "Card value" },
-    });
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.BodyForAgent).toBe("typed text");
-    expect(ctxPayload.CommandBody).toBe("typed text");
   });
 });

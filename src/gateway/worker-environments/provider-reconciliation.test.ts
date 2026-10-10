@@ -288,19 +288,6 @@ describe("worker environment service", () => {
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
   });
 
-  it("skips an active lease whose durable receipt matches the lifecycle bundle", async () => {
-    await support.seedReady("worker-current");
-
-    await support.createService(support.createProvider()).reconcileOnce();
-
-    expect(support.testState.store.get("worker-current")).toMatchObject({
-      state: "ready",
-      bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
-    });
-    expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-  });
-
   it("re-enters bootstrapping when the durable receipt has a stale bundle hash", async () => {
     const bootstrapping = await support.seedBootstrapping("worker-stale");
     await support.testState.store.transition({
@@ -338,6 +325,7 @@ describe("worker environment service", () => {
 
     expect(support.testState.prepareInstallation).toHaveBeenCalledTimes(1);
     expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "ready",

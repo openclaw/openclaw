@@ -17,7 +17,7 @@ const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
-const ISOLATED_RUNTIME_NODE_ARGS = [
+export const ISOLATED_RUNTIME_NODE_ARGS = [
   "--preserve-symlinks",
   "--preserve-symlinks-main",
   "--import",
@@ -45,7 +45,7 @@ export function runBuiltRuntime(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeout: number,
-  maxBuffer?: number,
+  options: Pick<Parameters<typeof runCliProcessChild>[0], "maxBuffer" | "onTestFinished"> = {},
 ) {
   return runCliProcessChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
@@ -54,7 +54,8 @@ export function runBuiltRuntime(
     cwd: runtimeRoot,
     env,
     timeoutMs: timeout,
-    maxBuffer: maxBuffer ?? 1024 * 1024,
+    maxBuffer: options.maxBuffer ?? 1024 * 1024,
+    ...(options.onTestFinished ? { onTestFinished: options.onTestFinished } : {}),
   });
 }
 
@@ -118,6 +119,7 @@ export function createSourceRuntime(root: string): string {
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "node-runtime-env.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
@@ -139,7 +141,7 @@ export function createSourceRuntime(root: string): string {
 export function createBuiltRuntime(
   root: string,
   sourceDist = path.resolve("dist"),
-  options: { copyDirectories?: boolean } = {},
+  options: { copyDirectories?: boolean; emptyExtensions?: boolean } = {},
 ): string {
   const runtimeRoot = createSourceRuntime(root);
   // The pretest owner supplies immutable built modules once; mutable package
@@ -150,7 +152,9 @@ export function createBuiltRuntime(
     }
     const source = path.join(sourceDist, entry.name);
     const target = path.join(runtimeRoot, "dist", entry.name);
-    if (entry.isDirectory() && options.copyDirectories) {
+    if (entry.isDirectory() && entry.name === "extensions" && options.emptyExtensions) {
+      fs.mkdirSync(target);
+    } else if (entry.isDirectory() && options.copyDirectories) {
       // Direct package entry invocations do not pass --preserve-symlinks.
       fs.cpSync(source, target, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
     } else if (entry.isDirectory()) {
@@ -163,6 +167,57 @@ export function createBuiltRuntime(
     throw new Error("built Doctor fixture requires dist/entry.js; prepare the runtime first");
   }
   return runtimeRoot;
+}
+
+export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: number): void {
+  const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
+  const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
+  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
+  fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+
+  openOpenClawStateDatabase({
+    path: sharedPath,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  closeOpenClawStateDatabaseForTest();
+
+  const shared = new DatabaseSync(sharedPath);
+  try {
+    shared
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run("discord", "components", "interaction:1", '{"ok":false}', canonicalCreatedAt, null);
+  } finally {
+    shared.close();
+  }
+
+  const sidecar = new DatabaseSync(sidecarPath);
+  try {
+    sidecar.exec(`
+      CREATE TABLE plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      );
+    `);
+    sidecar
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      // Keep retired sidecar data distinct from the canonical row.
+      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
+  } finally {
+    sidecar.close();
+  }
 }
 
 export function seedV17AdditiveRepairDatabase(

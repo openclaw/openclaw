@@ -17,7 +17,8 @@ const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock 
   }),
 );
 
-vi.mock("../../terminal-pty.js", () => ({
+vi.mock("../../terminal-pty.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../terminal-pty.js")>()),
   spawnTerminalPty: (...args: unknown[]) => spawnMock(...args),
 }));
 

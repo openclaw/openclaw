@@ -1,10 +1,13 @@
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 
-type OpenAiCompatError = {
+export type OpenAiCompatError = {
   status: number;
   error: {
     message: string;
@@ -32,33 +35,6 @@ const ERROR_TYPE_BY_REASON = {
   unknown: undefined,
 } satisfies Record<FailoverReason, string | undefined>;
 
-function statusForReason(reason: FailoverReason, status: number | undefined): number {
-  if (reason === "server_error") {
-    return status && status >= 400 && status < 500 ? status : 502;
-  }
-  if (reason === "timeout") {
-    return status && status >= 400 && status < 500 ? status : 504;
-  }
-  return status ?? resolveFailoverStatus(reason) ?? 500;
-}
-
-function messageForReason(params: {
-  reason: FailoverReason;
-  message: string;
-  rawError?: string;
-}): string {
-  if (params.reason === "server_error") {
-    return "upstream provider error";
-  }
-  if (params.reason === "timeout") {
-    return "upstream provider timeout";
-  }
-  if (params.reason === "overloaded") {
-    return "upstream provider overloaded";
-  }
-  return params.rawError?.trim() || params.message.trim() || "request failed";
-}
-
 /** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   if (err instanceof ToolAuthorizationError) {
@@ -73,69 +49,98 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   if (!type) {
     return undefined;
   }
-  const status = statusForReason(reason, described.status);
-  const message = messageForReason({
-    reason,
-    message: described.message,
-    rawError: described.rawError,
-  });
+  let status = described.status ?? resolveFailoverStatus(reason) ?? 500;
+  let message: string;
+  if (reason === "server_error" || reason === "timeout") {
+    status =
+      described.status && described.status >= 400 && described.status < 500
+        ? described.status
+        : reason === "timeout"
+          ? 504
+          : 502;
+    message = reason === "timeout" ? "upstream provider timeout" : "upstream provider error";
+  } else {
+    message =
+      reason === "overloaded"
+        ? "upstream provider overloaded"
+        : described.rawError?.trim() || described.message.trim() || "request failed";
+  }
   return {
     status,
     error: {
-      message,
+      message: redactToolPayloadText(message),
       type,
-      ...(described.code ? { code: described.code } : {}),
+      ...(described.code ? { code: redactToolPayloadText(described.code) } : {}),
     },
   };
 }
 
-/** Validates OpenAI-compatible sampling parameters before provider dispatch. */
+/** Validates sampling ranges after the HTTP request schema admits numeric fields. */
 export function validateOpenAiSamplingParams(params: {
-  temperature?: unknown;
-  topP?: unknown;
-  frequencyPenalty?: unknown;
-  presencePenalty?: unknown;
-  seed?: unknown;
+  temperature?: number | null;
+  topP?: number | null;
+  frequencyPenalty?: number | null;
+  presencePenalty?: number | null;
+  seed?: number | null;
 }): string | undefined {
-  if (params.temperature != null) {
-    if (typeof params.temperature !== "number" || !Number.isFinite(params.temperature)) {
-      return "`temperature` must be a finite number.";
-    }
-    if (params.temperature < 0 || params.temperature > 2) {
-      return "`temperature` must be between 0 and 2.";
-    }
+  if (params.temperature != null && (params.temperature < 0 || params.temperature > 2)) {
+    return "`temperature` must be between 0 and 2.";
   }
-  if (params.topP != null) {
-    if (typeof params.topP !== "number" || !Number.isFinite(params.topP)) {
-      return "`top_p` must be a finite number.";
-    }
-    if (params.topP < 0 || params.topP > 1) {
-      return "`top_p` must be between 0 and 1.";
-    }
+  if (params.topP != null && (params.topP < 0 || params.topP > 1)) {
+    return "`top_p` must be between 0 and 1.";
   }
-  if (params.frequencyPenalty != null) {
-    if (typeof params.frequencyPenalty !== "number" || !Number.isFinite(params.frequencyPenalty)) {
-      return "`frequency_penalty` must be a finite number.";
-    }
-    if (params.frequencyPenalty < -2 || params.frequencyPenalty > 2) {
-      return "`frequency_penalty` must be between -2.0 and 2.0.";
-    }
+  if (
+    params.frequencyPenalty != null &&
+    (params.frequencyPenalty < -2 || params.frequencyPenalty > 2)
+  ) {
+    return "`frequency_penalty` must be between -2.0 and 2.0.";
   }
-  if (params.presencePenalty != null) {
-    if (typeof params.presencePenalty !== "number" || !Number.isFinite(params.presencePenalty)) {
-      return "`presence_penalty` must be a finite number.";
-    }
-    if (params.presencePenalty < -2 || params.presencePenalty > 2) {
-      return "`presence_penalty` must be between -2.0 and 2.0.";
-    }
+  if (
+    params.presencePenalty != null &&
+    (params.presencePenalty < -2 || params.presencePenalty > 2)
+  ) {
+    return "`presence_penalty` must be between -2.0 and 2.0.";
   }
-  if (params.seed != null) {
-    if (typeof params.seed !== "number" || !Number.isFinite(params.seed)) {
-      return "`seed` must be a finite number.";
-    }
-    if (!Number.isInteger(params.seed)) {
-      return "`seed` must be an integer.";
-    }
+  if (params.seed != null && !Number.isInteger(params.seed)) {
+    return "`seed` must be an integer.";
   }
   return undefined;
+}
+
+export function resolveOpenAiStreamParams(
+  params: AgentStreamParams,
+): AgentStreamParams | undefined {
+  const entries = Object.entries(params).filter(([, value]) => value !== undefined);
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+export function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error("response_format must be an object");
+  }
+  const type = value.type;
+  if (type !== "text" && type !== "json_object" && type !== "json_schema") {
+    throw new Error("response_format.type must be text, json_object, or json_schema");
+  }
+  return value;
+}
+
+export function resolveStopSequences(
+  value: string | string[] | null | undefined,
+): string[] | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const list = typeof value === "string" ? [value] : value;
+  // OpenAI Chat Completions accepts at most 4 stop sequences.
+  if (list.length > 4) {
+    throw new Error("stop supports at most 4 sequences");
+  }
+  if (list.some((item) => item.length === 0)) {
+    throw new Error("stop entries must be non-empty strings");
+  }
+  return list.length > 0 ? list : undefined;
 }

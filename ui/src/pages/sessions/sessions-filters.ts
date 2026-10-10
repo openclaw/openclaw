@@ -2,8 +2,9 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   normalizeSessionsGroupBy,
   SESSION_GROUP_MODES,
@@ -41,53 +42,6 @@ const SESSION_GROUP_MODE_LABELS = {
   agent: "sessionsView.groupByAgent",
   date: "sessionsView.groupByDate",
 } as const satisfies Record<SessionsGroupBy, string>;
-
-function groupModeLabel(mode: SessionsGroupBy): string {
-  return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
-}
-
-function renderFilterToggle(params: {
-  name: string;
-  checked: boolean;
-  label: string;
-  title: string;
-  extraClass?: string;
-  onChange: (checked: boolean) => void;
-}) {
-  const className = [
-    "session-filter-check",
-    "session-filter-toggle",
-    params.extraClass ?? "",
-    params.checked ? "session-filter-check--active" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return html`
-    <openclaw-tooltip .content=${params.title}>
-      <label class=${className}>
-        <input
-          name=${params.name}
-          class="session-filter-check__input"
-          type="checkbox"
-          .checked=${params.checked}
-          @change=${(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement) {
-              params.onChange(event.currentTarget.checked);
-            }
-          }}
-        />
-        <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
-        <span class="session-filter-check__label">${params.label}</span>
-      </label>
-    </openclaw-tooltip>
-  `;
-}
-
-function setPreviousSiblingExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
-}
 
 export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
@@ -135,8 +89,8 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
       for="sessions-filter-popover-trigger"
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => setPreviousSiblingExpanded(event, true)}
-      @wa-hide=${(event: Event) => setPreviousSiblingExpanded(event, false)}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="sessions-filter-popover__panel">
         <div class="sessions-filter-popover__fields">
@@ -166,14 +120,28 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
           role="group"
           aria-label=${t("sessionsView.sourceFilters")}
         >
-          ${sourceFilters.map(([key, label, tooltip]) =>
-            renderFilterToggle({
-              name: key,
-              checked: props[key],
-              label,
-              title: tooltip,
-              onChange: (checked) => updateFilter(key, checked),
-            }),
+          ${sourceFilters.map(
+            ([key, label, tooltip]) => html`
+              <openclaw-tooltip .content=${tooltip}>
+                <label
+                  class=${`session-filter-check session-filter-toggle${props[key] ? " session-filter-check--active" : ""}`}
+                >
+                  <input
+                    name=${key}
+                    class="session-filter-check__input"
+                    type="checkbox"
+                    .checked=${props[key]}
+                    @change=${(event: Event) => {
+                      if (event.currentTarget instanceof HTMLInputElement) {
+                        updateFilter(key, event.currentTarget.checked);
+                      }
+                    }}
+                  />
+                  <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
+                  <span class="session-filter-check__label">${label}</span>
+                </label>
+              </openclaw-tooltip>
+            `,
           )}
         </div>
         <label class="session-groupby">
@@ -191,7 +159,7 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
             ).map(
               (mode) => html`
                 <option value=${mode} ?selected=${props.groupBy === mode}>
-                  ${groupModeLabel(mode)}
+                  ${t(SESSION_GROUP_MODE_LABELS[mode])}
                 </option>
               `,
             )}
@@ -214,4 +182,92 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
       </div>
     </wa-popover>
   `;
+}
+
+export function handleSessionsSearchKeydown(
+  event: KeyboardEvent,
+  props: {
+    sessionMenu: { key: string } | null;
+    onSearchChange: (query: string) => void;
+  },
+) {
+  // SAFETY: This listener is bound directly to the search input.
+  const input = event.currentTarget as HTMLInputElement;
+  const document = input.ownerDocument;
+  if (
+    event.key !== "Escape" ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    document.activeElement !== input ||
+    !input.value ||
+    props.sessionMenu ||
+    document.openClawModalLayers?.size ||
+    document.querySelector(
+      "dialog[open], [aria-modal='true'], openclaw-menu-surface, wa-dropdown[open], wa-popover[open], wa-select[open]",
+    )
+  ) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  props.onSearchChange("");
+}
+
+export function clearSessionsSearch(event: MouseEvent, onSearchChange: (query: string) => void) {
+  // SAFETY: This listener is bound directly to the clear button.
+  const input = (event.currentTarget as HTMLElement).parentElement?.querySelector("input");
+  input?.focus({ preventScroll: true });
+  onSearchChange("");
+}
+
+// Drag-over highlighting toggles a class directly on the target row instead of
+// re-rendering per dragover event; lit re-renders mid-drag would cancel the drag.
+function setDropTargetActive(event: DragEvent, active: boolean) {
+  // SAFETY: These handlers are bound to the session row receiving the drag event.
+  (event.currentTarget as HTMLElement | null)?.classList.toggle(
+    "session-drop-target--active",
+    active,
+  );
+}
+
+export function categoryDropHandlers(
+  props: Pick<SessionsAdvancedFiltersProps, "groupBy" | "groupWriteDisabledReason"> & {
+    onAssignCategory: (key: string, category: string | null) => void;
+  },
+  category: string | null,
+) {
+  if (props.groupBy !== "category" || props.groupWriteDisabledReason) {
+    return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
+  }
+  const carriesSessionKey = (event: DragEvent) =>
+    event.dataTransfer?.types.includes(SESSION_DRAG_MIME) === true;
+  return {
+    dragover: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      setDropTargetActive(event, true);
+    },
+    dragleave: (event: DragEvent) => setDropTargetActive(event, false),
+    drop: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
+      event.preventDefault();
+      setDropTargetActive(event, false);
+      const key = event.dataTransfer?.getData(SESSION_DRAG_MIME);
+      if (key) {
+        props.onAssignCategory(key, category);
+      }
+    },
+  } as const;
 }

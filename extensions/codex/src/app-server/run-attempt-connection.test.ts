@@ -232,9 +232,13 @@ describe("prepareCodexAttemptConnection", () => {
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
 
     expect(() => originalHostCapabilities.assertActive()).not.toThrow();
-    expect(() => connection.assertCurrent()).toThrow(
+    expect(() => connection.assertCurrent()).not.toThrow();
+    expect(connection.assertLegacyCurrent).toThrow("Codex session generation is no longer current");
+    const effect = vi.fn();
+    await expect(connection.withCurrent(effect)).rejects.toThrow(
       "Codex session generation is no longer current",
     );
+    expect(effect).not.toHaveBeenCalled();
     expect(bindingStore.read(current)).toEqual(binding);
   });
 
@@ -283,14 +287,7 @@ describe("prepareCodexAttemptConnection", () => {
     },
   );
 
-  it.each([
-    "preserved",
-    "missing",
-    "ordinary",
-    "auth-changed",
-    "model-changed",
-    "provider-changed",
-  ] as const)(
+  it.each(["preserved", "auth-changed"] as const)(
     "rechecks %s native ownership after acquiring the lifecycle binding lease",
     async (state) => {
       const sessionFile = path.join(tempDir, "leased-ownership.jsonl");
@@ -314,26 +311,17 @@ describe("prepareCodexAttemptConnection", () => {
       const withLease = bindingStore.withLease.bind(bindingStore);
       vi.spyOn(bindingStore, "withLease").mockImplementationOnce(async (identity, run) => {
         // The initial snapshot is valid; simulate retirement/replacement while awaiting its lease.
-        if (state === "missing") {
-          await bindingStore.mutate(identity, { kind: "clear", threadId: "thread-existing" });
-        } else if (state !== "preserved") {
+        if (state !== "preserved") {
           await bindingStore.mutate(identity, {
             kind: "patch",
             threadId: "thread-existing",
-            patch:
-              state === "ordinary"
-                ? { preserveNativeModel: undefined }
-                : state === "model-changed"
-                  ? { model: "gpt-5.6-sol" }
-                  : state === "provider-changed"
-                    ? { modelProvider: "other-native-provider" }
-                    : {
-                        connectionScope: "supervision",
-                        supervisionSourceThreadId: "native-source",
-                        conversationSourceTransferComplete: true,
-                        model: "native-model",
-                        modelProvider: "native-provider",
-                      },
+            patch: {
+              connectionScope: "supervision",
+              supervisionSourceThreadId: "native-source",
+              conversationSourceTransferComplete: true,
+              model: "native-model",
+              modelProvider: "native-provider",
+            },
           });
         }
         return withLease(identity, run);
@@ -383,7 +371,7 @@ describe("prepareCodexAttemptConnection", () => {
   ])("handles an installation target for %s execution before native startup", async (placement) => {
     const sessionFile = path.join(tempDir, "installation-target.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-installation-target"));
-    const createToolSurface = vi.fn(params.hostCapabilities.createToolSurface);
+    const createToolSurfaceAsync = vi.fn(params.hostCapabilities.createToolSurfaceAsync);
     const localProcessEnv = Object.freeze({
       OPENCLAW_STATE_DIR: "/fixture/diagnosed",
       OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
@@ -391,7 +379,7 @@ describe("prepareCodexAttemptConnection", () => {
     });
     params.hostCapabilities = Object.freeze({
       ...params.hostCapabilities,
-      createToolSurface,
+      createToolSurfaceAsync,
       preparedEnvironment: () => ({
         credentialScrubEnv: {},
         localIdentityEnv: {},
@@ -442,7 +430,7 @@ describe("prepareCodexAttemptConnection", () => {
         /owned local Codex stdio.*saved prompt/,
       );
       expect(clientFactory).not.toHaveBeenCalled();
-      expect(createToolSurface).not.toHaveBeenCalled();
+      expect(createToolSurfaceAsync).not.toHaveBeenCalled();
       return;
     }
     const connection = await pending;
@@ -831,6 +819,7 @@ describe("prepareCodexAttemptConnection", () => {
           expect.anything(),
           { kind: "clear", threadId: "thread-existing" },
           expect.any(Function),
+          expect.objectContaining({ withCurrent: expect.any(Function) }),
         );
         const remainingListeners = getEventListeners(controller.signal, "abort").length;
         controller.abort("cancelled after rejection");

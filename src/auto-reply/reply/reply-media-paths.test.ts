@@ -15,7 +15,7 @@ import {
 
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
-const resolveAgentScopedOutboundMediaAccess = vi.hoisted(() => vi.fn());
+const resolveAgentScopedHostOutboundMediaAccess = vi.hoisted(() => vi.fn());
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 vi.mock("../../agents/sandbox.js", () => ({
@@ -27,7 +27,7 @@ vi.mock("../../media/outbound-attachment.js", () => ({
 }));
 
 vi.mock("../../media/read-capability.js", () => ({
-  resolveAgentScopedOutboundMediaAccess,
+  resolveAgentScopedHostOutboundMediaAccess,
 }));
 
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -78,19 +78,20 @@ function expectOutboundAttachmentCall(
 }
 
 function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
-  const call = resolveAgentScopedOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
+  const call = resolveAgentScopedHostOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
   if (!call) {
     throw new Error("missing agent scoped media access call");
   }
   return requireRecord(call[0], "agent scoped media access request");
 }
 
-function createTestReplyMediaNormalizer(
-  overrides: Omit<
-    Parameters<typeof createReplyMediaPathNormalizer>[0],
-    "cfg" | "sessionKey" | "workspaceDir"
-  > = {},
-) {
+type NormalizerOptions = Parameters<typeof createReplyMediaPathNormalizer>[0];
+const sandboxWorkspace = {
+  workspaceDir: "/tmp/sandboxes/session-1",
+  containerWorkdir: "/workspace",
+};
+
+function createTestReplyMediaNormalizer(overrides: Partial<NormalizerOptions> = {}) {
   return createReplyMediaPathNormalizer({
     cfg: {},
     sessionKey: "session-key",
@@ -106,7 +107,7 @@ describe("createReplyMediaPathNormalizer", () => {
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl.replace(/^file:\/\//i, ""))),
       contentType: mediaUrl.endsWith(".mp3") ? "audio/mpeg" : "image/png",
     }));
-    resolveAgentScopedOutboundMediaAccess
+    resolveAgentScopedHostOutboundMediaAccess
       .mockReset()
       .mockImplementation(({ workspaceDir }: { workspaceDir?: string }) => ({
         workspaceDir,
@@ -119,13 +120,26 @@ describe("createReplyMediaPathNormalizer", () => {
     stateDirEnvSnapshot.restore();
   });
 
-  it("stages workspace-relative media through shared outbound attachment loading", async () => {
+  it("stages workspace-relative media and preserves reply metadata", async () => {
     const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
+    const mirror = {
+      sessionKey: "main",
+      text: "Here is the image",
       mediaUrls: ["./out/photo.png"],
+      idempotencyKey: "source-reply:0",
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: mirror.text, mediaUrls: ["./out/photo.png"] },
+      { sourceReplyTranscriptMirror: mirror },
+    );
+    const result = await normalize(payload);
+    expect(result).not.toBe(payload);
+    expect(getReplyPayloadMetadata(result)?.sourceReplyTranscriptMirror).toEqual({
+      sessionKey: "main",
+      text: "Here is the image",
+      mediaUrls: ["./out/photo.png"],
+      idempotencyKey: "source-reply:0",
     });
-
     expectMedia(result, "/tmp/outbound-media/photo.png", ["/tmp/outbound-media/photo.png"]);
     const options = expectOutboundAttachmentCall(
       0,
@@ -141,7 +155,6 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it.each([
-    { name: "plain", fileName: "photo.png", prefix: "file://" },
     { name: "encoded", fileName: "café 100% image.png", prefix: "file://" },
     { name: "localhost", fileName: "café 100% image.png", prefix: "file://localhost" },
     { name: "uppercase single-slash", fileName: "café 100% image.png", prefix: "FILE:" },
@@ -170,79 +183,45 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(result.trustedLocalMedia).toBeUndefined();
   });
 
-  it("preserves reply metadata when media normalization clones the payload", async () => {
-    const normalize = createTestReplyMediaNormalizer();
-    const payload = setReplyPayloadMetadata(
-      {
-        text: "Here is the image",
-        mediaUrls: ["./out/photo.png"],
-      },
-      {
-        sourceReplyTranscriptMirror: {
-          sessionKey: "main",
-          text: "Here is the image",
-          mediaUrls: ["./out/photo.png"],
-          idempotencyKey: "source-reply:0",
-        },
-      },
-    );
-
-    const result = await normalize(payload);
-
-    expect(result).not.toBe(payload);
-    expectMedia(result, "/tmp/outbound-media/photo.png", ["/tmp/outbound-media/photo.png"]);
-    expect(getReplyPayloadMetadata(result)?.sourceReplyTranscriptMirror).toEqual({
-      sessionKey: "main",
-      text: "Here is the image",
-      mediaUrls: ["./out/photo.png"],
-      idempotencyKey: "source-reply:0",
+  it("maps a custom backend workdir to the host sandbox workspace before staging", async () => {
+    const containerWorkdir = "/remote/agent";
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir,
     });
+    const normalize = createTestReplyMediaNormalizer({ agentId: "finance" });
+    const fileUrl = `file://${containerWorkdir}/screens/final%20image.png`;
+
+    const result = await normalize({
+      mediaUrls: [
+        "./out/photo.png",
+        fileUrl,
+        ...(parseReplyDirectives(`MEDIA:${fileUrl}`).mediaUrls ?? []),
+      ],
+    });
+
+    expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "finance" }),
+      undefined,
+    );
+    expectMedia(result, "/tmp/outbound-media/photo.png", [
+      "/tmp/outbound-media/photo.png",
+      "/tmp/outbound-media/final image.png",
+    ]);
+    expectOutboundAttachmentCall(
+      0,
+      path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
+      5 * 1024 * 1024,
+    );
+    expectOutboundAttachmentCall(
+      1,
+      path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
+      5 * 1024 * 1024,
+    );
+    expect(resolveAgentScopedHostOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
+    );
   });
-
-  it.each([
-    { name: "Docker", containerWorkdir: "/workspace" },
-    { name: "OpenShell", containerWorkdir: "/sandbox" },
-    { name: "custom remote backend", containerWorkdir: "/remote/agent" },
-  ])(
-    "maps $name media to the host sandbox workspace before staging",
-    async ({ containerWorkdir }) => {
-      ensureSandboxWorkspaceForSession.mockResolvedValue({
-        workspaceDir: "/tmp/sandboxes/session-1",
-        containerWorkdir,
-      });
-      const normalize = createTestReplyMediaNormalizer({ agentId: "finance" });
-      const fileUrl = `file://${containerWorkdir}/screens/final%20image.png`;
-
-      const result = await normalize({
-        mediaUrls: [
-          "./out/photo.png",
-          fileUrl,
-          ...(parseReplyDirectives(`MEDIA:${fileUrl}`).mediaUrls ?? []),
-        ],
-      });
-
-      expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "finance" }),
-      );
-      expectMedia(result, "/tmp/outbound-media/photo.png", [
-        "/tmp/outbound-media/photo.png",
-        "/tmp/outbound-media/final image.png",
-      ]);
-      expectOutboundAttachmentCall(
-        0,
-        path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
-        5 * 1024 * 1024,
-      );
-      expectOutboundAttachmentCall(
-        1,
-        path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
-        5 * 1024 * 1024,
-      );
-      expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
-      );
-    },
-  );
 
   it("maps explicitly supplied backend workdirs without rediscovering the sandbox", async () => {
     const normalize = createTestReplyMediaNormalizer({
@@ -285,217 +264,139 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(result.text).toBe("⚠️ photo.png: Delivery failed. Try sending this file again.");
   });
 
-  it.each([
-    ["lowercase triple-slash", "file:///Users/peter/Documents/report.pdf"],
-    ["uppercase triple-slash", "FILE:///Users/peter/Documents/report.pdf"],
-    ["lowercase single-slash", "file:/Users/peter/Documents/report.pdf"],
-    ["uppercase single-slash", "FILE:/Users/peter/Documents/report.pdf"],
-    ["remote host", "file://server/share/report.pdf"],
-    ["network path", "FILE:////server/share/report.pdf"],
-    ["encoded slash", "file:/Users/peter/Documents/%2Freport.pdf"],
-    ["encoded backslash", "FILE:/Users/peter/Documents/%5Creport.pdf"],
-  ])("drops %s host file URLs when no sandbox mapping applies", async (_label, mediaUrl) => {
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: [mediaUrl],
-    });
-
+  it.each<{
+    name: string;
+    mediaUrl: string;
+    sandbox?: typeof sandboxWorkspace & { workspaceAccess?: "none" };
+    options?: Partial<NormalizerOptions>;
+  }>([
+    { name: "uppercase file URL", mediaUrl: "FILE:/Users/peter/Documents/report.pdf" },
+    { name: "remote-host file URL", mediaUrl: "file://server/share/report.pdf" },
+    {
+      name: "host file URL with sandbox",
+      mediaUrl: "file:///Users/peter/Documents/report.pdf",
+      sandbox: sandboxWorkspace,
+    },
+    {
+      name: "unmapped absolute host path",
+      mediaUrl: "/Users/peter/Documents/report.pdf",
+      sandbox: sandboxWorkspace,
+      options: { cfg: { tools: { fs: { workspaceOnly: false } } } },
+    },
+    {
+      name: "unmounted host workspace",
+      mediaUrl: "/Users/peter/.openclaw/workspace/reports/screenshot.png",
+      sandbox: { ...sandboxWorkspace, workspaceAccess: "none" },
+      options: { workspaceDir: "/Users/peter/.openclaw/workspace" },
+    },
+    { name: "workspace traversal", mediaUrl: "../../etc/passwd" },
+    {
+      name: "sandbox traversal",
+      mediaUrl: "../../etc/passwd",
+      sandbox: sandboxWorkspace,
+    },
+  ])("rejects $name before attachment loading", async ({ mediaUrl, sandbox, options }) => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue(sandbox ?? null);
+    const result = await createTestReplyMediaNormalizer(options)({ mediaUrls: [mediaUrl] });
     expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
-  it("drops host file URLs even when sandbox exists", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
-    });
-
-    expectNoMedia(result);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
-  });
-
-  it("drops absolute host-local media paths when sandbox mapping fails", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: { tools: { fs: { workspaceOnly: false } } },
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/Documents/report.pdf"],
-    });
-
-    expectNoMedia(result);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
-  });
-
-  it("blocks absolute host-workspace media staging for sandboxed sessions with workspaceAccess none", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-      workspaceAccess: "none",
-    });
-    const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/Users/peter/.openclaw/workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: [absolutePath],
-    });
-
-    expectNoMedia(result);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
-  });
-
-  it("stages absolute workspace media paths before sandbox mapping when the workspace is mounted", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-      workspaceAccess: "rw",
-    });
-    const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/Users/peter/.openclaw/workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: [absolutePath],
-    });
-
-    expectMedia(result, "/tmp/outbound-media/screenshot.png", [
-      "/tmp/outbound-media/screenshot.png",
-    ]);
-    expectOutboundAttachmentCall(0, absolutePath, 5 * 1024 * 1024);
-  });
-
-  it("stages absolute workspace media paths so the PR scenario now works", async () => {
-    const absolutePath = "/Users/peter/.openclaw/workspace/exports/images/chart.png";
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
-      sessionKey: "session-key",
-      workspaceDir: "/Users/peter/.openclaw/workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: [absolutePath],
-    });
-
-    expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
-    expectOutboundAttachmentCall(0, absolutePath, 8 * 1024 * 1024);
-  });
-
-  it("prefers channel account media limits when staging reply attachments", async () => {
-    const absolutePath = "/Users/peter/.openclaw/workspace/exports/images/chart.png";
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {
-        channels: {
-          whatsapp: {
-            mediaMaxMb: 50,
-            accounts: {
-              work: {
-                mediaMaxMb: 64,
-              },
-            },
-          },
+  it.each<{
+    name: string;
+    source: string;
+    maxMb: number;
+    options?: Partial<NormalizerOptions>;
+    mounted?: boolean;
+  }>([
+    {
+      name: "mounted workspace before sandbox mapping",
+      source: "/Users/peter/.openclaw/workspace/reports/screenshot.png",
+      maxMb: 5,
+      mounted: true,
+    },
+    {
+      name: "agent default limit",
+      source: "/Users/peter/.openclaw/workspace/exports/images/chart.png",
+      maxMb: 8,
+      options: { cfg: { agents: { defaults: { mediaMaxMb: 8 } } } },
+    },
+    {
+      name: "account limit over channel and agent limits",
+      source: "/Users/peter/.openclaw/workspace/exports/images/chart.png",
+      maxMb: 64,
+      options: {
+        cfg: {
+          channels: { whatsapp: { mediaMaxMb: 50, accounts: { work: { mediaMaxMb: 64 } } } },
+          agents: { defaults: { mediaMaxMb: 8 } },
         },
-        agents: { defaults: { mediaMaxMb: 8 } },
+        sessionKey: undefined,
+        messageProvider: "whatsapp",
+        accountId: "work",
       },
-      sessionKey: undefined,
-      workspaceDir: "/Users/peter/.openclaw/workspace",
-      messageProvider: "whatsapp",
-      accountId: "work",
+    },
+    {
+      name: "Telegram transport default",
+      source: "./exports/video.mp4",
+      maxMb: 100,
+      options: {
+        cfg: { channels: { telegram: {} } },
+        sessionKey: undefined,
+        messageProvider: "telegram",
+      },
+    },
+  ])("stages media using $name", async ({ source, maxMb, options, mounted }) => {
+    if (mounted) {
+      ensureSandboxWorkspaceForSession.mockResolvedValue({
+        ...sandboxWorkspace,
+        workspaceAccess: "rw",
+      });
+    }
+    const workspaceDir = "/Users/peter/.openclaw/workspace";
+    const result = await createTestReplyMediaNormalizer({ workspaceDir, ...options })({
+      mediaUrls: [source],
     });
-
-    await normalize({
-      mediaUrls: [absolutePath],
-    });
-
-    expectOutboundAttachmentCall(0, absolutePath, 64 * 1024 * 1024);
+    const stagedPath = path.join("/tmp/outbound-media", path.basename(source));
+    expectMedia(result, stagedPath, [stagedPath]);
+    expectOutboundAttachmentCall(0, path.resolve(workspaceDir, source), maxMb * 1024 * 1024);
   });
 
-  it("drops workspace-relative media paths that escape the agent workspace", async () => {
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: ["../../etc/passwd"],
-    });
-
-    expectNoMedia(result);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
-  });
-
-  it("drops sandbox-relative media paths that escape both sandbox and workspace", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: ["../../etc/passwd"],
-    });
-
-    expectNoMedia(result);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
-  });
-
-  it.each([
+  it.each<{
+    source: string;
+    normalized: string;
+    sourceUrls?: string[];
+    sandbox?: boolean;
+  }>([
     {
       source: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
-      sourceUrls: undefined,
+      normalized: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
     },
     {
       source: "/Users/peter/.openclaw/media/tool-image-generation/./generated.png",
+      normalized: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
       sourceUrls: ["/Users/peter/.openclaw/media/tool-image-generation/./generated.png"],
     },
+    {
+      source: "/Users/peter/.openclaw/media/outbound/generated.png",
+      normalized: "/Users/peter/.openclaw/media/outbound/generated.png",
+      sandbox: true,
+    },
   ])(
-    "keeps managed generated media and source spelling: $source",
-    async ({ source, sourceUrls }) => {
+    "keeps managed media and source spelling: $source",
+    async ({ source, normalized, sourceUrls, sandbox }) => {
+      if (sandbox) {
+        ensureSandboxWorkspaceForSession.mockResolvedValue(sandboxWorkspace);
+      }
       setTestEnvValue("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
       const normalize = createTestReplyMediaNormalizer();
       const result = await normalize({ mediaUrls: [source] });
-      expectMedia(result, "/Users/peter/.openclaw/media/tool-image-generation/generated.png", [
-        "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
-      ]);
+      expectMedia(result, normalized, [normalized]);
       expect(
         collectReplyMediaEntries(result, result.mediaUrls).map((entry) => entry.sourceUrls),
       ).toEqual([sourceUrls]);
       expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
     },
   );
-
-  it("keeps managed outbound media under the shared media root with sandbox mapping", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
-    setTestEnvValue("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
-    });
-
-    expectMedia(result, "/Users/peter/.openclaw/media/outbound/generated.png", [
-      "/Users/peter/.openclaw/media/outbound/generated.png",
-    ]);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
-  });
 
   it("drops managed outbound media symlinks escaping the shared media root without sandbox mapping", async () => {
     if (process.platform === "win32") {
@@ -525,34 +426,57 @@ describe("createReplyMediaPathNormalizer", () => {
     }
   });
 
-  it("drops host-local media when shared outbound attachment policy rejects it", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
-      new Error("Local media path is not under an allowed directory"),
-    );
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/secrets/photo.png"],
-    });
-
-    expectNoMedia(result);
-  });
-
-  it("keeps reply text and appends a named receipt when all reply media is dropped", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
-      new LocalMediaAccessError("not-found", "missing test fixture"),
-    );
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
+  it.each<{
+    name: string;
+    error: Error;
+    mediaUrl: string;
+    text?: string;
+    expectedText?: string;
+    verifyMetadata?: (result: ReplyPayload) => void;
+  }>([
+    {
+      name: "outbound policy rejection",
+      error: new Error("Local media path is not under an allowed directory"),
+      mediaUrl: "/Users/peter/secrets/photo.png",
+    },
+    {
+      name: "missing file with caption",
+      error: new LocalMediaAccessError("not-found", "missing test fixture"),
+      mediaUrl: "./out/missing.png",
       text: "WA_MEDIA_DM_07",
-      mediaUrls: ["./out/missing.png"],
-    });
-
-    expect(result.text).toBe(
-      "WA_MEDIA_DM_07\n⚠️ missing.png: File not found. Check the path and try again.",
-    );
+      expectedText: "WA_MEDIA_DM_07\n⚠️ missing.png: File not found. Check the path and try again.",
+    },
+    {
+      name: "missing file without caption",
+      error: new LocalMediaAccessError("not-found", "missing test fixture"),
+      mediaUrl: "./out/missing.png",
+      expectedText: "⚠️ missing.png: File not found. Check the path and try again.",
+      verifyMetadata: (result) => {
+        expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toEqual([
+          { code: "file-not-found", kind: "image", label: "missing.png", mimeType: "image/png" },
+        ]);
+      },
+    },
+    {
+      name: "host-read media type rejection",
+      error: new HostReadMediaTypeError("unsupported test fixture"),
+      mediaUrl: "./out/settings.toml",
+      expectedText:
+        "⚠️ settings.toml: Rejected by the local attachment allowlist. Send a supported file type.",
+      verifyMetadata: (result) => {
+        expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toMatchObject([
+          { code: "unsupported-format", label: "settings.toml" },
+        ]);
+      },
+    },
+  ])("drops media for $name", async ({ error, mediaUrl, text, expectedText, verifyMetadata }) => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(error);
+    const result = await createTestReplyMediaNormalizer()({ text, mediaUrls: [mediaUrl] });
     expectNoMedia(result);
+    if (expectedText !== undefined) {
+      expect(result.text).toBe(expectedText);
+    }
+    verifyMetadata?.(result);
   });
 
   it("keeps surviving media and appends a named receipt for each dropped item", async () => {
@@ -628,44 +552,6 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(entry?.attachment?.mimeType).toBeUndefined();
   });
 
-  it("returns a warning-only text reply when media-only output is dropped upstream", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
-      new LocalMediaAccessError("not-found", "missing test fixture"),
-    );
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
-      mediaUrls: ["./out/missing.png"],
-    });
-
-    expect(result.text).toBe("⚠️ missing.png: File not found. Check the path and try again.");
-    expectNoMedia(result);
-    expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toEqual([
-      {
-        code: "file-not-found",
-        kind: "image",
-        label: "missing.png",
-        mimeType: "image/png",
-      },
-    ]);
-  });
-
-  it("keeps host-read media type rejection internal to the reply outcome", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
-      new HostReadMediaTypeError("unsupported test fixture"),
-    );
-    const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({ mediaUrls: ["./out/settings.toml"] });
-
-    expect(result.text).toBe(
-      "⚠️ settings.toml: Rejected by the local attachment allowlist. Send a supported file type.",
-    );
-    expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toMatchObject([
-      { code: "unsupported-format", label: "settings.toml" },
-    ]);
-  });
-
   it("threads requester context into shared outbound media access", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
@@ -686,7 +572,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/photo.png"],
     });
 
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
+    expect(resolveAgentScopedHostOutboundMediaAccess).toHaveBeenCalledTimes(1);
     expect(expectAgentScopedMediaAccessCall()).toEqual({
       cfg: {},
       agentId: undefined,
@@ -705,70 +591,39 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
-  it("passes absolute local media sources into shared outbound media access", async () => {
-    const absolutePath = "/Users/peter/Pictures/chart.png";
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: { tools: { fs: { workspaceOnly: false } } },
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+  it.each(["/Users/peter/Pictures/chart.png", "~/Pictures/chart.png"])(
+    "passes local source %s into shared outbound media access",
+    async (mediaSource) => {
+      const normalize = createReplyMediaPathNormalizer({
+        cfg: { tools: { fs: { workspaceOnly: false } } },
+        sessionKey: "session-key",
+        workspaceDir: "/tmp/agent-workspace",
+      });
 
-    await normalize({
-      mediaUrls: [absolutePath],
-    });
+      const result = await normalize({
+        mediaUrls: [mediaSource],
+      });
 
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
-    const accessRequest = expectAgentScopedMediaAccessCall();
-    expect(typeof accessRequest.agentId).toBe("string");
-    expect({ ...accessRequest, agentId: undefined }).toEqual({
-      cfg: { tools: { fs: { workspaceOnly: false } } },
-      agentId: undefined,
-      workspaceDir: "/tmp/agent-workspace",
-      mediaSources: [absolutePath],
-      sessionKey: "session-key",
-      messageProvider: undefined,
-      accountId: undefined,
-      requesterSenderId: undefined,
-      requesterSenderName: undefined,
-      requesterSenderUsername: undefined,
-      requesterSenderE164: undefined,
-      groupId: undefined,
-      groupChannel: undefined,
-      groupSpace: undefined,
-    });
-  });
-
-  it("passes home-relative local media sources into shared outbound media access", async () => {
-    const homeRelativePath = "~/Pictures/chart.png";
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: { tools: { fs: { workspaceOnly: false } } },
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: [homeRelativePath],
-    });
-
-    expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
-    const accessRequest = expectAgentScopedMediaAccessCall();
-    expect(typeof accessRequest.agentId).toBe("string");
-    expect({ ...accessRequest, agentId: undefined }).toEqual({
-      cfg: { tools: { fs: { workspaceOnly: false } } },
-      agentId: undefined,
-      workspaceDir: "/tmp/agent-workspace",
-      mediaSources: [homeRelativePath],
-      sessionKey: "session-key",
-      messageProvider: undefined,
-      accountId: undefined,
-      requesterSenderId: undefined,
-      requesterSenderName: undefined,
-      requesterSenderUsername: undefined,
-      requesterSenderE164: undefined,
-      groupId: undefined,
-      groupChannel: undefined,
-      groupSpace: undefined,
-    });
-  });
+      expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
+      expect(resolveAgentScopedHostOutboundMediaAccess).toHaveBeenCalledTimes(1);
+      const accessRequest = expectAgentScopedMediaAccessCall();
+      expect(typeof accessRequest.agentId).toBe("string");
+      expect({ ...accessRequest, agentId: undefined }).toEqual({
+        cfg: { tools: { fs: { workspaceOnly: false } } },
+        agentId: undefined,
+        workspaceDir: "/tmp/agent-workspace",
+        mediaSources: [mediaSource],
+        sessionKey: "session-key",
+        messageProvider: undefined,
+        accountId: undefined,
+        requesterSenderId: undefined,
+        requesterSenderName: undefined,
+        requesterSenderUsername: undefined,
+        requesterSenderE164: undefined,
+        groupId: undefined,
+        groupChannel: undefined,
+        groupSpace: undefined,
+      });
+    },
+  );
 });

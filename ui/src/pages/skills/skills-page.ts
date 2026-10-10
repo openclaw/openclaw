@@ -3,12 +3,14 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -36,11 +38,15 @@ import {
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
+import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
-import { renderSkillLibrary, renderSkillLibraryDialogs } from "./library-view.ts";
+import {
+  renderSkillLibrary,
+  renderSkillLibraryDialogs,
+  renderSkillLibraryFeedback,
+} from "./library-view.ts";
 import type { SkillDetailTab, SkillsStatusFilter } from "./view-types.ts";
 import { renderSkills } from "./view.ts";
 
@@ -115,15 +121,7 @@ class SkillsPage extends OpenClawLightDomElement {
   });
   private readonly clawhubIcons = new PluginIconController({
     kind: "catalog",
-    getFetchContext: () => ({
-      resourceBasePath: this.context.resourceBasePath,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: this.context.gateway.snapshot.hello,
-        settings: { token: this.context.gateway.connection.token },
-        password: this.context.gateway.connection.password,
-      },
-    }),
+    getFetchContext: () => pluginIconFetchContext(this.context),
     isConnected: () => this.gateway.connected,
     onUrlsChange: (urls) => {
       this.clawhubIconUrls = urls;
@@ -132,8 +130,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private readonly library = new SkillLibraryController(
     this,
     this.gateway,
-    () => this.skillsAgentId,
-    () => this.refreshPage(),
+    () => this.context?.config,
   );
   private readonly clawhubSearchTask = new Task(this, {
     args: () =>
@@ -148,6 +145,7 @@ class SkillsPage extends OpenClawLightDomElement {
       client ? searchClawHub(client, query, signal) : initialState,
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .watchStore(() => this.context?.config)
     .effect(
       () => this.context?.agents,
       (agents) => {
@@ -161,9 +159,8 @@ class SkillsPage extends OpenClawLightDomElement {
         return cleanup;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         const previous = this.skillsAgentId;
         this.reconcileAgentState();
@@ -196,10 +193,7 @@ class SkillsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubIcons.reset();
     super.disconnectedCallback();
   }
@@ -227,10 +221,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private resetLoadedSkillState() {
     this.library.reset();
     this.clawhubSearchTask.abort();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
     }
@@ -345,15 +336,20 @@ class SkillsPage extends OpenClawLightDomElement {
   private changeClawHubQuery(query: string) {
     this.clawhubSearchQuery = query;
     this.clawhubInstallMessage = null;
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubSearchTimer = setTimeout(() => {
       this.clawhubSearchTimer = null;
       this.debouncedClawHubSearchQuery = query.trim();
       this.requestUpdate();
     }, 300);
     this.requestUpdate();
+  }
+
+  private clearClawHubSearchTimer() {
+    if (this.clawhubSearchTimer) {
+      clearTimeout(this.clawhubSearchTimer);
+      this.clawhubSearchTimer = null;
+    }
   }
 
   get clawhubSearchResults(): ClawHubSearchResult[] | null {
@@ -408,11 +404,10 @@ class SkillsPage extends OpenClawLightDomElement {
     );
   }
 
-  private selectHubTab(tab: PluginsHubTab) {
-    if (tab === "skills") {
-      return;
-    }
-    this.context.navigate(tab);
+  private navigateSkills(route: "skills" | "skill-settings") {
+    this.context.navigate(route, {
+      search: this.skillsAgentId ? `?agent=${encodeURIComponent(this.skillsAgentId)}` : "",
+    });
   }
 
   override render() {
@@ -423,39 +418,21 @@ class SkillsPage extends OpenClawLightDomElement {
         this.surface === "discovery"
           ? renderPluginsHubHeader({
               active: "skills",
-              onSelect: (tab) => this.selectHubTab(tab),
+              onSelect: (tab) => {
+                if (tab !== "skills") {
+                  this.context.navigate(tab);
+                }
+              },
               secondaryAction: {
                 label: t("skillDiscovery.settings"),
                 icon: icons.settings,
-                onClick: () =>
-                  this.context.navigate("skill-settings", {
-                    search: this.skillsAgentId
-                      ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                      : "",
-                  }),
+                onClick: () => this.navigateSkills("skill-settings"),
               },
             })
-          : html`<div class="plugins-toolbar">
-              <button
-                type="button"
-                class="btn"
-                @click=${() =>
-                  this.context.navigate("skills", {
-                    search: this.skillsAgentId
-                      ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                      : "",
-                  })}
-              >
-                ${icons.search} ${t("skillDiscovery.search")}
-              </button>
-              <button
-                type="button"
-                class="btn"
-                @click=${() => this.context.navigate("skill-workshop")}
-              >
-                ${t("pluginsPage.workshopTab")}
-              </button>
-            </div>`
+          : renderSettingsPageHeader({
+              title: titleForRoute("skill-settings"),
+              subtitle: subtitleForRoute("skill-settings"),
+            })
       }
       ${renderSettingsWorkspace(html`
         <div
@@ -471,11 +448,28 @@ class SkillsPage extends OpenClawLightDomElement {
             library:
               this.surface === "discovery"
                 ? html`
-                    ${this.library.error && !this.library.draft && !this.library.importOpen ? html`<div class="callout danger" role="alert">${this.library.error}</div>` : nothing}
-                    ${this.library.notice && !this.library.draft ? html`<div class="callout success" role="status">${this.library.notice}</div>` : nothing}
+                    ${renderSkillLibraryFeedback(this.library)}
                     ${renderSkillLibraryDialogs(this.library)}
                   `
-                : renderSkillLibrary(this.library),
+                : renderSkillLibrary(
+                    this.library,
+                    html`
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() => this.navigateSkills("skills")}
+                      >
+                        ${icons.search} ${t("skillDiscovery.search")}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() => this.context.navigate("skill-workshop")}
+                      >
+                        ${t("pluginsPage.workshopTab")}
+                      </button>
+                    `,
+                  ),
             showInventory: this.library.showWorkspace,
             canUpdate: this.canUpdateSkills(),
             canInstall: this.canInstallFromClawHub(),

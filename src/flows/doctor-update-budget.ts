@@ -7,7 +7,7 @@ import type { HealthFinding } from "./health-checks.js";
 
 export type DoctorUpdateWork =
   | { kind: "startup" }
-  | { kind: "inspection"; scope: "run" | "agent" }
+  | { kind: "inspection"; scope: "run" | "agent"; repairs?: true }
   | { kind: "standalone" }
   | { kind: "finalize" };
 

@@ -10,10 +10,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type {
-  OpenClawPluginService,
+  OpenClawPluginApi,
   PluginRuntimeLifecycleRegistration,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../../extensions/crabbox/index.js";
 import { runExecProcess } from "../../src/agents/bash-tools.exec-runtime.js";
@@ -84,7 +87,8 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
 
       function registerGeneration(binary = sandbox.binary) {
         const lifecycle: PluginRuntimeLifecycleRegistration[] = [];
-        const services: OpenClawPluginService[] = [];
+        const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+        const scheduler = createTestPluginServiceScheduler();
         const api = createTestPluginApi({
           id: "crabbox",
           config,
@@ -95,11 +99,22 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         });
         plugin.register(api);
         return async () => {
-          for (const registration of lifecycle) {
-            await registration.cleanup?.({ reason: "restart" });
-          }
-          for (const service of services) {
-            await service.stop?.({ config, stateDir, workspaceDir, logger: api.logger });
+          scheduler.beginClose();
+          try {
+            for (const registration of lifecycle) {
+              await registration.cleanup?.({ reason: "restart" });
+            }
+            for (const service of services) {
+              await service.stop?.({
+                config,
+                stateDir,
+                workspaceDir,
+                logger: api.logger,
+                scheduler,
+              });
+            }
+          } finally {
+            await scheduler.stop();
           }
         };
       }

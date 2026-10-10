@@ -53,7 +53,6 @@ export type ChromeMcpOpenOptions = ChromeMcpOperationOptions & {
 export type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
   targetId: string;
 };
 
@@ -101,11 +100,9 @@ export type NormalizedChromeMcpProfileOptions = {
   browserUrl?: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
 };
-export type ChromeMcpOptionsInput =
-  | string
-  | ChromeMcpProfileOptions
-  | NormalizedChromeMcpProfileOptions;
+export type ChromeMcpOptionsInput = ChromeMcpProfileOptions | NormalizedChromeMcpProfileOptions;
 
 export type ChromeMcpSessionOwner = {
   isCurrent: (session: ChromeMcpSession) => boolean;
@@ -131,19 +128,7 @@ export type ChromeMcpProcessSnapshot = {
   identity: string;
 };
 
-/** Injectable process cleanup dependencies for platform-specific tests. */
-export type ChromeMcpProcessCleanupDeps = {
-  listProcesses?: () => Promise<ChromeMcpProcessSnapshot[]>;
-  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
-  sleep?: (ms: number) => Promise<void>;
-  platform?: NodeJS.Platform;
-  taskkillProcessTree?: (pid: number) => Promise<void>;
-};
-
-export type ChromeMcpOwnedProcess = {
-  pid: number;
-  identity: string;
-};
+export type ChromeMcpOwnedProcess = Pick<ChromeMcpProcessSnapshot, "pid" | "identity">;
 
 export type ChromeMcpProcessCleanupTarget = {
   root: ChromeMcpOwnedProcess;

@@ -1,15 +1,14 @@
-// Qa Matrix plugin module implements self-verification CLI E2EE scenarios.
-import { createMatrixQaClient } from "../substrate/client.js";
 import { createMatrixQaCliSelfVerificationRuntime } from "./scenario-runtime-e2ee-cli-runtime.js";
 import {
   assertMatrixQaCliSasMatches,
   createMatrixQaE2eeCliOwnerClient,
   isMatrixQaCliBackupUsable,
   isMatrixQaCliOwnerSelfVerification,
-  parseMatrixQaCliJson,
   parseMatrixQaCliSasText,
   parseMatrixQaCliSummaryField,
+  loginMatrixQaCliDevice,
   registerMatrixQaCliE2eeAccount,
+  runMatrixQaSetupCliJson,
   type MatrixQaCliBackupRestoreStatus,
   type MatrixQaCliVerificationStatus,
   writeMatrixQaCliOutputArtifacts,
@@ -44,17 +43,12 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
     if (!encodedRecoveryKey) {
       throw new Error("Matrix E2EE self-verification scenario did not expose a recovery key");
     }
-    const loginClient = createMatrixQaClient({
-      baseUrl: context.baseUrl,
-    });
-    const cliDevice = await loginClient.loginWithPassword({
-      deviceName: "OpenClaw Matrix QA CLI Self Verification Device",
-      password: account.password,
-      userId: account.userId,
-    });
-    if (!cliDevice.deviceId) {
-      throw new Error("Matrix E2EE CLI verification login did not return a device id");
-    }
+    const cliDevice = await loginMatrixQaCliDevice(
+      context.baseUrl,
+      account,
+      "OpenClaw Matrix QA CLI Self Verification Device",
+      "Matrix E2EE CLI verification",
+    );
 
     const cli = await createMatrixQaCliSelfVerificationRuntime({
       accountId,
@@ -64,26 +58,24 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
       userId: cliDevice.userId,
     });
     try {
-      const restoreResult = await cli.run(
-        [
-          "matrix",
-          "verify",
-          "backup",
-          "restore",
-          "--account",
-          accountId,
-          "--recovery-key-stdin",
-          "--json",
-        ],
-        context.timeoutMs,
-        `${encodedRecoveryKey}\n`,
-      );
-      const restoreArtifacts = await writeMatrixQaCliOutputArtifacts({
-        label: "verify-backup-restore",
-        result: restoreResult,
-        rootDir: cli.rootDir,
-      });
-      const restored = parseMatrixQaCliJson(restoreResult) as MatrixQaCliBackupRestoreStatus;
+      const { artifacts: restoreArtifacts, payload: restoredPayload } =
+        await runMatrixQaSetupCliJson(
+          cli,
+          "verify-backup-restore",
+          [
+            "matrix",
+            "verify",
+            "backup",
+            "restore",
+            "--account",
+            accountId,
+            "--recovery-key-stdin",
+            "--json",
+          ],
+          context.timeoutMs,
+          `${encodedRecoveryKey}\n`,
+        );
+      const restored = restoredPayload as MatrixQaCliBackupRestoreStatus;
       if (
         restored.success !== true ||
         restored.backup?.decryptionKeyCached !== true ||
@@ -193,20 +185,16 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
         });
         const cliVerificationId =
           completedCli.stdout.match(/^Verification id:\s*(\S+)/m)?.[1] ?? "interactive-cli";
-        const statusResult = await cli.run([
-          "matrix",
-          "verify",
-          "status",
-          "--account",
-          accountId,
-          "--json",
-        ]);
-        const statusArtifacts = await writeMatrixQaCliOutputArtifacts({
-          label: "verify-status",
-          result: statusResult,
-          rootDir: cli.rootDir,
-        });
-        const status = parseMatrixQaCliJson(statusResult) as MatrixQaCliVerificationStatus;
+        const { artifacts: statusArtifacts, payload: statusPayload } =
+          await runMatrixQaSetupCliJson(cli, "verify-status", [
+            "matrix",
+            "verify",
+            "status",
+            "--account",
+            accountId,
+            "--json",
+          ]);
+        const status = statusPayload as MatrixQaCliVerificationStatus;
         if (
           status.verified !== true ||
           status.crossSigningVerified !== true ||
@@ -254,6 +242,7 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
         };
       } finally {
         session.kill();
+        await session.wait().catch(() => undefined);
       }
     } finally {
       try {

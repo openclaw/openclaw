@@ -26,9 +26,9 @@ import { planEffectiveModelCatalogRows } from "./index.js";
 import type { RemoteModelCatalogPrice, RemoteModelCatalogUpstreamPrice } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
 import {
-  getRemoteModelCatalogPricing,
-  getRemoteModelCatalogUpstreamPricing,
+  getActiveRemoteModelCatalog,
   prepareRemoteModelCatalogStartupSnapshot,
+  type ActiveRemoteModelCatalog,
 } from "./remote-overlay.js";
 
 type PricingValue = ModelCatalogCost;
@@ -38,7 +38,7 @@ type ExternalPricingPolicy = {
   /** Sources whose vendor/model rates this provider charges unchanged, as for gateways. */
   passthroughSources: readonly string[];
 };
-type PricingContext = {
+export type PricingContext = {
   config: OpenClawConfig;
   normalizeKey: (provider: string, model: string) => string;
   catalog: ReadonlyMap<string, PricingValue>;
@@ -50,7 +50,35 @@ type PricingContext = {
 };
 
 const EMPTY_CONFIG: OpenClawConfig = {};
-const pricingContextByConfig = new WeakMap<OpenClawConfig, PricingContext>();
+const pricingContextByConfig = new WeakMap<
+  OpenClawConfig,
+  { absent?: PricingContext; catalogs: WeakMap<ActiveRemoteModelCatalog, PricingContext> }
+>();
+
+function readPricingContext(
+  config: OpenClawConfig,
+  catalog: ActiveRemoteModelCatalog | undefined,
+): PricingContext | undefined {
+  const contexts = pricingContextByConfig.get(config);
+  return catalog ? contexts?.catalogs.get(catalog) : contexts?.absent;
+}
+
+function retainPricingContext(
+  config: OpenClawConfig,
+  catalog: ActiveRemoteModelCatalog | undefined,
+  context: PricingContext,
+): void {
+  let contexts = pricingContextByConfig.get(config);
+  if (!contexts) {
+    contexts = { catalogs: new WeakMap() };
+    pricingContextByConfig.set(config, contexts);
+  }
+  if (catalog) {
+    contexts.catalogs.set(catalog, context);
+  } else {
+    contexts.absent = context;
+  }
+}
 
 function activeManifestRegistry(
   snapshot: PluginMetadataSnapshot,
@@ -119,8 +147,9 @@ function buildPricingContext(
   }
   // Hosted aliases are policy-resolved against installed manifests. If that metadata is
   // unavailable, fail closed instead of treating every provider as policy-free.
-  const hosted = snapshot ? (getRemoteModelCatalogPricing(config) ?? {}) : {};
-  const upstream = snapshot ? (getRemoteModelCatalogUpstreamPricing(config) ?? {}) : {};
+  const remoteCatalog = snapshot ? getActiveRemoteModelCatalog(config) : undefined;
+  const hosted = remoteCatalog?.pricing ?? {};
+  const upstream = remoteCatalog?.upstreamPricing ?? {};
   // Policy-free providers read both tables like v1's merged map; stable sort keeps hosted first.
   const policyFree: Array<[string, RemoteModelCatalogPrice]> = [
     ...Object.entries(hosted),
@@ -169,9 +198,10 @@ function buildPricingContext(
   };
 }
 
-/** Reuses the static pricing policy captured for this config. */
+/** Reuses policy and prices for the config's exact accepted catalog generation. */
 export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG): PricingContext {
-  const existing = pricingContextByConfig.get(config);
+  const catalog = getActiveRemoteModelCatalog(config, false);
+  const existing = readPricingContext(config, catalog);
   if (existing) {
     return existing;
   }
@@ -186,7 +216,7 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
     snapshot = undefined;
   }
   const context = buildPricingContext(config, snapshot);
-  pricingContextByConfig.set(config, context);
+  retainPricingContext(config, getActiveRemoteModelCatalog(config, false), context);
   return context;
 }
 
@@ -194,7 +224,7 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
 export async function prepareModelPricingContext(
   config: OpenClawConfig = EMPTY_CONFIG,
 ): Promise<void> {
-  if (pricingContextByConfig.has(config)) {
+  if (readPricingContext(config, getActiveRemoteModelCatalog(config, false))) {
     return;
   }
   const env = cloneEnvWithPlatformSemantics(process.env);
@@ -228,11 +258,12 @@ export async function prepareModelPricingContext(
         await prepareRemoteModelCatalogStartupSnapshot({ env });
       }
       assertCurrent();
-      // A synchronous reader may have captured this config while preparation awaited I/O.
-      if (!pricingContextByConfig.has(config)) {
+      const catalog = getActiveRemoteModelCatalog(config, false);
+      // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
+      if (!readPricingContext(config, catalog)) {
         const context = buildPricingContext(config, snapshot);
         assertCurrent();
-        pricingContextByConfig.set(config, context);
+        retainPricingContext(config, catalog, context);
       }
     });
   } finally {

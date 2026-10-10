@@ -12,20 +12,11 @@ import {
 import { parseIMessageNotification } from "./parse-notification.js";
 import type { IMessagePayload } from "./types.js";
 
-// Per-chat history fetch budget. Upstream `messages.history` serves rows
-// `ORDER BY date DESC LIMIT ?`, so a smaller limit trims the OLDEST rows
-// server-side before we ever see them. Always request the full budget: the
-// cross-chat sort plus the perRunLimit slice below can only pick the true
-// oldest rows if the per-chat page reached them.
+// imsg returns newest-first: fetch the full page before choosing the global oldest rows.
 const PER_CHAT_HISTORY_LIMIT = 500;
 
-// chats.list page size used during catchup. 200 covers far more than any
-// realistic offline window worth of distinct chats while staying well under
-// any sensible chat.db query cost.
 const CATCHUP_CHATS_LIST_LIMIT = 200;
 
-// Per-RPC timeout. Catchup runs once at startup; a slow imsg should not
-// stall the live dispatch loop indefinitely.
 const CATCHUP_RPC_TIMEOUT_MS = 30_000;
 
 type ChatsListEntry = {
@@ -64,21 +55,7 @@ type RunIMessageCatchupParams = {
   now?: () => number;
 };
 
-/**
- * Wire `performIMessageCatchup` against the live `imsg` JSON-RPC client.
- *
- * Catchup recovers messages that landed in `chat.db` while the gateway was
- * offline (crash, restart, mac sleep) by:
- *   1. listing recently-active chats via `chats.list`,
- *   2. fetching per-chat history since the cursor via `messages.history`,
- *   3. sorting cross-chat by `rowid`, capping at `perRunLimit`,
- *   4. admitting each row through the same durable GUID queue used by live
- *      notifications, so replay, coalescing, echo, and receipt behavior match.
- *
- * Runs at most once per `monitorIMessageProvider` invocation, between
- * `watch.subscribe` and the live dispatch loop. Anything that arrives during
- * catchup itself flows through live admission; queue tombstones reject overlap.
- */
+/** Replay oldest-first through durable admission; tombstones reject live/watch overlap. */
 export async function runIMessageCatchup(
   params: RunIMessageCatchupParams,
 ): Promise<IMessageCatchupSummary> {
@@ -86,9 +63,6 @@ export async function runIMessageCatchup(
   const log = (msg: string) => runtime?.log?.(msg);
   const warnLog = (msg: string) => runtime?.log?.(warn(msg));
 
-  // Map keyed by guid so the dispatch adapter can recover the full payload
-  // the fetcher pulled from `messages.history`. Local to this catchup pass —
-  // discarded when the function returns.
   const payloadByGuid = new Map<
     string,
     { message: IMessagePayload; rawEnvelope: { message: unknown } }
@@ -114,12 +88,7 @@ export async function runIMessageCatchup(
     const chats = chatsResult?.chats ?? [];
     const collected: IMessageCatchupRow[] = [];
     let historyFetchFailed = false;
-    // Track the highest rowid / date the imsg bridge actually returned across
-    // all chats, regardless of whether each row passed the parser. The catchup
-    // loop uses this as a cursor-advance floor so an unparseable row (corrupt
-    // text column, schema drift, etc.) cannot stall catchup forever — without
-    // this, the same broken row would be re-fetched and re-dropped on every
-    // gateway startup.
+    // Include parse-rejected rows so corrupt history cannot stall the next startup.
     let rawWatermarkRowid = -Infinity;
     let rawWatermarkMs = -Infinity;
 
@@ -128,8 +97,6 @@ export async function runIMessageCatchup(
       if (chatId === null) {
         continue;
       }
-      // Skip chats that have not seen activity in the catchup window. Saves
-      // a per-chat RPC for every old archived conversation.
       const lastMs =
         typeof chat.last_message_at === "string" ? Date.parse(chat.last_message_at) : Number.NaN;
       if (Number.isFinite(lastMs) && lastMs < sinceMs) {
@@ -149,8 +116,6 @@ export async function runIMessageCatchup(
           { timeoutMs: CATCHUP_RPC_TIMEOUT_MS },
         );
       } catch (err) {
-        // Best-effort per chat. A single broken chat must not poison the
-        // whole pass — drop and continue.
         historyFetchFailed = true;
         warnLog(`imessage catchup: messages.history failed for chat_id=${chatId}: ${String(err)}`);
         continue;
@@ -158,11 +123,6 @@ export async function runIMessageCatchup(
 
       const messages = Array.isArray(historyResult?.messages) ? historyResult.messages : [];
       for (const raw of messages) {
-        // Best-effort raw-watermark probe BEFORE we run the parser, so even
-        // rows we drop still let the cursor advance past them. We only trust
-        // numeric `id` / parseable `created_at` — if the row is so malformed
-        // that we cannot even read those, leave the watermark unchanged for
-        // this row (same forward-progress behavior as today, just no worse).
         const rawRecord = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
         const rawRowid =
           rawRecord && typeof rawRecord.id === "number" && Number.isFinite(rawRecord.id)
@@ -178,9 +138,6 @@ export async function runIMessageCatchup(
           rawWatermarkMs = Math.max(rawWatermarkMs, rawDateMs);
         }
 
-        // Reuse the live notification parser by wrapping the row in the same
-        // `{ message: ... }` envelope. Anything that fails the parser would
-        // also be dropped on the live path, so the same shape guard applies.
         const payload = parseIMessageNotification({ message: raw });
         if (!payload) {
           continue;
@@ -213,37 +170,16 @@ export async function runIMessageCatchup(
         `imessage catchup: fetched ${sorted.length} rows across chats, ` +
           `capped to perRunLimit=${limit} (oldest first); next startup picks up the rest`,
       );
-      // Drop payloads we are no longer going to dispatch so the dispatch
-      // adapter does not have to defend against the discarded ones.
-      const keep = new Set(capped.map((row) => row.guid));
-      for (const guid of payloadByGuid.keys()) {
-        if (!keep.has(guid)) {
-          payloadByGuid.delete(guid);
-        }
-      }
     }
 
-    // Clamp the raw watermark when cap-truncation hits so the catchup loop
-    // cannot persist a cursor past undispatched valid rows. Without this,
-    // a `messages.history` page wider than `perRunLimit` would silently
-    // skip the cap-truncated tail forever — the WARN above promises the
-    // next startup picks up the rest, and that promise relies on the
-    // cursor staying at the last dispatched rowid. When no truncation
-    // happens, the watermark covers parse-rejected rows interspersed
-    // with the dispatched batch (the original forward-progress fix).
+    // Never advance past valid rows excluded by perRunLimit.
     let effectiveWatermarkRowid = rawWatermarkRowid;
     let effectiveWatermarkMs = rawWatermarkMs;
-    if (isCapTruncated && capped.length > 0) {
+    if (isCapTruncated) {
       const last = capped.at(-1);
-      if (last) {
-        effectiveWatermarkRowid = Math.min(effectiveWatermarkRowid, last.rowid);
-        effectiveWatermarkMs = Math.min(effectiveWatermarkMs, last.date);
-      }
-    } else if (isCapTruncated && capped.length === 0) {
-      // Pathological: cap=0. Don't emit any watermark; preserve the prior
-      // cursor and let the next pass try again.
-      effectiveWatermarkRowid = Number.NaN;
-      effectiveWatermarkMs = Number.NaN;
+      // A zero cap produces NaN watermarks and preserves the prior cursor.
+      effectiveWatermarkRowid = last ? Math.min(rawWatermarkRowid, last.rowid) : Number.NaN;
+      effectiveWatermarkMs = last ? Math.min(rawWatermarkMs, last.date) : Number.NaN;
     }
 
     return {
@@ -260,10 +196,6 @@ export async function runIMessageCatchup(
   const dispatchFn: CatchupDispatchFn = async (row) => {
     const entry = payloadByGuid.get(row.guid);
     if (!entry) {
-      // Should not happen: the fetcher only emits rows it has stashed. But
-      // if a future caller wires a different fetcher and forgets to populate
-      // the map, we would otherwise silently no-op. Treat as a transient
-      // failure so the cursor stays put and operators see the warning.
       warnLog(`imessage catchup: missing payload for guid=${row.guid}, skipping`);
       return { ok: false };
     }

@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway child process lifecycle behavior.
 import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { finished } from "node:stream/promises";
@@ -13,6 +12,7 @@ import {
   isQaPosixProcessGroupAlive,
   type QaLinuxProcessGroupInspector,
 } from "./posix-process-group.js";
+import { boundProcessGroupDiagnostics } from "./posix-process-stat.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -208,13 +208,6 @@ export function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, log
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
-function boundQaGatewayProcessTreeDiagnostics(details: string) {
-  if (details.length <= 2_048) {
-    return details;
-  }
-  return `${sliceUtf16Safe(details, 0, 2_045)}...`;
-}
-
 function isQaGatewayChildProcessTreeAlive(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector = inspectLinuxProcessGroup,
@@ -271,13 +264,6 @@ type QaGatewayChildStopOptions = {
   inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
 };
 
-function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
-  return {
-    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
-  };
-}
-
 function formatQaGatewayProcessTreeDiagnostics(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
@@ -289,7 +275,7 @@ function formatQaGatewayProcessTreeDiagnostics(
   const inspection = inspectLinuxProcessGroupFn(child.pid);
   const processGroupDetails =
     inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
-  return boundQaGatewayProcessTreeDiagnostics(
+  return boundProcessGroupDiagnostics(
     `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
   );
 }
@@ -302,17 +288,20 @@ export async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
-  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (
-    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+    await waitForQaGatewayChildExit(
+      child,
+      opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+      inspectLinuxProcessGroupFn,
+    )
   ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
   const stopped = await waitForQaGatewayChildExit(
     child,
-    timeouts.forceTimeoutMs,
+    opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
     inspectLinuxProcessGroupFn,
   );
   if (!stopped) {

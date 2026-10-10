@@ -129,6 +129,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_frozen_target_scenario_omissions:
+        description: Trusted opt-in to omit survivor scenarios absent from a canonical frozen target
+        required: false
+        default: false
+        type: boolean
       telegram_mode:
         description: Optional Telegram QA lane for the resolved package candidate
         required: true
@@ -1308,6 +1313,12 @@ jobs:
           legacy_guard="$install_prefix/lib/node_modules/openclaw/dist/openclaw-install-guard"
           [[ ! -e "$pending" ]]
           [[ ! -e "$legacy_guard" ]]
+
+      - name: Check installed package tree budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"
 
   docker_acceptance:
     name: Docker product acceptance (artifact-only)

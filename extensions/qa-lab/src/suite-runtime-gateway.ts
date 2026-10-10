@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
@@ -6,9 +7,9 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
@@ -53,10 +54,21 @@ async function waitForTransportReady(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   timeoutMs = 45_000,
 ) {
-  await env.transport.waitReady({
-    gateway: env.gateway,
-    timeoutMs,
-  });
+  try {
+    await env.transport.waitReady({
+      gateway: env.gateway,
+      timeoutMs,
+    });
+  } catch (error) {
+    if (error instanceof QaSuiteInfraError) {
+      throw error;
+    }
+    throw new QaSuiteInfraError(
+      "transport_ready_timeout",
+      `transport did not become ready: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function waitForConfigRestartSettle(
@@ -141,30 +153,6 @@ function getGatewayRetryAfterMs(error: unknown) {
   return null;
 }
 
-function areJsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-      return false;
-    }
-    return left.every((entry, index) => areJsonValuesEqual(entry, right[index]));
-  }
-  if (isPlainObject(left) || isPlainObject(right)) {
-    if (!isPlainObject(left) || !isPlainObject(right)) {
-      return false;
-    }
-    const leftKeys = Object.keys(left).toSorted();
-    const rightKeys = Object.keys(right).toSorted();
-    if (!areJsonValuesEqual(leftKeys, rightKeys)) {
-      return false;
-    }
-    return leftKeys.every((key) => areJsonValuesEqual(left[key], right[key]));
-  }
-  return false;
-}
-
 function withoutQaConfigApplyVolatileFields(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -190,8 +178,8 @@ function isConfigMutationNoopForSnapshot(
     return false;
   }
   return action === "config.patch"
-    ? areJsonValuesEqual(applyQaMergePatch(config, nextConfig), config)
-    : areJsonValuesEqual(
+    ? isDeepStrictEqual(applyQaMergePatch(config, nextConfig), config)
+    : isDeepStrictEqual(
         withoutQaConfigApplyVolatileFields(config),
         withoutQaConfigApplyVolatileFields(nextConfig),
       );
@@ -230,7 +218,7 @@ async function runConfigMutation(params: {
   skipRestartDeferral?: boolean;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
-  const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
+  const timeoutMs = resolveQaLiveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
@@ -335,49 +323,24 @@ async function runConfigMutation(params: {
   );
 }
 
-async function patchConfig(params: {
-  env: QaGatewayMutationEnv;
-  patch: Record<string, unknown>;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  note?: string;
-  restartDelayMs?: number;
-  restartSettleBufferMs?: number;
-  replacePaths?: readonly string[];
-  skipRestartDeferral?: boolean;
-}) {
+async function patchConfig(
+  params: Omit<Parameters<typeof runConfigMutation>[0], "action" | "raw"> & {
+    patch: Record<string, unknown>;
+  },
+) {
   return await runConfigMutation({
-    env: params.env,
+    ...params,
     action: "config.patch",
     raw: JSON.stringify(params.patch, null, 2),
-    sessionKey: params.sessionKey,
-    deliveryContext: params.deliveryContext,
-    note: params.note,
-    restartDelayMs: params.restartDelayMs,
-    restartSettleBufferMs: params.restartSettleBufferMs,
-    replacePaths: params.replacePaths,
-    skipRestartDeferral: params.skipRestartDeferral,
   });
 }
 
-async function applyConfig(params: {
-  env: QaGatewayMutationEnv;
-  nextConfig: Record<string, unknown>;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  note?: string;
-  restartDelayMs?: number;
-}) {
+async function applyConfig(
+  params: Omit<
+    Parameters<typeof runConfigMutation>[0],
+    "action" | "raw" | "restartSettleBufferMs" | "replacePaths" | "skipRestartDeferral"
+  > & { nextConfig: Record<string, unknown> },
+) {
   return await runConfigMutation({
     env: params.env,
     action: "config.apply",

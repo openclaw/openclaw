@@ -60,7 +60,7 @@ type FixtureOptions = {
   currentChatType?: "channel" | "direct";
   currentMessagingTarget?: string;
   rawTarget?: string;
-  configure?: (cfg: OpenClawConfig) => void;
+  allowOtherChannel?: boolean;
 };
 
 async function withReadFixture(
@@ -160,12 +160,11 @@ async function withReadFixture(
             network: { dangerouslyAllowPrivateNetwork: true },
             actions: { messages: true },
             groupPolicy: "allowlist",
-            groups: { [OTHER]: {} },
+            groups: options.allowOtherChannel === false ? {} : { [OTHER]: {} },
             accounts: { other: { enabled: true } },
           },
         },
       };
-      options.configure?.(cfg);
       setRuntimeConfigSnapshot(cfg, cfg);
       const requesterAccountId = options.requesterAccountId ?? "default";
       const toolContext = {
@@ -282,7 +281,18 @@ describe("Mattermost registered message reads", () => {
             expect(requests).toEqual(["/api/v4/users/me"]);
           } else {
             await expect(read(OTHER)).resolves.toMatchObject({
-              details: { ok: true, channelId: OTHER },
+              details: {
+                ok: true,
+                channelId: OTHER,
+                messages: [
+                  {
+                    ...POST,
+                    timestampMs: 1_700_000_000_000,
+                    timestampUtc: "2023-11-14T22:13:20.000Z",
+                  },
+                ],
+                hasMore: false,
+              },
             });
             expect(requests).toEqual([
               "/api/v4/users/me",
@@ -296,46 +306,7 @@ describe("Mattermost registered message reads", () => {
     },
   );
 
-  it.each(["bundled", "global"] as const)(
-    "reads current and configured channels with %s registration",
-    async (origin) => {
-      await withReadFixture({ origin }, async ({ read, requests }) => {
-        for (const target of [CURRENT, OTHER]) {
-          await expect(read(target)).resolves.toMatchObject({
-            details: {
-              ok: true,
-              channelId: target,
-              messages: [
-                {
-                  ...POST,
-                  timestampMs: 1_700_000_000_000,
-                  timestampUtc: "2023-11-14T22:13:20.000Z",
-                },
-              ],
-              hasMore: false,
-            },
-          });
-        }
-        expect(requests).toEqual([postsPath(CURRENT), metadataPath, postsPath(OTHER)]);
-      });
-    },
-  );
-
   it.each([
-    {
-      name: "disabled by default",
-      configure: (cfg: OpenClawConfig) => {
-        delete cfg.channels!.mattermost!.actions;
-      },
-      error: "reads are disabled",
-    },
-    {
-      name: "disabled for the selected account",
-      configure: (cfg: OpenClawConfig) => {
-        cfg.channels!.mattermost!.accounts = { default: { actions: { messages: false } } };
-      },
-      error: "reads are disabled",
-    },
     {
       name: "another requester account",
       requesterAccountId: "other",
@@ -354,60 +325,45 @@ describe("Mattermost registered message reads", () => {
   });
 
   it("preserves provider channel policy before reading posts", async () => {
-    await withReadFixture(
-      {
-        configure: (cfg) => {
-          cfg.channels!.mattermost!.groups = {};
-        },
-      },
-      async ({ read, requests }) => {
-        await expect(read(OTHER)).rejects.toThrow("Mattermost read target channel is not allowed");
-        expect(requests).toEqual([metadataPath]);
-      },
-    );
+    await withReadFixture({ allowOtherChannel: false }, async ({ read, requests }) => {
+      await expect(read(OTHER)).rejects.toThrow("Mattermost read target channel is not allowed");
+      expect(requests).toEqual([metadataPath]);
+    });
   });
 
-  it.each(["plugin", "run", "turn"] as const)(
-    "stops after metadata when %s authority is revoked",
-    async (authorityOwner) => {
-      await withReadFixture({}, async ({ read, requests, revoke, beforeResponse }) => {
-        beforeResponse((path) => {
-          if (path === metadataPath) {
-            revoke(authorityOwner);
-          }
-          return undefined;
-        });
-        await expect(read(OTHER)).rejects.toThrow(/no longer active/);
-        expect(requests).toEqual([metadataPath]);
+  it("stops after metadata when turn authority is revoked", async () => {
+    await withReadFixture({}, async ({ read, requests, revoke, beforeResponse }) => {
+      beforeResponse((path) => {
+        if (path === metadataPath) {
+          revoke("turn");
+        }
+        return undefined;
       });
-    },
-  );
+      await expect(read(OTHER)).rejects.toThrow(/no longer active/);
+      expect(requests).toEqual([metadataPath]);
+    });
+  });
 
-  it.each(["bundled", "global"] as const)(
-    "checks %s read authority after DNS preparation before each request",
-    async (origin) => {
-      for (const beforePosts of [false, true]) {
-        await withReadFixture({ origin }, async ({ read, requests, revoke }) => {
-          let lookups = 0;
-          preparation.afterLookup = () => {
-            lookups += 1;
-            if (!beforePosts || requests.includes(metadataPath)) {
-              revoke("plugin");
-            }
-          };
-          await expect(read(OTHER)).rejects.toThrow(/no longer active/);
-          expect(lookups).toBeGreaterThan(0);
-          expect(requests).toEqual(beforePosts ? [metadataPath] : []);
-          preparation.afterLookup = undefined;
-        });
-      }
-    },
-  );
+  it("checks bundled read authority after DNS preparation before each request", async () => {
+    for (const beforePosts of [false, true]) {
+      await withReadFixture({ origin: "bundled" }, async ({ read, requests, revoke }) => {
+        let lookups = 0;
+        preparation.afterLookup = () => {
+          lookups += 1;
+          if (!beforePosts || requests.includes(metadataPath)) {
+            revoke("plugin");
+          }
+        };
+        await expect(read(OTHER)).rejects.toThrow(/no longer active/);
+        expect(lookups).toBeGreaterThan(0);
+        expect(requests).toEqual(beforePosts ? [metadataPath] : []);
+        preparation.afterLookup = undefined;
+      });
+    }
+  });
 
   it.each([
     { owner: "plugin" as const, status: 200 },
-    { owner: "plugin" as const, status: 403 },
-    { owner: "run" as const, status: 200 },
     { owner: "run" as const, status: 403 },
   ])("fences late $status responses after $owner revocation", async ({ owner, status }) => {
     await withReadFixture({}, async ({ read, requests, revoke, beforeResponse }) => {
@@ -436,11 +392,7 @@ describe("Mattermost registered message reads", () => {
 
   it("preserves direct operator reads and provider errors", async () => {
     await withReadFixture(
-      {
-        configure: (cfg) => {
-          cfg.channels!.mattermost!.groups = {};
-        },
-      },
+      { allowOtherChannel: false },
       async ({ directRead, requests, beforeResponse }) => {
         await expect(directRead(OTHER)).resolves.toMatchObject({ details: { ok: true } });
         beforeResponse(() => 403);

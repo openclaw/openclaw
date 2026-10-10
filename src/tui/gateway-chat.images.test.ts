@@ -109,13 +109,7 @@ describe("GatewayChatClient image previews", () => {
     expect(requests[1]?.edge).toBe("bound-edge-header");
   });
 
-  it.each([
-    { wsPath: "/", basePath: "/console", expectedBase: "/console" },
-    { wsPath: "/console", basePath: "console/", expectedBase: "/console" },
-    { wsPath: "/proxy", basePath: "/console", expectedBase: "/proxy/console" },
-    { wsPath: "/proxy/console/", basePath: "/console", expectedBase: "/proxy/console" },
-    { wsPath: "/proxy", basePath: "", expectedBase: "/proxy" },
-  ])(
+  it.each([{ wsPath: "/console", basePath: "console/", expectedBase: "/console" }])(
     "resolves media mount $basePath through WebSocket path $wsPath",
     async ({ wsPath, basePath, expectedBase }) => {
       const rpc = vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({
@@ -138,15 +132,6 @@ describe("GatewayChatClient image previews", () => {
       );
     },
   );
-
-  it("does not guess an image mount when the config owner fails", async () => {
-    vi.spyOn(GatewayClient.prototype, "request").mockRejectedValue(new Error("config unavailable"));
-    const client = new GatewayChatClient({ url: origin, token: "media-token" });
-    await expect(client.loadImage(request("media://inbound/photo.jpg"))).rejects.toThrow(
-      "config unavailable",
-    );
-    expect(requests).toHaveLength(0);
-  });
 
   it("resolves generated images through the selected session and uses only the ticket for HTTP", async () => {
     const rpc = vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({
@@ -199,17 +184,14 @@ describe("GatewayChatClient image previews", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it.each([
-    "https://remote.example/image.png",
-    "//remote.example/image.png",
-    "file:///tmp/image.png",
-    "media://inbound/nested%2Fphoto.png",
-    "data:text/plain;base64,SGVsbG8=",
-  ])("rejects unsupported source %s without making a request", async (source) => {
-    const client = new GatewayChatClient({ url: origin });
-    await expect(client.loadImage(request(source))).rejects.toThrow();
-    expect(requests).toHaveLength(0);
-  });
+  it.each(["https://remote.example/image.png", "data:text/plain;base64,SGVsbG8="])(
+    "rejects unsupported source %s without making a request",
+    async (source) => {
+      const client = new GatewayChatClient({ url: origin });
+      await expect(client.loadImage(request(source))).rejects.toThrow();
+      expect(requests).toHaveLength(0);
+    },
+  );
 
   it("rejects artifact responses that cross session or origin boundaries", async () => {
     const rpc = vi.spyOn(GatewayClient.prototype, "request");

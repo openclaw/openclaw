@@ -7,7 +7,7 @@ export function useSpawnBrokerTestFixture(afterEach: (close: () => Promise<void>
     brokers.clear();
   });
   return async () => {
-    if (process.platform === "win32" || process.versions.bun) {
+    if (process.platform === "win32") {
       return undefined;
     }
     const broker = createSpawnBrokerHost();

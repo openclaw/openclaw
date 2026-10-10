@@ -77,48 +77,21 @@ describe("check-runtime-sidecar-loaders", () => {
     expect(runtimeGraph.filter((filePath) => /(^|\/)manager(?:-|\.)/.test(filePath))).toEqual([]);
   });
 
-  it("flags hidden createRequire runtime sidecars that are not build entries", () => {
-    const source = `
-      import { createRequire } from "node:module";
-      const require = createRequire(import.meta.url);
-      export function loadRuntime() {
-        return require("./missing.runtime.js");
-      }
-    `;
-
-    expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/tasks/task-registry.ts",
-        new Set(),
-        parser.parseSourceFile("src/tasks/task-registry.ts", source),
-      ),
-    ).toEqual([
-      {
-        line: 5,
-        specifier: "./missing.runtime.js",
-        sourcePath: "src/tasks/missing.runtime.ts",
-        reason:
-          'hidden local runtime loader "./missing.runtime.js" resolves to src/tasks/missing.runtime.ts, but that source is not an explicit tsdown entry',
-      },
-    ]);
-  });
-
   it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {
     const source = `
       import { createRequire } from "node:module";
       const require = createRequire(import.meta.url);
       export function loadRuntime() {
-        return require("./task-registry-control.runtime.js");
+        return require("./example-control.runtime.js");
       }
     `;
 
     expect(
       findRuntimeSidecarLoaderViolations(
         source,
-        "src/tasks/task-registry.ts",
-        new Set(["src/tasks/task-registry-control.runtime.ts"]),
-        parser.parseSourceFile("src/tasks/task-registry.ts", source),
+        "src/example/example-registry.ts",
+        new Set(["src/example/example-control.runtime.ts"]),
+        parser.parseSourceFile("src/example/example-registry.ts", source),
       ),
     ).toStrictEqual([]);
   });
@@ -138,17 +111,17 @@ describe("check-runtime-sidecar-loaders", () => {
     expect(
       findRuntimeSidecarLoaderViolations(
         source,
-        "src/tasks/task-registry.ts",
+        "src/example/example-registry.ts",
         new Set(),
-        parser.parseSourceFile("src/tasks/task-registry.ts", source),
+        parser.parseSourceFile("src/example/example-registry.ts", source),
       ),
     ).toEqual([
       {
         line: 7,
         specifier: "./control.runtime.js",
-        sourcePath: "src/tasks/control.runtime.ts",
+        sourcePath: "src/example/control.runtime.ts",
         reason:
-          'hidden local runtime loader "./control.runtime.js" resolves to src/tasks/control.runtime.ts, but that source is not an explicit tsdown entry',
+          'hidden local runtime loader "./control.runtime.js" resolves to src/example/control.runtime.ts, but that source is not an explicit tsdown entry',
       },
     ]);
   });
@@ -165,9 +138,9 @@ describe("check-runtime-sidecar-loaders", () => {
     expect(
       findRuntimeSidecarLoaderViolations(
         source,
-        "src/tasks/task-registry.ts",
+        "src/example/example-registry.ts",
         new Set(),
-        parser.parseSourceFile("src/tasks/task-registry.ts", source),
+        parser.parseSourceFile("src/example/example-registry.ts", source),
       ),
     ).toStrictEqual([]);
   });
@@ -178,10 +151,10 @@ describe("check-runtime-sidecar-loaders", () => {
         {
           entry: {
             index: "src/index.ts",
-            "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
+            "example-control.runtime": "src/example/example-control.runtime.ts",
           },
         },
       ]),
-    ).toEqual(new Set(["src/index.ts", "src/tasks/task-registry-control.runtime.ts"]));
+    ).toEqual(new Set(["src/index.ts", "src/example/example-control.runtime.ts"]));
   });
 });

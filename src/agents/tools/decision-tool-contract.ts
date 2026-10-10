@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
 import { validateDecisionBatch } from "../../decisions/validation.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
+import { textResult } from "./tool-results.js";
 
 const entry = {
   anyOf: [
@@ -12,6 +13,21 @@ const entry = {
     { type: "null" },
   ],
 } as const;
+
+const criteriaByQuestionType = {
+  boolean: {
+    anyOf: [
+      { type: "null" },
+      {
+        type: "object",
+        properties: { true: entry, false: entry },
+        additionalProperties: false,
+      },
+    ],
+  },
+  choice: { type: "object", minProperties: 2, additionalProperties: entry },
+  score: { type: "array", minItems: 2, items: entry },
+};
 
 /** Provider-neutral request contract. Provider-specific translation stays in the provider plugin. */
 export const DecisionEvaluateInput = Type.Unsafe({
@@ -24,47 +40,12 @@ export const DecisionEvaluateInput = Type.Unsafe({
       type: "object",
       minProperties: 1,
       additionalProperties: {
-        anyOf: [
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type"],
-            properties: {
-              type: { const: "boolean" },
-              instructions: entry,
-              criteria: {
-                anyOf: [
-                  { type: "null" },
-                  {
-                    type: "object",
-                    properties: { true: entry, false: entry },
-                    additionalProperties: false,
-                  },
-                ],
-              },
-            },
-          },
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "criteria"],
-            properties: {
-              type: { const: "choice" },
-              instructions: entry,
-              criteria: { type: "object", minProperties: 2, additionalProperties: entry },
-            },
-          },
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "criteria"],
-            properties: {
-              type: { const: "score" },
-              instructions: entry,
-              criteria: { type: "array", minItems: 2, items: entry },
-            },
-          },
-        ],
+        anyOf: Object.entries(criteriaByQuestionType).map(([type, criteria]) => ({
+          type: "object",
+          additionalProperties: false,
+          required: type === "boolean" ? ["type"] : ["type", "criteria"],
+          properties: { type: { const: type }, instructions: entry, criteria },
+        })),
       },
     },
   },
@@ -194,8 +175,5 @@ export function decisionToolResult(
               : ""),
         }
       : outcome;
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(details) }],
-    details,
-  };
+  return textResult(JSON.stringify(details), details);
 }

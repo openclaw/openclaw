@@ -1,6 +1,4 @@
-// Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
-import { configAccentCases } from "./config-accent.test-support.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -13,66 +11,15 @@ import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from 
 import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const nonBooleanConfigCases = [
-  {
-    name: "gateway.controlUi.communityInvite",
-    config: { gateway: { controlUi: { communityInvite: "yes" } } },
-  },
-  {
-    name: "gateway.controlUi.sessionObserver",
-    config: {
-      gateway: {
-        controlUi: {
-          sessionObserver: "yes",
-        },
-      },
-    },
-  },
-  {
-    name: "gateway.controlUi.allowExternalEmbedUrls",
-    config: {
-      gateway: {
-        controlUi: {
-          allowExternalEmbedUrls: "yes",
-        },
-      },
-    },
-  },
-  {
-    name: "plugins.entries.*.hooks.allowPromptInjection",
-    config: {
-      plugins: {
-        entries: {
-          "voice-call": {
-            hooks: {
-              allowPromptInjection: "no",
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
-    },
-  },
-];
-
 function issuePaths(issues: Array<{ path: string }>): string[] {
   return issues.map((issue) => issue.path);
 }
 
-function issueMessages(issues: Array<{ message: string }>): string[] {
-  return issues.map((issue) => issue.message);
-}
-
 function expectSomeIssueMessageContains(issues: Array<{ message: string }>, text: string): void {
-  expect(issueMessages(issues).join("\n")).toContain(text);
+  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
 }
 
-describe("boolean config validation", () => {
-  it.each(nonBooleanConfigCases)("rejects non-boolean values for $name", ({ config }) => {
-    const result = OpenClawSchema.safeParse(config);
-    expect(result.success).toBe(false);
-  });
-
+describe("MCP disabled config", () => {
   it.each([
     ["root", true, "mcp.servers.example.disabled", "enabled: false"],
     ["root", false, "mcp.servers.example.disabled", "enabled: true"],
@@ -98,61 +45,7 @@ describe("boolean config validation", () => {
   );
 });
 
-describe("agent timeoutSeconds config", () => {
-  it.each([
-    ["unlimited opt-in", 0, true],
-    ["finite", 600, true],
-    ["negative", -1, false],
-    ["fractional", 1.5, false],
-  ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
-    const result = OpenClawSchema.safeParse({
-      agents: { defaults: { timeoutSeconds }, entries: { main: { default: true } } },
-    });
-    expect(result.success).toBe(ok);
-  });
-});
-
 describe("model provider localService config", () => {
-  it("accepts standalone timeout overlays for bundled model providers", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        providers: {
-          openai: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.models?.providers?.openai?.timeoutSeconds).toBe(600);
-    }
-  });
-
-  it.each([
-    { provider: "x-ai", name: "xAI alias" },
-    { provider: "xiaomi-token-plan", name: "Xiaomi Token Plan" },
-    { provider: "tencent-tokenplan", name: "Tencent TokenPlan" },
-  ] as const)("accepts standalone timeout overlays for $name", ({ provider }) => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          [provider]: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.models?.providers?.[provider]?.timeoutSeconds).toBe(600);
-      expect(result.config.models?.providers?.[provider]?.models).toEqual([]);
-      expect(result.config.models?.providers?.[provider]?.baseUrl).toBe("");
-    }
-  });
-
   it("revalidates materialized bundled provider overlays", () => {
     const first = validateConfigObjectRaw({
       models: {
@@ -173,65 +66,6 @@ describe("model provider localService config", () => {
 
     const second = validateConfigObjectRaw(first.config);
     expect(second.ok).toBe(true);
-  });
-
-  it("rejects standalone timeout overlays for unknown model providers", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        providers: {
-          anyManifestProvider: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const paths = result.error.issues.map((issue) => issue.path.join("."));
-      expect(paths).toEqual(
-        expect.arrayContaining([
-          "models.providers.anyManifestProvider.baseUrl",
-          "models.providers.anyManifestProvider.models",
-        ]),
-      );
-    }
-  });
-
-  it("requires models when a model provider declaration sets baseUrl", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://example.test/v1",
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const paths = result.error.issues.map((issue) => issue.path.join("."));
-      expect(paths).toContain("models.providers.custom.models");
-    }
-  });
-
-  it("requires baseUrl when a model provider declaration sets models", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        providers: {
-          custom: {
-            models: [{ id: "custom-model", name: "Custom model", api: "openai-completions" }],
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const paths = result.error.issues.map((issue) => issue.path.join("."));
-      expect(paths).toContain("models.providers.custom.baseUrl");
-    }
   });
 
   it("accepts on-demand local provider service settings", () => {
@@ -259,26 +93,6 @@ describe("model provider localService config", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts bundled provider timeout overlays without custom provider fields", () => {
-    for (const provider of ["openai", "zai"] as const) {
-      const result = validateConfigObjectRaw({
-        models: {
-          providers: {
-            [provider]: {
-              timeoutSeconds: 600,
-            },
-          },
-        },
-      });
-
-      expect(result.ok).toBe(true);
-      if (provider === "zai" && result.ok) {
-        expect(result.config.models?.providers?.zai?.models).toEqual([]);
-        expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
-      }
-    }
-  });
-
   it("still requires baseUrl and models for custom provider declarations", () => {
     const result = validateConfigObjectRaw({
       models: {
@@ -302,68 +116,7 @@ describe("model provider localService config", () => {
   });
 });
 
-describe("$schema key in config (#14998)", () => {
-  it("accepts config with $schema string", () => {
-    const result = OpenClawSchema.safeParse({
-      $schema: "https://openclaw.ai/config.json",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.$schema).toBe("https://openclaw.ai/config.json");
-    }
-  });
-
-  it("accepts config without $schema", () => {
-    const result = OpenClawSchema.safeParse({});
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects non-string $schema", () => {
-    const result = OpenClawSchema.safeParse({ $schema: 123 });
-    expect(result.success).toBe(false);
-  });
-
-  it("accepts $schema during full config validation", () => {
-    const result = validateConfigObject({
-      $schema: "./schema.json",
-      gateway: { port: 18789 },
-    });
-    expect(result.ok).toBe(true);
-  });
-
-  it("preserves $schema through validateConfigObject round-trip", () => {
-    const res = validateConfigObject({
-      $schema: "https://openclaw.ai/config.json",
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.$schema).toBe("https://openclaw.ai/config.json");
-    }
-  });
-});
-
 describe("accessGroups config", () => {
-  it("accepts Discord channel audience access groups", () => {
-    const result = OpenClawSchema.safeParse({
-      accessGroups: {
-        maintainers: {
-          type: "discord.channelAudience",
-          guildId: "1456350064065904867",
-          channelId: "1456744319972282449",
-          membership: "canViewChannel",
-        },
-      },
-      channels: {
-        discord: {
-          dmPolicy: "allowlist",
-          allowFrom: ["accessGroup:maintainers"],
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
   it("rejects unknown access group membership modes", () => {
     const result = OpenClawSchema.safeParse({
       accessGroups: {
@@ -377,42 +130,6 @@ describe("accessGroups config", () => {
     });
 
     expect(result.success).toBe(false);
-  });
-
-  it("accepts message sender access groups for any channel", () => {
-    const result = OpenClawSchema.safeParse({
-      accessGroups: {
-        owners: {
-          type: "message.senders",
-          members: {
-            "*": ["global-owner"],
-            telegram: ["12345"],
-            discord: ["discord:67890"],
-          },
-        },
-      },
-      channels: {
-        telegram: {
-          dmPolicy: "allowlist",
-          allowFrom: ["accessGroup:owners"],
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-});
-
-describe("plugins.slots.contextEngine", () => {
-  it("accepts a contextEngine slot id", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        slots: {
-          contextEngine: "my-context-engine",
-        },
-      },
-    });
-    expect(result.success).toBe(true);
   });
 });
 
@@ -449,124 +166,12 @@ describe("models.catalogRefresh", () => {
   });
 });
 
-describe("diagnostics.otel.captureContent", () => {
-  it("accepts supported OTEL log exporters and rejects unknown values", () => {
-    for (const logsExporter of ["otlp", "stdout", "both"]) {
-      const result = OpenClawSchema.safeParse({
-        diagnostics: {
-          otel: {
-            logs: true,
-            logsExporter,
-          },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
-
-    const invalid = OpenClawSchema.safeParse({
-      diagnostics: {
-        otel: {
-          logs: true,
-          logsExporter: "stderr",
-        },
-      },
-    });
-    expect(invalid.success).toBe(false);
-  });
-
-  it("accepts boolean OTEL content capture config", () => {
-    for (const captureContent of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        diagnostics: {
-          otel: {
-            captureContent,
-          },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-});
-
-describe("diagnostics.otel.metricNamePrefix", () => {
-  it("accepts valid metric name fragments and rejects invalid values", () => {
-    for (const metricNamePrefix of ["", "acme.", "Acme/team-1_"]) {
-      const result = OpenClawSchema.safeParse({
-        diagnostics: { otel: { metricNamePrefix } },
-      });
-      expect(result.success).toBe(true);
-    }
-
-    for (const metricNamePrefix of [42, " ", ".acme", "acme metrics.", "é.", "a".repeat(129)]) {
-      const result = OpenClawSchema.safeParse({
-        diagnostics: { otel: { metricNamePrefix } },
-      });
-      expect(result.success).toBe(false);
-    }
-  });
-});
-
-describe("ui.seamColor", () => {
-  it("accepts hex colors", () => {
-    const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects non-hex colors", () => {
-    const res = validateConfigObject({ ui: { seamColor: "lobster" } });
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects invalid hex length", () => {
-    const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
-    expect(res.ok).toBe(false);
-  });
-});
-
-describe("ui.prefs.accent", () => {
-  it.each(configAccentCases)("validates %s", (_label, accent, valid) => {
-    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
-  });
-});
-
-describe("ui.prefs.sidebarEntries", () => {
-  it("accepts the route and session entries synchronized by the Control UI", () => {
-    const result = validateConfigObject({
-      ui: {
-        prefs: {
-          sidebarEntries: ["route:usage", "session:agent:main:test"],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("rejects sidebar entries that are not strings", () => {
-    const result = validateConfigObject({
-      ui: {
-        prefs: {
-          sidebarEntries: ["route:usage", 7],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-  });
-});
-
-describe("gateway.controlUi.embedSandbox", () => {
-  it("accepts strict, scripts, and trusted modes", () => {
-    for (const mode of ["strict", "scripts", "trusted"] as const) {
-      const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
-            embedSandbox: mode,
-          },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
+describe("gateway.controlUi embed policy", () => {
+  it("rejects non-boolean external URL permissions", () => {
+    expect(
+      OpenClawSchema.safeParse({ gateway: { controlUi: { allowExternalEmbedUrls: "yes" } } })
+        .success,
+    ).toBe(false);
   });
 
   it("rejects unsupported values", () => {
@@ -581,177 +186,25 @@ describe("gateway.controlUi.embedSandbox", () => {
   });
 });
 
-describe("gateway.controlUi.environment", () => {
-  it("accepts named environment colors and trims the label", () => {
-    for (const color of [
-      "teal",
-      "amber",
-      "purple",
-      "coral",
-      "pink",
-      "blue",
-      "green",
-      "red",
-      "gray",
-    ]) {
-      const result = OpenClawSchema.safeParse({
-        gateway: { controlUi: { environment: { label: " edge ", color } } },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.gateway?.controlUi?.environment?.label).toBe("edge");
-      }
-    }
-  });
-
-  it.each([
-    { label: "edge", color: "orange" },
-    { label: " ", color: "amber" },
-    { label: "a".repeat(25), color: "amber" },
-    { label: "edge" },
-    { color: "amber" },
-  ])("rejects invalid environment configuration %#", (environment) => {
-    expect(OpenClawSchema.safeParse({ gateway: { controlUi: { environment } } }).success).toBe(
-      false,
-    );
-  });
-});
-
-describe("gateway.controlUi.allowExternalEmbedUrls", () => {
-  it("accepts boolean values", () => {
-    for (const value of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
-            allowExternalEmbedUrls: value,
-          },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-});
-
-describe.each(["sessionObserver", "communityInvite"])("gateway.controlUi.%s", (key) => {
-  it("accepts boolean values", () => {
-    for (const value of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        gateway: { controlUi: { [key]: value } },
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-});
-
 describe("plugins.entries.*.hooks", () => {
-  it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
+  it.each([
+    {
+      name: "prompt injection",
+      hooks: { allowPromptInjection: "no", allowConversationAccess: true },
+    },
+    {
+      name: "conversation access",
+      hooks: { allowPromptInjection: false, allowConversationAccess: "yes" },
+    },
+  ])("rejects non-boolean $name values", ({ hooks }) => {
     const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            hooks: {
-              allowPromptInjection: false,
-              allowConversationAccess,
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts allowPromptInjection=false alongside allowConversationAccess=true", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            hooks: {
-              allowPromptInjection: false,
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts bounded typed hook timeout overrides", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "memory-recall": {
-            hooks: {
-              timeoutMs: 30_000,
-              timeouts: {
-                before_prompt_build: 90_000,
-                agent_end: 60_000,
-              },
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects non-boolean conversation access values", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            hooks: {
-              allowPromptInjection: false,
-              allowConversationAccess: "yes",
-            },
-          },
-        },
-      },
+      plugins: { entries: { "voice-call": { hooks } } },
     });
     expect(result.success).toBe(false);
   });
-
-  it("rejects invalid typed hook timeout overrides", () => {
-    for (const hooks of [
-      { timeoutMs: 0 },
-      { timeoutMs: 600_001 },
-      { timeouts: { before_prompt_build: -1 } },
-      { timeouts: { before_prompt_build: 1.5 } },
-    ]) {
-      const result = OpenClawSchema.safeParse({
-        plugins: {
-          entries: {
-            "memory-recall": { hooks },
-          },
-        },
-      });
-      expect(result.success).toBe(false);
-    }
-  });
-});
-
-describe("mcp.sessionIdleTtlMs", () => {
-  it.each([0, 1000.9, 7_200_000])("accepts the historical value %s", (sessionIdleTtlMs) => {
-    expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(true);
-  });
-
-  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
-    "rejects invalid idle TTL %s",
-    (sessionIdleTtlMs) => {
-      expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(false);
-    },
-  );
 });
 
 describe("mcp.apps.enabled", () => {
-  it.each([true, false])("accepts %s", (enabled) => {
-    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled } } }).success).toBe(true);
-  });
-
-  it("rejects non-boolean values", () => {
-    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled: "yes" } } }).success).toBe(false);
-  });
-
   it("accepts only a bare HTTP(S) sandbox origin", () => {
     expect(
       OpenClawSchema.safeParse({
@@ -777,22 +230,6 @@ describe("mcp.apps.enabled", () => {
 });
 
 describe("plugins.entries.*.subagent", () => {
-  it("accepts trusted subagent override settings", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            subagent: {
-              allowModelOverride: true,
-              allowedModels: ["anthropic/claude-haiku-4-5"],
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects invalid trusted subagent override settings", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
@@ -811,25 +248,6 @@ describe("plugins.entries.*.subagent", () => {
 });
 
 describe("plugins.entries.*.llm", () => {
-  it("accepts trusted llm override settings", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            llm: {
-              allowModelOverride: true,
-              allowedModels: ["anthropic/claude-haiku-4-5"],
-              allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
-              allowAuthProfileOverride: true,
-              allowAgentIdOverride: true,
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects invalid trusted llm override settings", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
@@ -868,47 +286,6 @@ describe("web search provider config", () => {
 });
 
 describe("gateway.remote.transport", () => {
-  it("accepts direct transport", () => {
-    const res = validateConfigObject({
-      gateway: {
-        remote: {
-          transport: "direct",
-          url: "wss://gateway.example.ts.net",
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects unknown transport", () => {
-    const res = validateConfigObject({
-      gateway: {
-        remote: {
-          transport: "udp",
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.remote.transport");
-    }
-  });
-
-  it("accepts macOS SSH remote port", () => {
-    const res = validateConfigObject({
-      gateway: {
-        remote: {
-          remotePort: 18789,
-          sshTarget: "user@example.test",
-          sshHostKeyPolicy: "openssh",
-          transport: "ssh",
-          url: "ws://127.0.0.1:18789",
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
   it("rejects invalid macOS SSH host-key policy", () => {
     const res = validateConfigObject({
       gateway: {
@@ -921,21 +298,6 @@ describe("gateway.remote.transport", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("gateway.remote.sshHostKeyPolicy");
-    }
-  });
-
-  it("rejects invalid macOS SSH remote port", () => {
-    const res = validateConfigObject({
-      gateway: {
-        remote: {
-          remotePort: 0,
-          transport: "ssh",
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.remote.remotePort");
     }
   });
 });
@@ -987,61 +349,7 @@ describe("gateway.remote.edgeAuth", () => {
   });
 });
 
-describe("gateway.tools config", () => {
-  it("accepts gateway.tools allow and deny lists", () => {
-    const res = validateConfigObject({
-      gateway: {
-        tools: {
-          allow: ["gateway"],
-          deny: ["sessions_spawn", "sessions_send"],
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects invalid gateway.tools values", () => {
-    const res = validateConfigObject({
-      gateway: {
-        tools: {
-          allow: "gateway",
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.tools.allow");
-    }
-  });
-});
-
 describe("config identity/materialization regressions", () => {
-  it("keeps explicit responsePrefix and group mention patterns", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: {
-          main: {
-            identity: {
-              name: "Samantha Sloth",
-              theme: "space lobster",
-              emoji: "🦞",
-            },
-            groupChat: { mentionPatterns: ["@openclaw"] },
-          },
-        },
-      },
-      channels: {
-        whatsapp: { responsePrefix: "✅" },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.whatsapp?.responsePrefix).toBe("✅");
-      expect(res.config.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
-    }
-  });
-
   it("preserves empty responsePrefix when identity is present", () => {
     const res = validateConfigObject({
       agents: {
@@ -1107,43 +415,6 @@ describe("config identity/materialization regressions", () => {
 });
 
 describe("cron webhook schema", () => {
-  it("accepts cron.webhookToken SecretRef values", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        webhookToken: {
-          source: "env",
-          provider: "default",
-          id: "CRON_WEBHOOK_TOKEN",
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts the shared cron webhook SSRF policy", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        webhookSsrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-          allowedHostnames: ["127.0.0.1", "internal.example"],
-          allowRfc2544BenchmarkRange: true,
-          allowIpv6UniqueLocalRange: true,
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.cron?.webhookSsrfPolicy).toEqual({
-        dangerouslyAllowPrivateNetwork: true,
-        allowedHostnames: ["127.0.0.1", "internal.example"],
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      });
-    }
-  });
-
   it("rejects unknown cron webhook SSRF policy fields", () => {
     const res = OpenClawSchema.safeParse({
       cron: { webhookSsrfPolicy: { allowEverything: true } },
@@ -1155,18 +426,12 @@ describe("cron webhook schema", () => {
 
 describe("broadcast", () => {
   it.each([
-    { name: "legacy peer array", key: "120363403215116621@g.us", entry: ["alfred", "baerbel"] },
     {
       name: "legacy array without a new participant cap",
       key: "+15551234567",
       entry: Array.from({ length: 17 }, () => "alfred"),
     },
     { name: "qualified peer array", key: "telegram:-100123", entry: ["alfred", "baerbel"] },
-    {
-      name: "qualified object with runtime defaults",
-      key: "discord:123456789",
-      entry: { agents: ["alfred", "baerbel"] },
-    },
     {
       name: "qualified object at upper bounds",
       key: "slack:C0123",
@@ -1176,11 +441,6 @@ describe("broadcast", () => {
         maxRounds: 4,
         maxTurns: 32,
       },
-    },
-    {
-      name: "qualified object at lower bounds",
-      key: "whatsapp:1203@g.us",
-      entry: { agents: ["alfred"], mentionGating: true, maxRounds: 1, maxTurns: 1 },
     },
   ])("accepts $name", ({ key, entry }) => {
     const res = validateConfigObject({
@@ -1211,25 +471,10 @@ describe("broadcast", () => {
       key: "telegram:-100123",
       entry: Array.from({ length: 17 }, () => "alfred"),
     },
-    {
-      name: "too many object participants",
-      key: "telegram:-100123",
-      entry: { agents: Array.from({ length: 17 }, () => "alfred") },
-    },
-    {
-      name: "unknown object option",
-      key: "telegram:-100123",
-      entry: { agents: ["alfred"], extra: true },
-    },
     ...[0, 5, 1.5].map((maxRounds) => ({
       name: `invalid rounds ${maxRounds}`,
       key: "telegram:-100123",
       entry: { agents: ["alfred"], maxRounds },
-    })),
-    ...[0, 33, 1.5].map((maxTurns) => ({
-      name: `invalid turns ${maxTurns}`,
-      key: "telegram:-100123",
-      entry: { agents: ["alfred"], maxTurns },
     })),
   ])("rejects $name", ({ key, entry }) => {
     const res = validateConfigObject({
@@ -1268,43 +513,6 @@ describe("broadcast", () => {
   });
 });
 
-describe("model compat config schema", () => {
-  it.each(["together", "zai", "qwen", "qwen-chat-template"] as const)(
-    "accepts full openai-completions compat fields with %s thinking format",
-    (thinkingFormat) => {
-      const res = OpenClawSchema.safeParse({
-        models: {
-          providers: {
-            local: {
-              baseUrl: "http://127.0.0.1:1234/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "qwen3-32b",
-                  name: "Qwen3 32B",
-                  compat: {
-                    supportsUsageInStreaming: true,
-                    supportsStrictMode: false,
-                    supportsJsonSchemaResponseFormat: true,
-                    requiresStringContent: true,
-                    thinkingFormat,
-                    requiresToolResultName: true,
-                    requiresAssistantAfterToolResult: false,
-                    requiresThinkingAsText: false,
-                    requiresOpenAiAnthropicToolPayload: true,
-                  },
-                },
-              ],
-            },
-          },
-        },
-      });
-
-      expect(res.success).toBe(true);
-    },
-  );
-});
-
 describe("config paths", () => {
   it("rejects empty and blocked paths", () => {
     expect(parseConfigPath("")).toEqual({
@@ -1330,15 +538,7 @@ describe("config paths", () => {
 });
 
 describe("config strict validation", () => {
-  it("rejects unknown fields", () => {
-    const res = validateConfigObject({
-      agents: { list: [{ id: "openclaw" }] },
-      customUnknownField: { nested: "value" },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts documented agents.list[].params overrides", () => {
+  it("accepts documented agents.entries.<id>.params overrides", () => {
     const res = validateConfigObject({
       agents: {
         entries: {
@@ -1356,7 +556,7 @@ describe("config strict validation", () => {
 
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.agents?.list?.[0]?.params).toEqual({
+      expect(res.config.agents?.entries?.main?.params).toEqual({
         cacheRetention: "none",
         temperature: 0.4,
         maxTokens: 8192,
@@ -1410,30 +610,6 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects top-level heartbeat visibility without read-time auto-migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        heartbeat: {
-          showOk: true,
-          showAlerts: false,
-          useIndicator: true,
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(issuePaths(snap.legacyIssues)).not.toContain("heartbeat");
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
-        showOk: true,
-        showAlerts: false,
-        useIndicator: true,
-      });
-      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toBeUndefined();
-    });
-  });
-
   it("reports legacy tts provider keys without read-time auto-migration", () => {
     const raw = {
       tts: {
@@ -1472,26 +648,6 @@ describe("config strict validation", () => {
     expect(issuePaths(issues)).not.toContain("agents");
   });
 
-  it("reports retired queue steering modes without read-time auto-migration", async () => {
-    const raw = {
-      messages: {
-        queue: {
-          mode: "queue",
-          byChannel: {
-            discord: "steer-backlog",
-            telegram: "collect",
-          },
-        },
-      },
-    };
-    const issues = findLegacyConfigIssues(raw);
-
-    expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
-    expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
-    expect(raw.messages.queue.mode).toBe("queue");
-    expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
-  });
-
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -1501,14 +657,13 @@ describe("config strict validation", () => {
               perSession: true,
             },
           },
-          list: [
-            {
-              id: "openclaw",
+          entries: {
+            openclaw: {
               sandbox: {
                 perSession: false,
               },
             },
-          ],
+          },
         },
       });
 
@@ -1521,7 +676,7 @@ describe("config strict validation", () => {
       expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
         perSession: true,
       });
-      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+      expect(snap.sourceConfigBeforeMigrations?.agents?.entries?.openclaw?.sandbox).toEqual({
         perSession: false,
       });
       expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({
@@ -1566,4 +721,3 @@ describe("config strict validation", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

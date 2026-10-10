@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isMissingPathError } from "../infra/errors.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 
@@ -30,10 +31,6 @@ type MemoryArtifactAddress = {
   relativePath: string;
   storeKey: string;
 };
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function normalizeWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir);
@@ -83,11 +80,11 @@ function resolveAddress(params: {
   if (!relativePath) {
     return undefined;
   }
-  const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
+  const workspaceKey = sha256Hex(normalizeWorkspaceKey(params.workspaceDir));
   return {
     workspaceKey,
     relativePath,
-    storeKey: `${workspaceKey}:${sha256(relativePath)}`,
+    storeKey: `${workspaceKey}:${sha256Hex(relativePath)}`,
   };
 }
 
@@ -102,7 +99,7 @@ function openStore() {
 
 function normalizeStoredProvenance(
   value: StoredMemoryArtifactProvenance | undefined,
-  address: MemoryArtifactAddress,
+  address: Pick<MemoryArtifactAddress, "workspaceKey" | "relativePath">,
 ): StoredMemoryArtifactProvenance | undefined {
   if (
     value?.version !== 1 ||
@@ -151,14 +148,14 @@ export async function recordMemoryArtifactWriteProvenance(params: {
     const originClass =
       params.originClass === "agent" &&
       (!previous ||
-        (previous.originClass === "agent" && previous.fileHash === sha256(params.contentBefore)))
+        (previous.originClass === "agent" && previous.fileHash === sha256Hex(params.contentBefore)))
         ? "agent"
         : "untrusted";
     return {
       version: 1,
       workspaceKey: address.workspaceKey,
       relativePath: address.relativePath,
-      fileHash: sha256(params.contentAfter),
+      fileHash: sha256Hex(params.contentAfter),
       originClass,
       observedAt: params.observedAt,
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -191,7 +188,7 @@ export async function clearMemoryArtifactProvenance(params: {
   if (!address) {
     return;
   }
-  const expectedHash = sha256(params.contentBefore);
+  const expectedHash = sha256Hex(params.contentBefore);
   await openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
 }
 
@@ -210,17 +207,22 @@ export async function readMemoryArtifactProvenance(params: {
 export async function listMemoryArtifactProvenance(params: {
   workspaceDir: string;
 }): Promise<Array<{ relativePath: string; provenance: MemoryArtifactProvenance }>> {
-  const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
-  const prefix = `${workspaceKey}:`;
-  return (await openStore().entries())
-    .filter((entry) => entry.key.startsWith(prefix))
+  const workspaceKey = sha256Hex(normalizeWorkspaceKey(params.workspaceDir));
+  // The adjacent ASCII separators bound exactly this workspace's key prefix.
+  const entries = await openStore().entriesInKeyRange({
+    keyStartInclusive: `${workspaceKey}:`,
+    keyEndExclusive: `${workspaceKey};`,
+    limit: Number.MAX_SAFE_INTEGER,
+    order: "asc",
+  });
+  // Stable sorting preserves the store's key order when creation times tie.
+  return entries
+    .toSorted((left, right) => left.createdAt - right.createdAt)
     .flatMap((entry) => {
-      const address = {
+      const stored = normalizeStoredProvenance(entry.value, {
         workspaceKey,
         relativePath: entry.value.relativePath,
-        storeKey: entry.key,
-      };
-      const stored = normalizeStoredProvenance(entry.value, address);
+      });
       return stored
         ? [{ relativePath: stored.relativePath, provenance: toPublicProvenance(stored) }]
         : [];

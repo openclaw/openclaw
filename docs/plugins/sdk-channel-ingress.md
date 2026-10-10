@@ -19,6 +19,11 @@ policy utilities from `openclaw/plugin-sdk/channel-ingress-runtime`.
 
 ## Runtime resolver
 
+In this example, `cfg` is the root OpenClaw configuration and `config` is the
+resolved channel-account configuration. Supply `runtime`, `normalizePlatformUserId`,
+`route`, `agentRoute`, `readStoreAllowFrom`, and the message facts from your
+plugin's receive path.
+
 ```ts
 import { defineStableChannelIngressIdentity } from "openclaw/plugin-sdk/channel-ingress-runtime";
 

@@ -57,8 +57,7 @@ across many turns:
 - A maintenance task: inspect current state, make bounded changes, run the
   right checks, and report what changed.
 
-A goal is not a task queue. Use [Task Flow](/automation/taskflow),
-[tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
+A goal is not a task queue. Use [subagents](/tools/subagents), [cron jobs](/automation/cron-jobs), or
 [standing orders](/automation/standing-orders) when work should run detached,
 repeat on a schedule, fan out into managed sub-work, or persist as a policy.
 
@@ -194,7 +193,8 @@ the objective as a normal chat draft. Complete pasted commands such as
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
-does not create a Goal. Start and Resume require the built-in OpenClaw runtime
+does not create a Goal. A failed older chat send stays separate from a newly opened
+Goal draft instead of filling its empty objective. Start and Resume require the built-in OpenClaw runtime
 and an idle local session with recoverable history. They are unavailable for
 native Codex and other external runtimes, and are not queued or steered into
 another run. The UI reports unsupported or busy sessions rather than creating
@@ -245,8 +245,9 @@ request expires and its literal payload is removed; **Review current goal** refr
 state before another decision. Forgetting this browser or switching authenticated
 accounts removes that Gateway's previous account recovery payloads.
 
-The action buttons are unavailable without a connection. The expand chevron
-keeps working. Concurrent Goal actions are rejected while an operation is
+The action buttons are unavailable without a connection or while the initial
+chat history loads and confirms the session identity. The expand chevron keeps
+working. Concurrent Goal actions are rejected while an operation is
 pending. These controls require
 a Gateway advertising the structured Goal capability. Text `/goal` commands
 remain available for CLI and other command-capable surfaces.
@@ -325,5 +326,4 @@ and transcript-derived totals.
 - [TUI](/web/tui)
 - [Session tool](/concepts/session-tool)
 - [Compaction](/concepts/compaction)
-- [Task Flow](/automation/taskflow)
 - [Standing orders](/automation/standing-orders)

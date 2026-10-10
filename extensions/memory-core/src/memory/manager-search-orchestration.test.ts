@@ -29,34 +29,7 @@ describe("memory index", () => {
     getFreshManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
-
-  async function expectHybridKeywordSearchFindsMemory(
-    cfg: Parameters<typeof getMemorySearchManager>[0]["cfg"],
-  ) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
-  }
-
-  it.each([0, 0.35])(
-    "finds keyword matches through default hybrid search at minimum score %s",
-    async (minScore) => {
-      await expectHybridKeywordSearchFindsMemory(createCfg({ minScore }));
-    },
-  );
 
   it("keeps a dirty status manager read-only while searching published results", async () => {
     const cfg = createCfg({ provider: "none", minScore: 0 });
@@ -149,8 +122,8 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
-  it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({});
+  it("fails search after bounded query embedding retries are exhausted for an explicit provider", async () => {
+    const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -177,6 +150,38 @@ describe("memory index", () => {
 
     await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
     expect(queryCalls).toBe(3);
+  });
+
+  it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
+    const cfg = createCfg({});
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: EmbeddingProvider;
+      }
+    ).provider = {
+      id: "mock",
+      model: "mock-embed",
+      embed: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(3);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {
@@ -378,7 +383,7 @@ describe("memory index", () => {
     }
   });
 
-  it("supplements thin strict FTS results for conversational queries", async () => {
+  it("keeps strict keyword hits without expanding thin conversational results", async () => {
     const cases = [
       {
         query: "that thing we discussed about the API",
@@ -406,19 +411,20 @@ describe("memory index", () => {
       }),
     );
     await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as EmbeddingProvider;
-    const embedSpy = vi.spyOn(provider, "embed");
+    const keywordSpy = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
 
-    for (const entry of cases) {
-      const results = await manager.search(entry.query, { maxResults: 6 });
-      expect(results.some((result) => result.path.endsWith(`memory/${entry.recallFile}`))).toBe(
-        true,
-      );
+    try {
+      for (const entry of cases) {
+        const results = await manager.search(entry.query, { maxResults: 6, lexicalOnly: true });
+        expect(results.map((result) => result.path)).toEqual([`memory/${entry.strictFile}`]);
+      }
+      expect(keywordSpy).toHaveBeenCalledTimes(cases.length);
+    } finally {
+      keywordSpy.mockRestore();
     }
-    expect(embedSpy).toHaveBeenCalledTimes(cases.length);
   });
 
-  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+  it("keeps zero-hit keyword fallback in one provider-backed worker request", async () => {
     const cfg = createCfg({
       minScore: 0.35,
     });
@@ -440,8 +446,7 @@ describe("memory index", () => {
       expect(partialResults).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
       );
-      expect(keywordSpy.mock.calls.length).toBeGreaterThan(1);
-      expect(keywordSpy.mock.calls.length).toBeLessThanOrEqual(7);
+      expect(keywordSpy).toHaveBeenCalledTimes(1);
     } finally {
       keywordSpy.mockRestore();
     }
@@ -477,7 +482,6 @@ describe("memory index", () => {
       minScore: 0,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -665,10 +669,8 @@ describe("memory index", () => {
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      fileWatcher: { closeNativeMemoryWatchPairs: () => void };
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.fileWatcher.closeNativeMemoryWatchPairs();
 
     const sessionId = "automatic-maintenance-purge";
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
@@ -676,7 +678,7 @@ describe("memory index", () => {
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -865,13 +867,20 @@ describe("memory index", () => {
         expect(maintenance.adoptReindexRetryState).toHaveBeenCalledWith({
           dirty: true,
           memoryFullRetryDirty: true,
+          fullReindexRetryBackoff: { attempts: 0, retryAt: 0, failedWithEmbeddings: false },
           sessionsDirty: true,
           sessionsFullRetryDirty: true,
           sessionsReconcileDirty: true,
           sessionsDirtyFiles: new Set(["session.jsonl"]),
         });
         expect(maintenance.sync).toHaveBeenCalledTimes(expectedSyncCalls);
-        expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search" });
+        expect(maintenance.sync).toHaveBeenNthCalledWith(1, { reason: "search" });
+        if (expectedSyncCalls === 2) {
+          expect(maintenance.sync).toHaveBeenNthCalledWith(2, {
+            reason: "search",
+            force: true,
+          });
+        }
         expect(maintenance.close).toHaveBeenCalledTimes(1);
         expect(manager.status().lastSyncError).toContain(syncError.message);
         expect(Reflect.get(manager, "dirty")).toBe(true);

@@ -22,7 +22,9 @@ export function createReplyTurnRotationEvidence(params: {
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
     (source.fromBarrier ||
-      (source.operation.key === params.sessionKey &&
+      (lifecycleAdmissionByOperation.get(source.operation)?.databaseIdentity ===
+        source.databaseIdentity &&
+        source.operation.key === params.sessionKey &&
         (source.operation === replyRunRegistry.get(params.sessionKey) ||
           source.operation.result !== null)));
   const mergeWaitedRotation = (source: ReplyRotationSource) => {
@@ -68,6 +70,9 @@ export function createReplyTurnRotationEvidence(params: {
       operation: ReplyOperation,
       databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
     ) {
+      if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
+        return;
+      }
       waitedRotations.set(
         databaseIdentity,
         mergeWaitedRotation({

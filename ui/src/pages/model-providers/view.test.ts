@@ -279,9 +279,11 @@ describe("renderModelProviders", () => {
   });
 
   it("locks provider and default-model mutations while shared config work is pending", async () => {
+    const onPrimaryChange = vi.fn();
     const container = mount(
       props({
         configBusy: true,
+        onPrimaryChange,
         defaultModels: {
           primary: "openai/gpt-5",
           fallbacks: ["anthropic/claude"],
@@ -311,10 +313,14 @@ describe("renderModelProviders", () => {
 
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
-    const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
-    expect(defaultSelects).toHaveLength(4);
+    const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
+    expect(primary.disabled).toBe(false);
+    await choosePickerValue(primary, "anthropic/claude");
+    expect(onPrimaryChange).not.toHaveBeenCalled();
     expect(
-      defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
+      [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
+        (option) => option.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(
       [
@@ -376,10 +382,12 @@ describe("renderModelProviders", () => {
     expect(controls.map((control) => control.disabled)).toEqual([true, false, true]);
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
+    const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
+    expect(primary.disabled).toBe(false);
     expect(
-      [
-        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
-      ].every((control) => control.hasAttribute("disabled")),
+      [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
+        (option) => option.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(text(defaults)).not.toContain("operator.admin access");
     button(addForm!, "Save provider")?.click();
@@ -501,7 +509,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "ok", profileCount: 1 },
+            auth: { kind: "ok" },
             profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
             modelCount: 0,
             availableModelCount: 0,
@@ -532,7 +540,7 @@ describe("renderModelProviders", () => {
         props({
           cards: [
             card({
-              auth: { kind: "ok", profileCount: 1 },
+              auth: { kind: "ok" },
               profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
               hasConfigApiKey,
               catalogStatus: "auth-rejected",
@@ -559,7 +567,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "api-key", profileCount: 0 },
+            auth: { kind: "api-key" },
           }),
         ],
       }),
@@ -585,30 +593,6 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Credentials for Writer");
     expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("Global session spend · 30d");
-  });
-
-  it("preserves complete graphemes in custom provider fallback icons", () => {
-    const cases = [
-      { id: "🧭-proxy", expected: "🧭" },
-      { id: "🇺🇸-proxy", expected: "🇺🇸" },
-      { id: "👩‍💻-proxy", expected: "👩‍💻" },
-      { id: "e\u0301-proxy", expected: "E\u0301" },
-      { id: "ß-provider", expected: "S" },
-    ];
-    const container = mount(
-      props({
-        cards: cases.map(({ id }) => card({ id, displayName: id, credentialProviderIds: [id] })),
-      }),
-    );
-
-    for (const { id, expected } of cases) {
-      const row = [...container.querySelectorAll<HTMLElement>("[data-provider-id]")].find(
-        (candidate) => candidate.dataset.providerId === id,
-      );
-      expect(row?.querySelector(".provider-brand-icon--fallback")?.textContent?.trim()).toBe(
-        expected,
-      );
-    }
   });
 
   it("does not invent config key provenance when auth status is unavailable", () => {
@@ -686,7 +670,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "ok", profileCount: 1 },
+            auth: { kind: "ok" },
             profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
             modelCount: 0,
             availableModelCount: 0,
@@ -788,6 +772,75 @@ describe("renderModelProviders", () => {
       ).toBe("Disabled");
     },
   );
+
+  function utilityOption(container: HTMLElement, value: string) {
+    const option = container
+      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+      ?.querySelector(`[role="option"][data-value="${value}"]`);
+    return {
+      label: text(option?.querySelector(".picker-select__label") ?? null),
+      detail: text(option?.querySelector(".picker-select__description") ?? null),
+    };
+  }
+  const utilityModels = [
+    { id: "claude-opus", provider: "anthropic", name: "Claude Opus", available: true },
+    { id: "claude-haiku-4-5", provider: "anthropic", name: "Claude Haiku 4.5", available: true },
+  ];
+
+  it.each([
+    [
+      { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+      "Claude CLI · native",
+      "Runs through Claude CLI using its own login.",
+    ],
+    [
+      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      "API · OpenClaw",
+      "Uses the provider's API connection",
+    ],
+  ] as const)(
+    "shows the automatic utility model's route in its detail line (%o)",
+    async (runtime, route, billing) => {
+      const container = mount(
+        props({
+          configuredModels: utilityModels,
+          defaultModels: { primary: "anthropic/claude-opus", fallbacks: [], utilityModel: null },
+          automaticUtilityModel: "anthropic/claude-haiku-4-5",
+          utilityRuntime: runtime,
+        }),
+      );
+      await updatePickers(container);
+      const automatic = utilityOption(container, "__openclaw_automatic_utility__");
+      expect(automatic.label).toBe("Auto · Claude Haiku 4.5");
+      expect(automatic.detail).toContain(route);
+      const trigger = container
+        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+        ?.querySelector<HTMLButtonElement>("button[aria-haspopup]");
+      expect(trigger?.title).toContain(billing);
+    },
+  );
+
+  it("shows the route on an explicitly chosen utility model, not on Auto", async () => {
+    const container = mount(
+      props({
+        configuredModels: utilityModels,
+        defaultModels: {
+          primary: "anthropic/claude-opus",
+          fallbacks: [],
+          utilityModel: "anthropic/claude-haiku-4-5",
+        },
+        automaticUtilityModel: "anthropic/claude-haiku-4-5",
+        utilityRuntime: { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+      }),
+    );
+    await updatePickers(container);
+    const chosen = utilityOption(container, "anthropic/claude-haiku-4-5");
+    expect(chosen.label).toBe("Claude Haiku 4.5");
+    expect(chosen.detail).toContain("Claude CLI · native");
+    expect(utilityOption(container, "__openclaw_automatic_utility__").detail).not.toContain(
+      "Claude CLI",
+    );
+  });
 
   it("disables probing when the gateway does not advertise the method", () => {
     const onProbe = vi.fn();

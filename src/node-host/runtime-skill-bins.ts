@@ -2,17 +2,13 @@ import fs from "node:fs";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { NodeHostClient } from "./client.js";
-import type { SkillBinsProvider } from "./invoke.js";
+import type { SkillBinsProvider } from "./invoke-types.js";
 
-function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
+export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
   }
-  return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
-}
-
-export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
-  const resolvedPath = resolveExecutablePathFromEnv(bin, pathEnv);
+  const resolvedPath = resolveExecutableFromPathEnv(bin, pathEnv);
   if (!resolvedPath) {
     return null;
   }
@@ -24,8 +20,7 @@ export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string):
 }
 
 function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
-  const trustEntries: SkillBinTrustEntry[] = [];
-  const seen = new Set<string>();
+  const trustEntries = new Map<string, SkillBinTrustEntry>();
   for (const raw of bins) {
     const name = raw.trim();
     if (!name) {
@@ -35,14 +30,9 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
     if (!resolvedPath) {
       continue;
     }
-    const key = `${name}\u0000${resolvedPath}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    trustEntries.push({ name, resolvedPath });
+    trustEntries.set(`${name}\u0000${resolvedPath}`, { name, resolvedPath });
   }
-  return trustEntries.toSorted(
+  return [...trustEntries.values()].toSorted(
     (left, right) =>
       left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
   );
@@ -59,8 +49,8 @@ export class SkillBinsCache implements SkillBinsProvider {
     private readonly pathEnv: string,
   ) {}
 
-  async current(force = false): Promise<SkillBinTrustEntry[]> {
-    if (force || Date.now() - this.lastRefresh > this.ttlMs) {
+  async current(): Promise<SkillBinTrustEntry[]> {
+    if (Date.now() - this.lastRefresh > this.ttlMs) {
       const refresh = this.refreshInFlight ?? this.refresh();
       this.refreshInFlight = refresh;
       try {

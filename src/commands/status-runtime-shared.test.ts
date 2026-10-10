@@ -1,12 +1,10 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayDiagnosticsSafe,
-  resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
   resolveStatusRuntimeSnapshot,
-  resolveStatusSecurityAudit,
-  resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
@@ -79,22 +77,6 @@ describe("status-runtime-shared", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("resolves the shared security audit payload", async () => {
-    await resolveStatusSecurityAudit({
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-    });
-
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-      loadPluginSecurityCollectors: false,
-    });
   });
 
   it("passes the remaining status budget through to provider usage", async () => {
@@ -386,20 +368,6 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
-  it("resolves gateway health with the shared probe call shape", async () => {
-    await resolveStatusGatewayHealth({
-      config: { gateway: {} },
-      ...createStatusGatewayProbeBudget(5000),
-    });
-
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 5000,
-      config: { gateway: {} },
-    });
-  });
-
   it("returns a fallback health error when the gateway is unreachable", async () => {
     await expect(
       resolveStatusGatewayHealthSafe({
@@ -466,13 +434,6 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("resolves daemon summaries together", async () => {
-    await expect(resolveStatusServiceSummaries()).resolves.toEqual([
-      { label: "LaunchAgent" },
-      { label: "node" },
-    ]);
-  });
-
   it("resolves the shared runtime snapshot with security audit and runtime details", async () => {
     await expect(
       resolveStatusRuntimeSnapshot({
@@ -491,6 +452,12 @@ describe("status-runtime-shared", () => {
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "health",
+      params: { probe: true },
+      timeoutMs: 1234,
+      config: { gateway: {} },
     });
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
       config: { gateway: {} },

@@ -16,6 +16,10 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
+import {
+  classifyGatewayStaleConnectionError,
+  type GatewayStaleConnectionReason,
+} from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -60,7 +64,7 @@ export async function readGatewayStartupPhase(params: {
   }
 }
 
-export type GatewayRestartProbeAuth = {
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -73,10 +77,12 @@ export type GatewayReachability = {
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeTimeouts?: Array<{ id: string; error: string }>;
   probeError?: string;
+  staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };
@@ -85,18 +91,20 @@ export type GatewayHttpReadiness = {
 export async function waitForGatewayHttpReadiness(params: {
   attempts: number;
   config?: OpenClawConfig;
+  /** Absolute deadline in the performance.now() clock domain. */
   deadlineAt: number;
   delayMs: number;
   probeTimeoutMs?: number;
   port: number;
   signal?: AbortSignal;
+  onObservation?: (readiness: GatewayHttpReadiness) => void;
 }): Promise<GatewayHttpReadiness> {
   params.signal?.throwIfAborted();
   const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
   let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
     params.signal?.throwIfAborted();
-    const remainingMs = params.deadlineAt - Date.now();
+    const remainingMs = params.deadlineAt - performance.now();
     if (remainingMs <= 0) {
       return latest;
     }
@@ -113,11 +121,12 @@ export async function waitForGatewayHttpReadiness(params: {
     const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
+    params.onObservation?.(latest);
     if (healthz === 200 && readyz === 200) {
       return latest;
     }
     if (attempt + 1 < params.attempts) {
-      const remainingDelayMs = params.deadlineAt - Date.now();
+      const remainingDelayMs = params.deadlineAt - performance.now();
       if (remainingDelayMs <= 0) {
         return latest;
       }
@@ -188,37 +197,31 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
       activated: true,
       error: entry.error,
     };
-    if (typeof entry.activationSource === "string") {
-      error.activationSource = entry.activationSource;
-    }
-    if (typeof entry.activationReason === "string") {
-      error.activationReason = entry.activationReason;
-    }
-    if (typeof entry.failurePhase === "string") {
-      error.failurePhase = entry.failurePhase;
+    for (const key of ["activationSource", "activationReason", "failurePhase"] as const) {
+      if (typeof entry[key] === "string") {
+        error[key] = entry[key];
+      }
     }
     return [error];
   });
 }
 
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
+function readChannelProbeFailures(health: unknown) {
+  const errors: GatewayReachability["channelProbeErrors"] = [];
+  const timeouts: GatewayReachability["channelProbeErrors"] = [];
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  if (!channels) {
-    return [];
-  }
-  const errors: Array<{ id: string; error: string }> = [];
-  for (const [id, summary] of Object.entries(channels)) {
+  for (const [id, summary] of Object.entries(channels ?? {})) {
     const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (probe?.ok !== false) {
+    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
       continue;
     }
-    const error = probe.error;
-    errors.push({
+    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+    (probe.timedOut === true ? timeouts : errors).push({
       id,
-      error: typeof error === "string" && error.trim() ? error : "probe failed",
+      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
     });
   }
-  return errors;
+  return { errors, timeouts };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -298,7 +301,11 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    result.channelProbeErrors = readChannelProbeErrors(health);
+    const { errors, timeouts } = readChannelProbeFailures(health);
+    result.channelProbeErrors = errors;
+    if (timeouts.length) {
+      result.channelProbeTimeouts = timeouts;
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket
@@ -310,6 +317,7 @@ export async function confirmGatewayReachable(params: {
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
     if (!result.reachable) {
+      result.staleConnection = classifyGatewayStaleConnectionError(error);
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }

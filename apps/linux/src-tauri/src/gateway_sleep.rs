@@ -108,7 +108,7 @@ impl GatewaySleepCycleController {
                         self.log_route_changed();
                         return;
                     }
-                    let late = {
+                    {
                         let mut state = self
                             .state
                             .lock()
@@ -119,19 +119,15 @@ impl GatewaySleepCycleController {
                         }
                         if generation == state.generation {
                             state.suspension = Some(HeldSuspension {
-                                id: suspension_id.clone(),
-                                route: route.clone(),
+                                id: suspension_id,
+                                route,
                             });
-                            false
-                        } else {
-                            true
+                            return;
                         }
-                    };
-                    if late {
-                        // Wake or a newer cycle won the race; do not leave the late lease active.
-                        if let Err(error) = (self.resume)(suspension_id, route).await {
-                            (self.log)(format!("gateway sleep preparation failed: {error}"));
-                        }
+                    }
+                    // Wake or a newer cycle won the race; do not leave the late lease active.
+                    if let Err(error) = (self.resume)(suspension_id, route).await {
+                        (self.log)(format!("gateway sleep preparation failed: {error}"));
                     }
                 }
                 Ok(SleepPrepareOutcome::Busy) => {

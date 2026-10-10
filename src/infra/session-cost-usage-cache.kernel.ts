@@ -225,19 +225,16 @@ export function acquireSessionCostUsageRefreshLockInDatabase(
   },
 ): boolean {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const currentRaw =
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("cache_entries")
-        .select("value_json")
-        .where("scope", "=", LEGACY_CACHE_SCOPE)
-        .where("key", "=", REFRESH_LOCK_KEY)
-        .limit(1),
-    ).rows[0]?.value_json ?? null;
+  const currentRaw = readSessionCostUsageRefreshLockInDatabase(db);
   if (currentRaw !== params.previousRaw || params.previousOwnerIsRunning) {
     return false;
   }
+  const values = {
+    value_json: params.lockJson,
+    blob: null,
+    expires_at: null,
+    updated_at: params.startedAt,
+  };
   executeSqliteQuerySync(
     db,
     kysely
@@ -245,19 +242,9 @@ export function acquireSessionCostUsageRefreshLockInDatabase(
       .values({
         scope: LEGACY_CACHE_SCOPE,
         key: REFRESH_LOCK_KEY,
-        value_json: params.lockJson,
-        blob: null,
-        expires_at: null,
-        updated_at: params.startedAt,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.columns(["scope", "key"]).doUpdateSet({
-          value_json: params.lockJson,
-          blob: null,
-          expires_at: null,
-          updated_at: params.startedAt,
-        }),
-      ),
+      .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
   );
   return true;
 }

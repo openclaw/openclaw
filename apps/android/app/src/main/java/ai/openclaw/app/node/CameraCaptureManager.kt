@@ -1,9 +1,9 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.camera2.CameraCharacteristics
@@ -22,7 +22,6 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
-import androidx.core.content.ContextCompat.checkSelfPermission
 import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.Lifecycle
@@ -37,17 +36,16 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
 
-/**
- * CameraX-backed capture service used by gateway camera commands.
- */
 internal class CameraClipSession(
   private val unbind: () -> Unit,
   private val deleteTemporaryFile: (File) -> Unit,
@@ -106,11 +104,6 @@ class CameraCaptureManager(
   private val cameraEnabled: () -> Boolean = { true },
   private val defaultFacing: () -> String = { "front" },
 ) {
-  /** Base64 JSON response for camera.snap after resize and JPEG budget enforcement. */
-  data class Payload(
-    val payloadJson: String,
-  )
-
   /** Temporary MP4 response for camera.clip before CameraHandler validates invoke size. */
   data class FilePayload(
     val file: File,
@@ -119,6 +112,7 @@ class CameraCaptureManager(
   )
 
   /** Camera device metadata exposed through camera.list. */
+  @Serializable
   data class CameraDeviceInfo(
     val id: String,
     val name: String,
@@ -128,9 +122,19 @@ class CameraCaptureManager(
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
 
-  private companion object {
+  companion object {
     // ProcessCameraProvider is process-wide, including during runtime replacement.
-    val captureMutex = Mutex()
+    private val captureMutex = Mutex()
+
+    /** Interactive camera screens share exclusion without inheriting remote-node admission. */
+    internal fun tryAcquireCamera(): AutoCloseable? {
+      val owner = Any()
+      if (!captureMutex.tryLock(owner)) return null
+      val released = AtomicBoolean(false)
+      return AutoCloseable {
+        if (released.compareAndSet(false, true)) captureMutex.unlock(owner)
+      }
+    }
   }
 
   /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */
@@ -148,18 +152,6 @@ class CameraCaptureManager(
         .sortedBy { it.id }
     }
 
-  private fun ensureCameraPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    if (granted) return
-    throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
-  }
-
-  private fun ensureMicPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    if (granted) return
-    throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-  }
-
   /** Snap and clip share one foreground lease; never queue a stale camera command. */
   internal suspend fun <T> withCapture(
     includeAudio: Boolean = false,
@@ -171,8 +163,8 @@ class CameraCaptureManager(
         check(captureMutex.tryLock()) { "CAMERA_BUSY: another camera capture is active" }
         try {
           fun checkAccess() {
-            ensureCameraPermission()
-            if (includeAudio) ensureMicPermission()
+            check(context.hasPermission(Manifest.permission.CAMERA)) { "CAMERA_PERMISSION_REQUIRED: grant Camera permission" }
+            if (includeAudio) check(context.hasPermission(Manifest.permission.RECORD_AUDIO)) { "MIC_PERMISSION_REQUIRED: grant Microphone permission" }
             check(cameraEnabled()) { "CAMERA_DISABLED: enable Camera in Settings" }
             check(isForeground()) { "NODE_BACKGROUND_UNAVAILABLE: command requires foreground" }
           }
@@ -218,12 +210,12 @@ class CameraCaptureManager(
   }
 
   /** Captures one still image and returns a gateway-sized JPEG payload. */
-  suspend fun snap(paramsJson: String?): Payload =
+  suspend fun snap(paramsJson: String?): String =
     withCapture { owner, ensureCurrent ->
       val params = parseJsonParamsObject(paramsJson)
       val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
-      val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
-      val maxWidth = parseMaxWidth(params) ?: 1600
+      val quality = (parseJsonDouble(params, "quality") ?: 0.95).coerceIn(0.1, 1.0)
+      val maxWidth = parseJsonInt(params, "maxWidth")?.takeIf { it > 0 } ?: 1600
       val deviceId = parseDeviceId(params)
 
       val provider = context.cameraProvider()
@@ -237,65 +229,69 @@ class CameraCaptureManager(
           // A failed bind can still attach a use case; release only this request's capture.
           provider.bindToLifecycle(owner, selector, capture)
           ensureCurrent()
-          capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
+          capture.takeJpegWithExif(ContextCompat.getMainExecutor(context), context.cacheDir)
         } finally {
           // The JPEG bytes are self-contained; release CameraX before decoding and recompressing them.
           provider.unbind(capture)
         }
       ensureCurrent()
-      val decoded =
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-          ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
-      val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
-      val scaled =
-        if (maxWidth > 0 && rotated.width > maxWidth) {
-          val h =
-            (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
-              .toInt()
-              .coerceAtLeast(1)
-          val s = rotated.scale(maxWidth, h)
-          if (s !== rotated) rotated.recycle()
-          s
-        } else {
-          rotated
-        }
+      // Keep the capture lease until structured pixel work and its bitmap cleanup finish.
+      val payload =
+        withContext(Dispatchers.Default) {
+          val decoded =
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+              ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
+          val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
+          val scaled =
+            if (rotated.width > maxWidth) {
+              val h =
+                (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
+                  .toInt()
+                  .coerceAtLeast(1)
+              val s = rotated.scale(maxWidth, h)
+              if (s !== rotated) rotated.recycle()
+              s
+            } else {
+              rotated
+            }
 
-      try {
-        val maxPayloadBytes = 5 * 1024 * 1024
-        // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
-        val maxEncodedBytes = (maxPayloadBytes / 4) * 3
-        val result =
-          JpegSizeLimiter.compressToLimit(
-            initialWidth = scaled.width,
-            initialHeight = scaled.height,
-            startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
-            minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
-            maxBytes = maxEncodedBytes,
-            encode = { width, height, q ->
-              val bitmap =
-                if (width == scaled.width && height == scaled.height) {
-                  scaled
-                } else {
-                  scaled.scale(width, height)
-                }
-              val out = ByteArrayOutputStream()
-              if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
-                if (bitmap !== scaled) bitmap.recycle()
-                throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
-              }
-              if (bitmap !== scaled) {
-                bitmap.recycle()
-              }
-              out.toByteArray()
-            },
-          )
-        val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
-        Payload(
-          """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}""",
-        )
-      } finally {
-        scaled.recycle()
-      }
+          try {
+            val maxPayloadBytes = 5 * 1024 * 1024
+            // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
+            val maxEncodedBytes = (maxPayloadBytes / 4) * 3
+            val result =
+              JpegSizeLimiter.compressToLimit(
+                initialWidth = scaled.width,
+                initialHeight = scaled.height,
+                startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
+                minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
+                maxBytes = maxEncodedBytes,
+                encode = { width, height, q ->
+                  val bitmap =
+                    if (width == scaled.width && height == scaled.height) {
+                      scaled
+                    } else {
+                      scaled.scale(width, height)
+                    }
+                  val out = ByteArrayOutputStream()
+                  if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
+                    if (bitmap !== scaled) bitmap.recycle()
+                    throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
+                  }
+                  if (bitmap !== scaled) {
+                    bitmap.recycle()
+                  }
+                  out.toByteArray()
+                },
+              )
+            val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
+            """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}"""
+          } finally {
+            scaled.recycle()
+          }
+        }
+      ensureCurrent()
+      payload
     }
 
   /** Records a short MP4 clip into a temporary cache file for the caller to encode/delete. */
@@ -304,11 +300,11 @@ class CameraCaptureManager(
     paramsJson: String?,
     onFileReady: (File) -> Unit,
   ): FilePayload =
-    withCapture(includeAudio = parseIncludeAudio(parseJsonParamsObject(paramsJson)) ?: true) { owner, ensureCurrent ->
+    withCapture(includeAudio = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") ?: true) { owner, ensureCurrent ->
       val params = parseJsonParamsObject(paramsJson)
       val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
-      val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
-      val includeAudio = parseIncludeAudio(params) ?: true
+      val durationMs = (parseJsonInt(params, "durationMs") ?: 3_000).coerceIn(200, 60_000)
+      val includeAudio = parseJsonBooleanFlag(params, "includeAudio") ?: true
       val deviceId = parseDeviceId(params)
 
       val provider = context.cameraProvider()
@@ -335,7 +331,7 @@ class CameraCaptureManager(
         val surfaceTexture = android.graphics.SurfaceTexture(0)
         surfaceTexture.setDefaultBufferSize(640, 480)
         val surface = android.view.Surface(surfaceTexture)
-        request.provideSurface(surface, context.mainExecutor()) {
+        request.provideSurface(surface, ContextCompat.getMainExecutor(context)) {
           surface.release()
           surfaceTexture.release()
         }
@@ -362,7 +358,7 @@ class CameraCaptureManager(
             .prepareRecording(context, outputOptions)
             .apply {
               if (includeAudio) withAudioEnabled()
-            }.start(context.mainExecutor()) { event ->
+            }.start(ContextCompat.getMainExecutor(context)) { event ->
               if (event is VideoRecordEvent.Finalize) {
                 finalized.complete(event)
               }
@@ -393,28 +389,13 @@ class CameraCaptureManager(
 
   private fun parseFacing(params: JsonObject?): String? {
     val value = parseJsonString(params, "facing")?.trim()?.lowercase() ?: return null
-    return when (value) {
-      "front", "back" -> value
-      else -> null
-    }
+    return value.takeIf { it == "front" || it == "back" }
   }
-
-  private fun parseQuality(params: JsonObject?): Double? = parseJsonDouble(params, "quality")
-
-  private fun parseMaxWidth(params: JsonObject?): Int? =
-    parseJsonInt(params, "maxWidth")
-      ?.takeIf { it > 0 }
-
-  private fun parseDurationMs(params: JsonObject?): Int? = parseJsonInt(params, "durationMs")
 
   private fun parseDeviceId(params: JsonObject?): String? =
     parseJsonString(params, "deviceId")
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
-
-  private fun parseIncludeAudio(params: JsonObject?): Boolean? = parseJsonBooleanFlag(params, "includeAudio")
-
-  private fun Context.mainExecutor(): Executor = ContextCompat.getMainExecutor(this)
 
   private fun resolveCameraSelector(
     provider: ProcessCameraProvider,
@@ -442,28 +423,12 @@ class CameraCaptureManager(
       runCatching {
         Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
       }.getOrNull()
-    val position =
-      when (lensFacing) {
-        CameraCharacteristics.LENS_FACING_FRONT -> "front"
-        CameraCharacteristics.LENS_FACING_BACK -> "back"
-        CameraCharacteristics.LENS_FACING_EXTERNAL -> "external"
-        else -> "unspecified"
-      }
-    val deviceType =
-      if (lensFacing == CameraCharacteristics.LENS_FACING_EXTERNAL) "external" else "builtIn"
-    val name =
-      when (position) {
-        "front" -> "Front Camera"
-        "back" -> "Back Camera"
-        "external" -> "External Camera"
-        else -> "Camera $cameraId"
-      }
-    return CameraDeviceInfo(
-      id = cameraId,
-      name = name,
-      position = position,
-      deviceType = deviceType,
-    )
+    return when (lensFacing) {
+      CameraCharacteristics.LENS_FACING_FRONT -> CameraDeviceInfo(cameraId, "Front Camera", "front", "builtIn")
+      CameraCharacteristics.LENS_FACING_BACK -> CameraDeviceInfo(cameraId, "Back Camera", "back", "builtIn")
+      CameraCharacteristics.LENS_FACING_EXTERNAL -> CameraDeviceInfo(cameraId, "External Camera", "external", "external")
+      else -> CameraDeviceInfo(cameraId, "Camera $cameraId", "unspecified", "builtIn")
+    }
   }
 
   @SuppressLint("UnsafeOptInUsageError")

@@ -13,12 +13,8 @@ type BuzzSetupInput = ChannelSetupInput & {
 };
 
 function validRelayUrl(value: string | undefined): boolean {
-  try {
-    const url = new URL(value ?? "");
-    return url.protocol === "ws:" || url.protocol === "wss:";
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value ?? "");
+  return url?.protocol === "ws:" || url?.protocol === "wss:";
 }
 
 export function patchBuzzAccountConfig(params: {

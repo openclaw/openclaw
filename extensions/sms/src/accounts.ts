@@ -2,7 +2,6 @@ import {
   createAccountListHelpers,
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/account-helpers";
-// Sms plugin module implements accounts behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   DEFAULT_ACCOUNT_ID,

@@ -11,19 +11,22 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../src/infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { readWindowsProcessStartTimeSync } from "../../src/infra/windows-process-start.js";
-import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
-import { createDeferred } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import type { runNodeScript } from "../helpers/run-node-script.js";
 import {
@@ -32,77 +35,47 @@ import {
   withShimFixture,
   writeEsmPluginFixture,
 } from "./direct-run-entrypoints.test-support.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
-const DIRECT_RUN_SCRIPTS = [
-  "scripts/android-app-i18n.ts",
-  "scripts/android-pin-version.ts",
-  "scripts/ci-run-timings.mjs",
-  "scripts/e2e/lib/package-compat.mjs",
-  "scripts/generate-bundled-channel-config-metadata.ts",
-  "scripts/plan-release-workflow-matrix.mjs",
-  "scripts/run-additional-boundary-checks.mts",
-  "scripts/verify-docker-attestations.mjs",
-] as const;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 
-const EXECUTABLE_ENTRYPOINTS = [
-  {
-    args: ["--direct-run-smoke"],
-    output: "Unknown CI run timing option: --direct-run-smoke",
-    script: "scripts/ci-run-timings.mjs",
-    status: 1,
-  },
-  {
-    args: ["2026.7.33"],
-    output: "0",
-    script: "scripts/e2e/lib/package-compat.mjs",
-    status: 0,
-  },
-  {
-    args: [],
-    output: "docker_e2e_count=",
-    script: "scripts/plan-release-workflow-matrix.mjs",
-    status: 0,
-  },
-  {
-    args: ["--help"],
-    output: "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
-    script: "scripts/run-additional-boundary-checks.mts",
-    status: 0,
-  },
-  {
-    args: ["--help"],
-    output: "Usage: node scripts/verify-docker-attestations.mjs",
-    script: "scripts/verify-docker-attestations.mjs",
-    status: 0,
-  },
-] as const;
-
-function runEntrypoint(entrypoint: (typeof EXECUTABLE_ENTRYPOINTS)[number]) {
-  const script = path.resolve(entrypoint.script);
-  const args =
-    entrypoint.script === "scripts/run-additional-boundary-checks.mts"
-      ? [
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(scriptModuleEntrypoints.additionalBoundaryChecks),
-          ),
-          ...entrypoint.args,
-        ]
-      : [script, ...entrypoint.args];
-  return spawnSync(process.execPath, args, {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DOCKER_LANES: "",
-      GITHUB_STEP_SUMMARY: "",
-      INCLUDE_LIVE_SUITES: "",
-      INCLUDE_RELEASE_PATH_SUITES: "",
-      LIVE_MODEL_PROVIDERS: "",
-      LIVE_SUITE_FILTER: "",
-      RELEASE_TEST_PROFILE: "",
+async function implementationReadyBeforeSettlement(
+  pidPath: string,
+  operation: PromiseLike<unknown>,
+): Promise<number> {
+  // The PID record precedes the receipt; command output and exit use different pipes.
+  const recorded = () => existsSync(pidPath) && readFileSync(pidPath, "utf8").trim() !== "";
+  const settled = Promise.resolve(operation).then(
+    () => {
+      if (!recorded()) {
+        throw new Error(`timeout waiting for pid in ${pidPath}`);
+      }
     },
-    timeout: 30_000,
-  });
+    (error: unknown) => {
+      if (!recorded()) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
+  return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+}
+
+// Recovery owns only foreign PIDs, so it has no ChildProcess exit handle to join.
+async function waitForExtinction(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`process still alive: ${pid}`, { cause: error });
+  }
 }
 
 type ModulesEnv = Partial<Record<"PNPM_CONFIG_MODULES_DIR" | "npm_config_modules_dir", string>>;
@@ -176,30 +149,61 @@ function expectShimLoader(
 }
 
 describe("script direct-run entrypoints", () => {
-  it.skipIf(process.platform === "win32")(
-    "lets the Vitest implementation finish cleanup beyond the shim force-kill window",
-    async () => {
-      await withShimFixture("scripts/run-vitest.mjs", async (fixture) => {
+  it
+    .skipIf(process.platform === "win32")
+    .for([
+      "scripts/run-vitest.mjs",
+      "scripts/check-changed.mjs",
+      "scripts/run-tsgo.mjs",
+      "scripts/run-oxlint.mjs",
+      "scripts/run-tsgo-core-test-shards.mjs",
+    ] as const)(
+    "lets %s finish implementation cleanup beyond the shim force-kill window",
+    async (wrapper, { signal }) => {
+      await withShimFixture(wrapper, async (fixture) => {
         const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
         const ownerPath = path.join(fixtureRoot, "owner.pid");
         const settledPath = path.join(fixtureRoot, "cleanup-settled");
+        const clockPath = path.join(fixtureRoot, "supervisor-clock.mjs");
+        // Scale both owners equally: a competing 5s or 10s cutoff must still fail.
+        // Readiness and the test harness retain real time.
+        writeFileSync(
+          clockPath,
+          `const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay, ...args) =>
+  realSetTimeout(callback, delay / 20, ...args);\n`,
+        );
         writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
         writeFileSync(
           implementationPath,
           `import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 const keepAlive = setInterval(() => {}, 1000);
 process.once("SIGTERM", () => {
   setTimeout(() => {
     fs.writeFileSync(${JSON.stringify(settledPath)}, "settled");
     clearInterval(keepAlive);
     process.exitCode = 143;
-  }, 5500);
+  }, 11000);
 });
 fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
+sendReceipt(${JSON.stringify(ownerPath)}, "ready");
 `,
         );
-        const completion = runNode([wrapperPath], process.env, fixtureRoot);
-        const owner = await waitForPidFile(ownerPath, 10_000);
+        const completion = runNode(
+          [wrapperPath],
+          {
+            ...process.env,
+            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(clockPath).href}`]
+              .filter(Boolean)
+              .join(" "),
+          },
+          fixtureRoot,
+        );
+        const owner = await withinTest(
+          implementationReadyBeforeSettlement(ownerPath, completion),
+          signal,
+        );
         process.kill(owner, "SIGTERM");
         const result = await completion;
         expect(result.status, formatShimResult(result)).toBe(143);
@@ -209,35 +213,28 @@ fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
     },
   );
 
-  it.each(["wrapper", "preload"])(
-    "loads compiled ESM through require from the %s with import-only dependencies",
-    async (entrypoint) => {
-      await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
-        const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
-        writeFileSync(implementationPath, writeEsmPluginFixture(fixtureRoot));
-        const env: NodeJS.ProcessEnv = {
-          ...process.env,
-          PNPM_CONFIG_MODULES_DIR: path.dirname(
-            path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-          ),
-        };
-        delete env.NODE_OPTIONS;
-        const args =
-          entrypoint === "wrapper"
-            ? [wrapperPath]
-            : ["--import", "./scripts/tsx.mjs", implementationPath];
-        const result = await runNode(args, env, process.cwd());
-        expect(result.error, formatShimResult(result)).toBeUndefined();
-        expect(result.status, formatShimResult(result)).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({
-          value: "import-only",
-          evaluations: 1,
-          transformed: "transformed",
-          sourceAlias: true,
-        });
+  it("loads compiled ESM through require from the wrapper with import-only dependencies", async () => {
+    await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
+      const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+      writeFileSync(implementationPath, writeEsmPluginFixture(fixtureRoot));
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+      };
+      delete env.NODE_OPTIONS;
+      const result = await runNode([wrapperPath], env, process.cwd());
+      expect(result.error, formatShimResult(result)).toBeUndefined();
+      expect(result.status, formatShimResult(result)).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        value: "import-only",
+        evaluations: 1,
+        transformed: "transformed",
+        sourceAlias: true,
       });
-    },
-  );
+    });
+  });
 
   it.each([false, true])(
     "preserves preloads when forking into another cwd (equals=%s)",
@@ -316,26 +313,24 @@ process.exitCode = await new Promise((resolve, reject) => {
     },
   );
 
-  it.each(["wrapper", "root package preloads"])(
-    "keeps %s and raw tsx children off disk caches without changing other cache settings",
-    async (entrypoint) => {
-      await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
-        const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
-        const require = createRequire(import.meta.url);
-        const modulesDir = path.dirname(path.dirname(require.resolve("tsx/package.json")));
-        const tempRoot = path.join(fixtureRoot, "temp");
-        const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? userInfo().username}`].map(
-          (name) => path.join(tempRoot, name),
-        );
-        for (const cacheRoot of cacheRoots) {
-          mkdirSync(cacheRoot, { recursive: true });
-          writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
-        }
-        const accessLog = path.join(fixtureRoot, "cache-access.log");
-        const guard = path.join(fixtureRoot, "cache-guard.cjs");
-        writeFileSync(
-          guard,
-          `
+  it("keeps root package preloads and raw tsx children off disk caches without changing other cache settings", async () => {
+    await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
+      const { fixtureRoot, implementationPath, runNode } = fixture;
+      const require = createRequire(import.meta.url);
+      const modulesDir = path.dirname(path.dirname(require.resolve("tsx/package.json")));
+      const tempRoot = path.join(fixtureRoot, "temp");
+      const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? userInfo().username}`].map((name) =>
+        path.join(tempRoot, name),
+      );
+      for (const cacheRoot of cacheRoots) {
+        mkdirSync(cacheRoot, { recursive: true });
+        writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
+      }
+      const accessLog = path.join(fixtureRoot, "cache-access.log");
+      const guard = path.join(fixtureRoot, "cache-guard.cjs");
+      writeFileSync(
+        guard,
+        `
 const fs = require("node:fs");
 const path = require("node:path");
 const readdirSync = fs.readdirSync;
@@ -347,22 +342,22 @@ fs.readdirSync = function (directory, ...args) {
   return readdirSync.call(this, directory, ...args);
 };
 `,
-        );
-        const preservedEnv = Object.fromEntries(
-          [
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-            "XDG_CACHE_HOME",
-            "NODE_COMPILE_CACHE",
-            "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH",
-          ].map((key) => [
-            key,
-            key === "TMPDIR" || key === "TEMP" ? tempRoot : path.join(fixtureRoot, key),
-          ]),
-        );
-        const childPath = path.join(fixtureRoot, "child.mts");
-        const snapshotSource = `
+      );
+      const preservedEnv = Object.fromEntries(
+        [
+          "TMPDIR",
+          "TMP",
+          "TEMP",
+          "XDG_CACHE_HOME",
+          "NODE_COMPILE_CACHE",
+          "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH",
+        ].map((key) => [
+          key,
+          key === "TMPDIR" || key === "TEMP" ? tempRoot : path.join(fixtureRoot, key),
+        ]),
+      );
+      const childPath = path.join(fixtureRoot, "child.mts");
+      const snapshotSource = `
 enum Transformed { Value = "transformed" }
 console.log(JSON.stringify({
   transformed: Transformed.Value,
@@ -371,110 +366,106 @@ console.log(JSON.stringify({
   env: Object.fromEntries(${JSON.stringify(Object.keys(preservedEnv))}.map(key => [key, process.env[key]])),
 }));
 `;
-        writeFileSync(childPath, `${snapshotSource}\nprocess.exitCode = 17;\n`);
-        writeFileSync(
-          implementationPath,
-          `${snapshotSource}
+      writeFileSync(childPath, `${snapshotSource}\nprocess.exitCode = 17;\n`);
+      writeFileSync(
+        implementationPath,
+        `${snapshotSource}
 import { spawnSync } from "node:child_process";
 const child = spawnSync(process.execPath, ["--import", "tsx", ${JSON.stringify(childPath)}, ...process.argv.slice(2)], { stdio: "inherit" });
 if (child.error) throw child.error;
 process.exitCode = child.status ?? 1;
 `,
-        );
-        const { scripts } = JSON.parse(readFileSync("package.json", "utf8")) as {
-          scripts: Record<string, string>;
-        };
-        const preloads = [
-          ...new Set(
-            Object.values(scripts).flatMap((command) =>
-              [...command.matchAll(/--import(?:=|\s+)(\S+)/gu)].map((match) => match[1]!),
-            ),
+      );
+      const { scripts } = JSON.parse(readFileSync("package.json", "utf8")) as {
+        scripts: Record<string, string>;
+      };
+      const preloads = [
+        ...new Set(
+          Object.values(scripts).flatMap((command) =>
+            [...command.matchAll(/--import(?:=|\s+)(\S+)/gu)].map((match) => match[1]!),
           ),
-        ];
-        expect(preloads.length).toBeGreaterThan(0);
-        const launches =
-          entrypoint === "wrapper"
-            ? [[wrapperPath]]
-            : preloads.map((preload) => ["--import", preload, implementationPath]);
-        for (const cacheFlag of [undefined, ""]) {
-          const env: NodeJS.ProcessEnv = {
-            ...process.env,
-            ...preservedEnv,
-            PNPM_CONFIG_MODULES_DIR: modulesDir,
-            NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
-          };
-          delete env.TSX_DISABLE_CACHE;
-          if (cacheFlag !== undefined) {
-            env.TSX_DISABLE_CACHE = cacheFlag;
-          }
-          for (const launch of launches) {
-            const result = await runNode(
-              [...launch, "argument with spaces", "--proof"],
-              env,
-              process.cwd(),
-            );
-            expect(result.error, formatShimResult(result)).toBeUndefined();
-            expect(result.status, formatShimResult(result)).toBe(17);
-            expect(
-              result.stdout
-                .trim()
-                .split("\n")
-                .map((line) => JSON.parse(line)),
-            ).toEqual(
-              Array.from({ length: 2 }, () => ({
-                transformed: "transformed",
-                args: ["argument with spaces", "--proof"],
-                cwd: process.cwd(),
-                env: preservedEnv,
-              })),
-            );
-            if (entrypoint === "wrapper") {
-              expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 17)");
-            }
-          }
+        ),
+      ];
+      expect(preloads.length).toBeGreaterThan(0);
+      const launches = preloads.map((preload) => ["--import", preload, implementationPath]);
+      for (const cacheFlag of [undefined, ""]) {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          ...preservedEnv,
+          PNPM_CONFIG_MODULES_DIR: modulesDir,
+          NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
+        };
+        delete env.TSX_DISABLE_CACHE;
+        if (cacheFlag !== undefined) {
+          env.TSX_DISABLE_CACHE = cacheFlag;
         }
-        expect(existsSync(accessLog)).toBe(false);
-        for (const cacheRoot of cacheRoots) {
-          expect(readdirSync(cacheRoot)).toEqual(["0-sentinel"]);
-          expect(readFileSync(path.join(cacheRoot, "0-sentinel"), "utf8")).toBe("keep");
+        for (const launch of launches) {
+          const result = await runNode(
+            [...launch, "argument with spaces", "--proof"],
+            env,
+            process.cwd(),
+          );
+          expect(result.error, formatShimResult(result)).toBeUndefined();
+          expect(result.status, formatShimResult(result)).toBe(17);
+          expect(
+            result.stdout
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line)),
+          ).toEqual(
+            Array.from({ length: 2 }, () => ({
+              transformed: "transformed",
+              args: ["argument with spaces", "--proof"],
+              cwd: process.cwd(),
+              env: preservedEnv,
+            })),
+          );
         }
-      });
-    },
-  );
-
-  it.each(EXECUTABLE_ENTRYPOINTS)("runs $script through its guarded CLI", (entrypoint) => {
-    const result = runEntrypoint(entrypoint);
-    const output = `${result.stdout}${result.stderr}`;
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(entrypoint.status);
-    expect(output).toContain(entrypoint.output);
+      }
+      expect(existsSync(accessLog)).toBe(false);
+      for (const cacheRoot of cacheRoots) {
+        expect(readdirSync(cacheRoot)).toEqual(["0-sentinel"]);
+        expect(readFileSync(path.join(cacheRoot, "0-sentinel"), "utf8")).toBe("keep");
+      }
+    });
   });
 
-  it.runIf(process.platform === "win32")(
-    "runs the checked-out Crabbox wrapper through its Windows Job child",
-    async () => {
-      await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
-        const fixtureVersion = "0.56.0";
-        const binDir = path.join(fixtureRoot, "fake bin");
-        const home = path.join(fixtureRoot, "home");
-        const state = path.join(fixtureRoot, "state");
-        const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
-        mkdirSync(binDir);
-        mkdirSync(state);
-        // A failed version probe must fail before managed installation can download anything.
-        writeFileSync(
-          path.join(state, "tools"),
-          "managed installation disabled for this fixture\n",
-        );
-        const responses = {
-          "--version": `crabbox ${fixtureVersion}`,
-          "run --help": "provider: ssh\n  -provider string\n",
-          "config show --json": JSON.stringify({ provider: "ssh" }),
-        };
-        writeFileSync(
-          path.join(binDir, "crabbox.cjs"),
-          String.raw`
+  it("runs scripts/verify-docker-attestations.mjs through its guarded CLI", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/verify-docker-attestations.mjs", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      "Usage: node scripts/verify-docker-attestations.mjs",
+    );
+  });
+
+  it("runs the checked-out Crabbox wrapper through its managed child", async () => {
+    await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
+      const fixtureVersion = "999.0.0";
+      const binDir = path.join(fixtureRoot, "fake bin");
+      const home = path.join(fixtureRoot, "home");
+      const state = path.join(fixtureRoot, "state");
+      const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
+      mkdirSync(binDir);
+      mkdirSync(state);
+      // A failed version probe must fail before managed installation can download anything.
+      writeFileSync(path.join(state, "tools"), "managed installation disabled for this fixture\n");
+      const responses = {
+        "--version": `crabbox ${fixtureVersion}`,
+        "run --help": "provider: ssh\n  -provider string\n",
+        "config show --json": JSON.stringify({ provider: "ssh" }),
+      };
+      writeFileSync(
+        path.join(binDir, process.platform === "win32" ? "crabbox.cjs" : "crabbox"),
+        String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const record = (stage, details = {}) => fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ stage, args, pid: process.pid, atMs: Date.now(), ...details }) + "\n");
@@ -487,181 +478,138 @@ if (response === undefined) throw new Error("Unexpected fixture command: " + JSO
 process.stdout.write(response + "\n");
 record("stdout-write-returned");
 `,
-        );
-        writeFileSync(
-          path.join(binDir, "crabbox.cmd"),
-          [
-            "@echo off",
-            `"${process.execPath}" "%~dp0crabbox.cjs" %*`,
-            "exit /b %errorlevel%",
-            "",
-          ].join("\r\n"),
-        );
-        const env: NodeJS.ProcessEnv = {
-          SystemRoot: process.env.SystemRoot,
-          ComSpec: process.env.ComSpec,
-          PATH: [binDir, path.dirname(process.execPath), process.env.PATH ?? ""].join(
-            path.delimiter,
-          ),
-          HOME: home,
-          USERPROFILE: home,
-          APPDATA: path.join(home, "AppData", "Roaming"),
-          LOCALAPPDATA: path.join(home, "AppData", "Local"),
-          XDG_CONFIG_HOME: path.join(home, "config"),
-          XDG_STATE_HOME: path.join(home, "state"),
-          OPENCLAW_STATE_DIR: state,
-          TMPDIR: fixtureRoot,
-          TMP: fixtureRoot,
-          TEMP: fixtureRoot,
-          CRABBOX_PROVIDER: "ssh",
-          OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
-        };
-        // Keep the checked-out implementation and its Windows worker/native imports intact.
-        const result = await runNode(
-          [path.resolve("scripts/crabbox-wrapper.mjs"), "--version"],
-          env,
-          process.cwd(),
-        );
-        // Read before asserting: joined timeout cleanup removes the fixture even on failure.
-        // A returned stdout write records progress, not completed pipe drainage.
-        const trace = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
-        const details = `${formatShimResult(result)}\nfixture stages:\n${trace || "no invocation recorded"}`;
-        expect(result.error, details).toBeUndefined();
-        expect(result.status, details).toBe(0);
-        expect(result.stdout, details).toBe(`crabbox ${fixtureVersion}\n`);
-        const invocations = trace
-          .trim()
-          .split("\n")
-          .map(
-            (line) =>
-              JSON.parse(line) as {
-                stage: string;
-                args: string[];
-                pid: number;
-                startTimeMs?: number | null;
-              },
-          )
-          .filter(({ stage }) => stage === "identity-read");
-        expect(invocations.map(({ args }) => args)).toEqual([
-          ["--version"],
-          ["run", "--help"],
-          ["config", "show", "--json"],
-          ["--version"],
-        ]);
-        for (const invocation of invocations) {
-          const alive = isProcessAlive(invocation.pid);
-          expect(
-            alive,
-            alive
-              ? `${JSON.stringify({
-                  invocation,
-                  observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
-                  invocations,
-                })}\n${formatShimResult(result)}`
-              : undefined,
-          ).toBe(false);
-        }
-        expect(readdirSync(state)).toEqual(["tools"]);
-      });
-    },
-  );
-
-  it.each([
-    {
-      envKey: "PNPM_CONFIG_MODULES_DIR",
-      mode: "absolute",
-      wrapper: TSX_SHIM_WRAPPERS[0],
-      nodeArgs: [],
-      inherited: [],
-    },
-    {
-      envKey: "npm_config_modules_dir",
-      mode: "relative",
-      wrapper: TSX_SHIM_WRAPPERS[1],
-      nodeArgs: ["--no-maglev", "--no-concurrent-sparkplug"],
-      inherited: ["--no-maglev", "--no-concurrent-sparkplug"],
-    },
-    {
-      envKey: "PNPM_CONFIG_MODULES_DIR",
-      mode: "relative",
-      wrapper: TSX_SHIM_WRAPPERS[2],
-      nodeArgs: ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"],
-      inherited: ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"],
-    },
-    {
-      envKey: "npm_config_modules_dir",
-      mode: "absolute",
-      wrapper: TSX_SHIM_WRAPPERS[3],
-      nodeArgs: ["--title=--no-maglev", "--no-concurrent-sparkplug"],
-      inherited: ["--no-concurrent-sparkplug"],
-    },
-  ] as const)(
-    "boots $wrapper from a $mode $envKey",
-    async ({ envKey, mode, wrapper, nodeArgs, inherited }) => {
-      const result = await runShimFixture(
-        wrapper,
-        ({ checkoutRoot, fixtureRoot }) => {
-          const modulesDir = path.join(fixtureRoot, "hydrated-modules");
-          writeTsxFixture(modulesDir, "hydrated");
-          const configuredDir =
-            mode === "absolute" ? modulesDir : path.relative(checkoutRoot, modulesDir);
-          return { [envKey]: configuredDir };
-        },
-        nodeArgs,
+        { mode: 0o755 },
       );
-      expectShimLoader(result, "hydrated", inherited);
-    },
-  );
-
-  it("prefers PNPM_CONFIG_MODULES_DIR over npm_config_modules_dir", async () => {
-    const result = await runShimFixture(TSX_SHIM_WRAPPERS[2], ({ fixtureRoot }) => {
-      const preferredDir = path.join(fixtureRoot, "preferred-modules");
-      const fallbackDir = path.join(fixtureRoot, "fallback-modules");
-      writeTsxFixture(preferredDir, "preferred");
-      writeTsxFixture(fallbackDir, "lowercase");
-      return {
-        PNPM_CONFIG_MODULES_DIR: preferredDir,
-        npm_config_modules_dir: fallbackDir,
+      writeFileSync(
+        path.join(binDir, "crabbox.cmd"),
+        [
+          "@echo off",
+          `"${process.execPath}" "%~dp0crabbox.cjs" %*`,
+          "exit /b %errorlevel%",
+          "",
+        ].join("\r\n"),
+      );
+      const env: NodeJS.ProcessEnv = {
+        SystemRoot: process.env.SystemRoot,
+        ComSpec: process.env.ComSpec,
+        PATH: [binDir, path.dirname(process.execPath), process.env.PATH ?? ""].join(path.delimiter),
+        HOME: home,
+        USERPROFILE: home,
+        APPDATA: path.join(home, "AppData", "Roaming"),
+        LOCALAPPDATA: path.join(home, "AppData", "Local"),
+        XDG_CONFIG_HOME: path.join(home, "config"),
+        XDG_STATE_HOME: path.join(home, "state"),
+        OPENCLAW_STATE_DIR: state,
+        TMPDIR: fixtureRoot,
+        TMP: fixtureRoot,
+        TEMP: fixtureRoot,
+        CRABBOX_PROVIDER: "ssh",
+        OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
       };
-    });
-    expectShimLoader(result, "preferred");
-  });
-
-  it("falls back to checkout dependencies without an external modules directory", async () => {
-    expectShimLoader(await runShimFixture(TSX_SHIM_WRAPPERS[3]), "checkout");
-  });
-
-  it.each(["hydrated", "primary"] as const)(
-    "requires explicit hydration to bootstrap from %s without local modules",
-    async (source) => {
-      const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
-        rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
-        const primaryRoot = path.join(fixtureRoot, "primary");
-        const modulesDir = path.join(primaryRoot, "node_modules");
-        writeTsxFixture(modulesDir, source);
-        if (source === "hydrated") {
-          return { PNPM_CONFIG_MODULES_DIR: modulesDir };
+      // Preserve the real wrapper and Job lifecycle; compile its graph before the deadline.
+      const result = await runNode(
+        [path.resolve("scripts/crabbox-wrapper.mjs"), "--version"],
+        preparedScriptWrapperEnv(
+          [
+            [
+              new URL("../../scripts/crabbox-wrapper.mts", import.meta.url),
+              resolveRuntimeWorkerUrl(scriptModuleEntrypoints.crabboxWrapper),
+            ],
+          ],
+          env,
+        ),
+        process.cwd(),
+      );
+      // Read before asserting: joined timeout cleanup removes the fixture even on failure.
+      // A returned stdout write records progress, not completed pipe drainage.
+      const trace = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
+      const details = `${formatShimResult(result)}\nfixture stages:\n${trace || "no invocation recorded"}`;
+      expect(result.error, details).toBeUndefined();
+      expect(result.status, details).toBe(0);
+      expect(result.stdout, details).toBe(`crabbox ${fixtureVersion}\n`);
+      const invocations = trace
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              stage: string;
+              args: string[];
+              pid: number;
+              startTimeMs?: number | null;
+            },
+        )
+        .filter(({ stage }) => stage === "identity-read");
+      expect(invocations.map(({ args }) => args)).toEqual([
+        ["--version"],
+        ["run", "--help"],
+        ["config", "show", "--json"],
+        ["--version"],
+      ]);
+      for (const invocation of invocations) {
+        if (process.platform === "win32") {
+          expect(
+            Number.isSafeInteger(invocation.startTimeMs) && (invocation.startTimeMs ?? 0) > 0,
+            `${JSON.stringify(invocation)}\n${details}`,
+          ).toBe(true);
         }
-        const initialized = spawnSync(
-          "git",
-          ["init", "--quiet", "--separate-git-dir", path.join(primaryRoot, ".git"), checkoutRoot],
-          { encoding: "utf8" },
-        );
-        expect(initialized.status, initialized.stderr).toBe(0);
-        return {};
-      });
-      if (source === "hydrated") {
-        expectShimLoader(result, source);
-      } else {
-        expect(result.error, formatShimResult(result)).toBeUndefined();
-        expect(result.status, formatShimResult(result)).toBe(1);
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toContain(
-          "Run pnpm install --frozen-lockfile in an independently owned checkout.",
-        );
+        // Windows may reuse an exited probe's PID before the remaining probes finish.
+        // An unreadable identity for a live PID still cannot prove child cleanup.
+        const observedStartTimeMs = readWindowsProcessStartTimeSync(invocation.pid, 0);
+        const alive = isProcessAlive(invocation.pid);
+        expect(
+          alive &&
+            (process.platform !== "win32" ||
+              observedStartTimeMs === null ||
+              observedStartTimeMs === invocation.startTimeMs),
+          alive
+            ? `${JSON.stringify({
+                invocation,
+                observedStartTimeMs,
+                invocations,
+              })}\n${formatShimResult(result)}`
+            : undefined,
+        ).toBe(false);
       }
-    },
-  );
+      expect(readdirSync(state)).toEqual(["tools"]);
+    });
+  });
+
+  it("boots scripts/e2e/kitchen-sink-rpc-walk.mjs from a relative PNPM_CONFIG_MODULES_DIR", async () => {
+    const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
+    const result = await runShimFixture(
+      TSX_SHIM_WRAPPERS[2],
+      ({ checkoutRoot, fixtureRoot }) => {
+        const modulesDir = path.join(fixtureRoot, "hydrated-modules");
+        writeTsxFixture(modulesDir, "hydrated");
+        return { PNPM_CONFIG_MODULES_DIR: path.relative(checkoutRoot, modulesDir) };
+      },
+      nodeArgs,
+    );
+    expectShimLoader(result, "hydrated", nodeArgs);
+  });
+
+  it("requires explicit hydration to bootstrap from primary without local modules", async () => {
+    const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
+      rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
+      const primaryRoot = path.join(fixtureRoot, "primary");
+      const modulesDir = path.join(primaryRoot, "node_modules");
+      writeTsxFixture(modulesDir, "primary");
+      const initialized = spawnSync(
+        "git",
+        ["init", "--quiet", "--separate-git-dir", path.join(primaryRoot, ".git"), checkoutRoot],
+        { encoding: "utf8" },
+      );
+      expect(initialized.status, initialized.stderr).toBe(0);
+      return {};
+    });
+    expect(result.error, formatShimResult(result)).toBeUndefined();
+    expect(result.status, formatShimResult(result)).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "Run pnpm install --frozen-lockfile in an independently owned checkout.",
+    );
+  });
 
   it("matches Windows drive paths case-insensitively", () => {
     expect(
@@ -673,114 +621,66 @@ record("stdout-write-returned");
     ).toBe(true);
   });
 
-  it.each(DIRECT_RUN_SCRIPTS)("uses the canonical guard in %s", (script) => {
-    const source = readFileSync(script, "utf8");
+  it.each(["scripts/android-app-i18n.ts", "scripts/generate-bundled-channel-config-metadata.ts"])(
+    "uses the canonical guard in %s",
+    (script) => {
+      const source = readFileSync(script, "utf8");
 
-    expect(source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu)).toHaveLength(
-      1,
-    );
-  });
+      expect(
+        source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu),
+      ).toHaveLength(1);
+    },
+  );
 
-  it.each([
-    ...DIRECT_RUN_SCRIPTS,
-    "scripts/lib/direct-run.mjs",
-    "scripts/lib/tsx-cli-shim.mjs",
-    "test/scripts/direct-run-entrypoints.test.ts",
-    "test/scripts/install-ps1.test.ts",
-    "scripts/tsx.mjs",
-  ])("routes %s through Windows CI", (changedPath) => {
-    expect(detectChangedScope([changedPath]).runWindows).toBe(true);
-  });
+  it.each(["scripts/verify-docker-attestations.mjs"])(
+    "routes %s through Windows CI",
+    (changedPath) => {
+      expect(detectChangedScope([changedPath]).runWindows).toBe(true);
+    },
+  );
 });
 
-it.each([false, true])(
-  "keeps the fixture until its callback settles (reject=%s)",
-  async (reject) => {
-    const release = createDeferred();
-    const failure = new Error("callback rejected after its final write");
-    let root = "";
-    let finalWrite = "";
-    const completion = Promise.resolve(
-      withShimFixture(TSX_SHIM_WRAPPERS[0], async ({ fixtureRoot }) => {
-        root = fixtureRoot;
-        await release.promise;
-        const marker = path.join(fixtureRoot, "callback-finished");
-        writeFileSync(marker, "finished");
-        finalWrite = readFileSync(marker, "utf8");
-        if (reject) {
-          throw failure;
-        }
-        return "callback result";
-      }),
-    ).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      expect(existsSync(root), "pending callbacks still own their fixture").toBe(true);
-    } finally {
-      release.resolve();
-      await completion;
-    }
-    expect(await completion).toEqual(reject ? { error: failure } : { value: "callback result" });
-    expect(finalWrite).toBe("finished");
-    expect(existsSync(root)).toBe(false);
-  },
-);
-
-it.each(["callback", "command"])(
-  "retains fixture evidence when %s cleanup is unconfirmed",
-  async (source) => {
-    // Fault injection is limited to the receipt: real OS cleanup failure is unsafe to force.
-    const failure = Object.assign(new Error("child cleanup unverified"), {
-      code: "EPROCESSGROUP_CLEANUP_FAILED",
-      processTreeState: "indeterminate",
+it("retains fixture evidence when command cleanup is unconfirmed", async () => {
+  // Fault injection is limited to the receipt: real OS cleanup failure is unsafe to force.
+  const failure = Object.assign(new Error("child cleanup unverified"), {
+    code: "EPROCESSGROUP_CLEANUP_FAILED",
+    processTreeState: "indeterminate",
+  });
+  const runManaged = managedChild.runManagedCommand;
+  const spy = vi
+    .spyOn(managedChild, "runManagedCommand")
+    .mockImplementationOnce(async (options) => {
+      await runManaged(options);
+      throw failure;
     });
-    const runManaged = managedChild.runManagedCommand;
-    const spy = vi
-      .spyOn(managedChild, "runManagedCommand")
-      .mockImplementationOnce(async (options) => {
-        await runManaged(options);
-        throw failure;
-      });
-    let root = "";
-    try {
-      const error = await withShimFixture(
-        TSX_SHIM_WRAPPERS[0],
-        async ({ fixtureRoot, runNode }) => {
-          root = fixtureRoot;
-          writeFileSync(path.join(root, "evidence"), "keep");
-          if (source === "callback") {
-            throw failure;
-          }
-          await runNode(
-            [
-              "-e",
-              'process.stdout.write("retained stdout"); process.stderr.write("retained stderr");',
-            ],
-            process.env,
-            root,
-          );
-        },
-      ).catch((cause: unknown) => cause);
-      expect(existsSync(root), "unverified writers still own the fixture").toBe(true);
-      expect(readFileSync(path.join(root, "evidence"), "utf8")).toBe("keep");
-      expect(error).toMatchObject({ message: expect.stringContaining(root), cause: failure });
-      if (source === "command") {
-        const output = readFileSync(path.join(root, "command-output.log"), "utf8");
-        expect(output).toContain("retained stdout");
-        expect(output).toContain("retained stderr");
-        expect(output).toContain("EPROCESSGROUP_CLEANUP_FAILED");
-      }
-    } finally {
-      spy.mockRestore();
-      // The real command has joined; only the injected receipt prevents removal.
-      rmSync(root, { recursive: true, force: true });
-    }
-  },
-);
+  let root = "";
+  try {
+    const error = await withShimFixture(TSX_SHIM_WRAPPERS[0], async ({ fixtureRoot, runNode }) => {
+      root = fixtureRoot;
+      writeFileSync(path.join(root, "evidence"), "keep");
+      await runNode(
+        ["-e", 'process.stdout.write("retained stdout"); process.stderr.write("retained stderr");'],
+        process.env,
+        root,
+      );
+    }).catch((cause: unknown) => cause);
+    expect(existsSync(root), "unverified writers still own the fixture").toBe(true);
+    expect(readFileSync(path.join(root, "evidence"), "utf8")).toBe("keep");
+    expect(error).toMatchObject({ message: expect.stringContaining(root), cause: failure });
+    const output = readFileSync(path.join(root, "command-output.log"), "utf8");
+    expect(output).toContain("retained stdout");
+    expect(output).toContain("retained stderr");
+    expect(output).toContain("EPROCESSGROUP_CLEANUP_FAILED");
+  } finally {
+    spy.mockRestore();
+    // The real command has joined; only the injected receipt prevents removal.
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
-it("joins owned descendants and captures timeout output before deleting a rejected fixture", async () => {
+it("joins owned descendants and captures timeout output before deleting a rejected fixture", async ({
+  signal,
+}) => {
   const evidence = mkdtempSync(path.join(tmpdir(), "openclaw-shim-owned-pids-"));
   const pidPaths = ["wrapper", "implementation", "descendant"].map((role) =>
     path.join(evidence, `${role}.pid`),
@@ -819,10 +719,14 @@ process.disconnect();
           `
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+${fixtureReceiptClientSource(receipts.endpoint)}
 enum Transformed { Value = "transformed" }
 console.log(Transformed.Value);
 const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
-child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, String(process.pid)));
+child.once("message", () => {
+  fs.writeFileSync(${JSON.stringify(pidPaths[1])}, String(process.pid));
+  sendReceipt(${JSON.stringify(pidPaths[1])}, "ready");
+});
 `,
         );
         const env: NodeJS.ProcessEnv = {
@@ -840,7 +744,10 @@ child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, Str
           fixturePresentAtCommandSettlement = existsSync(fixtureRoot);
           return result;
         });
-        const implementationPid = await waitForPidFile(pidPaths[1]!, 5_000);
+        const implementationPid = await withinTest(
+          implementationReadyBeforeSettlement(pidPaths[1]!, command),
+          signal,
+        );
         expect(isProcessAlive(implementationPid)).toBe(true);
         throw failure;
       }).catch((cause: unknown) => cause);
@@ -877,12 +784,12 @@ child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, Str
         const pid = Number(readFileSync(pidPath, "utf8"));
         if (isProcessAlive(pid)) {
           managedChild.terminateManagedChild(
-            { pid, kill: (signal) => process.kill(pid, signal) },
+            { pid, kill: (killSignal) => process.kill(pid, killSignal) },
             "SIGKILL",
             { useProcessGroup: false },
           );
         }
-        await waitForDead(pid, 5_000);
+        await waitForExtinction(pid, signal);
       }
     }),
     () => {

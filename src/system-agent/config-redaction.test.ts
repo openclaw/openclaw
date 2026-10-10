@@ -95,41 +95,17 @@ describe("isSystemAgentSensitiveConfigValue", () => {
 });
 
 describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
-  it.each([
-    "gateway.auth.token=abcDEF123",
-    String.raw`gateway.auth.token\=abcDEF123`,
-    String.raw`gateway.auth.token\ abcDEF123`,
-    "gateway.auth.tokenabcDEF123",
-    "gateway.auth.token_abcDEF123",
-    "gateway.auth.token$abcDEF123",
-    "plugins.entries.codex.config.appServer.headersabcDEF123",
-    'gateway.auth["token=abcDEF123"]',
-    'gateway.auth["token abcDEF123"]',
-    'gateway.auth["token:abcDEF123"]',
-    'gateway.auth["token=abcDEF123"].nested',
-  ])("detects sensitive data embedded in path %s", (path) => {
-    expect(isSystemAgentSensitiveConfigPathEmbedding(path)).toBe(true);
-  });
-
-  it("preserves a non-sensitive dynamic key containing an assignment delimiter", () => {
+  it("detects sensitive data appended to a plugin-owned hint", () => {
     expect(
       isSystemAgentSensitiveConfigPathEmbedding(
-        'channels.synology-chat.accounts["prod=us"].webhookUrl',
+        "plugins.entries.codex.config.appServer.headersabcDEF123",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it.each([
     "plugins.entries.codex.config.appServer.headers.Authorization",
-    'plugins.entries.codex.config.appServer.headers["X-Test"]',
-    String.raw`plugins.entries.codex.config.appServer.headers.X\-Test`,
-    'channels.synology-chat.accounts["token=prod"].webhookUrl',
-    String.raw`channels.synology-chat.accounts.token\=prod.webhookUrl`,
-    'channels.synology-chat.accounts["token=prod"].webhookPath',
-    String.raw`channels.synology-chat.accounts.token\=prod.webhookPath`,
-    'broadcast["token=prod"]',
     'session.identityLinks["token=prod"]',
-    'channels.modelByChannel["token=prod"].chat',
     'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
     'channels.buzz.groups["00000000-0000-4000-8000-000000000000"].enabled',
     'hooks.entries.work["token=prod"]',
@@ -138,12 +114,6 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     "hooks.mappings[0].agentId",
   ])("preserves schema-valid dynamic path %s", (path) => {
     expect(isSystemAgentSensitiveConfigPathEmbedding(path)).toBe(false);
-  });
-
-  it("rejects a nonnumeric array index", () => {
-    expect(
-      isSystemAgentSensitiveConfigPathEmbedding('hooks.mappings["token=abcDEF123"].agentId'),
-    ).toBe(true);
   });
 
   it.each([

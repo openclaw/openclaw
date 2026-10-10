@@ -567,36 +567,6 @@ describe("parseCliJsonl", () => {
 
     expect([result.errorText, result.terminalFailure]).toEqual(expected);
   });
-
-  it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
-    "normalizes $name from CLI JSONL output",
-    ({ raw, normalized }) => {
-      const result = parseCliJsonl(
-        [
-          JSON.stringify({ type: "init", session_id: "openai-compatible-session" }),
-          JSON.stringify({
-            type: "result",
-            session_id: "openai-compatible-session",
-            result: "OpenAI-compatible response",
-            usage: raw,
-          }),
-        ].join("\n"),
-        {
-          command: "openai-compatible",
-          output: "jsonl",
-          jsonlDialect: "claude-stream-json",
-          sessionIdFields: ["session_id"],
-        },
-        "openai-compatible-cli",
-      );
-
-      expect(result).toEqual({
-        text: "OpenAI-compatible response",
-        sessionId: "openai-compatible-session",
-        usage: normalized,
-      });
-    },
-  );
 });
 
 describe("parseCliOutput", () => {

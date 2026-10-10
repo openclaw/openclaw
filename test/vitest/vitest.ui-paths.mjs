@@ -11,12 +11,12 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",
-  "ui/src/pages/sessions/view.browser.test.ts",
   "ui/src/styles/corner-shape.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/chat-github-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
 ];
 
@@ -24,15 +24,20 @@ export function isUiBrowserTestFile(relative) {
   return (
     isUiTestTarget(relative) &&
     !/[*?[\]{}]|[@+!]\(/u.test(relative) &&
-    relative.endsWith(".browser.test.ts") &&
+    /\.browser\.test\.tsx?$/u.test(relative) &&
     !uiNodeDrivenBrowserTestFiles.includes(relative)
   );
 }
 
 export const pluginControlUiPathGlob = "extensions/*/browser/**";
-export const controlUiTestGlobs = ["ui/src/**/*.test.ts", "extensions/*/browser/**/*.test.ts"];
+export const controlUiTestGlobs = [
+  "ui/src/**/*.test.ts",
+  "ui/src/**/*.test.tsx",
+  "extensions/*/browser/**/*.test.ts",
+];
 export const controlUiE2eTestGlobs = [
   "ui/src/**/*.e2e.test.ts",
+  "ui/src/**/*.e2e.test.tsx",
   "extensions/*/browser/**/*.e2e.test.ts",
 ];
 
@@ -52,12 +57,15 @@ export function isControlUiSourcePath(file) {
 export function isUiTestTarget(relative) {
   return (
     isControlUiSourcePath(relative) &&
-    relative.endsWith(".test.ts") &&
-    !relative.endsWith(".e2e.test.ts")
+    /\.test\.tsx?$/u.test(relative) &&
+    !/\.e2e\.test\.tsx?$/u.test(relative)
   );
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
+  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
@@ -70,6 +78,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
@@ -98,6 +107,7 @@ export const uiE2eRealGatewayTestFiles = [
 // Listed fixtures own their HOME, state, ports, and cleanup; UI bytes are either
 // borrowed from the invocation preview or read by their prepared Gateway child.
 export const uiE2ePrebuiltParallelTestFiles = [
+  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",

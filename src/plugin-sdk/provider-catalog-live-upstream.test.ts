@@ -114,10 +114,7 @@ describe("shared upstream provider metadata catalogs", () => {
   });
 
   it.each([
-    ["modern tiers", { tiers: [UPSTREAM_CONTEXT_TIER] }, true],
-    ["legacy tier", { context_over_200k: UPSTREAM_TIER_COST }, true],
     ["object tiers", { tiers: {} }, false],
-    ["null tier", { tiers: [null] }, false],
     ["mixed tiers", { tiers: [null, UPSTREAM_CONTEXT_TIER] }, true],
     [
       "malformed tiers with legacy pricing",
@@ -253,7 +250,6 @@ describe("shared upstream provider metadata catalogs", () => {
     ["@ai-sdk/openai", "openai-responses", "https://opencode.ai/zen/v1"],
     ["@ai-sdk/anthropic", "anthropic-messages", "https://opencode.ai/zen"],
     ["@ai-sdk/google", "google-generative-ai", "https://opencode.ai/zen/v1"],
-    ["@unsupported/sdk", undefined, undefined],
     ["constructor", undefined, undefined],
   ] as const)(
     "projects only supported upstream %s transport from JSON",

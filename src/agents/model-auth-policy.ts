@@ -23,6 +23,7 @@ type ModelAuthPolicyParams = {
   modelBaseUrl?: string;
   mode?: string;
   authFlow?: string;
+  capability?: string;
 };
 
 function policyForModel(params: ModelAuthPolicyParams): ProviderModelAuthPolicy {
@@ -30,6 +31,7 @@ function policyForModel(params: ModelAuthPolicyParams): ProviderModelAuthPolicy 
     provider: params.provider,
     mode: params.mode,
     authFlow: params.authFlow,
+    capability: params.capability,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
   });
@@ -47,6 +49,6 @@ export function assertAuthModeAllowedForModel(
     return;
   }
   throw new Error(
-    `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} ${policy.incompatibilityReason ?? "does not accept this credential"}.`,
+    `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.capability ?? params.modelApi ?? "inference"} ${policy.incompatibilityReason ?? "does not accept this credential"}.`,
   );
 }

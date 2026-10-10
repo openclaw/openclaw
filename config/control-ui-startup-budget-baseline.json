@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 370756,
-  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
-  "updatedAt": "2026-09-22"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

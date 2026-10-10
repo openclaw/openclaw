@@ -73,6 +73,30 @@ This mapping covers workspace files only. Memory search, skill management, and
 attachment staging require their respective workspace capabilities; this mapping
 alone does not enable a complete storage split or launch an agent harness.
 
+### Workspace Skill installation
+
+A paired workspace uses the native Skill installers for source publication,
+source records, and ClawHub update and removal. Gateway keeps installation
+policy and change hooks; the node keeps installed files and provenance. Local
+workspaces keep their existing installation path.
+
+Allow `workspace.skills` and `file.create`, read access to the workspace, and
+write access to these paths (replace `/workspace` with the configured root):
+
+- `/workspace/skills` and `/workspace/skills/**`, including native replacement staging.
+- `/workspace/.clawhub/lock.json` for installation tracking.
+- `/workspace/.openclaw/skill-installs/**` for temporary source uploads.
+
+The adapter opens an admitted node operation before uploading a bounded source
+archive. The node extracts a private copy and waits for Gateway's installation
+policy decision before publishing it. It retires staging when that operation
+ends. Source transfers retain the file plugin's archive and extraction limits;
+links and special files are rejected. A disconnected node fails explicitly.
+
+ClawHub updates and removal retain native version and local-modification
+checks. An installed Skill is discovered through the existing workspace catalog;
+this does not add remote Skills to channel command menus.
+
 ### Binary transfers for services
 
 Plugin services can use the existing node channel to transfer file bytes:

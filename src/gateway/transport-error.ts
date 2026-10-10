@@ -9,6 +9,7 @@ export class GatewayTransportError extends Error {
   readonly code?: number;
   readonly reason?: string;
   readonly timeoutMs?: number;
+  readonly requestDispatched?: boolean;
 
   constructor(params: {
     kind: GatewayTransportErrorKind;
@@ -17,6 +18,7 @@ export class GatewayTransportError extends Error {
     code?: number;
     reason?: string;
     timeoutMs?: number;
+    requestDispatched?: boolean;
   }) {
     super(params.message);
     this.name = "GatewayTransportError";
@@ -30,6 +32,9 @@ export class GatewayTransportError extends Error {
     }
     if (params.timeoutMs !== undefined) {
       this.timeoutMs = params.timeoutMs;
+    }
+    if (params.requestDispatched !== undefined) {
+      this.requestDispatched = params.requestDispatched;
     }
   }
 }
@@ -85,6 +90,7 @@ export function createGatewayCloseTransportError(params: {
     code,
     reason,
     connectionDetails,
+    requestDispatched,
     message: requestDispatched ? `${message}\n\n${DISPATCHED_REQUEST_OUTCOME_GUIDANCE}` : message,
   });
 }
@@ -100,6 +106,7 @@ export function createGatewayTimeoutTransportError(params: {
     kind: "timeout",
     timeoutMs,
     connectionDetails,
+    requestDispatched,
     message: requestDispatched ? `${message}\n\n${DISPATCHED_REQUEST_OUTCOME_GUIDANCE}` : message,
   });
 }

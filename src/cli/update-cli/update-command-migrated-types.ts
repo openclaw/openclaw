@@ -1,4 +1,6 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import type { UpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type {
   UpdateRequester,
   UpdateRequesterAuthority,
@@ -7,27 +9,37 @@ import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryHandoff } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandChildGrant } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 
-export type UpdateDoctorInput = {
+export type UpdatePostCoreInput = {
   executor: UpdateCommandChildGrant;
   runId: string;
   root: string;
-  configInputHash: string;
   requester?: UpdateRequester;
+  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
+  opts: Pick<UpdateCommandOptions, "json" | "restart" | "yes" | "acceptCapabilities" | "timeout">;
+};
+
+export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
+  configInputHash: string;
   repair: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
+  databaseGenerations?: UpdateDatabaseGenerations;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
-  params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
+  params: Omit<
+    FinishUpdateParams,
+    "packageTransaction" | "databaseBackup" | "preManagedServiceStop" | "opts"
+  > & {
     opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence"
+        "requesterAuthority" | "executorFence" | "sourceArtifactLock"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };
@@ -47,6 +59,8 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
 export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
+  /** Missing on older workers; only explicit false permits pre-start database restoration. */
+  candidateStartAttempted?: boolean;
   executorDelegation?: "pid-start-v1";
   automaticTriage?: TriageFailureContext;
 } & (

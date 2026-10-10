@@ -1,16 +1,21 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-// Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
+  drainSessionEventPublications,
+  sessionEventPublicationRows,
+} from "../session-event-prepared-row.js";
+import { prepareSessionEventProjection } from "../session-event-projection.js";
+import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
   type SessionEventAgentScope,
 } from "../session-request-agent.js";
+import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
@@ -132,6 +137,7 @@ function broadcastSessionsChanged(
   payload: SessionChangedPayload,
   scope: SessionEventAgentScope | null,
   includeSnapshot = true,
+  read?: SessionRowReadView,
 ): void {
   const connIds = context.getSessionEventSubscriberConnIds();
   if (!hasSessionChangeReceivers(connIds)) {
@@ -186,9 +192,13 @@ function broadcastSessionsChanged(
     );
     return;
   }
+  const projection = getSessionRowProjection(context);
   const broadcastOptions = {
     ...routingOptions,
     ...resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope),
+    ...(read && projection
+      ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+      : {}),
   };
   // A deletion describes the removed generation, never the row now occupying its key.
   const query = snapshotTarget(payload, scope);
@@ -196,8 +206,10 @@ function broadcastSessionsChanged(
     context.broadcastToConnIds("sessions.changed", eventPayload, connIds, broadcastOptions);
     return;
   }
-  const projection = getSessionRowProjection(context);
-  const currentRow = projection?.snapshot(query).row;
+  const preparedRow = read?.describe(query);
+  const currentRow = read
+    ? preparedRow && read.present(preparedRow)
+    : projection?.snapshot(query).row;
   const sessionRow =
     payload.sessionId && payload.sessionId !== currentRow?.sessionId ? null : currentRow;
   const activeRunState =
@@ -272,18 +284,18 @@ async function publishSessionChange(context: SessionChangeContext, change: Sessi
   const projection = getSessionRowProjection(context);
   const query = snapshotTarget(payload, scope);
   let publicationStarted = false;
-  const broadcast = (includeSnapshot = true) => {
+  const broadcast = (includeSnapshot = true, read?: SessionRowReadView) => {
     publicationStarted = true;
-    broadcastSessionsChanged(context, payload, scope, includeSnapshot);
+    broadcastSessionsChanged(context, payload, scope, includeSnapshot, read);
   };
   try {
     if (change.captureFailed) {
       broadcast(false);
     } else if (query && projection) {
-      const prepared = await projection.withPreparedExactRows(
+      const prepared = await sessionEventPublicationRows(projection).withPreparedExactRows(
         () => [query],
-        () => {
-          broadcast(!captured || projection.isCurrent(captured));
+        (read) => {
+          broadcast(!captured || projection.isCurrent(captured), read);
         },
         { includeAncestors: true },
       );
@@ -376,13 +388,24 @@ export async function flushPendingSessionsChangedEvents(context?: object): Promi
     }
     pending.forEach(finishPendingSessionChange);
     await Promise.all(pending.flatMap((entry) => (entry.work ? [entry.work] : [])));
+    const projections = new Set(
+      pending.flatMap((entry) => getSessionRowProjection(entry.context) ?? []),
+    );
+    await Promise.all([...projections].map(drainSessionEventPublications));
   }
 }
 
 export function emitSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
-  options: { accessChanged?: boolean; preparedPublication?: boolean; catalogOnly?: boolean } = {},
+  options: {
+    accessChanged?: boolean;
+    /** The producer changed liveness only; durable owners publish their own row facts. */
+    rowScope?: "runtime";
+    preparedPublication?: boolean;
+    sessionRows?: SessionRowReadView;
+    catalogOnly?: boolean;
+  } = {},
 ): void {
   // Catalog absorption changes no session facts. Rename/delete callers retain
   // normal invalidation because their sweeps can have committed member changes.
@@ -393,6 +416,9 @@ export function emitSessionsChanged(
         ? {
             sessionKey: payload.sessionKey,
             ...(payload.agentId ? { agentId: payload.agentId } : {}),
+            ...(options.rowScope
+              ? { scope: options.rowScope, facts: { kind: "unchanged" as const } }
+              : {}),
           }
         : { all: true, scope: "sessions" },
     );
@@ -404,7 +430,7 @@ export function emitSessionsChanged(
   if (!catalogOnly) {
     invalidateSessionSharingSnapshot(payload.sessionKey);
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
-    context.mentionInbox?.invalidate(payload.sessionKey);
+    void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
   const connIds = context.getSessionEventSubscriberConnIds();
   if (!hasSessionChangeReceivers(connIds)) {
@@ -414,8 +440,8 @@ export function emitSessionsChanged(
   const scope: SessionEventAgentScope | null = payload.sessionKey
     ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
-  if (options.preparedPublication) {
-    return broadcastSessionsChanged(context, payload, scope);
+  if (options.preparedPublication && payload.sessionKey) {
+    return broadcastSessionsChanged(context, payload, scope, true, options.sessionRows);
   }
   const publicationKey = sessionChangeKey(cfg, payload, scope);
   const key = JSON.stringify([
@@ -488,19 +514,4 @@ export function emitSessionsChanged(
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
   startPendingSessionChange(next, captureSessionChange(context, payload, scope, key));
-}
-
-export function emitSessionArchived(
-  context: SessionChangeContext,
-  sessionKey: string | undefined,
-  agentId?: string,
-): void {
-  if (!sessionKey) {
-    return;
-  }
-  emitSessionsChanged(context, {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    reason: "archive",
-  });
 }

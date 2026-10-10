@@ -3,6 +3,11 @@ name: Vercel Container Registry Publish
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       advisory:
         description: Keep automated release mirroring non-blocking
         required: true
@@ -50,7 +55,7 @@ concurrency:
 jobs:
   validate_recovery:
     if: ${{ !inputs.advisory }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     permissions: {}
     steps:
       - name: Require a main-branch recovery dispatch

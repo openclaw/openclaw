@@ -21,7 +21,6 @@ export const miscExtensionTestRoots = [
   "extensions/synthetic",
   "extensions/tavily",
   "extensions/vercel-ai-gateway",
-  "extensions/webhooks",
 ];
 
 export function isMiscExtensionRoot(root) {

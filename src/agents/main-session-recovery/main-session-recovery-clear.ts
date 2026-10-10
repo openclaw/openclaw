@@ -1,4 +1,5 @@
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 
 type ForegroundClaims = NonNullable<
   NonNullable<SessionEntry["mainRestartRecovery"]>["foregroundClaims"]
@@ -49,17 +50,31 @@ export function buildMainSessionRecoveryClearPatch(
   return MAIN_SESSION_RECOVERY_CLEAR_PATCH;
 }
 
+export function buildMainSessionRecoverySettlementPatch(
+  params: Parameters<typeof buildRestartRecoveryClaimCleanupPatch>[0] & {
+    // A retained delivery snapshot can finish a receipt without owning the current cycle.
+    clearRecoveryState?: boolean;
+  },
+): Partial<SessionEntry> {
+  return {
+    ...buildRestartRecoveryClaimCleanupPatch(params),
+    ...(params.clearRecoveryState === false
+      ? {}
+      : buildMainSessionRecoveryClearPatch(params.entry)),
+  };
+}
+
 export function clearMainSessionRecoveryAfterAgentRun(
   entry: SessionEntry,
   clearForceSafeTools: boolean | undefined,
 ): void {
-  const aborted = entry.abortedLastRun === true;
-  if (clearForceSafeTools && !aborted) {
+  if (entry.abortedLastRun === true) {
+    return;
+  }
+  if (clearForceSafeTools) {
     entry.restartRecoveryForceSafeTools = undefined;
   }
-  if (!aborted) {
-    Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
-  }
+  Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
 }
 
 export type { MainRecoveryStateFields };

@@ -173,7 +173,7 @@ export function createPluginCliLoadSession(
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? createPluginCliLogger(),
+          logger: params.logger ?? createPluginRuntimeLoaderLogger(),
         });
         const captured = revision;
         const prepared: PreparedPluginCliLoad = {
@@ -208,11 +208,6 @@ function resolvePreparedPluginCliLoad(params: PluginCliPublicLoadParams): Prepar
   return (params.session ?? createPluginCliLoadSession()).resolve(params);
 }
 
-/** Creates the default plugin CLI logger shared with runtime loading. */
-export function createPluginCliLogger(): PluginLogger {
-  return createPluginRuntimeLoaderLogger();
-}
-
 function resolvePrimaryCommandManifestPluginIds(
   context: PluginRuntimeLoadContext,
   primaryCommand: string | undefined,
@@ -245,18 +240,6 @@ function pluginCliRegistrarOwnsRoot(
   return roots.includes(primaryCommand);
 }
 
-function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: string): string[] {
-  const normalizedPrimary = normalizeLowercaseStringOrEmpty(primaryCommand);
-  if (!normalizedPrimary) {
-    return [];
-  }
-  return uniqueStrings(
-    registry.cliRegistrars
-      .filter((entry) => pluginCliRegistrarOwnsRoot(entry, normalizedPrimary))
-      .map((entry) => entry.pluginId),
-  );
-}
-
 async function resolvePrimaryCommandPluginIds(
   prepared: PreparedPluginCliLoad,
   primaryCommand: string | undefined,
@@ -274,33 +257,37 @@ async function resolvePrimaryCommandPluginIds(
   }
   const registry = await loadPluginCliMetadataRegistryWithContext(
     prepared,
-    { primaryCommand: normalizedPrimary },
+    normalizedPrimary,
     loaderOptions,
   );
   prepared.assertCurrent();
-  return listPluginCliRootOwnerIds(registry, normalizedPrimary);
+  return uniqueStrings(
+    registry.cliRegistrars
+      .filter((entry) => pluginCliRegistrarOwnsRoot(entry, normalizedPrimary))
+      .map((entry) => entry.pluginId),
+  );
 }
 
 async function loadPluginCliMetadataRegistryWithContext(
   prepared: PreparedPluginCliLoad,
-  params?: { primaryCommand?: string },
+  primaryCommand?: string,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<PluginRegistry> {
-  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(
-    prepared.context,
-    params?.primaryCommand,
-  );
+  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
   prepared.assertCurrent();
-  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() =>
-    loadOpenClawPluginCliRegistry(
-      buildPluginRuntimeLoadOptions(prepared.context, {
-        ...loaderOptions,
-        // The prepared record owns reuse; process caching can retain another generation's registrars.
-        cache: false,
-        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-      }),
-    ),
-  ));
+  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() => {
+    const options = buildPluginRuntimeLoadOptions(prepared.context, {
+      ...loaderOptions,
+      // The prepared record owns reuse; process caching can retain another generation's registrars.
+      cache: false,
+      ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    });
+    return prepared.resources
+      ? prepared.resources.acquire(() =>
+          acquirePluginRegistryForInspection({ ...options, mode: "cli-metadata" }),
+        )
+      : loadOpenClawPluginCliRegistry(options);
+  }));
   prepared.assertCurrent();
   return registry;
 }
@@ -340,38 +327,6 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   );
 }
 
-function buildPluginCliCommandGroupEntries(params: {
-  registrars: PluginRegistry["cliRegistrars"];
-  config: OpenClawConfig;
-  workspaceDir: string | undefined;
-  logger: PluginLogger;
-  assertCurrent: () => void;
-  withCache: PreparedPluginCliLoad["withCache"];
-  resources?: CliPluginInvocationResources;
-}): PluginCliCommandGroupEntry[] {
-  return params.registrars.map((entry) => ({
-    pluginId: entry.pluginId,
-    parentPath: entry.parentPath ?? [],
-    placeholders: entry.descriptors,
-    names: entry.commands,
-    register: async (program) => {
-      params.assertCurrent();
-      const register = () =>
-        params.withCache(() =>
-          entry.register({
-            program,
-            parentPath: entry.parentPath ?? [],
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            logger: params.logger,
-          }),
-        );
-      await (params.resources ? params.resources.run(register) : register());
-      params.assertCurrent();
-    },
-  }));
-}
-
 export async function loadPluginCliDescriptors(
   params: PluginCliPublicLoadParams,
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
@@ -379,7 +334,7 @@ export async function loadPluginCliDescriptors(
     const prepared = resolvePreparedPluginCliLoad(params);
     const registry = await loadPluginCliMetadataRegistryWithContext(
       prepared,
-      { primaryCommand: params.primaryCommand },
+      params.primaryCommand,
       params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
@@ -401,26 +356,42 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
   mode: "runtime" | "metadata" = "runtime",
 ): Promise<PluginCliCommandGroupEntry[]> {
   const prepared = resolvePreparedPluginCliLoad(params);
-  const buildEntries = (registry: PluginRegistry) => {
+  const buildEntries = (registry: PluginRegistry): PluginCliCommandGroupEntry[] => {
     prepared.assertCurrent();
     const primary = mode === "metadata" && normalizeLowercaseStringOrEmpty(params.primaryCommand);
-    return buildPluginCliCommandGroupEntries({
-      ...prepared.context,
-      // Metadata discovery can include unrelated legacy roots without manifest ownership.
-      registrars: primary
-        ? registry.cliRegistrars.filter((entry) => pluginCliRegistrarOwnsRoot(entry, primary))
-        : registry.cliRegistrars,
-      assertCurrent: prepared.assertCurrent,
-      withCache: prepared.withCache,
-      resources: prepared.resources,
-    });
+    // Metadata discovery can include unrelated legacy roots without manifest ownership.
+    const registrars = primary
+      ? registry.cliRegistrars.filter((entry) => pluginCliRegistrarOwnsRoot(entry, primary))
+      : registry.cliRegistrars;
+    const { config, workspaceDir, logger } = prepared.context;
+    return registrars.map((entry) => ({
+      pluginId: entry.pluginId,
+      parentPath: entry.parentPath ?? [],
+      placeholders: entry.descriptors,
+      names: entry.commands,
+      register: async (program) => {
+        prepared.assertCurrent();
+        const register = () =>
+          prepared.withCache(() =>
+            entry.register({
+              program,
+              parentPath: entry.parentPath ?? [],
+              config,
+              workspaceDir,
+              logger,
+            }),
+          );
+        await (prepared.resources ? prepared.resources.run(register) : register());
+        prepared.assertCurrent();
+      },
+    }));
   };
   const entries =
     mode === "metadata"
       ? buildEntries(
           await loadPluginCliMetadataRegistryWithContext(
             prepared,
-            { primaryCommand: params.primaryCommand },
+            params.primaryCommand,
             params.loaderOptions,
           ),
         )

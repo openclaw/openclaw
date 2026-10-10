@@ -4,9 +4,11 @@ import {
   errorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayInflightResult } from "./inflight.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -55,12 +57,33 @@ export function createGatewayInflightSuccess(params: {
   return createGatewayInflightResult({ ...params, result: { ok: true, payload: params.payload } });
 }
 
-export function createGatewayInflightUnavailableFailure(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string | undefined;
-  channel: string;
-  err: unknown;
-}): GatewayInflightResult {
+export function createGatewayInflightFailure(
+  params: {
+    context: GatewayRequestContext;
+    dedupeKey: string | undefined;
+    channel: string;
+    err: unknown;
+  },
+  isAuthorized: () => boolean,
+): GatewayInflightResult {
+  if (!isChannelPartialDeliveryError(params.err) && !isAuthorized()) {
+    return createGatewayInflightAuthorityFailure(params);
+  }
+  // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
+  const unsentError =
+    params.err instanceof OutboundDeliveryError &&
+    !params.err.sentBeforeError &&
+    params.err.queueCustody !== "held"
+      ? params.err.cause
+      : params.err;
+  const authorizationError =
+    unsentError instanceof OutboundHandoffRejectedError ? unsentError.cause : unsentError;
+  if (authorizationError instanceof SessionMutationAuthorizationChangedError) {
+    return createGatewayInflightResult({
+      ...params,
+      result: { ok: false, error: authorizationError.error },
+    });
+  }
   // A channel partial-delivery error carries the receipt of the part that was
   // already delivered (e.g. a caption sent before the media upload failed).
   // Preserve it on the structured error and mark the result non-retryable so
@@ -103,47 +126,34 @@ export function createGatewayInflightAuthorityFailure(params: {
   });
 }
 
-async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
-  context: GatewayRequestContext;
-  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
-}) {
-  try {
-    const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
-    if (!mirrored && params.mirror.sourceReplyFinal === true) {
-      params.context.logGateway?.warn?.(
-        "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
-        {
-          channel: params.mirror.channel,
-          sessionKey: params.mirror.sessionKey,
-        },
-      );
-    }
-  } catch (err) {
-    params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
-      error: formatForLog(err),
-      channel: params.mirror.channel,
-      sessionKey: params.mirror.sessionKey,
-    });
-  }
-}
-
 const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
-
-function resolveSourceReplyTranscriptMirrorQueueKey(
-  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
-): string {
-  // Missing session keys are serialized together so global mirrors preserve delivery order.
-  return mirror.sessionKey?.trim() || "__global__";
-}
 
 export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }): Promise<void> {
-  const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
+  // Missing session keys serialize together so global mirrors preserve delivery order.
+  const queueKey = params.mirror.sessionKey?.trim() || "__global__";
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
-  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>
-    mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
-  );
+  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, async () => {
+    try {
+      const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+      if (!mirrored && params.mirror.sourceReplyFinal === true) {
+        params.context.logGateway?.warn?.(
+          "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+          {
+            channel: params.mirror.channel,
+            sessionKey: params.mirror.sessionKey,
+          },
+        );
+      }
+    } catch (err) {
+      params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
+        error: formatForLog(err),
+        channel: params.mirror.channel,
+        sessionKey: params.mirror.sessionKey,
+      });
+    }
+  });
 }

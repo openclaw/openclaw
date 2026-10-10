@@ -1,4 +1,3 @@
-// Setup migration snapshots bind retries to unchanged source and target state.
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -20,7 +19,6 @@ const ONBOARDING_TARGET_LOCK_OPTIONS = {
 };
 const activeSetupMigrationTargetLock = new AsyncLocalStorage<string>();
 const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta", "telemetry"]);
-const MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS = new Set(["securityAcknowledgedAt"]);
 const MEANINGFUL_WORKSPACE_ENTRIES = [
   "AGENTS.md",
   "SOUL.md",
@@ -57,24 +55,6 @@ async function hasDirectoryEntries(candidate: string): Promise<boolean> {
   }
 }
 
-function hasMeaningfulWizardConfig(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return true;
-  }
-  return Object.keys(value as Record<string, unknown>).some(
-    (key) => !MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS.has(key),
-  );
-}
-
-function hasMeaningfulConfig(config: OpenClawConfig): boolean {
-  return Object.entries(config as Record<string, unknown>).some(([key, value]) => {
-    if (MEANINGFUL_CONFIG_IGNORED_KEYS.has(key)) {
-      return false;
-    }
-    return key === "wizard" ? hasMeaningfulWizardConfig(value) : true;
-  });
-}
-
 function buildSetupMigrationSnapshotConfig(config: OpenClawConfig): Record<string, unknown> {
   const snapshot: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
@@ -87,9 +67,7 @@ function buildSetupMigrationSnapshotConfig(config: OpenClawConfig): Record<strin
     }
     // Risk acknowledgement can be accepted between retries; freshness already ignores it.
     const wizard = Object.fromEntries(
-      Object.entries(value).filter(
-        ([wizardKey]) => !MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS.has(wizardKey),
-      ),
+      Object.entries(value).filter(([wizardKey]) => wizardKey !== "securityAcknowledgedAt"),
     );
     if (Object.keys(wizard).length > 0) {
       snapshot[key] = wizard;
@@ -104,7 +82,7 @@ export async function inspectSetupMigrationFreshness(params: {
   workspaceDir: string;
 }): Promise<{ fresh: boolean; reasons: string[] }> {
   const reasons: string[] = [];
-  if (hasMeaningfulConfig(params.baseConfig)) {
+  if (Object.keys(buildSetupMigrationSnapshotConfig(params.baseConfig)).length > 0) {
     reasons.push("existing config values are loaded");
   }
   for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
@@ -225,21 +203,18 @@ export async function buildSetupMigrationTargetSnapshot(params: {
 /** Hashes only source paths represented by the provider's concrete migration plan. */
 export async function buildSetupMigrationPlanSourceSnapshot(plan: MigrationPlan): Promise<string> {
   const hash = crypto.createHash("sha256");
-  const itemSources = [
-    ...new Set(
-      plan.items
-        .map((item) => item.source?.trim())
-        .filter((source): source is string => Boolean(source))
-        .map((source) => path.resolve(resolveUserPath(source))),
-    ),
-  ].toSorted();
   const sources = [
     ...new Set(
-      itemSources.flatMap((source) =>
-        path.extname(source) === ".db"
+      plan.items.flatMap((item) => {
+        const input = item.source?.trim();
+        if (!input) {
+          return [];
+        }
+        const source = path.resolve(resolveUserPath(input));
+        return path.extname(source) === ".db"
           ? [source, `${source}-wal`, `${source}-shm`, `${source}-journal`]
-          : [source],
-      ),
+          : [source];
+      }),
     ),
   ].toSorted();
   for (const [index, source] of sources.entries()) {
@@ -248,20 +223,15 @@ export async function buildSetupMigrationPlanSourceSnapshot(plan: MigrationPlan)
   return hash.digest("hex");
 }
 
-/** Verifies planning inputs and builds the exact provider-side-effect retry boundary. */
+/** Rechecks planning inputs immediately before the provider-side-effect boundary. */
 export async function prepareSetupMigrationAttemptBoundary(params: {
   currentConfig: OpenClawConfig;
-  targetConfig: OpenClawConfig;
   stateDir: string;
   workspaceDir: string;
   plan: MigrationPlan;
   expectedTargetSnapshotHash: string;
   expectedSourceSnapshotHash: string;
-}): Promise<{
-  sourceSnapshotHash: string;
-  preparedTargetSnapshotHash: string;
-  targetSnapshotHash: string;
-}> {
+}): Promise<void> {
   const currentTargetSnapshotHash = await buildSetupMigrationTargetSnapshot({
     config: params.currentConfig,
     stateDir: params.stateDir,
@@ -276,15 +246,6 @@ export async function prepareSetupMigrationAttemptBoundary(params: {
   if (sourceSnapshotHash !== params.expectedSourceSnapshotHash) {
     throw new Error("Migration source changed while preparing the import. Review it and retry.");
   }
-  return {
-    sourceSnapshotHash,
-    preparedTargetSnapshotHash: currentTargetSnapshotHash,
-    targetSnapshotHash: await buildSetupMigrationTargetSnapshot({
-      config: params.targetConfig,
-      stateDir: params.stateDir,
-      workspaceDir: params.workspaceDir,
-    }),
-  };
 }
 
 /** Serializes onboarding writes that share one OpenClaw state target. */

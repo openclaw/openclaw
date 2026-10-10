@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod bundled_runtime;
 mod chrome_setup;
 mod cli;
 #[cfg(target_os = "linux")]
@@ -6,6 +8,7 @@ mod desktop_node;
 mod desktop_node_process;
 mod discovery;
 mod gateway;
+mod gateway_control_auth;
 mod gateway_device_identity;
 mod gateway_operation_queue;
 mod gateway_profiles;
@@ -29,6 +32,8 @@ mod pending_approvals;
 mod quickchat;
 mod quickchat_widgets;
 mod remote_gateway;
+#[cfg(target_os = "linux")]
+mod runtime_action;
 mod tray;
 mod updater;
 mod window_chrome;
@@ -39,7 +44,7 @@ mod window_chrome_macos;
 
 use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot, ReadyGateway};
-use gateway_operation_queue::{GatewayOperation, GatewayOperationQueue};
+use gateway_operation_queue::{GatewayOperation, GatewayOperationError, GatewayOperationQueue};
 use installer::InstallChannel;
 use remote_gateway::{RemoteConnectionSource, RemoteGatewayRequest, TunnelRoute};
 use serde::Serialize;
@@ -48,15 +53,21 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
+#[cfg(not(target_os = "linux"))]
+use tauri::Emitter;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, State, Url, Webview, WebviewUrl,
-    WebviewWindowBuilder,
+    AppHandle, LogicalPosition, Manager, State, Url, Webview, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
+#[cfg(target_os = "linux")]
+pub(crate) struct RuntimeAction {
+    cli: OpenClawCli,
+    observation: runtime_action::Observation,
+}
 fn external_browser_url_allowed(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
         && url.has_host()
@@ -68,6 +79,7 @@ pub(crate) fn native_auth_initialization_script(
     dashboard: &Url,
     gateway: &Url,
     request: &RemoteGatewayRequest,
+    native_session: bool,
 ) -> Result<String, String> {
     if request.transport == "direct" && request.tls_fingerprint.is_some() {
         return Err(
@@ -76,18 +88,17 @@ pub(crate) fn native_auth_initialization_script(
                 .to_string(),
         );
     }
+    if native_session {
+        return gateway_control_auth::initialization_script(dashboard, gateway);
+    }
     let path = dashboard.path().trim_end_matches('/');
-    let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
-    let path = serde_json::to_string(if path.is_empty() { "/" } else { path })
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
+    let origin = serde_json::json!(dashboard.origin().ascii_serialization());
+    let path = serde_json::json!(if path.is_empty() { "/" } else { path });
     let auth = serde_json::json!({
         "gatewayUrl": gateway.as_str(),
         "token": request.token,
         "password": request.password,
     });
-    let auth = serde_json::to_string(&auth)
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
     Ok(format!(
         r#"(() => {{
   try {{
@@ -259,7 +270,8 @@ mod native_browser_tests {
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
         let initialization_script =
-            native_auth_initialization_script(&dashboard, &gateway, &request).expect("auth script");
+            native_auth_initialization_script(&dashboard, &gateway, &request, false)
+                .expect("auth script");
         assert!(!dashboard.as_str().contains("fixture-password"));
         assert!(!gateway.as_str().contains("fixture-password"));
 
@@ -294,6 +306,41 @@ mod native_browser_tests {
     }
 
     #[test]
+    fn native_primary_dashboard_keeps_bootstrap_credentials_out_of_the_document() {
+        let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
+            "transport": "direct", "url": "https://gateway.example.com/control",
+            "token": "fixture-shared-secret", "password": "fixture-password",
+        }))
+        .unwrap();
+        let script = native_auth_initialization_script(
+            &Url::parse("https://gateway.example.com/control").unwrap(),
+            &Url::parse("wss://gateway.example.com/control").unwrap(),
+            &request,
+            true,
+        )
+        .unwrap();
+        let runner = r#"
+            const window = {addEventListener() {}, __TAURI_INTERNALS__: {invoke() {}}};
+            window.top = window;
+            new Function('window', 'location', process.argv[1])(window, {origin: 'https://gateway.example.com', pathname: '/control/chat'});
+            const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+            if (!auth?.nativeConnectAuth || auth.gatewayUrl !== 'wss://gateway.example.com/control' || 'token' in auth || 'password' in auth) {
+              throw new Error('Primary must use native challenge authentication, not bootstrap credentials');
+            }
+            if (typeof window.OpenClawNativeGatewayAuth?.postMessage !== 'function') throw new Error('native challenge bridge missing');
+        "#;
+        let result = Command::new("node")
+            .args(["-e", runner, &script])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[test]
     fn pinned_remote_gateway_never_receives_credentials_through_an_unpinned_webview() {
         let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
             "transport": "direct",
@@ -304,7 +351,7 @@ mod native_browser_tests {
         .expect("pinned remote request");
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
-        let result = native_auth_initialization_script(&dashboard, &gateway, &request);
+        let result = native_auth_initialization_script(&dashboard, &gateway, &request, false);
 
         assert!(
             result.is_err(),
@@ -323,8 +370,13 @@ mod native_browser_tests {
         let tunneled_dashboard = Url::parse("http://127.0.0.1:18789").expect("tunneled dashboard");
         let tunneled_gateway = Url::parse("ws://127.0.0.1:18789").expect("tunneled Gateway");
         assert!(
-            native_auth_initialization_script(&tunneled_dashboard, &tunneled_gateway, &tunneled)
-                .is_ok(),
+            native_auth_initialization_script(
+                &tunneled_dashboard,
+                &tunneled_gateway,
+                &tunneled,
+                false
+            )
+            .is_ok(),
             "host-key-verified SSH tunneling must remain available"
         );
     }
@@ -357,6 +409,11 @@ struct NavigationState {
 }
 
 impl NavigationState {
+    #[cfg(target_os = "linux")]
+    fn remote_presentation_is_current(&self) -> bool {
+        self.remote_dashboard && self.remote_presentation_generation == Some(self.watch_generation)
+    }
+
     fn remote_page_is_current(&self, generation: u64) -> bool {
         self.remote_dashboard
             && self.watch_generation == generation
@@ -470,12 +527,9 @@ impl NavigationState {
             return false;
         }
         let mut current_base = current_url.clone();
-        let mut local_base = local_url.clone();
         current_base.set_query(None);
         current_base.set_fragment(None);
-        local_base.set_query(None);
-        local_base.set_fragment(None);
-        current_base == local_base
+        current_base == *local_url
             && current_url
                 .query_pairs()
                 .find(|(key, _)| key == "mode")
@@ -523,11 +577,7 @@ impl NavigationState {
             // A failed replacement is not health evidence for the committed page.
             // Once publication changes its generation, the old handle cannot mask errors.
             #[cfg(target_os = "linux")]
-            if self.remote_dashboard
-                && self
-                    .remote_presentation_generation
-                    .is_some_and(|generation| generation == self.watch_generation)
-            {
+            if self.remote_presentation_is_current() {
                 return false;
             }
         }
@@ -709,12 +759,15 @@ impl DesktopState {
                 })
             })
             .and_then(|request| {
-                self.connect_remote_locked(app, request, RemoteConnectionSource::Saved, selection)
+                self.connect_remote_guarded(
+                    app,
+                    request,
+                    RemoteConnectionSource::Saved,
+                    selection,
+                    None,
+                )
             });
-        match result {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) => self.remote_failure(app, error, selection, None),
-        }
+        result.or_else(|error| self.remote_failure(app, error, selection, None))
     }
 
     fn connect_selected(
@@ -730,11 +783,12 @@ impl DesktopState {
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
         if !explicit_local {
             if let Some(remote) = remote_gateway::load_saved_remote()? {
-                return self.connect_remote_locked(
+                return self.connect_remote_guarded(
                     app,
                     remote,
                     RemoteConnectionSource::Saved,
                     selection,
+                    None,
                 );
             }
             self.on_main(app, move |state, app| {
@@ -761,13 +815,34 @@ impl DesktopState {
         let cli = match cli {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
-                return self.show_missing_cli(app, explicit_local, None);
+                return self.show_cli_recovery(app, CliError::Missing, explicit_local, None);
             }
             Err(error) => return Err(error.to_string()),
         };
         if explicit_local {
             self.inner.remote_tunnels.clear();
         }
+        #[cfg(target_os = "linux")]
+        let ready = {
+            // Startup, app updates, and reconnects only observe the existing service.
+            let snapshot = gateway::status(&cli)?;
+            if !snapshot.reachable {
+                self.show_local(app, local_mode(&snapshot), false, None)?;
+                self.update_tray(&snapshot);
+                let generation = self
+                    .inner
+                    .navigation
+                    .lock()
+                    .expect("navigation")
+                    .begin_watchdog();
+                if let Some(generation) = generation {
+                    self.watch_local(app.clone(), cli, generation);
+                }
+                return Ok(snapshot);
+            }
+            gateway::dashboard(&cli, snapshot)?
+        };
+        #[cfg(not(target_os = "linux"))]
         let ready = gateway::ensure_ready(&cli)?;
         self.finish_local_connection(app, cli, ready)
     }
@@ -776,37 +851,66 @@ impl DesktopState {
         &self,
         app: &AppHandle,
         channel: InstallChannel,
+        selection: u64,
     ) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
             .operation
             .lock()
             .map_err(|_| "Installer lock is unavailable.".to_string())?;
-        installer::install(app, channel)?;
-        let cli = OpenClawCli::discover().map_err(|error| {
-            format!("OpenClaw is installed, but the CLI could not be found: {error}")
-        })?;
-        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
-
-        // The installed CLI owns config/state migrations; repair before any
-        // Gateway readiness checks consume an outdated home.
-        let repair_error = match cli.output(["doctor", "--fix", "--non-interactive"]) {
-            Ok(output) if !output.status.success() => Some(
-                cli::output_tail(&output.stderr)
-                    .unwrap_or_else(|| format!("OpenClaw repair exited with {}", output.status)),
-            ),
-            Err(error) => Some(format!("OpenClaw repair could not start: {error}")),
-            _ => None,
+        #[cfg(target_os = "linux")]
+        let cli = {
+            let runtime = bundled_runtime::seed(app)?;
+            let cli = match OpenClawCli::discover() {
+                Ok(cli) => cli,
+                Err(CliError::Missing) => {
+                    if std::env::var_os("OPENCLAW_DESKTOP_CLI").is_some()
+                        || !installer::managed_launcher_absent(
+                            &cli::openclaw_home().map_err(|error| error.to_string())?,
+                        )?
+                    {
+                        return Err("The existing CLI launcher is unavailable. Repair it before installing a Gateway.".into());
+                    }
+                    installer::install(app, channel, true)?;
+                    let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
+                    runtime_action::bind_runtime(&cli, &runtime, runtime_action::Purpose::Gateway)?;
+                    cli
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            runtime_action::fresh(&cli, &runtime, &|| {
+                self.runtime_operation_is_current(app, selection)
+            })?;
+            cli
         };
-        if let Some(error) = repair_error {
-            for line in error.lines() {
-                let _ = app.emit_to(
-                    "main",
-                    "install-progress",
-                    serde_json::json!({ "stream": "stderr", "line": line }),
-                );
+        #[cfg(not(target_os = "linux"))]
+        let cli = {
+            installer::install(app, channel, false)?;
+            let cli = OpenClawCli::discover().map_err(|error| {
+                format!("OpenClaw is installed, but the CLI could not be found: {error}")
+            })?;
+            // Other Tauri platforms retain their existing installer/Doctor behavior.
+            let repair_error = match cli.output(["doctor", "--fix", "--non-interactive"]) {
+                Ok(output) if !output.status.success() => {
+                    Some(cli::output_tail(&output.stderr).unwrap_or_else(|| {
+                        format!("OpenClaw repair exited with {}", output.status)
+                    }))
+                }
+                Err(error) => Some(format!("OpenClaw repair could not start: {error}")),
+                _ => None,
+            };
+            if let Some(error) = repair_error {
+                for line in error.lines() {
+                    let _ = app.emit_to(
+                        "main",
+                        "install-progress",
+                        serde_json::json!({ "stream": "stderr", "line": line }),
+                    );
+                }
             }
-        }
+            cli
+        };
+        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
 
         self.inner.chrome_setup.installed(app.clone(), cli.clone());
 
@@ -819,7 +923,12 @@ impl DesktopState {
                     .to_string()
             })?
             .mark_onboarding_pending();
-        let ready = gateway::ensure_ready(&cli).map_err(|error| {
+        #[cfg(target_os = "linux")]
+        let readiness =
+            gateway::status(&cli).and_then(|snapshot| gateway::dashboard(&cli, snapshot));
+        #[cfg(not(target_os = "linux"))]
+        let readiness = gateway::ensure_ready(&cli);
+        let ready = readiness.map_err(|error| {
             format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
         })?;
         self.finish_local_connection(app, cli, ready)
@@ -850,9 +959,40 @@ impl DesktopState {
             self.update_tray(&snapshot);
             return Ok(snapshot);
         }
-
         let ready = gateway::dashboard(&cli, snapshot)?;
         self.finish_local_connection(app, cli, ready)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn runtime_operation_is_current(&self, app: &AppHandle, selection: u64) -> bool {
+        !self.is_quitting()
+            && app
+                .state::<GatewayOperationQueue>()
+                .selection_is_current(selection)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn runtime_action(
+        &self,
+        app: &AppHandle,
+        action: RuntimeAction,
+        selection: u64,
+    ) -> Result<GatewaySnapshot, String> {
+        let _operation = self
+            .inner
+            .operation
+            .lock()
+            .map_err(|_| "Gateway operation lock is unavailable.")?;
+        if remote_gateway::saved_settings()?.is_some() {
+            return Err("Select the local Gateway before changing its runtime.".into());
+        }
+        let runtime = bundled_runtime::seed(app)?;
+        runtime_action::activate(&action.cli, &runtime, &action.observation, &|| {
+            self.runtime_operation_is_current(app, selection)
+        })?;
+        let snapshot = gateway::status(&action.cli)?;
+        let ready = gateway::dashboard(&action.cli, snapshot)?;
+        self.finish_local_connection(app, action.cli, ready)
     }
 
     fn finish_local_connection(
@@ -902,16 +1042,22 @@ impl DesktopState {
                 .permit_local(true, None);
             // Keep the first-run page that owns the pending bootstrap reply.
             if !state.main_window_has_local_content(&main_window(&app)?) {
-                let mut url = state.inner.local_url.clone();
-                url.query_pairs_mut()
-                    .clear()
-                    .append_pair("mode", "reconnecting");
+                let url = state.local_url("reconnecting");
                 app.state::<native_browser_bridge::NativeBrowserBridgeState>()
                     .clear(&app);
                 replace_main_webview(&app, url, None, None)?;
             }
             Ok(())
         })?;
+        #[cfg(target_os = "linux")]
+        if let Ok(cli) = self.resolve_cli() {
+            let snapshot = gateway::status(&cli)?;
+            if !snapshot.installed && !snapshot.reachable {
+                // Choosing local first-run setup is explicit installation consent.
+                // The fresh-install guard rechecks absence before any service write.
+                return self.install_cli(app, InstallChannel::Stable, selection);
+            }
+        }
         self.connect_selected(app, true, selection)
     }
 
@@ -926,22 +1072,17 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
-        let result =
-            self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted, selection);
+        let result = self.connect_remote_guarded(
+            app,
+            request,
+            RemoteConnectionSource::Submitted,
+            selection,
+            None,
+        );
         if let Err(error) = &result {
             let _ = self.remote_failure(app, error.clone(), selection, None);
         }
         result
-    }
-
-    fn connect_remote_locked(
-        &self,
-        app: &AppHandle,
-        request: RemoteGatewayRequest,
-        source: RemoteConnectionSource,
-        selection: u64,
-    ) -> Result<GatewaySnapshot, String> {
-        self.connect_remote_guarded(app, request, source, selection, None)
     }
 
     fn promote_profile(
@@ -1035,7 +1176,7 @@ impl DesktopState {
             )?;
         }
         let target = remote_gateway::dashboard_url(&gateway_url)?;
-        let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
+        let script = native_auth_initialization_script(&target, &gateway_url, &request, true)?;
         let pending = Arc::new(Mutex::new(tunnel));
         let commit_pending = Arc::clone(&pending);
         let result = self.on_main(app, move |state, app| {
@@ -1063,7 +1204,6 @@ impl DesktopState {
                                 &mut commit_pending.lock().expect("pending SSH"),
                                 TunnelRoute {
                                     id: 0,
-                                    selection,
                                     request: request.clone(),
                                     url: gateway_url.clone(),
                                 },
@@ -1113,15 +1253,46 @@ impl DesktopState {
         navigation: &mut NavigationState,
         returning_from_settings: bool,
     ) -> Result<(), String> {
-        if !app
+        let selection = app
             .state::<gateway_windows::GatewayWindows>()
             .primary_selected(
                 app,
                 &dashboard,
-                Some(script.clone()),
+                Some(script),
                 gateway_ws::GatewayOwnership::Remote,
-            )?
-        {
+            )?;
+        let generation = navigation.watch_generation;
+        let installed = selection.install(|auth_script| {
+            let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
+            let bridge_script = bridge
+                .select(app, &dashboard, true)?
+                .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
+            match replace_main_webview(
+                app,
+                dashboard.clone(),
+                Some(format!(
+                    "{}\n{bridge_script}",
+                    auth_script.unwrap_or_default()
+                )),
+                Some(generation),
+            ) {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    navigation.cancel_watchdog();
+                    bridge.clear(app);
+                    let mut local = self.inner.local_url.clone();
+                    local
+                        .query_pairs_mut()
+                        .append_pair("mode", "connectionSettings");
+                    let _ = replace_main_webview(app, local, None, None);
+                    Err(
+                        "Could not open the remote Gateway dashboard. Try connecting again."
+                            .to_string(),
+                    )
+                }
+            }
+        })?;
+        if !installed {
             if returning_from_settings
                 && main_window(app)
                     .ok()
@@ -1132,32 +1303,6 @@ impl DesktopState {
             }
             return Ok(());
         }
-        let generation = navigation.watch_generation;
-        let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
-        let bridge_script = bridge
-            .select(app, &dashboard, true)?
-            .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
-        match replace_main_webview(
-            app,
-            dashboard.clone(),
-            Some(format!("{script}\n{bridge_script}")),
-            Some(generation),
-        ) {
-            Ok(_) => {}
-            Err(_) => {
-                navigation.cancel_watchdog();
-                bridge.clear(app);
-                let mut local = self.inner.local_url.clone();
-                local
-                    .query_pairs_mut()
-                    .append_pair("mode", "connectionSettings");
-                let _ = replace_main_webview(app, local, None, None);
-                return Err(
-                    "Could not open the remote Gateway dashboard. Try connecting again."
-                        .to_string(),
-                );
-            }
-        };
         #[cfg(target_os = "linux")]
         {
             if !self.is_quitting()
@@ -1222,11 +1367,8 @@ impl DesktopState {
         } else {
             #[cfg(target_os = "linux")]
             let remote_url = navigation
-                .remote_presentation_generation
-                .filter(|generation| {
-                    navigation.remote_dashboard && *generation == navigation.watch_generation
-                })
-                .map(|_| {
+                .remote_presentation_is_current()
+                .then(|| {
                     main_window(app)?.url().map_err(|_| {
                         "Could not retain the current dashboard. Try again.".to_string()
                     })
@@ -1258,10 +1400,7 @@ impl DesktopState {
                 SettingsReturnTarget::Local(target)
             }
         };
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut()
-            .clear()
-            .append_pair("mode", "connectionSettings");
+        let url = self.local_url("connectionSettings");
         operations
             .while_current(selection, || {
                 navigation.begin_settings(selection, target)?;
@@ -1292,39 +1431,26 @@ impl DesktopState {
             SettingsReturnTarget::SavedGateway => {
                 gateway_windows::restore_selected_main(app)?;
             }
-            SettingsReturnTarget::Local(url) => {
+            SettingsReturnTarget::Local(url) | SettingsReturnTarget::Remote(url) => {
+                if matches!(previous.target, SettingsReturnTarget::Remote(_)) {
+                    #[cfg(target_os = "linux")]
+                    if !navigation.remote_presentation_is_current() {
+                        return Err(
+                            "The previous dashboard is unavailable. Retry or edit the connection."
+                                .to_string(),
+                        );
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    return Err("The previous dashboard is unavailable.".to_string());
+                }
                 main_window(app)?
                     .navigate(url)
                     .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
-            }
-            #[cfg(target_os = "linux")]
-            SettingsReturnTarget::Remote(url) => {
-                navigation
-                    .remote_presentation_generation
-                    .filter(|generation| {
-                        navigation.remote_dashboard && *generation == navigation.watch_generation
-                    })
-                    .ok_or_else(|| {
-                        "The previous dashboard is unavailable. Retry or edit the connection."
-                            .to_string()
-                    })?;
-                main_window(app)?
-                    .navigate(url)
-                    .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
-            }
-            #[cfg(not(target_os = "linux"))]
-            SettingsReturnTarget::Remote(_) => {
-                return Err("The previous dashboard is unavailable.".to_string());
             }
         }
         let monitor = navigation.finish_settings_return();
         drop(navigation);
-        if let Some(generation) = monitor {
-            // Reuse the connected CLI without discovery or a connection operation.
-            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
-                self.watch_local(app.clone(), cli, generation);
-            }
-        }
+        self.resume_local_watchdog(app, monitor);
         Ok(true)
     }
 
@@ -1336,7 +1462,8 @@ impl DesktopState {
         session_key: &str,
         agent_id: &str,
     ) -> Result<(), String> {
-        // Match connection publication's NAV -> Gateway config lock order.
+        // Keep NAV -> route-publication ordering. Native navigation callbacks
+        // may read authentication without recursively locking Gateway config.
         // This entry is already on the native thread; do not nest on_main.
         let monitor = {
             let mut navigation = self.inner.navigation.lock().expect("navigation");
@@ -1351,8 +1478,8 @@ impl DesktopState {
                     }
                     let ws_url = ws_url.ok_or("Select a Gateway in the desktop app first.")?;
                     let target = desktop_bridge::session_url(ws_url, session_key, agent_id)?;
-                    if !app.state::<gateway_windows::GatewayWindows>().main_is_primary(app) {
-                        gateway_windows::show_primary_url(app, target)?;
+                    if !app.state::<gateway_windows::GatewayWindows>().main_is_primary() {
+                        gateway_windows::show_primary_route(app, Some(target))?;
                         return Ok(None);
                     }
                     if navigation.remote_dashboard {
@@ -1390,9 +1517,8 @@ impl DesktopState {
                                 "reconnecting".to_string()
                             }
                         };
-                        let mut recovery = self.inner.local_url.clone();
+                        let mut recovery = self.local_url(&mode);
                         recovery.set_fragment(None);
-                        recovery.query_pairs_mut().clear().append_pair("mode", &mode);
                         let bridge =
                             app.state::<native_browser_bridge::NativeBrowserBridgeState>();
                         // The bridge scopes the whole dashboard, not just this session.
@@ -1417,11 +1543,7 @@ impl DesktopState {
                 })?
         };
         tray::show_window(app);
-        if let Some(generation) = monitor {
-            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
-                self.watch_local(app.clone(), cli, generation);
-            }
-        }
+        self.resume_local_watchdog(app, monitor);
         Ok(())
     }
 
@@ -1519,15 +1641,12 @@ impl DesktopState {
                 });
                 let retired = pending.lock().expect("pending SSH").take();
                 drop(retired);
-                match result {
-                    Ok(snapshot) => Ok(snapshot),
-                    Err(error) => self.remote_failure(app, error, selection, Some(child_id)),
-                }
+                result.or_else(|error| self.remote_failure(app, error, selection, Some(child_id)))
             }
         }
     }
 
-    pub fn show_error(&self, app: &AppHandle, _error: &str) {
+    pub fn show_error(&self, app: &AppHandle) {
         let _ = self.show_local(app, "error", false, None);
         self.update_tray(&GatewaySnapshot::reconnecting("Gateway action failed."));
         tray::show_window(app);
@@ -1600,12 +1719,9 @@ impl DesktopState {
 
     pub(crate) fn main_window_has_local_url(&self, url: &Url) -> bool {
         let mut current_url = url.clone();
-        let mut local_url = self.inner.local_url.clone();
         current_url.set_query(None);
         current_url.set_fragment(None);
-        local_url.set_query(None);
-        local_url.set_fragment(None);
-        current_url == local_url
+        current_url == self.inner.local_url
     }
 
     pub(crate) fn main_window_has_connection_settings_url(&self, url: &Url) -> bool {
@@ -1620,33 +1736,34 @@ impl DesktopState {
         self.with_tray(|tray| tray.update(snapshot));
     }
 
-    fn show_missing_cli(
+    fn local_url(&self, mode: &str) -> Url {
+        let mut url = self.inner.local_url.clone();
+        url.query_pairs_mut().clear().append_pair("mode", mode);
+        url
+    }
+
+    fn show_cli_recovery(
         &self,
         app: &AppHandle,
+        error: CliError,
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<GatewaySnapshot, String> {
-        let snapshot = GatewaySnapshot::missing_cli();
-        let navigation = self.show_local(app, "missingCli", force, expected_generation);
-        if !local_recovery_owns_gateway(&navigation) {
-            return Ok(snapshot);
-        }
-        app.state::<gateway_ws::GatewayClient>()
-            .clear_configuration(app);
-        self.update_tray(&snapshot);
-        navigation.map(|_| snapshot)
-    }
-
-    fn show_cli_recovery_error(&self, app: &AppHandle, generation: u64, error: CliError) {
         let mut snapshot = GatewaySnapshot::missing_cli();
-        snapshot.status = "CLI unavailable".to_string();
-        snapshot.detail = Some(error.to_string());
-        let navigation = self.show_local(app, "error", false, Some(generation));
+        let mode = if matches!(error, CliError::Missing) {
+            "missingCli"
+        } else {
+            snapshot.status = "CLI unavailable".to_string();
+            snapshot.detail = Some(error.to_string());
+            "error"
+        };
+        let navigation = self.show_local(app, mode, force, expected_generation);
         if local_recovery_owns_gateway(&navigation) {
             app.state::<gateway_ws::GatewayClient>()
                 .clear_configuration(app);
             self.update_tray(&snapshot);
         }
+        navigation.map(|_| snapshot)
     }
 
     fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
@@ -1703,7 +1820,6 @@ impl DesktopState {
         target: &str,
         force: bool,
         expected_generation: Option<u64>,
-        reveal_window: bool,
         dashboard: bool,
     ) -> Result<bool, String> {
         let target = target.to_string();
@@ -1712,13 +1828,7 @@ impl DesktopState {
             if state.is_quitting() || !navigation.permit_local(force, expected_generation) {
                 return Ok(false);
             }
-            state.navigate_local_document(
-                &app,
-                &mut navigation,
-                &target,
-                reveal_window,
-                dashboard,
-            )?;
+            state.navigate_local_document(&app, &mut navigation, &target, false, dashboard)?;
             Ok(true)
         })
     }
@@ -1735,10 +1845,13 @@ impl DesktopState {
         let windows = app.state::<gateway_windows::GatewayWindows>();
         let base = Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.")?;
         if dashboard {
-            if !windows.primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)? {
+            if !windows
+                .primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)?
+                .follows_primary()
+            {
                 return Ok(());
             }
-        } else if !windows.main_is_primary(app) {
+        } else if !windows.main_is_primary() {
             // Primary recovery must not replace an independently selected dashboard.
             return Ok(());
         }
@@ -1790,10 +1903,9 @@ impl DesktopState {
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<bool, String> {
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut().clear().append_pair("mode", mode);
+        let url = self.local_url(mode);
         // Status/watchdog updates may change the hidden WebView, but must not reveal it.
-        self.navigate_local(app, url.as_str(), force, expected_generation, false, false)
+        self.navigate_local(app, url.as_str(), force, expected_generation, false)
     }
 
     fn cancel_watchdog(&self) {
@@ -1854,6 +1966,15 @@ impl DesktopState {
         })
     }
 
+    fn resume_local_watchdog(&self, app: &AppHandle, generation: Option<u64>) {
+        if let Some(generation) = generation {
+            // Reuse the connected CLI without discovery or a connection operation.
+            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
+                self.watch_local(app.clone(), cli, generation);
+            }
+        }
+    }
+
     fn watch_local(&self, app: AppHandle, mut cli: OpenClawCli, generation: u64) {
         let state = self.clone();
         thread::spawn(move || loop {
@@ -1864,10 +1985,7 @@ impl DesktopState {
             let Ok(_operation) = state.inner.operation.try_lock() else {
                 continue;
             };
-            let snapshot = match gateway::status(&cli) {
-                Ok(snapshot) => snapshot,
-                Err(error) => GatewaySnapshot::reconnecting(error),
-            };
+            let snapshot = gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
             if snapshot.reachable {
                 state.update_tray(&snapshot);
                 if let Err(error) =
@@ -1907,19 +2025,14 @@ impl DesktopState {
                         match state.resolve_cli() {
                             Ok(discovered) => cli = discovered,
                             Err(error) => {
-                                if matches!(error, CliError::Missing) {
-                                    let _ = state.show_missing_cli(&app, false, Some(generation));
-                                } else {
-                                    state.show_cli_recovery_error(&app, generation, error);
-                                }
+                                let _ =
+                                    state.show_cli_recovery(&app, error, false, Some(generation));
                                 return;
                             }
                         }
                     }
-                    let snapshot = match gateway::status(&cli) {
-                        Ok(snapshot) => snapshot,
-                        Err(error) => GatewaySnapshot::reconnecting(error),
-                    };
+                    let snapshot =
+                        gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
@@ -1934,7 +2047,6 @@ impl DesktopState {
                                 &ready.dashboard_url,
                                 false,
                                 Some(generation),
-                                false,
                                 true,
                             ) {
                                 Ok(true) => {
@@ -2776,17 +2888,6 @@ pub(crate) async fn confirm_gateway_primary(app: &AppHandle, name: &str) -> Resu
         .map_err(|_| "Primary Gateway confirmation was closed.".into())
 }
 
-pub(crate) async fn promote_gateway_profile(
-    app: &AppHandle,
-    request: RemoteGatewayRequest,
-    guard: gateway_windows::PromotionGuard,
-) -> Result<(), String> {
-    app.state::<GatewayOperationQueue>()
-        .execute(GatewayOperation::PromoteProfile { request, guard })
-        .await
-        .map(|_| ())
-}
-
 // Called on the native thread after the window owner retires the failed document.
 pub(crate) fn recover_primary_navigation(
     app: &AppHandle,
@@ -2814,11 +2915,7 @@ pub(crate) fn recover_primary_navigation(
     }
 
     let mut navigation = state.inner.navigation.lock().expect("navigation");
-    let mut recovery = state.inner.local_url.clone();
-    recovery
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "remoteError");
+    let recovery = state.local_url("remoteError");
     // Back must return to local recovery, never to the failed browser document.
     navigation.settings_return = None;
     navigation.begin_settings(
@@ -2827,11 +2924,7 @@ pub(crate) fn recover_primary_navigation(
     )?;
     navigation.record_remote_failure(snapshot.clone(), None);
     navigation.remote_snapshot = Some(snapshot.clone());
-    let mut settings = state.inner.local_url.clone();
-    settings
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "connectionSettings");
+    let settings = state.local_url("connectionSettings");
     app.state::<native_browser_bridge::NativeBrowserBridgeState>()
         .clear(app);
     replace_main_webview(app, settings, None, None)?;
@@ -3033,12 +3126,7 @@ fn dashboard_document_ready(
     if let Some(snapshot) = snapshot {
         state.update_tray(&snapshot);
     }
-    if let Some(generation) = monitor {
-        let cli = state.inner.cli.lock().expect("CLI mutex poisoned").clone();
-        if let Some(cli) = cli {
-            state.watch_local(app.clone(), cli, generation);
-        }
-    }
+    state.resume_local_watchdog(app, monitor);
 }
 
 #[tauri::command]
@@ -3152,6 +3240,15 @@ async fn gateway_action(
 }
 
 fn main() {
+    // Xlib requires thread initialization before GTK opens a display. Older
+    // libX11 versions do not initialize it automatically for WebKit's threads.
+    #[cfg(target_os = "linux")]
+    assert_ne!(
+        unsafe { x11::xlib::XInitThreads() },
+        0,
+        "Could not initialize X11 thread safety."
+    );
+
     // AppIndicator uses the GTK application name for the tray menu heading.
     #[cfg(target_os = "linux")]
     gtk::glib::set_application_name("OpenClaw");
@@ -3289,7 +3386,11 @@ fn main() {
                     operation_state.retry_remote(&operation_app, selection)
                 }
                 GatewayOperation::Install(channel) => {
-                    operation_state.install_cli(&operation_app, channel)
+                    operation_state.install_cli(&operation_app, channel, selection)
+                }
+                #[cfg(target_os = "linux")]
+                GatewayOperation::Runtime(action) => {
+                    operation_state.runtime_action(&operation_app, action, selection)
                 }
                 GatewayOperation::Action(action) => {
                     operation_state.gateway_action(&operation_app, action)
@@ -3298,7 +3399,13 @@ fn main() {
                     operation_state.recover_remote(&operation_app, selection, child_id)
                 }
             },
-            move |error| error_state.show_error(&error_app, error),
+            move |error| match error {
+                GatewayOperationError::Action(_) => error_state.show_error(&error_app),
+                #[cfg(target_os = "linux")]
+                GatewayOperationError::Runtime(error) => {
+                    tray::show_runtime_error(&error_app, &error)
+                }
+            },
         ));
         let deep_link_app = app.handle().clone();
         app.deep_link().on_open_url(move |event| {

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
@@ -42,13 +43,12 @@ function deniedAccess(
     requiredScope,
     cause,
     reason: t(
-      cause === "disconnected"
-        ? "sessionsView.actionRequiresConnection"
-        : cause === "method-unavailable"
-          ? "sessionsView.actionUnavailable"
-          : cause === "session-not-owned"
-            ? "sessionsView.actionRequiresOwnership"
-            : "sessionsView.actionRequiresScope",
+      {
+        disconnected: "sessionsView.actionRequiresConnection",
+        "method-unavailable": "sessionsView.actionUnavailable",
+        "session-not-owned": "sessionsView.actionRequiresOwnership",
+        "missing-scope": "sessionsView.actionRequiresScope",
+      }[cause],
       { scope: requiredScope },
     ),
   };
@@ -79,11 +79,25 @@ export function readSessionMethodScopeAccess(
   ) {
     return deniedAccess(requiredScope, "missing-scope");
   }
+  const patch =
+    request.method === "sessions.patchMany" && isRecord(request.params)
+      ? request.params.patch
+      : request.method === "sessions.patch"
+        ? request.params
+        : undefined;
+  // The Gateway's sharing role records creator authority, including solo ownership.
+  // A broad write grant permits collaboration, but cannot archive or change
+  // communication policy for another creator's session.
+  const patchNeedsOwner =
+    isRecord(patch) &&
+    (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
+    !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
   if (
-    requiredScope === "operator.sessions.write" &&
-    !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
-    // Creation assigns its owner on the Gateway before a canonical row exists.
-    request.method !== "sessions.create" &&
+    (patchNeedsOwner ||
+      (requiredScope === "operator.sessions.write" &&
+        !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
+        // Creation assigns its owner on the Gateway before a canonical row exists.
+        request.method !== "sessions.create")) &&
     request.session?.sharingRole !== "owner" &&
     request.session?.sharingRole !== "admin"
   ) {

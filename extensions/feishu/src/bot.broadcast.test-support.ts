@@ -185,7 +185,7 @@ export function setupFeishuBroadcastTestHarness() {
   function createBroadcastConfig(): ClawdbotConfig {
     return {
       broadcast: { "oc-broadcast-group": ["susan", "main"] },
-      agents: { list: [{ id: "main" }, { id: "susan" }] },
+      agents: { entries: { main: {}, susan: {} } },
       channels: {
         feishu: {
           appId: "cli_test",

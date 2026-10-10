@@ -65,6 +65,13 @@ operator action is required. Ping and pong frames are transport-level health
 checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
 transports do not perform these remote connection checks.
 
+When a caller needs a connection during remote replacement, acquisition makes up
+to three connection attempts within the caller's timeout and
+cancellation scope. This applies only when the WebSocket never opened, so no
+buffered initialization frame reached the server. Authentication and certificate
+errors fail immediately. Requests on an opened connection, including model turns
+and tool execution, are not replayed by this recovery.
+
 WebSocket and Unix socket shutdown settles when the connection closes, including
 when the server disconnected first. If the peer cannot complete the closing
 handshake, OpenClaw terminates its socket at the shutdown deadline. A closed
@@ -223,8 +230,8 @@ failures, and connector refresh failures fail closed.
 
 ## Scheduled app authority
 
-Automations inherit the creator turn's callable tools and app policy without an
-explicit `toolsAllow` list. With a prepared ChatGPT profile, scheduled app access
+When a Codex creator turn captures scheduled app authority, an automation without an explicit
+`toolsAllow` list saves that turn's callable tools and app policy. With a prepared ChatGPT profile, scheduled app access
 remains bound to that exact profile and account. Without a prepared profile, an
 agent-scoped configured WebSocket app-server owns the schedule through its
 connection fingerprint. Reauthenticating that same endpoint to another account
@@ -267,6 +274,8 @@ Canonical `openai/*` chats on a user-home stdio or Unix connection also retain
 the native configured model provider; select the model with the canonical
 OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
 route compatibility and subscription/API-key account checks still apply.
+
+Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:

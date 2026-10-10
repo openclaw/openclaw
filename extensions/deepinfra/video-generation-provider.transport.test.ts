@@ -1,8 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
 import { WEBM_VIDEO } from "./video-generation.test-support.js";
+
+vi.hoisted(() => vi.resetModules());
+vi.unmock("openclaw/plugin-sdk/provider-http");
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -26,17 +30,6 @@ type CapturedRequest = {
 type DestroyableConnection = {
   destroy: () => void;
 };
-
-let buildDeepInfraVideoGenerationProvider: typeof import("./video-generation-provider.js").buildDeepInfraVideoGenerationProvider;
-
-beforeAll(async () => {
-  vi.resetModules();
-  vi.doUnmock("openclaw/plugin-sdk/provider-http");
-  vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-  }));
-  ({ buildDeepInfraVideoGenerationProvider } = await import("./video-generation-provider.js"));
-});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");

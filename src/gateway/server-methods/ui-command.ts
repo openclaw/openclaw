@@ -9,10 +9,14 @@ import {
   type UiCommandParams,
   validateUiCommandParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayPersonalToolParticipant,
+} from "../../agents/tools/gateway-caller-context.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
+import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -20,9 +24,11 @@ export function dispatchUiCommandToRequester({
   params: commandParams,
   context,
   client,
-}: Pick<GatewayRequestHandlerOptions, "context" | "client"> & { params: UiCommandParams }):
-  | { ok: true }
-  | { ok: false; error: ReturnType<typeof errorShape> } {
+}: Pick<GatewayRequestHandlerOptions, "context" | "client"> & {
+  params: UiCommandParams;
+}): { ok: true } | { ok: false; error: ReturnType<typeof errorShape> } {
+  const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
+  const participant = resolveGatewayPersonalToolParticipant(runtimeIdentity);
   const commandSessionKey =
     "sessionKey" in commandParams.command
       ? commandParams.command.sessionKey
@@ -54,11 +60,12 @@ export function dispatchUiCommandToRequester({
         ? { ...commandParams.command, sessionKey: canonicalSessionKey }
         : commandParams.command,
   };
-  const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
-  const target = runtimeIdentity
-    ? runtimeIdentity.gatewayUiCommandTarget
-    : (getGatewayToolCallerIdentity()?.gatewayUiCommandTarget ??
-      captureGatewayUiCommandTarget(client));
+  const target = participant
+    ? participant.gatewayUiCommandTarget
+    : runtimeIdentity
+      ? runtimeIdentity.gatewayUiCommandTarget
+      : (getGatewayToolCallerIdentity()?.gatewayUiCommandTarget ??
+        captureGatewayUiCommandTarget(client));
   // A session identifies what to open, never whose browser to move.
   const connIds =
     context.getClientConnIds?.(
@@ -83,17 +90,28 @@ export function dispatchUiCommandToRequester({
     };
   }
 
+  participant?.assertCurrent();
   context.broadcastToConnIds("ui.command", normalizedParams, connIds);
   return { ok: true };
 }
 
 export const uiCommandHandlers: GatewayRequestHandlers = {
-  "ui.command": defineValidatedGatewayMethod("ui.command", validateUiCommandParams, (options) => {
-    const result = dispatchUiCommandToRequester(options);
-    if (result.ok) {
-      options.respond(true, { ok: true });
-    } else {
-      options.respond(false, undefined, result.error);
-    }
-  }),
+  "ui.command": defineValidatedGatewayMethod(
+    "ui.command",
+    validateUiCommandParams,
+    (options) => {
+      assertActiveAgentRuntimeAuthority(options.client, options.context);
+      const result = dispatchUiCommandToRequester(options);
+      if (result.ok) {
+        options.respond(true, { ok: true });
+      } else {
+        options.respond(false, undefined, result.error);
+      }
+    },
+    (error) =>
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : String(error),
+      ),
+  ),
 };

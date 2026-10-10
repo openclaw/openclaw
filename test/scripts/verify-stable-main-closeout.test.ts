@@ -1,12 +1,12 @@
 // Verify Stable Main Closeout tests cover stable closeout CLI behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   readRecoveryStepInputs,
   requireRecoveryJob,
@@ -17,20 +17,77 @@ import {
 import { verifyStableMainCloseout } from "../../scripts/lib/stable-release-closeout.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const linuxTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const tempDirs: string[] = [];
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runCli(...args: string[]) {
   return spawnSync(process.execPath, ["scripts/verify-stable-main-closeout.mjs", ...args], {
     cwd: path.resolve("."),
     encoding: "utf8",
   });
+}
+
+function closeoutFixture(
+  version = "2026.9.6",
+  recovery = true,
+  appcast = "<rss>older app release</rss>",
+) {
+  const dir = tempDirs.make("openclaw-closeout-");
+  const tag = `v${version}`;
+  for (const name of ["main", "tag"]) {
+    const root = path.join(dir, name);
+    mkdirSync(root);
+    execFileSync("git", ["init", "--quiet", root]);
+    writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+    writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## ${version}\n\n- Released.\n`);
+    writeFileSync(path.join(root, "appcast.xml"), appcast);
+  }
+  const releasePath = path.join(dir, "release.json");
+  const outputPath = path.join(dir, "closeout.json");
+  const originalPath = path.join(dir, "original.json");
+  const assets: Array<{ name: string; digest: string }> = [];
+  const release = { tagName: tag, isDraft: false, isPrerelease: false, assets };
+  const args = [
+    "--tag",
+    tag,
+    "--main-dir",
+    path.join(dir, "main"),
+    "--tag-dir",
+    path.join(dir, "tag"),
+    "--release-json",
+    releasePath,
+    "--full-release-validation-run-id",
+    "11",
+    "--full-release-validation-run-attempt",
+    "2",
+    "--release-publish-run-id",
+    "12",
+    "--rollback-drill-id",
+    "synthetic-drill",
+    "--rollback-drill-date",
+    new Date().toISOString().slice(0, 10),
+    "--output",
+    outputPath,
+    ...(recovery ? ["--allow-failed-publish-recovery", "true"] : []),
+  ];
+  return {
+    dir,
+    release,
+    outputPath,
+    originalPath,
+    run(extra: string[] = [], env?: NodeJS.ProcessEnv) {
+      writeFileSync(releasePath, JSON.stringify(release));
+      return spawnSync(
+        process.execPath,
+        ["scripts/verify-stable-main-closeout.mjs", ...args, ...extra],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env,
+        },
+      );
+    },
+  };
 }
 
 type LinuxAsset = {
@@ -90,7 +147,7 @@ function linuxPublication(version: string) {
 }
 
 function linuxCloseoutFixture(carried = false, tag = "v2026.9.4") {
-  const dir = linuxTempDirs.make("openclaw-linux-closeout-");
+  const dir = tempDirs.make("openclaw-linux-closeout-");
   const version = tag.slice(1);
   const packageVersion = version.replace(/-[1-9]\d*$/u, "");
   const changelog = `# Changelog\n\n## ${packageVersion}\n\n- Released.\n`;
@@ -274,6 +331,26 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses historical %s replay without rewriting the published receipt",
+    (field) => {
+      const fixture = linuxCloseoutFixture();
+      expect(fixture.run().status).toBe(0);
+      const receipt = JSON.parse(readFileSync(fixture.outputPath, "utf8"));
+      const original = JSON.stringify({ ...receipt, [field]: "historical published authority" });
+      writeFileSync(fixture.originalPath, original);
+      const result = fixture.run(true);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Historical waiver-bearing closeout receipt replay is unsupported",
+      );
+      expect(result.stderr).toContain(
+        "a fresh validation run cannot replace their published binding",
+      );
+      expect(readFileSync(fixture.originalPath, "utf8")).toBe(original);
+    },
+  );
+
   it("accepts only the validated exact late immutable Linux manifest", () => {
     const fixture = linuxCloseoutFixture();
     expect(fixture.run().status).toBe(0);
@@ -417,56 +494,14 @@ describe("verify-stable-main-closeout", () => {
   });
 
   it("closes npm releases with apps pending and preserves that snapshot after app attachment", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-closeout-"));
-    tempDirs.push(dir);
-    for (const name of ["main", "tag"]) {
-      const root = path.join(dir, name);
-      mkdirSync(root);
-      execFileSync("git", ["init", "--quiet", root]);
-      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
-      writeFileSync(path.join(root, "package.json"), '{"version":"2026.6.8"}');
-      writeFileSync(path.join(root, "CHANGELOG.md"), "# Changelog\n\n## 2026.6.8\n\n- Released.\n");
-      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
-    }
-    const releasePath = path.join(dir, "release.json");
-    const outputPath = path.join(dir, "closeout.json");
-    const originalPath = path.join(dir, "original.json");
+    const fixture = closeoutFixture("2026.6.8");
+    const { dir, release, outputPath, originalPath } = fixture;
     const evidence = {
       name: "openclaw-2026.6.8-postpublish-evidence.json",
       digest: `sha256:${"b".repeat(64)}`,
     };
-    const release = {
-      tagName: "v2026.6.8",
-      isDraft: false,
-      isPrerelease: false,
-      assets: [evidence],
-    };
-    writeFileSync(releasePath, JSON.stringify(release));
-    const args = [
-      "--tag",
-      "v2026.6.8",
-      "--main-dir",
-      path.join(dir, "main"),
-      "--tag-dir",
-      path.join(dir, "tag"),
-      "--release-json",
-      releasePath,
-      "--full-release-validation-run-id",
-      "11",
-      "--full-release-validation-run-attempt",
-      "2",
-      "--release-publish-run-id",
-      "12",
-      "--rollback-drill-id",
-      "synthetic-drill",
-      "--rollback-drill-date",
-      new Date().toISOString().slice(0, 10),
-      "--output",
-      outputPath,
-      "--allow-failed-publish-recovery",
-      "true",
-    ];
-    const initial = runCli(...args);
+    release.assets.push(evidence);
+    const initial = fixture.run();
     expect(initial.status, initial.stderr).toBe(0);
     const initialBytes = readFileSync(outputPath, "utf8");
     expect(JSON.parse(initialBytes)).toMatchObject({
@@ -484,7 +519,7 @@ describe("verify-stable-main-closeout", () => {
       path.join(dir, "main", "CHANGELOG", "2026.6.8.md"),
       "## 2026.6.8\n\n- Released.\n",
     );
-    const splitReplay = runCli(...args, "--existing-manifest", originalPath);
+    const splitReplay = fixture.run(["--existing-manifest", originalPath]);
     expect(splitReplay.status, splitReplay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
     release.assets.push(
@@ -499,8 +534,7 @@ describe("verify-stable-main-closeout", () => {
         "OpenClawCompanion-SHA256SUMS.txt",
       ].map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` })),
     );
-    writeFileSync(releasePath, JSON.stringify(release));
-    const missingAppcast = runCli(...args, "--existing-manifest", originalPath);
+    const missingAppcast = fixture.run(["--existing-manifest", originalPath]);
     expect(missingAppcast.status).toBe(1);
     expect(missingAppcast.stderr).toContain(
       "main appcast.xml does not point at OpenClaw-2026.6.8.zip",
@@ -510,19 +544,17 @@ describe("verify-stable-main-closeout", () => {
       publishedAppcastPath,
       "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/OpenClaw-2026.6.8.zip",
     );
-    const replay = runCli(
-      ...args,
+    const replay = fixture.run([
       "--existing-manifest",
       originalPath,
       "--published-appcast",
       publishedAppcastPath,
-    );
+    ]);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
 
     evidence.digest = `sha256:${"d".repeat(64)}`;
-    writeFileSync(releasePath, JSON.stringify(release));
-    const changed = runCli(...args, "--existing-manifest", originalPath);
+    const changed = fixture.run(["--existing-manifest", originalPath]);
     expect(changed.status).toBe(1);
     expect(changed.stderr).toContain(
       `Recorded release asset changed or disappeared: ${evidence.name}`,
@@ -530,58 +562,12 @@ describe("verify-stable-main-closeout", () => {
   });
 
   it("keeps 2026.9.6 closeout pending without thin feeds and replays with published feeds", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-thin-closeout-"));
-    tempDirs.push(dir);
     const version = "2026.9.6";
     const tag = `v${version}`;
-    for (const name of ["main", "tag"]) {
-      const root = path.join(dir, name);
-      mkdirSync(root);
-      execFileSync("git", ["init", "--quiet", root]);
-      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
-      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
-      writeFileSync(
-        path.join(root, "CHANGELOG.md"),
-        `# Changelog\n\n## ${version}\n\n- Released.\n`,
-      );
-      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
-    }
-    const releasePath = path.join(dir, "release.json");
-    const outputPath = path.join(dir, "closeout.json");
-    const originalPath = path.join(dir, "original.json");
-    const release: {
-      tagName: string;
-      isDraft: boolean;
-      isPrerelease: boolean;
-      assets: Array<{ name: string; digest: string }>;
-    } = { tagName: tag, isDraft: false, isPrerelease: false, assets: [] };
-    writeFileSync(releasePath, JSON.stringify(release));
-    const args = [
-      "--tag",
-      tag,
-      "--main-dir",
-      path.join(dir, "main"),
-      "--tag-dir",
-      path.join(dir, "tag"),
-      "--release-json",
-      releasePath,
-      "--full-release-validation-run-id",
-      "11",
-      "--full-release-validation-run-attempt",
-      "2",
-      "--release-publish-run-id",
-      "12",
-      "--rollback-drill-id",
-      "synthetic-drill",
-      "--rollback-drill-date",
-      new Date().toISOString().slice(0, 10),
-      "--output",
-      outputPath,
-      "--allow-failed-publish-recovery",
-      "true",
-    ];
+    const fixture = closeoutFixture(version);
+    const { dir, release, outputPath, originalPath } = fixture;
 
-    const initial = runCli(...args);
+    const initial = fixture.run();
     expect(initial.status, initial.stderr).toBe(0);
     expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
       appcast: "pending",
@@ -594,7 +580,6 @@ describe("verify-stable-main-closeout", () => {
         ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
       )
       .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` }));
-    writeFileSync(releasePath, JSON.stringify(release));
     const publishedFeedSpecs: Array<[string, string, string]> = [
       ["--published-appcast", "appcast.xml", `OpenClaw-${version}.zip`],
       ["--published-appcast-arm64", "appcast-arm64.xml", `OpenClaw-${version}-arm64.zip`],
@@ -608,109 +593,41 @@ describe("verify-stable-main-closeout", () => {
       );
       return [flag, appcastPath];
     });
-    const replay = runCli(...args, "--existing-manifest", originalPath, ...publishedArgs);
+    const replay = fixture.run(["--existing-manifest", originalPath, ...publishedArgs]);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
   });
 
-  it("records operator waivers at closeout and preserves a waiver-less recorded manifest on replay", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-waiver-closeout-"));
-    tempDirs.push(dir);
-    const version = "2026.9.6";
-    const tag = `v${version}`;
-    for (const name of ["main", "tag"]) {
-      const root = path.join(dir, name);
-      mkdirSync(root);
-      execFileSync("git", ["init", "--quiet", root]);
-      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
-      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
-      writeFileSync(
-        path.join(root, "CHANGELOG.md"),
-        `# Changelog\n\n## ${version}\n\n- Released.\n`,
-      );
-      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
-    }
-    const releasePath = path.join(dir, "release.json");
-    const outputPath = path.join(dir, "closeout.json");
-    const originalPath = path.join(dir, "original.json");
-    writeFileSync(
-      releasePath,
-      JSON.stringify({ tagName: tag, isDraft: false, isPrerelease: false, assets: [] }),
-    );
-    const args = [
-      "--tag",
-      tag,
-      "--main-dir",
-      path.join(dir, "main"),
-      "--tag-dir",
-      path.join(dir, "tag"),
-      "--release-json",
-      releasePath,
-      "--full-release-validation-run-id",
-      "11",
-      "--full-release-validation-run-attempt",
-      "2",
-      "--release-publish-run-id",
-      "12",
-      "--rollback-drill-id",
-      "synthetic-drill",
-      "--rollback-drill-date",
-      new Date().toISOString().slice(0, 10),
-      "--output",
-      outputPath,
-      "--allow-failed-publish-recovery",
-      "true",
-    ];
-    const waiverArgs = [
-      "--stable-soak-waiver",
-      "2026.9.6 operator approved",
-      "--lane-waiver",
-      "2026.9.6 known flake",
-    ];
-
-    // A closeout recorded before waiver fields existed carries none of them.
-    const initial = runCli(...args);
+  it("rejects removed waiver flags while preserving strict closeout replay", () => {
+    const fixture = closeoutFixture();
+    const { outputPath, originalPath } = fixture;
+    const initial = fixture.run();
     expect(initial.status, initial.stderr).toBe(0);
     const recorded = JSON.parse(readFileSync(outputPath, "utf8"));
     expect(recorded).not.toHaveProperty("stableSoakWaiver");
     expect(recorded).not.toHaveProperty("laneWaiver");
     writeFileSync(originalPath, readFileSync(outputPath));
 
-    // Replay with waivers resolved from publish evidence keeps the recorded bytes.
-    const replay = runCli(...args, ...waiverArgs, "--existing-manifest", originalPath);
+    const replay = fixture.run(["--existing-manifest", originalPath]);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
-
-    // A fresh closeout records the waivers that authorized the stable.
-    const waived = runCli(...args, ...waiverArgs);
-    expect(waived.status, waived.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
-      stableSoakWaiver: "2026.9.6 operator approved",
-      laneWaiver: "2026.9.6 known flake",
-    });
+    for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
+      const rejected = fixture.run([flag, "2026.9.6 operator approved"]);
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain(`${flag} was removed`);
+      expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+    }
   });
 
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-withdrawn-closeout-"));
-    tempDirs.push(dir);
     const version = "2026.9.6";
-    const tag = `v${version}`;
     const mainSha = "a".repeat(40);
-    for (const name of ["main", "tag"]) {
-      const root = path.join(dir, name);
-      mkdirSync(root);
-      execFileSync("git", ["init", "--quiet", root]);
-      writeFileSync(path.join(root, ".git/HEAD"), `${mainSha}\n`);
-      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
-      writeFileSync(
-        path.join(root, "CHANGELOG.md"),
-        `# Changelog\n\n## ${version}\n\n- Released.\n`,
-      );
-      writeFileSync(
-        path.join(root, "appcast.xml"),
-        "<rss><sparkle:shortVersionString>2026.9.5</sparkle:shortVersionString></rss>",
-      );
-    }
+    const fixture = closeoutFixture(
+      version,
+      false,
+      "<rss><sparkle:shortVersionString>2026.9.5</sparkle:shortVersionString></rss>",
+    );
+    const { dir, release, outputPath, originalPath } = fixture;
     const bin = path.join(dir, "bin");
     mkdirSync(bin);
     writeFileSync(
@@ -727,51 +644,16 @@ process.stdout.write(JSON.stringify([
 `,
       { mode: 0o755 },
     );
-    const releasePath = path.join(dir, "release.json");
-    const outputPath = path.join(dir, "closeout.json");
-    const originalPath = path.join(dir, "original.json");
-    writeFileSync(
-      releasePath,
-      JSON.stringify({
-        tagName: tag,
-        isDraft: false,
-        isPrerelease: false,
-        assets: ["", "-arm64", "-x86_64"]
-          .flatMap((suffix) =>
-            ["zip", "dmg", "dSYM.zip"].map(
-              (extension) => `OpenClaw-${version}${suffix}.${extension}`,
-            ),
-          )
-          .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` })),
-      }),
-    );
-    const args = [
-      "--tag",
-      tag,
-      "--main-dir",
-      path.join(dir, "main"),
-      "--tag-dir",
-      path.join(dir, "tag"),
-      "--release-json",
-      releasePath,
-      "--full-release-validation-run-id",
-      "11",
-      "--full-release-validation-run-attempt",
-      "2",
-      "--release-publish-run-id",
-      "12",
-      "--rollback-drill-id",
-      "synthetic-drill",
-      "--rollback-drill-date",
-      new Date().toISOString().slice(0, 10),
-      "--output",
-      outputPath,
-    ];
+    release.assets = ["", "-arm64", "-x86_64"]
+      .flatMap((suffix) =>
+        ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
+      )
+      .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` }));
     const run = (lookups: "allowed" | "forbidden", ...extra: string[]) =>
-      spawnSync(process.execPath, ["scripts/verify-stable-main-closeout.mjs", ...args, ...extra], {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WITHDRAWAL_LOOKUPS: lookups },
+      fixture.run(extra, {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        WITHDRAWAL_LOOKUPS: lookups,
       });
 
     const initial = run("allowed");
@@ -790,25 +672,49 @@ process.stdout.write(JSON.stringify([
   });
 });
 
-describe("stable closeout workflow publication routing", () => {
-  it("treats thin replay appcasts as optional until publication", () => {
-    const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
-    const closeoutStep = workflow
-      .split("      - name: Verify stable state and write closeout manifest\n", 2)[1]
-      ?.split("\n      - name:", 1)[0];
-
-    expect(closeoutStep).toContain(
-      'if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/${appcast}?ref=main"',
-    );
-    expect(closeoutStep).toContain("Thin appcast is not published yet: $appcast");
-    expect(closeoutStep).toContain(
-      'existing_manifest_args+=(--published-appcast-arm64 "$published")',
-    );
-    expect(closeoutStep).toContain(
-      'existing_manifest_args+=(--published-appcast-x86-64 "$published")',
-    );
+describe("stable closeout workflow keyed runs and tag-only replay", () => {
+  const workflow = parse(
+    readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
+  ) as {
+    concurrency: { group: string; "cancel-in-progress": boolean | string };
+    on: {
+      workflow_dispatch: {
+        inputs: Record<string, { required: boolean; type: string; default?: string | boolean }>;
+      };
+    };
+    jobs: Record<
+      "resolve" | "verify",
+      {
+        concurrency?: { group: string; "cancel-in-progress": boolean };
+        steps: Array<{ name: string; run?: string; env?: Record<string, string> }>;
+      }
+    >;
+  };
+  it("keeps push runs alive and serializes verification by resolved stable tag", () => {
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency.group).toContain("inputs.tag");
+    expect(workflow.jobs.verify.concurrency).toEqual({
+      group: "openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}",
+      "cancel-in-progress": false,
+    });
   });
 
+  it("keeps non-tag replay inputs optional", () => {
+    for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
+      if (name === "tag") {
+        continue;
+      }
+      expect(input.required, name).toBe(false);
+      // Optional string inputs have an implicit empty default in GitHub Actions.
+      expect(input.default ?? (input.type === "string" ? "" : undefined), name).toBeOneOf([
+        "",
+        false,
+      ]);
+    }
+  });
+});
+
+describe("stable closeout workflow publication routing", () => {
   it.each([
     {
       name: "ordinary successful parent",
@@ -923,8 +829,7 @@ describe("stable closeout workflow publication routing", () => {
         '"./.closeout-tooling/scripts/lib/stable-release-closeout.mjs"',
         JSON.stringify(pathToFileURL(path.resolve("scripts/lib/stable-release-closeout.mjs")).href),
       );
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-closeout-routing-"));
-    tempDirs.push(dir);
+    const dir = tempDirs.make("openclaw-closeout-routing-");
     const run = path.join(dir, "run.json");
     const evidence = path.join(dir, "evidence.json");
     const manifest = path.join(dir, "manifest.json");
@@ -999,8 +904,7 @@ describe("stable closeout Full Release Validation checksum", () => {
   it.each(["valid", "wrong-file", "duplicate", "mismatch"])(
     "checks %s FRV manifest evidence",
     (kind) => {
-      const dir = mkdtempSync(path.join(tmpdir(), "openclaw-frv-checksum-"));
-      tempDirs.push(dir);
+      const dir = tempDirs.make("openclaw-frv-checksum-");
       const file = path.join(dir, "release-manifest.json");
       writeFileSync(
         file,
@@ -1077,11 +981,8 @@ describe("stable publication recovery boundaries", () => {
     ).rejects.toThrow("release source mismatch");
   });
 
-  it("binds a successful npm child to its exact run, attempt, repository and workflow", () => {
-    expect(validateRecoveryRun(run, expected)).toEqual(run);
-    expect(requireRecoveryJob([job], run, job.name)).toEqual(job);
-  });
   it.each([
+    {},
     { id: 102 },
     { run_attempt: 3 },
     { head_sha: "b".repeat(40) },
@@ -1091,13 +992,18 @@ describe("stable publication recovery boundaries", () => {
     { conclusion: "failure" },
     { repository: { full_name: "example/fork" } },
     { head_repository: { full_name: "example/fork" } },
-  ])("rejects mismatched producer metadata %j", (patch) => {
-    expect(() => validateRecoveryRun({ ...run, ...patch }, expected)).toThrow(
-      "Stable publish recovery:",
-    );
+  ])("binds producer metadata to the exact publication: %j", (patch) => {
+    if (Object.keys(patch).length === 0) {
+      expect(validateRecoveryRun(run, expected)).toEqual(run);
+    } else {
+      expect(() => validateRecoveryRun({ ...run, ...patch }, expected)).toThrow(
+        "Stable publish recovery:",
+      );
+    }
   });
   it.each(
     [
+      [job],
       [],
       [job, job],
       [{ ...job, run_id: 102 }],
@@ -1105,51 +1011,68 @@ describe("stable publication recovery boundaries", () => {
       [{ ...job, conclusion: "skipped" }],
       [{ ...job, head_sha: "b".repeat(40) }],
     ].map((jobs) => ({ jobs })),
-  )("rejects missing, ambiguous, stale or unsuccessful jobs", ({ jobs }) => {
-    expect(() => requireRecoveryJob(jobs, run, job.name)).toThrow("Stable publish recovery:");
+  )("requires one successful job from the exact attempt: $jobs", ({ jobs }) => {
+    if (jobs.length === 1 && jobs[0] === job) {
+      expect(requireRecoveryJob(jobs, run, job.name)).toEqual(job);
+    } else {
+      expect(() => requireRecoveryJob(jobs, run, job.name)).toThrow("Stable publish recovery:");
+    }
   });
-  it("reads only the runner input group and ignores forged stdout and other steps", () => {
-    const text = log([
-      ...header,
-      "##[group]Run forged",
-      "env:",
-      "  RELEASE_PUBLISH_RUN_ID: 999",
-      "##[endgroup]",
-    ]);
-    text.set(`${job.name}/5_Another step.txt`, Buffer.from("forged"));
-    expect(readRecoveryStepInputs(text, job, "Publish")).toEqual({
-      RELEASE_PUBLISH_RUN_ID: "100",
-      RELEASE_PUBLISH_RUN_ATTEMPT: "3",
-    });
-  });
-  it.each(
-    [
-      header.slice(1),
-      header.slice(0, -1),
-      [...header.slice(0, -1), "  RELEASE_PUBLISH_RUN_ID: 999", "##[endgroup]"],
-      ["##[group]Run set -euo pipefail", "env:", "env:", ...header.slice(3)],
-      ["##[group]Run set -euo pipefail", "arbitrary stdout", ...header.slice(3)],
-    ].map((lines) => ({ lines })),
-  )("rejects missing or ambiguous runner input records", ({ lines }) => {
-    expect(() => readRecoveryStepInputs(log(lines), job, "Publish")).toThrow(
-      "Stable publish recovery:",
-    );
-  });
-  it("rejects duplicate or failed step metadata even when the log looks valid", () => {
-    expect(() =>
-      readRecoveryStepInputs(
-        log(header),
+  it.each([
+    {
+      name: "valid inputs despite forged stdout and other steps",
+      lines: [
+        ...header,
+        "##[group]Run forged",
+        "env:",
+        "  RELEASE_PUBLISH_RUN_ID: 999",
+        "##[endgroup]",
+      ],
+      jobs: [job],
+      valid: true,
+    },
+    ...(
+      [
+        ["missing group", header.slice(1)],
+        ["truncated group", header.slice(0, -1)],
+        [
+          "duplicate field",
+          [...header.slice(0, -1), "  RELEASE_PUBLISH_RUN_ID: 999", "##[endgroup]"],
+        ],
+        [
+          "duplicate environment",
+          ["##[group]Run set -euo pipefail", "env:", "env:", ...header.slice(3)],
+        ],
+        [
+          "stdout without environment",
+          ["##[group]Run set -euo pipefail", "arbitrary stdout", ...header.slice(3)],
+        ],
+      ] satisfies Array<[string, string[]]>
+    ).map(([name, lines]) => ({ name, lines, jobs: [job], valid: false })),
+    {
+      name: "duplicate or failed step metadata",
+      lines: header,
+      jobs: [
         { ...job, steps: [...job.steps, ...job.steps] },
-        "Publish",
-      ),
-    ).toThrow("Stable publish recovery:");
-    expect(() =>
-      readRecoveryStepInputs(
-        log(header),
         { ...job, steps: [{ ...job.steps[0], conclusion: "failure" }] },
-        "Publish",
-      ),
-    ).toThrow("Stable publish recovery:");
+      ],
+      valid: false,
+    },
+  ])("reads only authoritative runner inputs: $name", ({ lines, jobs, valid }) => {
+    const text = log(lines);
+    if (valid) {
+      text.set(`${job.name}/5_Another step.txt`, Buffer.from("forged"));
+      expect(readRecoveryStepInputs(text, job, "Publish")).toEqual({
+        RELEASE_PUBLISH_RUN_ID: "100",
+        RELEASE_PUBLISH_RUN_ATTEMPT: "3",
+      });
+    } else {
+      for (const metadata of jobs) {
+        expect(() => readRecoveryStepInputs(text, metadata, "Publish")).toThrow(
+          "Stable publish recovery:",
+        );
+      }
+    }
   });
 });
 
@@ -1191,47 +1114,56 @@ function verified() {
   ];
 }
 describe("verified npm provenance", () => {
-  it("accepts only the exact qualified npm bytes and publication invocation", () => {
-    expect(() => validateRecoveryProvenance(verified(), npmExpected)).not.toThrow(
-      "Stable publish recovery:",
-    );
-  });
-  it.each([
-    { runId: "102" },
-    { attempt: "1" },
-    { name: "other" },
-    { version: "2026.9.4" },
-    { fullRef: "refs/heads/main" },
-    { sha512: "c".repeat(128) },
-  ])("rejects independently signed provenance for a different identity %j", (patch) => {
-    expect(() => validateRecoveryProvenance(verified(), { ...npmExpected, ...patch })).toThrow(
-      "Stable publish recovery:",
-    );
-  });
-  it("uses the npm package URL encoding for scoped package provenance", () => {
-    const scoped = verified();
-    scoped[0]!.verificationResult.statement.subject[0]!.name = "pkg:npm/%40openclaw/ai@2026.9.3";
-    expect(() =>
-      validateRecoveryProvenance(scoped, { ...npmExpected, name: "@openclaw/ai" }),
-    ).not.toThrow();
-    scoped[0]!.verificationResult.statement.subject[0]!.name =
-      "pkg:npm/%40openclaw/another@2026.9.3";
-    expect(() =>
-      validateRecoveryProvenance(scoped, { ...npmExpected, name: "@openclaw/ai" }),
-    ).toThrow("verified npm subject mismatch");
-  });
-  it("rejects missing or ambiguous verified statements", () => {
-    expect(() => validateRecoveryProvenance([], npmExpected)).toThrow("Stable publish recovery:");
-    expect(() => validateRecoveryProvenance([...verified(), ...verified()], npmExpected)).toThrow(
-      "Stable publish recovery:",
-    );
+  const cases: Array<{
+    name: string;
+    patch?: Partial<typeof npmExpected>;
+    valid?: boolean;
+    scoped?: boolean;
+    ambiguous?: boolean;
+  }> = [
+    { name: "exact qualified bytes and invocation", valid: true },
+    ...[
+      { runId: "102" },
+      { attempt: "1" },
+      { name: "other" },
+      { version: "2026.9.4" },
+      { fullRef: "refs/heads/main" },
+      { sha512: "c".repeat(128) },
+    ].map((patch) => ({ name: `different ${Object.keys(patch)[0]}`, patch })),
+    { name: "encoded scoped package", scoped: true },
+    { name: "missing or ambiguous statements", ambiguous: true },
+  ];
+  it.each(cases)("binds verified provenance to $name", ({ patch, valid, scoped, ambiguous }) => {
+    const results = verified();
+    const identity = { ...npmExpected, ...patch };
+    if (scoped) {
+      identity.name = "@openclaw/ai";
+      results[0]!.verificationResult.statement.subject[0]!.name = "pkg:npm/%40openclaw/ai@2026.9.3";
+      expect(() => validateRecoveryProvenance(results, identity)).not.toThrow();
+      results[0]!.verificationResult.statement.subject[0]!.name =
+        "pkg:npm/%40openclaw/another@2026.9.3";
+      expect(() => validateRecoveryProvenance(results, identity)).toThrow(
+        "verified npm subject mismatch",
+      );
+    } else if (valid) {
+      expect(() => validateRecoveryProvenance(results, identity)).not.toThrow(
+        "Stable publish recovery:",
+      );
+    } else {
+      for (const statements of ambiguous ? [[], [...results, ...results]] : [results]) {
+        expect(() => validateRecoveryProvenance(statements, identity)).toThrow(
+          "Stable publish recovery:",
+        );
+      }
+    }
   });
 });
 
-describe.each([
-  "01403169248346f2a6d6dd02955fc956fa9e1fe9",
-  "458f9980c2bfdcc4f15279d20db400815406f2e8",
-])("bounded historical publication runner headers at %s", (historicalSha) => {
+describe("bounded historical publication runner headers", () => {
+  const historicalShas = [
+    "01403169248346f2a6d6dd02955fc956fa9e1fe9",
+    "458f9980c2bfdcc4f15279d20db400815406f2e8",
+  ];
   const scenarios = [
     { name: "Publish", number: 20, file: "npm-publish-body.txt", job: "publish_openclaw_npm" },
     {
@@ -1247,13 +1179,11 @@ describe.each([
       job: "Publish Docker images / Publish prepared Docker images",
     },
   ];
-  function historical(scenario: (typeof scenarios)[number], bodyChange = (body: string) => body) {
-    const body = bodyChange(
-      readFileSync(
-        new URL(`../fixtures/stable-publish-recovery/${scenario.file}`, import.meta.url),
-        "utf8",
-      ).trim(),
-    );
+  function historical(scenario: (typeof scenarios)[number], historicalSha: string) {
+    const body = readFileSync(
+      new URL(`../fixtures/stable-publish-recovery/${scenario.file}`, import.meta.url),
+      "utf8",
+    ).trim();
     const code = body.split("\n");
     const input = [
       `##[group]Run ${code[0]}`,
@@ -1284,69 +1214,95 @@ describe.each([
       bytes,
     };
   }
-  it.each(scenarios)(
-    "matches the frozen $name body, runner header and successful API step",
-    (scenario) => {
-      const fixture = historical(scenario);
-      expect(readRecoveryStepInputs(fixture.logs, fixture.historicalJob, scenario.name)).toEqual({
-        RELEASE_PUBLISH_RUN_ID: "100",
-        RELEASE_PUBLISH_RUN_ATTEMPT: "3",
-      });
+  const cases: Array<{
+    name: string;
+    historicalSha: string;
+    scenario: (typeof scenarios)[number];
+    mutate?: (value: string) => string;
+    invalidMetadata?: boolean;
+  }> = [
+    ...historicalShas.flatMap((historicalSha) =>
+      scenarios.map((scenario) => ({
+        name: `${historicalSha} ${scenario.name}`,
+        historicalSha,
+        scenario,
+      })),
+    ),
+    ...[
+      {
+        name: "different body",
+        mutate: (value: string) => value.replace("set -euo pipefail", "set -eu"),
+      },
+      { name: "duplicate matching header", mutate: (value: string) => `${value}\n${value}` },
+      { name: "truncated header", mutate: (value: string) => value.replace("##[endgroup]", "") },
+      {
+        name: "different shell",
+        mutate: (value: string) =>
+          value.replace("shell: /usr/bin/bash -e {0}", "shell: /bin/sh {0}"),
+      },
+      {
+        name: "earlier step forgery",
+        mutate: (value: string) => value.replaceAll("12:55:34.500Z", "12:55:33.500Z"),
+      },
+      {
+        name: "later step forgery",
+        mutate: (value: string) => value.replaceAll("12:55:34.500Z", "12:56:15.500Z"),
+      },
+      {
+        name: "stdout only",
+        mutate: (value: string) =>
+          value
+            .split("\n")
+            .filter((line) => !line.includes("##[group]Run"))
+            .join("\n"),
+      },
+    ].map(({ name, mutate }) => ({
+      name,
+      mutate,
+      historicalSha: historicalShas[0]!,
+      scenario: scenarios[0]!,
+    })),
+    {
+      name: "another tooling revision, step number, failed step, or duplicate archive job",
+      historicalSha: historicalShas[0]!,
+      scenario: scenarios[0]!,
+      invalidMetadata: true,
+    },
+  ];
+  it.each(cases)(
+    "validates the frozen runner header: $name",
+    ({ historicalSha, scenario, mutate, invalidMetadata }) => {
+      const fixture = historical(scenario, historicalSha);
+      if (invalidMetadata) {
+        for (const changedJob of [
+          { ...fixture.historicalJob, head_sha: "b".repeat(40) },
+          { ...fixture.historicalJob, steps: [{ ...fixture.historicalJob.steps[0], number: 21 }] },
+          {
+            ...fixture.historicalJob,
+            steps: [{ ...fixture.historicalJob.steps[0], conclusion: "failure" }],
+          },
+        ]) {
+          expect(() => readRecoveryStepInputs(fixture.logs, changedJob, scenario.name)).toThrow(
+            "Stable publish recovery:",
+          );
+        }
+        fixture.logs.set("1_publish_openclaw_npm.txt", fixture.bytes);
+      } else if (mutate) {
+        fixture.logs.set(
+          "0_publish_openclaw_npm.txt",
+          Buffer.from(mutate(fixture.bytes.toString())),
+        );
+      }
+      if (mutate || invalidMetadata) {
+        expect(() =>
+          readRecoveryStepInputs(fixture.logs, fixture.historicalJob, scenario.name),
+        ).toThrow("Stable publish recovery:");
+      } else {
+        expect(readRecoveryStepInputs(fixture.logs, fixture.historicalJob, scenario.name)).toEqual({
+          RELEASE_PUBLISH_RUN_ID: "100",
+          RELEASE_PUBLISH_RUN_ATTEMPT: "3",
+        });
+      }
     },
   );
-  it.each([
-    {
-      name: "different body",
-      mutate: (value: string) => value.replace("set -euo pipefail", "set -eu"),
-    },
-    { name: "duplicate matching header", mutate: (value: string) => `${value}\n${value}` },
-    { name: "truncated header", mutate: (value: string) => value.replace("##[endgroup]", "") },
-    {
-      name: "different shell",
-      mutate: (value: string) => value.replace("shell: /usr/bin/bash -e {0}", "shell: /bin/sh {0}"),
-    },
-    {
-      name: "earlier step forgery",
-      mutate: (value: string) => value.replaceAll("12:55:34.500Z", "12:55:33.500Z"),
-    },
-    {
-      name: "later step forgery",
-      mutate: (value: string) => value.replaceAll("12:55:34.500Z", "12:56:15.500Z"),
-    },
-    {
-      name: "stdout only",
-      mutate: (value: string) =>
-        value
-          .split("\n")
-          .filter((line) => !line.includes("##[group]Run"))
-          .join("\n"),
-    },
-  ])("rejects $name", ({ mutate }) => {
-    const scenario = scenarios[0]!;
-    const fixture = historical(scenario);
-    fixture.logs.set("0_publish_openclaw_npm.txt", Buffer.from(mutate(fixture.bytes.toString())));
-    expect(() =>
-      readRecoveryStepInputs(fixture.logs, fixture.historicalJob, scenario.name),
-    ).toThrow("Stable publish recovery:");
-  });
-  it("rejects another tooling revision, step number, failed step, or duplicate archive job", () => {
-    const scenario = scenarios[0]!;
-    const fixture = historical(scenario);
-    for (const changedJob of [
-      { ...fixture.historicalJob, head_sha: "b".repeat(40) },
-      { ...fixture.historicalJob, steps: [{ ...fixture.historicalJob.steps[0], number: 21 }] },
-      {
-        ...fixture.historicalJob,
-        steps: [{ ...fixture.historicalJob.steps[0], conclusion: "failure" }],
-      },
-    ]) {
-      expect(() => readRecoveryStepInputs(fixture.logs, changedJob, scenario.name)).toThrow(
-        "Stable publish recovery:",
-      );
-    }
-    fixture.logs.set("1_publish_openclaw_npm.txt", fixture.bytes);
-    expect(() =>
-      readRecoveryStepInputs(fixture.logs, fixture.historicalJob, scenario.name),
-    ).toThrow("Stable publish recovery:");
-  });
 });

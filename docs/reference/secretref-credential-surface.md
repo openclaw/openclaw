@@ -90,6 +90,14 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.telegram.accounts.*.webhookSecret`
 - `channels.telegram.botToken`
 - `channels.telegram.webhookSecret`
+- `channels.x.accounts.*.bearerToken`
+- `channels.x.accounts.*.clientSecret`
+- `channels.x.accounts.*.refreshToken`
+- `channels.x.accounts.*.verifiedFromGitHub.token`
+- `channels.x.bearerToken`
+- `channels.x.clientSecret`
+- `channels.x.refreshToken`
+- `channels.x.verifiedFromGitHub.token`
 - `channels.zalo.accounts.*.botToken`
 - `channels.zalo.accounts.*.webhookSecret`
 - `channels.zalo.botToken`
@@ -153,7 +161,6 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
-- `plugins.entries.webhooks.config.routes.*.secret`
 - `plugins.entries.xai.config.webSearch.apiKey`
 
 #### `skills`

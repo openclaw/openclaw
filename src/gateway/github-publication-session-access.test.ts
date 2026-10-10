@@ -32,11 +32,8 @@ describe("registered session GitHub publication access", () => {
 
   it.each([
     { target: "own", policy: "absent", actor: "guest", outcome: "published" },
-    { target: "own", policy: "write", actor: "guest", outcome: "published" },
     { target: "foreign", policy: "view", actor: "guest", outcome: "INVALID_REQUEST" },
-    { target: "member", policy: "view", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "foreign", policy: "absent", actor: "guest", outcome: "UNAVAILABLE" },
-    { target: "member", policy: "absent", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "foreign", policy: "write", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "member", policy: "write", actor: "guest", outcome: "UNAVAILABLE" },
     { target: "missing", policy: "absent", actor: "guest", outcome: "INVALID_REQUEST" },

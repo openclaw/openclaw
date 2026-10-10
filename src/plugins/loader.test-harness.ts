@@ -6,7 +6,6 @@ import { expect } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -64,26 +63,6 @@ export function expectGlobalHookRunner(
   }
   expect(typeof runner.hasHooks).toBe("function");
   return runner;
-}
-
-export function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
-  const fail = (name: string): never => {
-    throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
-  };
-  return {
-    createQueuedTaskRun: () => fail("createQueuedTaskRun"),
-    createRunningTaskRun: () => fail("createRunningTaskRun"),
-    startTaskRunByRunId: () => fail("startTaskRunByRunId"),
-    recordTaskRunProgressByRunId: () => fail("recordTaskRunProgressByRunId"),
-    finalizeTaskRunByRunId: () => fail("finalizeTaskRunByRunId"),
-    completeTaskRunByRunId: () => fail("completeTaskRunByRunId"),
-    failTaskRunByRunId: () => fail("failTaskRunByRunId"),
-    setDetachedTaskDeliveryStatusByRunId: () => fail("setDetachedTaskDeliveryStatusByRunId"),
-    cancelDetachedTaskRunById: async () => ({
-      found: true,
-      cancelled: true,
-    }),
-  };
 }
 
 export function writeFixtureText(rootDir: string, relativePath: string, body: string) {

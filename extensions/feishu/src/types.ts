@@ -1,4 +1,3 @@
-// Feishu type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
 import type {
@@ -11,8 +10,19 @@ import type {
 } from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
 
-export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
-export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
+type LegacyFeishuWebhookConfig = {
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.host. */
+  webhookHost?: string;
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
+  webhookPort?: number;
+};
+
+export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema> &
+  LegacyFeishuWebhookConfig;
+export type FeishuConfig = Omit<z.infer<typeof FeishuConfigSchema>, "accounts"> &
+  LegacyFeishuWebhookConfig & {
+    accounts?: Record<string, FeishuAccountConfig | undefined>;
+  };
 
 export type FeishuDomain = "feishu" | "lark" | (z.infer<typeof FeishuDomainSchema> & {});
 

@@ -2,6 +2,7 @@ import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent
 import type { RealtimeVoiceToolResultOptions } from "../../../talk/provider-types.js";
 import {
   broadcastToOwner,
+  hasRelayAgentRunRegistrations,
   relaySessions,
   resolveRelayProviderToolCallId,
   type RelaySession,
@@ -61,7 +62,7 @@ export function completeAfterToolResultSubmissions(
   return Promise.all(pending).then(complete);
 }
 
-function trackToolResultCompletion(
+export function trackToolResultCompletion(
   pending: Map<string, Promise<void>>,
   callId: string,
   completion: void | Promise<void>,
@@ -170,30 +171,17 @@ export function submitFinalProviderToolResult(params: {
   );
 }
 
-export function trackAgentFinalToolResult(
-  session: RelaySession,
-  callId: string,
-  completion: void | Promise<void>,
-): void | Promise<void> {
-  return trackToolResultCompletion(session.pendingFinalToolResults, callId, completion);
-}
-
-export function trackPendingWorkingToolResult(
-  session: RelaySession,
-  callId: string,
-  completion: void | Promise<void>,
-): void | Promise<void> {
-  return trackToolResultCompletion(session.pendingWorkingToolResults, callId, completion);
-}
-
 export function clearRelayAgentToolCall(session: RelaySession, callId: string): void {
-  const runId = session.activeAgentToolCalls.get(callId);
+  const registration = session.activeAgentToolCalls.get(callId);
   session.activeAgentToolCalls.delete(callId);
-  if (!runId) {
+  if (!registration) {
     return;
   }
-  const runStillActive = [...session.activeAgentToolCalls.values()].includes(runId);
-  if (!runStillActive) {
-    session.activeAgentRuns.delete(runId);
+  const { run } = registration;
+  if (
+    session.activeAgentRuns.get(run.runId) === run &&
+    !hasRelayAgentRunRegistrations(session, run)
+  ) {
+    session.activeAgentRuns.delete(run.runId);
   }
 }

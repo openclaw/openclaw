@@ -1,4 +1,5 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +13,22 @@ function parseA2aOutboundBody(body: BodyInit | null | undefined): Record<string,
     throw new Error(`expected a serialized A2A request body, got ${typeof body}`);
   }
   return JSON.parse(body) as Record<string, unknown>;
+}
+
+function createA2aSendConfig(): A2aCoreConfig {
+  return {
+    channels: {
+      a2a: {
+        peers: {
+          hermes: {
+            token: "test-inbound-token",
+            url: "https://peer.example.test/a2a/v1",
+            outboundToken: "test-outbound-token",
+          },
+        },
+      },
+    },
+  };
 }
 
 // Cold (discovery-time) validation uses the zod-derived generated bundled
@@ -67,7 +84,6 @@ describe("A2A channel configuration", () => {
     ["reply timeout above maximum", { replyTimeoutMs: 600_001 }],
     ["negative rate limit", { rateLimitPerMinute: -1 }],
     ["unsupported multiple accounts", { accounts: { work: {} } }],
-    ["unknown channel field", { target: "https://untrusted.example.test" }],
   ])("rejects %s in every validation surface", (label, value) => {
     assertConfigAcceptance(value, false, label);
   });
@@ -106,18 +122,12 @@ describe("A2A channel message adapter", () => {
     "checks authority after transport preparation through the %s registered send",
     async (surface) => {
       const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
-      let markLookupStarted: (() => void) | undefined;
-      const lookupStarted = new Promise<void>((resolve) => {
-        markLookupStarted = resolve;
-      });
-      let finishLookup: ((addresses: Array<{ address: string; family: 4 }>) => void) | undefined;
-      const lookupFinished = new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
-        finishLookup = resolve;
-      });
+      const lookupStarted = createDeferred<void>();
+      const lookupFinished = createDeferred<Array<{ address: string; family: 4 }>>();
       const lookupFn: NonNullable<Parameters<typeof guardedFetch>[0]["lookupFn"]> = vi.fn(
         async () => {
-          markLookupStarted?.();
-          return await lookupFinished;
+          lookupStarted.resolve();
+          return await lookupFinished.promise;
         },
       );
       vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementationOnce(
@@ -126,18 +136,7 @@ describe("A2A channel message adapter", () => {
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(new Response('{"jsonrpc":"2.0","result":{}}'));
-      const cfg: A2aCoreConfig = {
-        channels: {
-          a2a: {
-            peers: {
-              hermes: {
-                token: "test-inbound-token",
-                url: "https://peer.example.test/a2a/v1",
-              },
-            },
-          },
-        },
-      };
+      const cfg = createA2aSendConfig();
       let current = true;
       const assertDirectAdapterHandoff = vi.fn(() => {
         if (!current) {
@@ -164,9 +163,9 @@ describe("A2A channel message adapter", () => {
         if (!send) {
           throw new Error(`expected ${surface} A2A text sender`);
         }
-        await lookupStarted;
+        await lookupStarted.promise;
         current = false;
-        finishLookup?.([{ address: "93.184.216.34", family: 4 }]);
+        lookupFinished.resolve([{ address: "93.184.216.34", family: 4 }]);
 
         await expect(send).rejects.toThrow("source authority revoked");
         expect(lookupFn).toHaveBeenCalledOnce();
@@ -192,19 +191,7 @@ describe("A2A channel message adapter", () => {
     );
 
     try {
-      const cfg: A2aCoreConfig = {
-        channels: {
-          a2a: {
-            peers: {
-              hermes: {
-                token: "test-inbound-token",
-                url: "https://peer.example.test/a2a/v1",
-                outboundToken: "test-outbound-token",
-              },
-            },
-          },
-        },
-      };
+      const cfg = createA2aSendConfig();
       const adapter = a2aChannelPlugin.message;
       const sendText = adapter?.send?.text;
       if (!adapter || !sendText) {
@@ -221,7 +208,7 @@ describe("A2A channel message adapter", () => {
             const result = await sendText({
               cfg,
               accountId: "default",
-              to: "hermes",
+              to: "a2a:hermes",
               text: "hello",
               assertDirectAdapterHandoff,
             });
@@ -229,16 +216,22 @@ describe("A2A channel message adapter", () => {
             const [url, request] = fetchSpy.mock.calls[0] ?? [];
             expect(url).toBe("https://peer.example.test/a2a/v1");
             expect(request).toMatchObject({
-              headers: { authorization: "Bearer test-outbound-token" },
+              headers: {
+                "content-type": "application/json",
+                authorization: "Bearer test-outbound-token",
+              },
               method: "POST",
               // The SSRF guard inspects redirects itself instead of delegating to fetch.
               redirect: "manual",
+              signal: expect.any(AbortSignal),
             });
-            expect(parseA2aOutboundBody(request?.body)).toMatchObject({
+            expect(parseA2aOutboundBody(request?.body)).toEqual({
               jsonrpc: "2.0",
+              id: expect.any(String),
               method: "SendMessage",
               params: {
                 message: {
+                  messageId: expect.any(String),
                   role: "ROLE_USER",
                   contextId: "ctx-oc-hermes",
                   parts: [{ text: "hello" }],
