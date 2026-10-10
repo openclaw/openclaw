@@ -1,4 +1,4 @@
-import { noChange, nothing, render } from "lit";
+import { noChange, nothing, render as renderLit } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import {
   MarkdownDomReconciler,
@@ -48,11 +48,11 @@ function markdownMediaRenderer(media?: MarkdownMedia): MarkdownDomMedia | undefi
       if (!item) {
         return undefined;
       }
-      const part = render(media.render(item, index), container);
+      const part = renderLit(media.render(item, index), container);
       return {
         setConnected: (connected) => part.setConnected(connected),
         dispose: () => {
-          render(nothing, container);
+          renderLit(nothing, container);
         },
       };
     },
