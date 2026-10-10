@@ -270,6 +270,7 @@ export class BoardWidgetFrameLifecycle {
           }
           <iframe
             class="board-widget__frame"
+            allow="fullscreen"
             style=${this.contentVisible ? "" : "opacity: 0"}
             ?inert=${!this.contentVisible}
             sandbox="allow-scripts allow-same-origin allow-forms"
@@ -311,6 +312,7 @@ export class BoardWidgetFrameLifecycle {
     return html`
       <iframe
         class="board-widget__frame"
+        allow="fullscreen"
         sandbox="allow-scripts"
         referrerpolicy="no-referrer"
         loading="lazy"

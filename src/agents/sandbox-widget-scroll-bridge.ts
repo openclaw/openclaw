@@ -22,8 +22,15 @@ export function buildSandboxWidgetScrollBridgeHtml(): string {
     if(!event.isTrusted||apply(sourceGetter,event,[])!==parent)return;
     const data=apply(dataGetter,event,[]);
     if(data?.type!=="openclaw:widget-board-host"||typeof data.nonce!=="string"||!data.nonce)return;
+    const firstHost=!nonce;
     nonce=data.nonce;
     apply(stop,event,[]);
+    if(firstHost){
+      // Contain margins in saved widget documents without rewriting their approved bytes.
+      const style=document.createElement("style");
+      style.textContent=":where(body){display:flow-root}";
+      document.head.prepend(style);
+    }
   },true);
   const remainder=(target,delta)=>{
     let value=delta;
