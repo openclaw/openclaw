@@ -75,7 +75,7 @@ export class TextareaTokenAnchor {
       textarea,
       tokenStart,
       (anchor) => {
-        overlay.bindTrigger(anchor);
+        overlay.bindTrigger(textarea);
         overlay.setReturnTarget(textarea);
         const unbind = bindOverlayAnchor(overlay.surface, anchor, "top-start");
         return {
@@ -119,7 +119,7 @@ export class TextareaTokenAnchor {
       this.anchor = document.createElement("span");
       this.anchor.setAttribute("aria-hidden", "true");
       this.anchor.style.cssText =
-        "position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none;";
+        "position:fixed;left:0;top:0;width:0;opacity:0;pointer-events:none;";
       document.body.append(this.mirror);
       // Named CSS anchors must share the native popup's tree scope.
       anchorParent.append(this.anchor);

@@ -163,7 +163,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         await hidden;
         expect(dialog.open).toBe(false);
       } finally {
-        await emulateOverlayMedia({ reducedMotion: null });
+        await emulateOverlayMedia({ forcedColors: "none", reducedMotion: "no-preference" });
       }
     },
   );

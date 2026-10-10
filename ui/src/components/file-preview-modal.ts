@@ -116,6 +116,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
                       class="close-button"
                       type="button"
                       aria-label=${t("common.close")}
+                      ?autofocus=${this.loading || Boolean(this.error) || !activeFile}
                       @click=${this.emitClose}
                     >
                       ${icons.x}
@@ -123,6 +124,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
                 : html`<span class="search-icon">⌕</span
                     ><input
                       class="search"
+                      autofocus
                       placeholder=${searchPlaceholder}
                       .value=${this.query}
                       @input=${this.handleQueryInput}
@@ -184,6 +186,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       class="item ${file.path === this.activeFile?.path ? "is-active" : ""}"
       data-path=${file.path}
       aria-current=${file.path === this.activeFile?.path ? "true" : "false"}
+      ?autofocus=${this.layout === "document" && file.path === this.activeFile?.path}
       @pointerdown=${this.preventItemPointerFocus}
       @mousedown=${this.preventItemPointerFocus}
       @click=${() => this.emitSelect(file.path)}
@@ -350,6 +353,12 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   };
 
   private focusModal() {
+    if (
+      !this.isConnected ||
+      !this.shadowRoot?.querySelector<HTMLDialogElement>("openclaw-modal-dialog > dialog")?.open
+    ) {
+      return;
+    }
     const target =
       this.searchInput ??
       this.shadowRoot?.querySelector<HTMLElement>(".item.is-active, .button") ??

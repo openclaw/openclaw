@@ -9,6 +9,10 @@ import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
+export function TooltipChildren(props: { children?: SolidJSX.Element }) {
+  return <>{props.children}</>;
+}
+
 export interface TooltipContentsProps extends TooltipPolicyProps {
   host: HTMLElement;
   contentTemplate?: SolidJSX.Element;
@@ -51,6 +55,7 @@ export function TooltipContents(props: TooltipContentsProps) {
     dismissOutsidePointer: false,
     dismissOutsideFocus: false,
     dismissEscape: false,
+    reflectTriggerExpanded: false,
     isValid: () => !currentProps.disabled && Boolean(controller?.trigger?.isConnected),
     acquireOcclusion: acquireNativeOverlaySurface,
     onInteraction: (event, target) => controller?.handleInteraction(event, target),
@@ -92,9 +97,7 @@ export function TooltipContents(props: TooltipContentsProps) {
         if (open && trigger) {
           overlay.setParent(findOverlayParent(trigger));
         }
-        if (trigger instanceof HTMLElement) {
-          overlay.setReturnTarget(trigger);
-        }
+        overlay.bindTrigger(trigger instanceof HTMLElement ? trigger : undefined);
         if (
           trigger &&
           (trigger !== anchoredTrigger || anchoredPlacement !== policy.resolvedPlacement)

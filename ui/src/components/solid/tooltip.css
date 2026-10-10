@@ -43,7 +43,7 @@ openclaw-tooltip-provider {
       allow-discrete;
 }
 
-.tooltip-surface:popover-open {
+.tooltip-surface:popover-open:where(:not([data-phase="closing"])) {
   opacity: 1;
   scale: 1;
   transition-duration: var(

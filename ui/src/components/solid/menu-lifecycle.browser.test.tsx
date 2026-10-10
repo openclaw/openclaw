@@ -37,7 +37,7 @@ describe("Solid menu branch lifetime", () => {
       vi.useRealTimers();
       await phase(surface("people-move"), "open");
       expect(surface("people-assign").matches(":popover-open")).toBe(false);
-      item("Engineering", "people-move").focus();
+      expect(document.activeElement).toBe(item("Engineering", "people-move"));
       await userEvent.keyboard(dir === "ltr" ? "{ArrowLeft}" : "{ArrowRight}");
       expect(document.activeElement).toBe(trigger("people-move"));
       await userEvent.keyboard("{ArrowDown}");
@@ -147,6 +147,10 @@ describe("Solid menu branch lifetime", () => {
 
   it("resolves a late document veto before retiring a branch or changing focus", async () => {
     const view = mountMenu();
+    const outside = document.createElement("input");
+    outside.setAttribute("aria-label", "Outside input");
+    Object.assign(outside.style, { position: "fixed", right: "8px", bottom: "8px" });
+    view.container.append(outside);
     await openMenu();
     await openMenu("people-assign");
     const veto = (event: Event) => event.preventDefault();
@@ -157,14 +161,14 @@ describe("Solid menu branch lifetime", () => {
       expect(surface("people-assign").matches(":popover-open")).toBe(true);
       expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
       expect(surface("people-assign").inert).toBe(false);
-      await userEvent.click(view.getByRole("button", { name: "After menu" }));
+      await userEvent.click(outside);
       expect(openSurfaces()).toHaveLength(2);
-      expect(document.activeElement).toBe(view.getByRole("button", { name: "After menu" }));
+      expect(document.activeElement).toBe(outside);
     } finally {
       document.removeEventListener("overlay-hide", veto);
     }
     trigger("people-assign").focus();
-    await userEvent.click(view.getByRole("button", { name: "After menu" }));
+    await userEvent.click(outside);
     await phase(surface(), "hidden");
     expect(openSurfaces()).toHaveLength(0);
   });

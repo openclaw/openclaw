@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import {
-  createOverlayAnchor,
-  getOverlayAnchorSource,
-  type OverlayAnchorBinding,
-} from "./overlay-anchor.ts";
+import { createOverlayAnchor, type OverlayAnchorBinding } from "./overlay-anchor.ts";
 import { createOverlay, type Overlay } from "./overlay-lifecycle.ts";
 
 const owners: Overlay[] = [];
@@ -82,6 +78,16 @@ function expectAnchored(surface: HTMLElement, element: Element) {
   expect(Math.abs(target.top - source.bottom - 6)).toBeLessThan(1);
 }
 
+function spatialSource(surface: HTMLElement) {
+  const root = surface.getRootNode();
+  const container = root instanceof ShadowRoot ? root : document;
+  const source = container.querySelector<HTMLElement>('span[popover="manual"][aria-hidden="true"]');
+  if (!source) {
+    throw new Error("Expected the active spatial anchor");
+  }
+  return source;
+}
+
 describe("native cross-root anchor geometry", () => {
   it.each([
     { direction: "shadow-anchor", svg: false, mode: "open" },
@@ -101,9 +107,9 @@ describe("native cross-root anchor geometry", () => {
       current.binding.update(element, "bottom");
       await open(current.owner);
       expectAnchored(current.surface, element);
-      const source = getOverlayAnchorSource(current.surface)!;
-      expect(source.getRootNode()).toBe(document);
-      expect(source.parentElement).toBe(document.body);
+      const source = spatialSource(current.surface);
+      expect(source.getRootNode()).toBe(current.surface.getRootNode());
+      expect(source.matches(":popover-open")).toBe(true);
       element.style.left = "240px";
       await frame();
       expectAnchored(current.surface, element);
@@ -112,6 +118,7 @@ describe("native cross-root anchor geometry", () => {
       });
       current.owner.request(false);
       await hidden;
+      expect(source.matches(":popover-open")).toBe(false);
       const left = source.style.left;
       element.style.left = "340px";
       await frame();
@@ -131,12 +138,14 @@ describe("native cross-root anchor geometry", () => {
     let shown = 0;
     current.surface.addEventListener("overlay-after-show", () => shown++);
     await open(current.owner);
-    const source = getOverlayAnchorSource(current.surface);
+    const source = spatialSource(current.surface);
     expect(current.surface.style.getPropertyValue("position-anchor")).not.toBe("auto");
     expectAnchored(current.surface, first);
     current.binding.update(second, "bottom");
-    expect(getOverlayAnchorSource(current.surface)).toBe(source);
-    expect(current.surface.style.getPropertyValue("position-anchor")).toBe("auto");
+    expect(spatialSource(current.surface)).toBe(source);
+    expect(current.surface.style.getPropertyValue("position-anchor")).toBe(
+      source.style.getPropertyValue("anchor-name"),
+    );
     expectAnchored(current.surface, second);
     expect(current.owner.open).toBe(true);
     expect(current.owner.phase).toBe("open");
@@ -144,7 +153,7 @@ describe("native cross-root anchor geometry", () => {
     expect(first.style.getPropertyValue("anchor-name")).toBe("--author-anchor");
   });
 
-  it("paints and delivers a real click when its implicit source is an invisible proxy", async () => {
+  it("paints and delivers a real click with an invisible spatial proxy and SVG anchor", async () => {
     const element = anchor(shadow("closed"), true);
     const current = popup(document.body);
     const action = document.createElement("button");
@@ -160,5 +169,68 @@ describe("native cross-root anchor geometry", () => {
     await userEvent.click(action);
     expect(clicks).toBe(1);
     expect(current.owner.open).toBe(true);
+  });
+
+  it("keeps native Tab entry and exit tied to the real invoker across shadow roots", async () => {
+    const trigger = document.createElement("input");
+    const next = document.createElement("input");
+    document.body.append(trigger, next);
+    nodes.push(trigger, next);
+    const current = popup(shadow("closed"));
+    const input = document.createElement("input");
+    current.surface.append(input);
+    current.owner.bindTrigger(trigger);
+    current.binding.update(trigger);
+    await open(current.owner);
+    trigger.focus();
+    await userEvent.keyboard("{Tab}");
+    expect(current.surface.getRootNode()).toBe(input.getRootNode());
+    expect((input.getRootNode() as ShadowRoot).activeElement).toBe(input);
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement).toBe(next);
+  });
+
+  it.each(["proposal", "native"] as const)("cleans up a %s opening veto", (veto) => {
+    const current = popup(shadow("closed"));
+    current.binding.update(anchor(document.body));
+    current.surface.addEventListener(
+      veto === "proposal" ? "overlay-show" : "beforetoggle",
+      (event) => event.preventDefault(),
+    );
+    expect(current.owner.request(true)).toBe(false);
+    expect(current.owner.open).toBe(false);
+    expect(current.owner.phase).toBe("hidden");
+    const root = current.surface.getRootNode() as ShadowRoot;
+    expect(root.querySelector(":popover-open")).toBeNull();
+    if (veto === "proposal") {
+      expect(root.querySelector('[aria-hidden="true"]')).toBeNull();
+    }
+  });
+
+  it("retains its spatial anchor through a held closing animation and disposes it on teardown", async () => {
+    const current = popup(shadow("closed"));
+    const element = anchor(document.body);
+    current.binding.update(element, "bottom");
+    await open(current.owner);
+    const source = spatialSource(current.surface);
+    const animation = current.surface.animate({ opacity: [1, 0] }, { duration: 60_000 });
+    animation.pause();
+    try {
+      expect(current.owner.request(false)).toBe(true);
+      await frame();
+      expect(current.owner.open).toBe(false);
+      expect(current.owner.phase).toBe("closing");
+      expect(current.surface.inert).toBe(true);
+      expect(current.surface.matches(":popover-open")).toBe(true);
+      expect(source.matches(":popover-open")).toBe(true);
+      expectAnchored(current.surface, element);
+      current.owner.dispose();
+      expect(source.matches(":popover-open")).toBe(false);
+      expect(current.surface.matches(":popover-open")).toBe(false);
+      current.binding.dispose();
+      expect(source.isConnected).toBe(false);
+    } finally {
+      animation.cancel();
+    }
   });
 });

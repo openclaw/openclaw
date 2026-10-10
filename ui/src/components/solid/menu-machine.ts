@@ -111,9 +111,13 @@ export function useMenuMachine(
         focusMenu() {},
         focusParentMenu() {},
         setIntentPolygon(params) {
+          const trigger = overlay.trigger;
+          if (!trigger) {
+            return;
+          }
           // Geometry reads serve pointer intent only; CSS owns every placement write.
           const box = overlay.surface.getBoundingClientRect();
-          const anchor = overlay.trigger.getBoundingClientRect();
+          const anchor = trigger.getBoundingClientRect();
           params.context.set("currentPlacement", box.x < anchor.x ? "left-start" : "right-start");
           machine.implementations?.actions?.setIntentPolygon?.(params);
         },
@@ -134,13 +138,22 @@ export function useMenuMachine(
     closeOnSelect: false,
     "aria-label": overlay.id,
     onOpenChange({ open }) {
-      if (open && (!overlay.trigger.isConnected || (overlay.parent && !overlay.parent.open))) {
+      if (open && (!overlay.trigger?.isConnected || (overlay.parent && !overlay.parent.open))) {
         service.send({ type: "CONTROLLED.CLOSE" });
         return;
       }
       const restore = !open && containsComposed(overlay.surface, service.scope.getActiveElement());
+      // Native sibling dismissal must not leave focus behind in the retired branch.
+      const handoff =
+        open &&
+        [...(overlay.parent?.children ?? [])].some(
+          (sibling) => sibling !== overlay && sibling.open && sibling.containsFocus(),
+        );
       if (
-        !overlay.request(open, open && focusFromKeyboard ? "first" : restore ? "return" : "none")
+        !overlay.request(
+          open,
+          open && (focusFromKeyboard || handoff) ? "first" : restore ? "return" : "none",
+        )
       ) {
         service.send({ type: overlay.open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE" });
       }
@@ -244,7 +257,8 @@ export function useMenuMachine(
           (result.onKeyDown as ((e: KeyboardEvent) => void) | undefined)?.(e);
         },
         onPointerMove: (event: PointerEvent) => {
-          if (disabled || !parentBinding || event.pointerType !== "mouse") {
+          const trigger = overlay.trigger;
+          if (disabled || !parentBinding || !trigger || event.pointerType !== "mouse") {
             return;
           }
           focusFromKeyboard = false;
@@ -272,14 +286,14 @@ export function useMenuMachine(
             parent.refs.set("pointerRoutingLocked", false);
             parent.context.set("pointerRoutingMode", "interactive");
           }
-          const item = parentBinding.read().getItemProps({ value: overlay.trigger.id });
+          const item = parentBinding.read().getItemProps({ value: trigger.id });
           (item.onPointerMove as ((e: PointerEvent) => void) | undefined)?.(event);
           // The document pointer listener releases the old child's corridor lock.
           // Decide child opening after that same event, rather than dropping it.
           queueMicrotask(() => {
             if (
               overlay.trigger !== target ||
-              !overlay.trigger.isConnected ||
+              !overlay.trigger?.isConnected ||
               !overlay.parent?.open ||
               overlay.parent.revision !== parentRevision
             ) {

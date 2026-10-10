@@ -297,8 +297,8 @@
   transform: scaleX(-1);
 }
 
-.oc-menu:popover-open,
-.oc-popover:popover-open {
+.oc-menu:popover-open:where(:not([data-phase="closing"])),
+.oc-popover:popover-open:where(:not([data-phase="closing"])) {
   opacity: 1;
   scale: 1;
   transition-duration: var(--oc-overlay-show-duration, var(--control-ui-transition-fast));

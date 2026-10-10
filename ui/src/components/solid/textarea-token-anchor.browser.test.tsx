@@ -50,6 +50,30 @@ function mountCaret(value: string, container?: HTMLElement) {
   return { menu, textarea };
 }
 
+function caretPoint(surface: HTMLElement) {
+  const root = surface.getRootNode();
+  const container = root instanceof ShadowRoot ? root : document;
+  const name = surface.style.getPropertyValue("position-anchor");
+  const point = [...container.querySelectorAll<HTMLElement>("[aria-hidden]")].find((element) =>
+    element.style.getPropertyValue("anchor-name").split(/,\s*/u).includes(name),
+  );
+  if (!point) {
+    throw new Error("Expected the menu's measured caret anchor");
+  }
+  return point;
+}
+
+function expectMenuHit(menu: MenuHandle) {
+  const item = menu.overlay.surface.querySelector<HTMLButtonElement>("[role=menuitem]")!;
+  const bounds = item.getBoundingClientRect();
+  const root = item.getRootNode();
+  const hit = (root instanceof ShadowRoot ? root : document).elementFromPoint(
+    bounds.left + bounds.width / 2,
+    bounds.top + bounds.height / 2,
+  );
+  expect(item.contains(hit), "the visible caret menu item receives pointer input").toBe(true);
+}
+
 it("positions a native menu at the measured caret and returns focus to the editor", async () => {
   const { menu, textarea } = mountCaret("hello @person");
   anchor = new TextareaTokenAnchor(() => anchor?.close());
@@ -57,7 +81,8 @@ it("positions a native menu at the measured caret and returns focus to the edito
   anchor.updateNative(menu.overlay, textarea, 6);
   await expect.poll(() => menu.overlay.open).toBe(true);
   await phase(menu.overlay.surface, "open");
-  const point = menu.overlay.trigger.getBoundingClientRect();
+  expect(menu.overlay.trigger).toBe(textarea);
+  const point = caretPoint(menu.overlay.surface).getBoundingClientRect();
   const editor = textarea.getBoundingClientRect();
   expect(point.left).toBeGreaterThan(editor.left);
   expect(point.left).toBeLessThan(editor.right);
@@ -66,6 +91,7 @@ it("positions a native menu at the measured caret and returns focus to the edito
   expect(menu.overlay.surface.style.getPropertyValue("position-anchor")).not.toBe("");
   expect(menu.overlay.surface.style.left).toBe("");
   expect(menu.overlay.surface.style.top).toBe("");
+  expectMenuHit(menu);
   menu.overlay.surface.querySelector<HTMLButtonElement>("[role=menuitem]")!.focus();
   menu.overlay.request(false, "return");
   expect(document.activeElement).toBe(textarea);
@@ -78,7 +104,7 @@ it("retires the native menu when its token scrolls outside the textarea", async 
   anchor = new TextareaTokenAnchor(() => anchor?.close());
   anchor.updateNative(menu.overlay, textarea, 0);
   await expect.poll(() => menu.overlay.open).toBe(true);
-  const point = menu.overlay.trigger;
+  const point = caretPoint(menu.overlay.surface);
   textarea.scrollTop = textarea.scrollHeight;
   textarea.dispatchEvent(new Event("scroll"));
   await expect.poll(() => menu.overlay.open).toBe(false);
@@ -99,7 +125,8 @@ it.each(["open", "closed"] as const)(
     textarea.focus();
     anchor.updateNative(menu.overlay, textarea, 6);
     await phase(menu.overlay.surface, "open");
-    const point = menu.overlay.trigger;
+    expect(menu.overlay.trigger).toBe(textarea);
+    const point = caretPoint(menu.overlay.surface);
     const pointBox = point.getBoundingClientRect();
     const menuBox = menu.overlay.surface.getBoundingClientRect();
     expect(point.getRootNode()).toBe(root);
@@ -108,6 +135,7 @@ it.each(["open", "closed"] as const)(
     expect(menuBox.height).toBeGreaterThan(0);
     expect(Math.abs(menuBox.left - pointBox.left)).toBeLessThan(1);
     expect(menuBox.bottom).toBeLessThanOrEqual(pointBox.top);
+    expectMenuHit(menu);
     menu.overlay.surface.querySelector<HTMLButtonElement>("[role=menuitem]")!.focus();
     menu.overlay.request(false, "return");
     expect(root.activeElement).toBe(textarea);

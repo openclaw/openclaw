@@ -1,4 +1,4 @@
-import { getOverlayAnchorSource } from "./overlay-anchor.ts";
+import { hideOverlayAnchor, showOverlayAnchor } from "./overlay-anchor.ts";
 import {
   branchRevision,
   containsComposed,
@@ -24,6 +24,8 @@ export interface OverlayNativeAdapter {
 
 export interface OverlayOptions {
   native?: OverlayNativeAdapter;
+  /** Tooltips describe their invoker without exposing expandable-control semantics. */
+  reflectTriggerExpanded?: boolean;
   /** Only members of the same group displace one another. Dialogs have no group. */
   exclusiveGroup?: string;
   isValid?(surface: HTMLElement, trigger?: HTMLElement): boolean;
@@ -47,7 +49,7 @@ export interface Overlay {
   readonly parent?: Overlay;
   readonly children: Set<Overlay>;
   readonly surface: HTMLElement;
-  readonly trigger: HTMLElement;
+  readonly trigger: HTMLElement | undefined;
   /** Accepted state is synchronous; phase tracks the remaining presentation work. */
   readonly open: boolean;
   readonly phase: OverlayPhase;
@@ -57,7 +59,7 @@ export interface Overlay {
   retire(): void;
   /** Bind after mounting so subscriptions use the live document, not a template document. */
   bindSurface(node: HTMLElement): void;
-  bindTrigger(node: HTMLElement): void;
+  bindTrigger(node: HTMLElement | undefined): void;
   setParent(parent?: Overlay): void;
   setReturnTarget(node: HTMLElement): void;
   subscribe(listener: (open: boolean) => void): () => void;
@@ -71,8 +73,14 @@ export interface Overlay {
 export const popoverOverlayAdapter: OverlayNativeAdapter = {
   isOpen: (surface) => surface.matches(":popover-open"),
   show: (surface, source) => {
-    const anchor = getOverlayAnchorSource(surface) ?? source;
-    surface.showPopover(anchor ? { source: anchor } : undefined);
+    showOverlayAnchor(surface);
+    try {
+      surface.showPopover(source ? { source } : undefined);
+    } finally {
+      if (!surface.matches(":popover-open")) {
+        hideOverlayAnchor(surface);
+      }
+    }
   },
   hide: (surface) => surface.hidePopover(),
 };
@@ -85,7 +93,7 @@ export function createOverlay(
   let parent = initialParent;
   const native = options.native ?? popoverOverlayAdapter;
   let surface: HTMLElement;
-  let trigger: HTMLElement;
+  let trigger: HTMLElement | undefined;
   let returnTarget: HTMLElement | undefined;
   let registry: OverlayRegistry;
   let unregister: (() => void) | undefined;
@@ -203,13 +211,16 @@ export function createOverlay(
       }
       if (!opened) {
         notifyClosed();
-        if (surface && (!surface.isConnected || phase !== "closing")) {
+        if (surface && (disposed || !surface.isConnected || phase !== "closing")) {
+          if (native.isOpen(surface)) {
+            setNativeOpen(false);
+          }
           setPhase("hidden");
         }
         return;
       }
       setPhase("closing");
-      if (native.isOpen(surface)) {
+      if (native.isOpen(surface) && (disposed || !hasPendingPresentation())) {
         setNativeOpen(false);
       }
       if (requested !== intent) {
@@ -260,9 +271,13 @@ export function createOverlay(
       if (trigger === node) {
         return;
       }
-      trigger?.setAttribute("aria-expanded", "false");
+      if (options.reflectTriggerExpanded !== false) {
+        trigger?.setAttribute("aria-expanded", "false");
+      }
       trigger = node;
-      trigger.setAttribute("aria-expanded", String(opened));
+      if (options.reflectTriggerExpanded !== false) {
+        trigger?.setAttribute("aria-expanded", String(opened));
+      }
       if (registry) {
         refreshOverlayRoots(registry, api);
       }
@@ -438,7 +453,9 @@ export function createOverlay(
           return false;
         }
         setPhase("closing");
-        setNativeOpen(false);
+        if (!hasPendingPresentation()) {
+          setNativeOpen(false);
+        }
         children.forEach((child) => child.retire());
         if (requested !== intent) {
           const reopen = intentTarget;
@@ -491,7 +508,7 @@ export function createOverlay(
     nativeMutation = true;
     try {
       if (next) {
-        native.show(surface, returnTarget ?? trigger);
+        native.show(surface, trigger);
       } else {
         options.beforeNativeHide?.();
         native.hide(surface);
@@ -519,6 +536,7 @@ export function createOverlay(
     surface.dataset.phase = next;
     surface.inert = next === "closing" || next === "hidden";
     if (next === "hidden") {
+      hideOverlayAnchor(surface);
       releaseOcclusion?.();
       releaseOcclusion = undefined;
     }
@@ -535,13 +553,28 @@ export function createOverlay(
       orderStack(registry);
     }
     surface.inert = !next;
-    trigger?.setAttribute("aria-expanded", String(next));
+    if (options.reflectTriggerExpanded !== false) {
+      trigger?.setAttribute("aria-expanded", String(next));
+    }
     listeners.forEach((listener) => listener(next));
   }
   function propose(name: string) {
     return surface.dispatchEvent(
       new CustomEvent(name, { bubbles: true, composed: true, cancelable: true }),
     );
+  }
+  function pendingPresentation() {
+    return surface.getAnimations().filter((animation) => {
+      const end = animation.effect?.getComputedTiming().endTime;
+      return (
+        ["running", "paused"].includes(animation.playState) &&
+        typeof end === "number" &&
+        Number.isFinite(end)
+      );
+    });
+  }
+  function hasPendingPresentation() {
+    return pendingPresentation().length > 0;
   }
   function complete(next: boolean, token: number) {
     const currentSurface = surface;
@@ -558,19 +591,27 @@ export function createOverlay(
         return;
       }
       // An unrelated spinner must not prevent the overlay from settling forever.
-      const animations = currentSurface.getAnimations().filter((animation) => {
-        const end = animation.effect?.getComputedTiming().endTime;
-        const pending = ["running", "paused"].includes(animation.playState);
-        return pending && typeof end === "number" && Number.isFinite(end);
-      });
+      const animations = pendingPresentation();
       void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
         if (
           token !== generation ||
           disposed ||
           !currentSurface.isConnected ||
-          currentSurface !== surface ||
-          native.isOpen(surface) !== next
+          currentSurface !== surface
         ) {
+          return;
+        }
+        if (!next && native.isOpen(surface)) {
+          setNativeOpen(false);
+          children.forEach((child) => child.retire());
+          if (token !== generation || disposed) {
+            if (!disposed && intentTarget) {
+              api.request(true, intentFocus);
+            }
+            return;
+          }
+        }
+        if (native.isOpen(surface) !== next) {
           return;
         }
         setPhase(next ? "open" : "hidden");
@@ -583,6 +624,11 @@ export function createOverlay(
       return;
     }
     const next = native.isOpen(surface);
+    // Accepted close authority is already false while its finite exit still
+    // needs the native top layer. Reconciliation must not turn that into a reopen.
+    if (phase === "closing" && !opened && next) {
+      return;
+    }
     surface.inert = !next;
     if (next === opened) {
       return;

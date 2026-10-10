@@ -24,7 +24,8 @@ export interface OverlayAnchorBinding {
 type SurfaceAnchor = {
   update(binding: Binding): void;
   remove(binding: Binding): void;
-  source(): HTMLElement | undefined;
+  show(): void;
+  hide(): void;
 };
 
 let nextAnchor = 0;
@@ -81,7 +82,9 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
   const doc = surface.ownerDocument;
   const win = doc.defaultView;
   let source: HTMLSpanElement | undefined;
+  let presented = false;
   let frame: number | undefined;
+  const sourceName = `--oc-overlay-spatial-${++nextAnchor}`;
   const current = () => bindings.findLast((binding) => binding.anchor);
   const crossRoot = (binding: Binding) => binding.anchor?.getRootNode() !== surface.getRootNode();
   const measure = (anchor: AnchorElement) => {
@@ -106,7 +109,7 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
     if (!binding?.anchor) {
       return;
     }
-    const positionAnchor = crossRoot(binding) ? "auto" : binding.name;
+    const positionAnchor = crossRoot(binding) ? sourceName : binding.name;
     if (surface.style.getPropertyValue("position-anchor") !== positionAnchor) {
       surface.style.setProperty("position-anchor", positionAnchor);
     }
@@ -129,32 +132,13 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
     }
     frame = win.requestAnimationFrame(() => {
       frame = undefined;
-      if (!surface.isConnected || !surface.matches(":popover-open")) {
+      if (!surface.isConnected || !presented) {
         return;
       }
       apply();
       schedule();
     });
   };
-  const beforeToggle = (event: Event) => {
-    if (event.target === surface && (event as ToggleEvent).newState === "open") {
-      apply();
-      schedule();
-    }
-  };
-  const toggle = (event: Event) => {
-    if (event.target !== surface) {
-      return;
-    }
-    if (surface.matches(":popover-open")) {
-      apply();
-      schedule();
-    } else {
-      stop();
-    }
-  };
-  surface.addEventListener("beforetoggle", beforeToggle);
-  surface.addEventListener("toggle", toggle);
   const state: SurfaceAnchor = {
     update(binding) {
       const index = bindings.indexOf(binding);
@@ -163,7 +147,7 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       }
       bindings.push(binding);
       apply();
-      if (surface.matches(":popover-open")) {
+      if (presented) {
         schedule();
       }
     },
@@ -177,8 +161,6 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
         return;
       }
       stop();
-      surface.removeEventListener("beforetoggle", beforeToggle);
-      surface.removeEventListener("toggle", toggle);
       source?.remove();
       surfaces.delete(surface);
       if (original) {
@@ -192,27 +174,48 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
         surface.dataset.placement = oldPlacement;
       }
     },
-    source() {
+    show() {
       if (!current()?.anchor) {
-        return undefined;
+        return;
       }
       if (!source) {
         source = doc.createElement("span");
         source.setAttribute("aria-hidden", "true");
-        // Hidden implicit anchors suppress native popup painting and hit testing.
+        source.popover = "manual";
+        // A spatial proxy has no focus or dismissal policy. Its top-layer box
+        // escapes transformed ancestors while its name stays in the surface's root.
         source.style.cssText =
-          "position:fixed;left:0;top:0;width:0;height:0;margin:0;padding:0;border:0;opacity:0;pointer-events:none;";
-        doc.body.append(source);
+          "position:fixed;inset:auto;left:0;top:0;width:0;height:0;margin:0;padding:0;border:0;opacity:0;pointer-events:none;";
+        source.style.setProperty("anchor-name", sourceName);
+      }
+      const root = surface.getRootNode();
+      if (source.getRootNode() !== root) {
+        (root instanceof ShadowRoot ? root : doc.body).prepend(source);
       }
       apply();
-      return source;
+      if (!source.matches(":popover-open")) {
+        source.showPopover();
+      }
+      if (!source.matches(":popover-open")) {
+        throw new DOMException("Overlay spatial anchor could not open", "InvalidStateError");
+      }
+      presented = true;
+      apply();
+      schedule();
+    },
+    hide() {
+      presented = false;
+      stop();
+      if (source?.matches(":popover-open")) {
+        source.hidePopover();
+      }
     },
   };
   surfaces.set(surface, state);
   return state;
 }
 
-/** A stable native source preserves live reanchoring across document/shadow roots. */
+/** A stable spatial anchor preserves live reanchoring across document/shadow roots. */
 export function createOverlayAnchor(surface: HTMLElement): OverlayAnchorBinding {
   const state = surfaces.get(surface) ?? createSurfaceAnchor(surface);
   const binding: Binding = { name: `--oc-overlay-${++nextAnchor}`, placement: "bottom-start" };
@@ -260,7 +263,12 @@ export function bindOverlayAnchor(
   return () => binding.dispose();
 }
 
-/** Only the native popover adapter consumes this source; focus uses the real trigger. */
-export function getOverlayAnchorSource(surface: HTMLElement): HTMLElement | undefined {
-  return surfaces.get(surface)?.source();
+/** Called only after opening authority is accepted, before the visible surface opens. */
+export function showOverlayAnchor(surface: HTMLElement): void {
+  surfaces.get(surface)?.show();
+}
+
+/** Exit transitions still need geometry after the native surface begins hiding. */
+export function hideOverlayAnchor(surface: HTMLElement): void {
+  surfaces.get(surface)?.hide();
 }

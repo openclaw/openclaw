@@ -31,7 +31,7 @@ afterEach(async () => {
       root.setAttribute(name, value);
     }
   }
-  await emulateOverlayMedia({ forcedColors: null, reducedMotion: null });
+  await emulateOverlayMedia({ forcedColors: "none", reducedMotion: "no-preference" });
   await page.viewport(originalWidth, originalHeight);
 });
 
@@ -116,12 +116,18 @@ describe("native overlay presentation", () => {
       ).toBe(tokenColor("muted"));
       expect(getComputedStyle(item("Open")).fontWeight, theme).toBe("400");
       expect(getComputedStyle(surface().querySelector("h3")!).fontWeight, theme).toBe("500");
-      expect(
-        getComputedStyle(item("Open"))
-          .transitionDuration.split(",")
-          .every((duration) => duration.trim() === "0.075s"),
+      const itemStyle = getComputedStyle(item("Open"));
+      const motionContext = JSON.stringify({
         theme,
-      ).toBe(true);
+        duration: itemStyle.transitionDuration,
+        property: itemStyle.transitionProperty,
+        token: itemStyle.getPropertyValue("--control-ui-transition-fast"),
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      });
+      for (const duration of itemStyle.transitionDuration.split(",")) {
+        const seconds = Number.parseFloat(duration) / (duration.trim().endsWith("ms") ? 1000 : 1);
+        expect(seconds, motionContext).toBeCloseTo(0.075, 6);
+      }
       const rootFontSize = Number.parseFloat(getComputedStyle(root).fontSize);
       const focused = getComputedStyle(child);
       expect(focused.outlineStyle, theme).toBe("solid");

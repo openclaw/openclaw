@@ -63,6 +63,7 @@ function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "me
 /** Menus share native visibility authority; Zag owns navigation and pointer intent. */
 export function Menu(props: BranchProps): JSX.Element {
   let mounted = false;
+  let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const identity = untrack(() => ({
@@ -142,16 +143,16 @@ export function Menu(props: BranchProps): JSX.Element {
   );
   createEffect(placement, (value) => {
     if (mounted) {
-      anchorBinding?.update(overlay.trigger, value);
+      anchorBinding?.update(trigger, value);
     }
   });
   onSettled(() => {
     mounted = true;
     if (!identity.parent) {
-      overlay.setParent(findOverlayParent(overlay.trigger));
+      overlay.setParent(findOverlayParent(trigger));
     }
     anchorBinding = createOverlayAnchor(overlay.surface);
-    anchorBinding.update(overlay.trigger, placement());
+    anchorBinding.update(trigger, placement());
     const stopOpen = overlay.subscribe((open) => {
       openPublication += 1;
       setOpened(open);
@@ -222,7 +223,10 @@ export function Menu(props: BranchProps): JSX.Element {
     <div class={props.class} dir={direction()}>
       <button
         {...binding.trigger(identity.binding, props.disabled)}
-        ref={(node) => overlay.bindTrigger(node)}
+        ref={(node) => {
+          trigger = node;
+          overlay.bindTrigger(node);
+        }}
         type="button"
         id={`${identity.id}:trigger`}
         class={[

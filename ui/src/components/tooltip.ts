@@ -2,7 +2,7 @@ import { render as renderSolid } from "@solidjs/web";
 import { nothing, render as renderLit, type TemplateResult } from "lit";
 import { createComponent, createEffect, createMemo, getOwner, onCleanup } from "solid-js";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { TooltipContents, type NativeTooltipHandle } from "./solid/tooltip.tsx";
+import { TooltipChildren, TooltipContents, type NativeTooltipHandle } from "./solid/tooltip.tsx";
 import {
   TooltipProvider,
   consumeTooltipEscape,
@@ -107,7 +107,11 @@ export const Tooltip = defineSolidBridge<TooltipProps, TooltipMethods>(
     );
     onCleanup(dispose);
     // The caller's Lit parts retain one intact range, including all slot attributes.
-    return () => props.children;
+    return createComponent(TooltipChildren, {
+      get children() {
+        return props.children;
+      },
+    });
   },
   {
     properties: {
