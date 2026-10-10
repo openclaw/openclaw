@@ -436,9 +436,13 @@ async function startMcpLoopbackServer(
               withGatewayToolCallerIdentity(callerIdentity, () =>
                 runWithTrackedCancellation(requestAbort.signal, handleRequest),
               );
-            response = await (runRequestScope
-              ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
-              : handleAsCaller());
+            const runTool = () =>
+              runRequestScope
+                ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+                : handleAsCaller();
+            response = boundClientGrant
+              ? await boundClientGrant.runInContinuation(runTool)
+              : await runTool();
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }

@@ -25,6 +25,10 @@ import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
+import {
+  retainGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../process/gateway-work-admission.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
@@ -139,6 +143,8 @@ type McpLoopbackToolAuth = {
 
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
+  /** Host-only originating turn admission across fresh HTTP callbacks. */
+  rootContinuation?: GatewayRootWorkAdmissionContinuationScope;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
   /** Live reply participants remain host-owned across CLI fallback and HTTP callbacks. */
@@ -264,7 +270,10 @@ function sweepExpiredAttachGrants(nowMs: number = Date.now()): void {
 }
 
 export function mintMcpLoopbackClientGrant(
-  params: Omit<StoredMcpLoopbackClientGrant, "token" | "activeCaptureKey" | "assertCaptureCurrent">,
+  params: Omit<
+    StoredMcpLoopbackClientGrant,
+    "token" | "activeCaptureKey" | "assertCaptureCurrent" | "rootContinuation"
+  >,
 ): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
   if (!sessionKey) {
@@ -290,6 +299,7 @@ export function mintMcpLoopbackClientGrant(
     skillLibraryAuthoring: params.skillLibraryAuthoring,
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
+  grant.rootContinuation = retainGatewayRootWorkAdmissionContinuationScope() ?? undefined;
   clientGrantsByToken.set(grant.token, grant);
   return structuredClone({
     token: grant.token,
@@ -362,6 +372,8 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   }
   let activeGrant = {
     ...grant,
+    rootContinuation:
+      grant.rootContinuation ?? retainGatewayRootWorkAdmissionContinuationScope() ?? undefined,
     activeCaptureKey: captureKey,
     assertCaptureCurrent: params.assertCurrent,
     context: {
@@ -417,9 +429,11 @@ export function deactivateMcpLoopbackClientGrantCapture(params: {
   const {
     activeCaptureKey: _activeCaptureKey,
     assertCaptureCurrent: _assertCaptureCurrent,
+    rootContinuation,
     ...inactiveGrant
   } = grant;
   replaceMcpLoopbackClientGrant(inactiveGrant);
+  rootContinuation?.release();
   return true;
 }
 
@@ -449,6 +463,7 @@ export function transferMcpLoopbackClientGrant(params: {
     assertCaptureCurrent: _assertCaptureCurrent,
     ...inactiveSource
   } = source;
+  target?.rootContinuation?.release();
   clientGrantsByToken.set(params.targetToken, {
     ...inactiveSource,
     token: params.targetToken,
@@ -485,6 +500,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
       isCurrent: () => boolean;
+      runInContinuation: <T>(run: () => Promise<T>) => Promise<T>;
       toolAuth?: McpLoopbackToolAuth;
     }
   | undefined {
@@ -535,6 +551,12 @@ export function resolveMcpLoopbackClientGrant(params: {
     questionAnswerAuthority,
     skillLibraryAuthoring: grant.skillLibraryAuthoring,
     isCurrent,
+    runInContinuation: async (run) => {
+      if (!isCurrent()) {
+        throw new Error("CLI MCP grant is no longer active");
+      }
+      return grant.rootContinuation ? await grant.rootContinuation.run(run) : await run();
+    },
 
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
@@ -553,6 +575,7 @@ export function revokeMcpLoopbackClientGrant(token: string): boolean {
   if (!grant || !clientGrantsByToken.delete(token)) {
     return false;
   }
+  grant.rootContinuation?.release();
   // Revocation must also release server-owned projections whose closures retain
   // this grant's prepared credentials.
   notifyMcpLoopbackClientGrantRevoked({ token, runtimeOwnerToken: grant.runtimeOwnerToken });

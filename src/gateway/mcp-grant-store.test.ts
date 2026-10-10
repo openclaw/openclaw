@@ -5,6 +5,10 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import {
+  getActiveGatewayRootWorkCount,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import {
   activateMcpLoopbackClientGrantCapture,
@@ -48,6 +52,120 @@ describe("mcp-grant-store", () => {
   afterEach(() => {
     for (const admission of admissions.splice(0)) {
       admission.close();
+    }
+  });
+
+  it("moves a warm CLI bearer without retaining the previous turn's root", async () => {
+    const oldRoot = tryBeginGatewayRootWorkAdmission("old-cli-turn");
+    const newRoot = tryBeginGatewayRootWorkAdmission("new-cli-turn");
+    if (!oldRoot || !newRoot) {
+      throw new Error("expected accepting admission");
+    }
+    let target: string | undefined;
+    let source: string | undefined;
+    try {
+      target = (
+        await oldRoot.run(async () =>
+          mintMcpLoopbackClientGrant({
+            runtimeOwnerToken: "runtime-one",
+            context: { sessionKey: "agent:main:warm", senderIsOwner: false },
+          }),
+        )
+      ).token;
+      source = (
+        await newRoot.run(async () =>
+          mintMcpLoopbackClientGrant({
+            runtimeOwnerToken: "runtime-one",
+            context: { sessionKey: "agent:main:warm", senderIsOwner: false },
+          }),
+        )
+      ).token;
+      oldRoot.release();
+      newRoot.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(
+        transferMcpLoopbackClientGrant({
+          sourceToken: source,
+          targetToken: target,
+          runtimeOwnerToken: "runtime-one",
+        }),
+      ).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(revokeMcpLoopbackClientGrant(source)).toBe(false);
+      expect(revokeMcpLoopbackClientGrant(target)).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      if (target) {
+        revokeMcpLoopbackClientGrant(target);
+      }
+      if (source) {
+        revokeMcpLoopbackClientGrant(source);
+      }
+      oldRoot.release();
+      newRoot.release();
+    }
+  });
+
+  it("releases a completed warm capture and reacquires only its retry's current root", async () => {
+    const root = tryBeginGatewayRootWorkAdmission("cli-capture");
+    if (!root) {
+      throw new Error("expected accepting admission");
+    }
+    let token: string | undefined;
+    try {
+      token = (
+        await root.run(async () =>
+          mintMcpLoopbackClientGrant({
+            runtimeOwnerToken: "runtime-one",
+            context: { sessionKey: "agent:main:warm", senderIsOwner: false },
+          }),
+        )
+      ).token;
+      await root.run(async () => {
+        activateMcpLoopbackClientGrantCapture({
+          token: token!,
+          runtimeOwnerToken: "runtime-one",
+          captureKey: "first",
+        });
+        expect(
+          deactivateMcpLoopbackClientGrantCapture({
+            token: token!,
+            runtimeOwnerToken: "runtime-one",
+            captureKey: "first",
+          }),
+        ).toBe(true);
+        expect(
+          activateMcpLoopbackClientGrantCapture({
+            token: token!,
+            runtimeOwnerToken: "runtime-one",
+            captureKey: "retry",
+          }),
+        ).not.toBe(false);
+      });
+      root.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(
+        deactivateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: "runtime-one",
+          captureKey: "first",
+        }),
+      ).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(
+        deactivateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: "runtime-one",
+          captureKey: "retry",
+        }),
+      ).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(revokeMcpLoopbackClientGrant(token)).toBe(true);
+    } finally {
+      if (token) {
+        revokeMcpLoopbackClientGrant(token);
+      }
+      root.release();
     }
   });
 
