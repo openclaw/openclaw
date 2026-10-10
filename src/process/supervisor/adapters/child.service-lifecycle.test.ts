@@ -398,7 +398,7 @@ describeSpawnTransports(
         }
         const adapter = await startNode(
           `const fs = require("node:fs");
-         const secret = fs.readFileSync(${JSON.stringify(process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3")}, "utf8").trimEnd();
+         const secret = fs.readFileSync(${JSON.stringify(process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3")}, "utf8").trimEnd();
          const input = fs.readFileSync(0, "utf8");
          process.stdout.write(secret.length + ":" + input);`,
           {
