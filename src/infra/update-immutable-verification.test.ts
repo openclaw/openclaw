@@ -142,7 +142,9 @@ it("verifies the preserved service's explicit port instead of the config default
   expect(result.outcome).toBe("verified");
   expect(inspectPortUsage.mock.calls.every(([port]) => port === 19678)).toBe(true);
   expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ localPortOverride: 19678 }));
-  expect(mocks.http).toHaveBeenCalledWith(expect.objectContaining({ port: 19678 }));
+  expect(mocks.http).toHaveBeenCalledWith(
+    expect.objectContaining({ port: 19678, deadlineAt: 120_000 }),
+  );
 });
 
 it.each([90_000, 150_000])(

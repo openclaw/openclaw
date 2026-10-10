@@ -81,12 +81,11 @@ export function observePluginStateEntry(
   );
 }
 
-/** The caller owns the IMMEDIATE transaction containing comparison, expiry, quotas and mutation. */
-export function compareAndApplyPluginStateEntry(
+function validateComparisonScope(
   store: PluginStateDatabase,
-  params: PluginStatePreparedComparison & PluginStateComparisonLimits,
+  params: PluginStatePreparedComparison,
   storeIdentity: string,
-): PluginStateCompareResult<unknown> {
+): string {
   const operation = params.operation === "update" ? "register" : "delete";
   const expected = validatePluginStateComparison(params.comparison, operation);
   const scope = comparisonScope(storeIdentity, params);
@@ -98,17 +97,15 @@ export function compareAndApplyPluginStateEntry(
       message: "Plugin state observation belongs to another database, namespace or key.",
     });
   }
-  const now = Date.now();
-  const row = selectPluginStateEntry(store.db, { ...params, now });
-  const current = observation(
-    store,
-    scope,
-    row,
-    params.operation === "update" ? "lookup" : "delete",
-  );
-  if (current.comparison !== params.comparison) {
-    return { status: "conflict", current };
-  }
+  return scope;
+}
+
+function applyComparedEntry(
+  store: PluginStateDatabase,
+  params: PluginStatePreparedComparison & PluginStateComparisonLimits,
+  now: number,
+  row: PluginStateReadRow | undefined,
+): { status: "applied" | "unchanged" } {
   if (params.operation === "delete") {
     return {
       status:
@@ -123,4 +120,25 @@ export function compareAndApplyPluginStateEntry(
   }
   updatePluginStateEntry(store, params, now, row !== undefined);
   return { status: "applied" };
+}
+
+/** The caller owns the IMMEDIATE transaction containing comparison, expiry, quotas and mutation. */
+export function compareAndApplyPluginStateEntry(
+  store: PluginStateDatabase,
+  params: PluginStatePreparedComparison & PluginStateComparisonLimits,
+  storeIdentity: string,
+): PluginStateCompareResult<unknown> {
+  const scope = validateComparisonScope(store, params, storeIdentity);
+  const now = Date.now();
+  const row = selectPluginStateEntry(store.db, { ...params, now });
+  const current = observation(
+    store,
+    scope,
+    row,
+    params.operation === "update" ? "lookup" : "delete",
+  );
+  if (current.comparison !== params.comparison) {
+    return { status: "conflict", current };
+  }
+  return applyComparedEntry(store, params, now, row);
 }
