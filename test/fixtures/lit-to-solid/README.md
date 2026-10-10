@@ -19,7 +19,7 @@ Prepare and typecheck the actual generated output on the remote proof host:
 
 ```sh
 node --import tsx test/fixtures/lit-to-solid/compile.mts
-pnpm exec tsgo -p .artifacts/solid2-p1-12/corpus/tsconfig.json
+node scripts/run-tsgo.mjs -p .artifacts/solid2-p1-12/corpus/tsconfig.json
 ```
 
 The focused golden suite is `pnpm test test/scripts/lit-to-solid.test.ts --maxWorkers=1`.

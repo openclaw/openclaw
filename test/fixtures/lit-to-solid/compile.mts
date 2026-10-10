@@ -52,7 +52,9 @@ fs.writeFileSync(
         types: [],
         paths: {
           "@solidjs/web": [path.join(root, "ui/node_modules/@solidjs/web")],
-          "@solidjs/web/*": [path.join(root, "ui/node_modules/@solidjs/web/*")],
+          "@solidjs/web/jsx-runtime": [
+            path.join(root, "ui/node_modules/@solidjs/web/types/jsx.d.ts"),
+          ],
           "solid-js": [path.join(root, "ui/node_modules/solid-js")],
         },
       },
