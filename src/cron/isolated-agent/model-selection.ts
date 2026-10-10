@@ -129,22 +129,28 @@ async function resolveCronThinkingCatalog(params: {
   provider: string;
   model: string;
   agentRuntime: string;
+  hydrations: Map<string, Promise<ModelCatalogEntry[]>>;
 }): Promise<ModelCatalogEntry[]> {
   const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
-  // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
-  const hydration = loadProviderScopedThinkingCatalog({
-    config: params.owner.config,
-    provider: params.provider,
-    model: params.model,
-    agentRuntime: params.agentRuntime,
-    agentId: params.owner.agentId,
-    agentDir: params.owner.agentDir,
-    workspaceDir: params.owner.workspaceDir,
-  });
+  const key = `${params.provider}/${params.model}\0${params.agentRuntime}`;
+  let hydration = params.hydrations.get(key);
+  if (!hydration) {
+    // Share live discovery across selection and execution, including fallback retries.
+    hydration = loadProviderScopedThinkingCatalog({
+      config: params.owner.config,
+      provider: params.provider,
+      model: params.model,
+      agentRuntime: params.agentRuntime,
+      agentId: params.owner.agentId,
+      agentDir: params.owner.agentDir,
+      workspaceDir: params.owner.workspaceDir,
+    }).then(normalizeThinkingCatalogProviders);
+    params.hydrations.set(key, hydration);
+  }
   // Native discovery can queue behind catalog renewal for longer than the cron setup watchdog.
   // Discovery keeps running under its owner; this turn uses the admitted catalog meanwhile.
   const refreshed = await raceWithTimeout(
-    hydration.then(normalizeThinkingCatalogProviders),
+    hydration,
     CRON_THINKING_HYDRATION_WAIT_MS,
     () => undefined,
     { ref: false },
@@ -176,15 +182,17 @@ export async function resolveCronThinkingSelection(params: {
       provider: params.provider,
       model: params.model,
     });
+  const hydrations = new Map<string, Promise<ModelCatalogEntry[]>>();
+  const loadThinkingCatalog = (provider: string, model: string, agentRuntime: string) =>
+    resolveCronThinkingCatalog({ owner: params.owner, provider, model, agentRuntime, hydrations });
   const catalog =
     requestedThinkLevel === "off" && params.agentRuntime === "openclaw"
       ? params.owner.modelCatalog.entries
-      : await resolveCronThinkingCatalog(params);
+      : await loadThinkingCatalog(params.provider, params.model, params.agentRuntime);
   return {
     catalog,
     immutableThinkLevel,
-    loadThinkingCatalog: async (provider: string, model: string, agentRuntime: string) =>
-      await resolveCronThinkingCatalog({ owner: params.owner, provider, model, agentRuntime }),
+    loadThinkingCatalog,
     requestedThinkLevel,
   };
 }

@@ -139,6 +139,7 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
       await expect(
         selection.loadThinkingCatalog(carried.provider, carried.id, "claude-cli"),
       ).resolves.toEqual([refreshed]);
+      expect(scopedThinkingCatalogMock).toHaveBeenCalledOnce();
     } finally {
       held.resolve([]);
       vi.useRealTimers();
