@@ -410,7 +410,7 @@ export class ShellChromeOwner {
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
       handleNavDrawerKeydown(
-        Object.assign(host.element, { closeNavDrawer: host.closeNavDrawer }),
+        Object.assign(host.element, { closeNavDrawer: () => host.closeNavDrawer() }),
         event,
       );
       return;

@@ -4,7 +4,6 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Page } from "playwright";
 import { expect } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 
 export async function verifyGatewayServedControlUiBundle(httpUrl: string): Promise<{
   assetPath: string;
@@ -37,10 +36,11 @@ export async function captureConfigReadbackFailure(page: Page): Promise<void> {
     const snapshot = await Promise.race([
       Promise.all([
         page.evaluate(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          const phase = app?.runtime?.context.gateway.snapshot.phase;
+          const readiness: Window["openclawControlUi"] = Object.getOwnPropertyDescriptor(
+            window,
+            "openclawControlUi",
+          )?.value;
+          const phase = readiness?.snapshot().gatewayPhase;
           const phases = [
             "stopped",
             "connecting",

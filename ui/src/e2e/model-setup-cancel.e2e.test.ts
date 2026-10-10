@@ -3,8 +3,8 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -51,14 +51,8 @@ const gatewayOptions = {
 async function openFirstRunWithBackNavigation(page: Page): Promise<void> {
   await page.goto(`${suite.server.baseUrl}settings/connection`);
   await page.locator('.settings-sidebar__item[href="/settings/connection"]').waitFor();
-  await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: Pick<ApplicationContext, "navigate"> };
-    };
-    if (!app.runtime) {
-      throw new Error("Control UI runtime is unavailable");
-    }
-    app.runtime.context.navigate("model-setup", { search: "?firstRun=1" });
+  await evaluateControlUiContext(page, (application) => {
+    application.navigate("model-setup", { search: "?firstRun=1" });
   });
   await page.waitForURL((url) => url.pathname === "/settings/model-setup");
 }

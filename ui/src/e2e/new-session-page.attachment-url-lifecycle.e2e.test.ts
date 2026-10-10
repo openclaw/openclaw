@@ -3,6 +3,7 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  navigateInApp,
   pastePng,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -102,23 +103,8 @@ suite.define(() => {
             })
             .toEqual({ active, duplicateRevocations: 0, unknownRevocations: 0 });
         };
-        const navigate = (routeId: string, search = "") =>
-          page.evaluate(
-            ({ targetRouteId, targetSearch }) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime?: {
-                  context: {
-                    navigate: (routeId: string, options?: { search?: string }) => void;
-                  };
-                };
-              };
-              if (!app.runtime) {
-                throw new Error("OpenClaw application runtime is unavailable");
-              }
-              app.runtime.context.navigate(targetRouteId, { search: targetSearch });
-            },
-            { targetRouteId: routeId, targetSearch: search },
-          );
+        const navigate = (routeId: Parameters<typeof navigateInApp>[1], search = "") =>
+          navigateInApp(page, routeId, search);
         await page.goto(`${suite.server.baseUrl}new`);
         const composer = page.locator(".new-session-page__message");
 

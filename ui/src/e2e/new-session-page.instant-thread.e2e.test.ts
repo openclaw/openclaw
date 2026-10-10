@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -276,11 +276,8 @@ suite.define(() => {
         );
         await page.locator('[data-chat-permission-select="true"]').click();
         await page.locator('[data-chat-permission-option="full"]').click();
-        await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          app.runtime.context.agentSelection.set("main");
+        await evaluateControlUiContext(page, (application) => {
+          application.agentSelection.set("main");
         });
         const originalUrl = page.url();
         const historyLength = await page.evaluate(() => history.length);
@@ -364,11 +361,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill(submitted);
         await gateway.deferNext("sessions.create");
         if (readiness) {
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            const context = app.runtime.context;
+          await evaluateControlUiContext(page, (context) => {
             const original = context.router.navigate.bind(context.router);
             const gate = { entered: false, release: () => {} };
             const wait = new Promise<void>((resolve) => {
@@ -496,11 +489,8 @@ suite.define(() => {
         const composer = page.locator(".new-session-page__message");
         await composer.fill(message);
         const originalUrl = page.url();
-        const hello = await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          return app.runtime.context.gateway.snapshot.hello!;
+        const hello = await evaluateControlUiContext(page, (application) => {
+          return application.gateway.snapshot.hello!;
         });
         await gateway.deferNext("sessions.create");
         await page.getByRole("button", { name: "Start session", exact: true }).click();
@@ -514,11 +504,8 @@ suite.define(() => {
         await page.locator(".chat-queue__item", { hasText: "private staged follow-up" }).waitFor();
         await followUpComposer.fill("private unfinished follow-up");
         if (change === "gateway") {
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            app.runtime.context.gateway.connect({
+          await evaluateControlUiContext(page, (application) => {
+            application.gateway.connect({
               gatewayUrl: "ws://other-synthetic-gateway.invalid",
               token: "",
             });
@@ -636,11 +623,7 @@ suite.define(() => {
           stage === "preview" ? "keep the confirmed creation" : "create this session only once";
         await page.locator(".new-session-page__message").fill(message);
         if (stage === "preview") {
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            const context = app.runtime.context;
+          await evaluateControlUiContext(page, (context) => {
             const original = context.router.navigate.bind(context.router);
             Object.defineProperty(context.router, "navigate", {
               configurable: true,
@@ -660,11 +643,7 @@ suite.define(() => {
         const params = createParams(await gateway.waitForRequest("sessions.create"));
         if (stage === "committed") {
           await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            const context = app.runtime.context;
+          await evaluateControlUiContext(page, (context) => {
             const original = context.navigateAndWait;
             Object.defineProperty(context, "navigateAndWait", {
               configurable: true,
@@ -701,11 +680,8 @@ suite.define(() => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await page.locator(".new-session-page__message").fill("legacy scope still starts");
-      const hello = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        return app.runtime.context.gateway.snapshot.hello!;
+      const hello = await evaluateControlUiContext(page, (application) => {
+        return application.gateway.snapshot.hello!;
       });
       await gateway.setMethodResponse("connect", {
         ...hello,
@@ -713,13 +689,14 @@ suite.define(() => {
       });
       await gateway.setOnline(false);
       await gateway.setOnline(true);
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        const snapshot = app.runtime.context.gateway.snapshot;
-        return snapshot.phase === "connected" && !snapshot.hello?.auth?.recoveryScope;
-      });
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(page, (application) => {
+            const snapshot = application.gateway.snapshot;
+            return snapshot.phase === "connected" && !snapshot.hello?.auth?.recoveryScope;
+          }),
+        )
+        .toBe(true);
       const composer = page.locator(".new-session-page__message");
       await composer.fill("legacy scope still starts");
       await gateway.deferNext("sessions.create");

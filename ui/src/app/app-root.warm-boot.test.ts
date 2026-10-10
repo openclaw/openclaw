@@ -13,6 +13,7 @@ import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext } from "./context.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
+// mock-isolation: root admission tests isolate shell rendering while exercising the real bootstrap owner.
 vi.mock("./app-host.tsx", () => ({
   OpenClawShell: () => document.createElement("openclaw-app-shell"),
 }));
@@ -65,7 +66,7 @@ function createWarmSurface(warm = true, startup?: Promise<void>) {
   const snapshot = runtime.context.gateway.snapshot;
   snapshot.phase = startup ? "stopped" : "connecting";
   snapshot.lastError = null;
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(current: typeof snapshot) => void>();
   vi.spyOn(runtime.context.gateway, "subscribe").mockImplementation((listener) => {
     listeners.add(listener);
     return () => listeners.delete(listener);
@@ -75,7 +76,7 @@ function createWarmSurface(warm = true, startup?: Promise<void>) {
   dispose = mountOpenClawApp(host, runtime);
   const draw = () => {
     for (const listener of listeners) {
-      listener();
+      listener(snapshot);
     }
     flush();
   };
@@ -241,9 +242,9 @@ describe("warm boot app root", () => {
     draw();
     const gate = loginGate(container);
     expect(rosterSubscriptions).not.toHaveBeenCalled();
-    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get).toBeTypeOf(
-      "function",
-    );
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toMatchObject({
+      get: expect.any(Function),
+    });
     expect(container.hasAttribute("data-openclaw-ready")).toBe(false);
 
     expect(window.openclawControlUi).toBeUndefined();
@@ -255,7 +256,9 @@ describe("warm boot app root", () => {
     expect(window.openclawControlUi).toBe(hook);
     expect(loginGate(container)).toBe(gate);
     expect(start).toHaveBeenCalledOnce();
-    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toMatchObject({
+      value: hook,
+    });
 
     dispose?.();
     dispose = undefined;

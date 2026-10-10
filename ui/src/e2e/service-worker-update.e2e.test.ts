@@ -8,6 +8,7 @@ import { chromium, webkit, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
@@ -315,9 +316,13 @@ describe("Control UI service-worker production update E2E", () => {
     });
     try {
       expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(() => Boolean(customElements.get("openclaw-app")), undefined, {
-        timeout: controlUiE2eWaitTimeoutMs,
-      });
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().ready === true,
+        undefined,
+        {
+          timeout: controlUiE2eWaitTimeoutMs,
+        },
+      );
     } catch (error) {
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -551,23 +556,15 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(
           async () =>
-            page.evaluate(() => {
+            evaluateControlUiContext(page, (application) => {
               const panel = document.querySelector("openclaw-terminal-panel") as
                 | (HTMLElement & { available: boolean })
                 | null;
-              const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-                runtime?: {
-                  context?: {
-                    config: { current: { terminalEnabled: boolean } };
-                    gateway: { snapshot: { phase: string; hello: unknown } };
-                  };
-                };
-              };
               return {
                 available: panel?.available ?? null,
-                phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
-                terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
-                hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+                phase: application.gateway.snapshot.phase,
+                terminalEnabled: application.config.current.terminalEnabled,
+                hasHello: application.gateway.snapshot.hello !== null,
               };
             }),
           { timeout: controlUiE2eWaitTimeoutMs },

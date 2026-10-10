@@ -64,7 +64,9 @@ suite.define(() => {
       await failure.waitFor();
       expect(failedImports).toBe(1);
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().ready)).toBe(false);
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().ready))
+        .toBe(false);
       const reload = failure.getByRole("button", { name: "Reload", exact: true });
       expect(await reload.isEnabled()).toBe(true);
 

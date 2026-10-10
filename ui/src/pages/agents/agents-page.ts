@@ -536,11 +536,8 @@ class AgentsPage
 
   private loadActivePanelData() {
     // A reused page can receive a roster before its next route data commits.
-    if (!this.routeData) {
-      return;
-    }
     const agentId = this.agentsSelectedId;
-    if (!agentId) {
+    if (!this.routeData || !agentId) {
       return;
     }
     if (this.agentsPanel === "overview") {
@@ -800,10 +797,7 @@ class AgentsPage
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
     resetToolsEffectiveState(this);
-    this.cron = createInitialCronState({
-      client: this.client,
-      connected: this.connected,
-    });
+    this.cron = createInitialCronState(this);
   }
 
   private loadEffectiveToolsForAgent(agentId: string) {

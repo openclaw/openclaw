@@ -158,7 +158,7 @@ type Presentation = { key: string; render: (presented: boolean) => unknown };
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-router-outlet": SolidJSX.HTMLAttributes<HTMLElement>;
+      "openclaw-router-outlet": HTMLAttributes<HTMLElement>;
     }
   }
 }
@@ -418,6 +418,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       aria-disabled={props["aria-disabled"]}
       ref={(element) => {
         host = element;
+        // SAFETY: These descriptors provide both members of the readiness outlet contract.
         const readinessHost = Object.defineProperties(element, {
           presentationSettled: { configurable: true, get: isSettled },
           settlePresentation: { configurable: true, value: settlePresentation },

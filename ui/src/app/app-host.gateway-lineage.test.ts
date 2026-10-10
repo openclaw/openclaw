@@ -45,6 +45,7 @@ import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
+// mock-isolation: Keep shell UI subscriptions out of the Gateway lineage and outbox fixture.
 vi.mock("./app-host.tsx", () => ({
   OpenClawShell: () => document.createElement("openclaw-app-shell"),
 }));

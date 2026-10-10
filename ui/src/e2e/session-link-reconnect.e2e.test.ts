@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -14,8 +14,6 @@ const destinationKey = "agent:main:dashboard:12345678-1111-4222-8333-abcdefabcde
 const destinationText = "The linked conversation recovered after reconnect.";
 const destinationPath = "/chat/main/linked-conversation-12345678";
 const sidebarConfig = { ui: { prefs: { sidebarEntries: ["route:activity"] } } };
-
-type TestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it.each([false, true])(
@@ -86,11 +84,7 @@ suite.define(() => {
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         }
         await gateway.resolveDeferred("connect");
-        await page.waitForFunction(
-          () =>
-            document.querySelector<TestApp>("openclaw-app")?.runtime?.context.gateway.snapshot
-              .phase === "connected",
-        );
+        await waitForControlUiGatewayReady(page);
         // A response belonging to the retired socket must not restore the abandoned route.
         await gateway.resolveDeferred("sessions.resolve");
 

@@ -10,8 +10,8 @@ import {
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -70,12 +70,10 @@ async function requestGateway<T>(
   methodName: string,
   requestParams: Record<string, unknown>,
 ) {
-  return await page.evaluate(
-    async ({ method, params }) => {
-      const app = document.querySelector("openclaw-app") as
-        | (HTMLElement & { runtime?: { context: ApplicationContext } })
-        | null;
-      const client = app?.runtime?.context.gateway.snapshot.client;
+  return await evaluateControlUiContext(
+    page,
+    async (context, { method, params }) => {
+      const client = context.gateway.snapshot.client;
       if (!client) {
         throw new Error("Usage proof has no connected Gateway client");
       }

@@ -34,7 +34,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import type { ShellRouteState } from "./app-host-route-state.ts";
+import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { AssistantDock } from "./assistant-dock.ts";
 import { readBootRecord } from "./boot-record.ts";
@@ -335,10 +335,11 @@ export function bootstrapApplication(): ApplicationRuntime {
     shouldOpenExternally,
     signal: startupLifecycle.signal,
     canPresentBrowserPanel: () => {
-      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
-        "openclaw-app-shell",
+      const shell = document.querySelector("openclaw-app-shell");
+      return (
+        shell?.isConnected === true &&
+        !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
       );
-      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
     },
     onNativeUpdateDeclined: () => {
       const snapshot = overlays.snapshot;

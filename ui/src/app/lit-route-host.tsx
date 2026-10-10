@@ -12,8 +12,8 @@ type LitRouteHostProps = {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-route-presentation": SolidJSX.HTMLAttributes<HTMLElement>;
-      "openclaw-route-fragment": SolidJSX.HTMLAttributes<HTMLElement>;
+      "openclaw-route-presentation": HTMLAttributes<HTMLElement>;
+      "openclaw-route-fragment": HTMLAttributes<HTMLElement>;
     }
   }
 }

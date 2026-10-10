@@ -1,8 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -27,54 +27,56 @@ type MeasuredPane = HTMLElement & {
 };
 
 async function observePaneRenders(page: Page) {
-  return page.evaluateHandle(
-    async ({ foreignKey: observedKey }) => {
-      const app = document.querySelector<
-        HTMLElement & { runtime?: { context: ApplicationContext } }
-      >("openclaw-app");
-      const pane = document.querySelector<MeasuredPane>(
-        "openclaw-chat-pane.chat-pane-cache__pane--active",
-      );
-      const sidebar = document.querySelector<
-        HTMLElement & {
-          updateComplete: Promise<boolean>;
-          sessionData: { presencePayload?: PresencePayload };
+  const context = await getControlUiContextHandle(page);
+  try {
+    return await context.evaluateHandle(
+      async (appContext, { foreignKey: observedKey }) => {
+        const pane = document.querySelector<MeasuredPane>(
+          "openclaw-chat-pane.chat-pane-cache__pane--active",
+        );
+        const sidebar = document.querySelector<
+          HTMLElement & {
+            updateComplete: Promise<boolean>;
+            sessionData: { presencePayload?: PresencePayload };
+          }
+        >("openclaw-app-sidebar");
+        const sessions = appContext.sessions;
+        if (!pane || !sidebar || !sessions) {
+          throw new Error("The mounted conversation and shared roster must be ready");
         }
-      >("openclaw-app-sidebar");
-      const sessions = app?.runtime?.context.sessions;
-      if (!pane || !sidebar || !sessions) {
-        throw new Error("The mounted conversation and shared roster must be ready");
-      }
-      await Promise.all([pane.updateComplete, sidebar.updateComplete]);
-      const originalRender = pane.render;
-      let renders = 0;
-      pane.render = function () {
-        renders += 1;
-        return originalRender.call(this);
-      };
-      return {
-        pane,
-        async read() {
-          await Promise.all([pane.updateComplete, sidebar.updateComplete]);
-          const count = renders;
-          renders = 0;
-          return {
-            renders: count,
-            sharedLabel: sessions.state.result?.sessions.find((row) => row.key === observedKey)
-              ?.label,
-            selectedKey: pane.state.sessionKey,
-            messages: pane.state.chatMessages.length,
-            panePresenceTs: pane.presencePayload?.presence[0]?.ts,
-            sidebarPresenceTs: sidebar.sessionData.presencePayload?.presence[0]?.ts,
-          };
-        },
-        restore() {
-          pane.render = originalRender;
-        },
-      };
-    },
-    { foreignKey },
-  );
+        await Promise.all([pane.updateComplete, sidebar.updateComplete]);
+        const originalRender = pane.render;
+        let renders = 0;
+        pane.render = function () {
+          renders += 1;
+          return originalRender.call(this);
+        };
+        return {
+          pane,
+          async read() {
+            await Promise.all([pane.updateComplete, sidebar.updateComplete]);
+            const count = renders;
+            renders = 0;
+            return {
+              renders: count,
+              sharedLabel: sessions.state.result?.sessions.find((row) => row.key === observedKey)
+                ?.label,
+              selectedKey: pane.state.sessionKey,
+              messages: pane.state.chatMessages.length,
+              panePresenceTs: pane.presencePayload?.presence[0]?.ts,
+              sidebarPresenceTs: sidebar.sessionData.presencePayload?.presence[0]?.ts,
+            };
+          },
+          restore() {
+            pane.render = originalRender;
+          },
+        };
+      },
+      { foreignKey },
+    );
+  } finally {
+    await context.dispose();
+  }
 }
 
 suite.define(() => {

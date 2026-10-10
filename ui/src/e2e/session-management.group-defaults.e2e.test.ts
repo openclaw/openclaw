@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { readRepositoryBranches } from "../../../src/agents/worktrees/branches.runtime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -450,24 +451,11 @@ suite.define(() => {
       await expect.poll(() => project.textContent()).toContain("client-work");
       await page.locator(".new-session-page__message").fill("keep this draft");
 
-      await page.evaluate(async (cwd) => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              sessions: {
-                groupsUpdate: (
-                  name: string,
-                  defaults: { cwd: string | null; worktree: boolean },
-                ) => Promise<unknown>;
-              };
-            };
-          };
-        };
-        await app.runtime?.context.sessions.groupsUpdate("Client work", {
-          cwd,
-          worktree: false,
-        });
-      }, refreshedCwd);
+      await evaluateControlUiContext(
+        page,
+        (context, cwd) => context.sessions.groupsUpdate("Client work", { cwd, worktree: false }),
+        refreshedCwd,
+      );
 
       await expect.poll(() => project.textContent()).toContain("refreshed-client-work");
       await expect
@@ -477,18 +465,9 @@ suite.define(() => {
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe("keep this draft");
 
-      await page.evaluate(async () => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              sessions: {
-                groupsRename: (from: string, to: string) => Promise<unknown>;
-              };
-            };
-          };
-        };
-        await app.runtime?.context.sessions.groupsRename("Client work", "Customer work");
-      });
+      await evaluateControlUiContext(page, (context) =>
+        context.sessions.groupsRename("Client work", "Customer work"),
+      );
 
       const unavailable = page.locator(".new-session-page__catalog-unavailable");
       await expect

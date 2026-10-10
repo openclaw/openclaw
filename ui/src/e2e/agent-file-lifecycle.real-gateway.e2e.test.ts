@@ -14,8 +14,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -302,12 +302,9 @@ catalogSuite.define(() => {
           ).toBe(0);
 
           const settleCatalogFrames = () =>
-            page.evaluate(async () => {
-              // SAFETY: Gateway readiness above establishes this app's connected runtime.
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
-              };
-              await app.runtime.context.gateway.snapshot.client.request("health", {});
+            evaluateControlUiContext(page, async (context) => {
+              // Gateway readiness above establishes the active client.
+              await context.gateway.snapshot.client!.request("health", {});
               await new Promise<void>((resolve) => {
                 requestAnimationFrame(() => resolve());
               });

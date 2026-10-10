@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -88,14 +88,10 @@ suite.define(() => {
             .getByRole("link", { name: "Session", exact: true });
           await link.waitFor({ state: "visible" });
           const primaryKeys = () =>
-            page.evaluate(() => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime?: { context: ApplicationContext };
-              };
-              return (
-                app.runtime?.context.sessions.state.result?.sessions.map((row) => row.key) ?? null
-              );
-            });
+            evaluateControlUiContext(
+              page,
+              (context) => context.sessions.state.result?.sessions.map((row) => row.key) ?? null,
+            );
           await expect.poll(primaryKeys).toEqual([]);
           const primaryBeforeClick = await primaryKeys();
           const href = await link.getAttribute("href");

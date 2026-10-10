@@ -3,8 +3,8 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -69,19 +69,16 @@ suite.define(() => {
         await openModelSetup(page, suite.server.baseUrl);
         await gateway.waitForRequest("openclaw.setup.detect");
         await page.locator(".model-setup__loading").waitFor();
-        await page.waitForFunction(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: ApplicationRuntime;
-          };
-          return app.runtime.context.gateway.snapshot.client?.recoveryScopeReady;
-        });
-        const connectionOwner = await page.evaluateHandle(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: ApplicationRuntime;
-          };
-          const client = app.runtime.context.gateway.snapshot.client!;
+        const initialContext = await getControlUiContextHandle(page);
+        await page.waitForFunction(
+          (context) => context.gateway.snapshot.client?.recoveryScopeReady,
+          initialContext,
+        );
+        const connectionOwner = await initialContext.evaluateHandle((context) => {
+          const client = context.gateway.snapshot.client!;
           return { client, recoveryScope: client.recoveryScope };
         });
+        await initialContext.dispose();
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         await page
           .locator(".model-setup-discovery")
@@ -126,18 +123,17 @@ suite.define(() => {
         });
         await page.getByRole("paragraph").filter({ hasText: "Chat remains usable." }).waitFor();
         expect(await gateway.getRequests("connect")).toHaveLength(1);
+        const currentContext = await getControlUiContextHandle(page);
         expect(
-          await connectionOwner.evaluate(({ client, recoveryScope }) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: ApplicationRuntime;
-            };
+          await currentContext.evaluate((context, { client, recoveryScope }) => {
             return {
-              sameClient: app.runtime.context.gateway.snapshot.client === client,
+              sameClient: context.gateway.snapshot.client === client,
               recoveryReady: client.recoveryScopeReady,
               sameRecoveryScope: client.recoveryScope === recoveryScope,
             };
-          }),
+          }, connectionOwner),
         ).toEqual({ sameClient: true, recoveryReady: true, sameRecoveryScope: true });
+        await currentContext.dispose();
         await connectionOwner.dispose();
         expect(pageErrors).toEqual([]);
         if (artifactDir) {

@@ -135,7 +135,7 @@ suite.define(() => {
           const parent = group.locator('[data-session-key="agent:main:parent"]');
           await parent.waitFor({ state: "visible" });
           expect(
-            await sidebar.evaluate((el) => el.parentElement?.getBoundingClientRect().width),
+            await sidebar.evaluate((el) => el.closest(".shell-nav")?.getBoundingClientRect().width),
           ).toBe(width);
           const workspaceName = sidebar.locator(
             ".sidebar-workspace-header .sidebar-agent-card__name-text",

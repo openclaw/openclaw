@@ -250,8 +250,9 @@ export class ShellOwner
     this.onboarding = onboarding;
   }
 
-  readonly querySelector = <T extends Element = Element>(selector: string): T | null =>
-    this.element.querySelector<T>(selector);
+  get querySelector(): HTMLElement["querySelector"] {
+    return this.element.querySelector.bind(this.element);
+  }
   readonly querySelectorAll = <T extends Element = Element>(selector: string): NodeListOf<T> =>
     this.element.querySelectorAll<T>(selector);
   get isConnected() {
@@ -278,8 +279,8 @@ export class ShellOwner
     this.resumePresentation();
     const runtime = this.runtime;
     if (context && runtime) {
-      const watch = <T,>(
-        projection: { subscribe(listener: () => void): () => void; read(): T; dispose(): void },
+      const watch = (
+        projection: { subscribe(listener: () => void): () => void; dispose(): void },
         synchronize?: () => void,
       ) => {
         const publish = () => {
@@ -691,7 +692,7 @@ export type OpenClawShellProps = {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-app-shell": SolidJSX.HTMLAttributes<HTMLElement>;
+      "openclaw-app-shell": HTMLAttributes<HTMLElement>;
     }
   }
 }

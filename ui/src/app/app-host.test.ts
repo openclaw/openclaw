@@ -224,12 +224,15 @@ describe("OpenClaw shell context lifecycle", () => {
     const first = bootstrapApplication();
     const second = bootstrapApplication();
     const gate = createDeferred();
+    const loadPalette = COMMAND_PALETTE_ELEMENT.loadModule;
+    const pendingPalette = gate.promise.then(loadPalette);
     const originalTag = COMMAND_PALETTE_ELEMENT.tagName;
     const tagName = createLazyElementSpec("context replacement palette").tagName;
     COMMAND_PALETTE_ELEMENT.tagName = tagName;
     vi.spyOn(COMMAND_PALETTE_ELEMENT, "loadModule").mockImplementation(async () => {
-      await gate.promise;
+      const module = await pendingPalette;
       customElements.define(tagName, class extends HTMLElement {});
+      return module;
     });
     const [runtime, setRuntime] = createSignal(first);
     let view: ReturnType<typeof render> | undefined;
@@ -249,7 +252,7 @@ describe("OpenClaw shell context lifecycle", () => {
     } finally {
       view?.unmount();
       gate.resolve();
-      await gate.promise;
+      await pendingPalette;
       COMMAND_PALETTE_ELEMENT.tagName = originalTag;
       first.stop();
       second.stop();

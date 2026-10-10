@@ -37,7 +37,7 @@ declare module "@solidjs/web" {
       "openclaw-app-topbar": ShellElementAttributes;
       "openclaw-tooltip": ShellElementAttributes;
       "resizable-divider": Omit<ShellElementAttributes, "onResize"> & {
-        onResize?: SolidJSX.EventHandler<HTMLElement, CustomEvent<{ splitRatio: number }>>;
+        onResize?: EventHandler<HTMLElement, CustomEvent<{ splitRatio: number }>>;
       };
       "openclaw-assistant-panel": ShellElementAttributes;
       "openclaw-exec-approval": ShellElementAttributes;

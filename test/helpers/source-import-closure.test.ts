@@ -17,6 +17,8 @@ beforeAll(() => {
     "raw-value.ts": 'import "./forbidden.ts?raw=1";',
     "raw-empty-value.ts": 'import "./forbidden.ts?raw=";',
     "backedge.ts": 'import "./page.html?raw"; import "./forbidden.js";',
+    "jsx-entry.ts": 'import "./view.tsx";',
+    "view.tsx": 'import "./forbidden.js"; export const view = <div />;',
     "page.html": '<script type="module">import "./forbidden.js";</script>',
     "forbidden.ts": "export const value = 1;",
   };
@@ -45,6 +47,14 @@ it("still follows source backedges alongside Vite raw imports", () => {
   expect(
     findSourceImportBackedges(`${fixturePath}/backedge.ts`, [`${fixturePath}/forbidden.ts`]),
   ).toEqual([`${fixturePath}/backedge.ts -> ${fixturePath}/forbidden.ts`]);
+});
+
+it("follows a TSX source backedge without requiring JSX in the repository config", () => {
+  expect(
+    findSourceImportBackedges(`${fixturePath}/jsx-entry.ts`, [`${fixturePath}/forbidden.ts`]),
+  ).toEqual([
+    `${fixturePath}/jsx-entry.ts -> ${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`,
+  ]);
 });
 
 it.each(["raw-value", "raw-empty-value"])(

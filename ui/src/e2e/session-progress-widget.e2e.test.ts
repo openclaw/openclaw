@@ -6,6 +6,7 @@ import {
   toggleSidebarPanelExpanded,
 } from "../pages/chat/sidebar-layout.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -367,17 +368,8 @@ suite.define(() => {
       await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
 
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context?: { agentSelection?: { setScope?: (agentId: string) => void } } };
-        };
-        return typeof app.runtime?.context?.agentSelection?.setScope === "function";
-      });
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context?: { agentSelection?: { setScope?: (agentId: string) => void } } };
-        };
-        app.runtime?.context?.agentSelection?.setScope?.("writer");
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.setScope("writer");
       });
       await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       // Reconcile the descriptor after the running roster and scope transition.
