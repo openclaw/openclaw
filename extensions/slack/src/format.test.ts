@@ -109,6 +109,16 @@ describe("normalizeSlackOutboundText", () => {
     );
   });
 
+  it("renders Markdown links to Slack control tokens as their labels", () => {
+    const input =
+      "See [the docs](!here), [team](!channel), [owner](@U0123ABCD) and [Install](#installation).";
+    const expected = "See the docs, team, owner and Install.";
+
+    expect(normalizeSlackOutboundText(input)).toBe(expected);
+    expect(normalizeSlackOutboundText(input, { mentions: "escape" })).toBe(expected);
+    expect(markdownToSlackMrkdwnChunks(input, 4000)).toEqual([expected]);
+  });
+
   it("leaves table parsing off for callers without an authored-text table mode", () => {
     const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
     expect(normalizeSlackOutboundText(table)).toBe(table);
