@@ -596,7 +596,6 @@ extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	3
-extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
