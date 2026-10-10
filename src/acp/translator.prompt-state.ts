@@ -19,6 +19,7 @@ export type AcpPendingPrompt = {
   sentText?: string;
   textReplacement?: { seq: number; sentText: string; text: string };
   sentPreambles?: Map<string, string>;
+  assistantItem?: { id: string; text: string; prefix: string };
   sentThought?: string;
   streamMessage?: unknown;
   toolCalls?: Map<string, AcpPendingToolCall>;

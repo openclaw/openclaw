@@ -54,6 +54,40 @@ async function createHarness() {
 }
 
 describe("ACP commentary reclassification", () => {
+  it.each(["OK.", "The sample value is orchid, and verification succeeded."])(
+    "preserves narration and the answer when the replacement is deferred: %s",
+    async (answer) => {
+      const h = await createHarness();
+      const narration = "I will read the sample now.";
+      await h.send("agent", {
+        stream: "assistant",
+        data: { itemId: "preview", text: narration, delta: narration },
+      });
+      await h.chat("I will");
+      await h.preamble("commentary", narration);
+      await h.preamble("commentary", narration);
+      await h.tool("read", "start");
+      await h.tool("read", "result");
+      // Transcript publication releases the replacement with a later sequence.
+      await h.chat("", { replace: true });
+      await h.send("agent", {
+        stream: "assistant",
+        data: { itemId: "answer", text: answer, delta: answer },
+      });
+      await h.chat(answer);
+      await h.chat("", { replace: true });
+      await h.chat(answer, { state: "final" });
+      await h.prompt;
+      expect(h.updates()).toEqual([
+        "I will",
+        " read the sample now.",
+        "read:in_progress",
+        "read:completed",
+        answer,
+      ]);
+    },
+  );
+
   it.each([
     { answer: "OK.", rounds: 1 },
     { answer: "The sample value is orchid, and verification succeeded.", rounds: 1 },

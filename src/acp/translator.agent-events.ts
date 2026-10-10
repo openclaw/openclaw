@@ -1,5 +1,6 @@
 import type { AgentSideConnection, SessionUpdate } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -55,11 +56,33 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
-    if (stream !== "tool" && (stream !== "item" || data.kind !== "preamble")) {
+    if (
+      stream !== "assistant" &&
+      stream !== "tool" &&
+      (stream !== "item" || data.kind !== "preamble")
+    ) {
       return;
     }
     const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
+      return;
+    }
+    if (stream === "assistant") {
+      const itemId = normalizeOptionalString(data.itemId);
+      if (!itemId || data.phase === "final_answer") {
+        pending.assistantItem = undefined;
+        return;
+      }
+      const item =
+        pending.assistantItem?.id === itemId
+          ? pending.assistantItem
+          : { id: itemId, text: "", prefix: pending.sentText ?? "" };
+      item.text =
+        typeof data.text === "string"
+          ? data.text
+          : (data.replace === true ? "" : item.text) +
+            (typeof data.delta === "string" ? data.delta : "");
+      pending.assistantItem = item;
       return;
     }
 
@@ -72,10 +95,20 @@ export class AcpTranslatorAgentEvents {
       const itemId = normalizeOptionalString(data.itemId) ?? "";
       const preambles = (pending.sentPreambles ??= new Map());
       let sent = preambles.get(itemId) ?? "";
-      const replacement = pending.textReplacement;
+      const preview = pending.assistantItem;
+      const previewText = preview?.text.trimEnd();
+      const replacement =
+        pending.textReplacement?.seq === payload.seq
+          ? pending.textReplacement
+          : !preambles.has(itemId) &&
+              preview &&
+              previewText &&
+              (text.startsWith(previewText) || previewText.startsWith(text))
+            ? { sentText: pending.sentText ?? "", text: preview.prefix }
+            : undefined;
       // The Gateway projects a reclassification before its preamble with the same sequence.
-      // Ordinary final retirement has no paired preamble and must keep its answer baseline.
-      if (replacement && replacement.seq === payload.seq) {
+      // A held projection can arrive later; its active assistant item still owns the preview.
+      if (replacement) {
         const retired = replacement.sentText.startsWith(replacement.text)
           ? replacement.sentText.slice(replacement.text.length).replace(/^\n+/, "")
           : "";
@@ -86,7 +119,12 @@ export class AcpTranslatorAgentEvents {
           sent = retired;
         }
         pending.sentText = replacement.text;
+        pending.streamMessage = mergeChatStreamMessage(pending.streamMessage, {
+          deltaText: replacement.text,
+          replace: true,
+        });
         pending.textReplacement = undefined;
+        pending.assistantItem = undefined;
       }
       if (sent.startsWith(text)) {
         preambles.set(itemId, sent);
@@ -106,6 +144,7 @@ export class AcpTranslatorAgentEvents {
       }
 
       if (phase === "start") {
+        pending.assistantItem = undefined;
         pending.sentPreambles?.delete("");
         pending.toolCalls ??= new Map();
         if (pending.toolCalls.has(toolCallId)) {
