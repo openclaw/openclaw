@@ -334,6 +334,14 @@ async function prepareHistoryRead(
       );
       return () => ({ kind: request.kind, present: read() });
     }
+    case "transcript-inactive-identity": {
+      const { readInactiveTranscriptIdentitySync } =
+        await import("./transcript-inactive-identities.worker.js");
+      return () => ({
+        kind: request.kind,
+        inactive: readInactiveTranscriptIdentitySync(request.scope, request.probe),
+      });
+    }
     case "session-pending-input-orphans": {
       const { readOrphanedSessionPendingInputTargetsInWorker } =
         await import("./session-pending-input-withdrawal.worker.js");

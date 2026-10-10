@@ -50,7 +50,10 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
 } from "./message-cache.js";
-import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
+import {
+  resolveCompleteTelegramPromptContextProjectionIds,
+  resolveTelegramPromptContextTranscriptMessageId,
+} from "./prompt-context-projection.js";
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
@@ -458,6 +461,9 @@ export function createTelegramMessageContextRuntime({
       .toSorted((left, right) => Number(left.node.messageId) - Number(right.node.messageId))
       .map(({ node, isReplyTarget }) => {
         const media = node.messageId ? mediaByMessageId?.get(node.messageId) : undefined;
+        const transcriptMessageId = resolveTelegramPromptContextTranscriptMessageId(
+          node.promptContextProjectionMarker,
+        );
         return {
           node,
           message: {
@@ -473,6 +479,7 @@ export function createTelegramMessageContextRuntime({
             media_ref: media?.path ? undefined : node.mediaRef,
             reply_to_id: node.replyToId,
             is_reply_target: isReplyTarget === true ? true : undefined,
+            ...(transcriptMessageId ? { session_transcript_id: transcriptMessageId } : {}),
           },
         };
       });
