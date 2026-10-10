@@ -32,7 +32,11 @@ function deriveTranscriptUsageSnapshot(
   trailingMessages: AgentMessage[],
 ): SessionTranscriptUsageSnapshot | undefined {
   const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  const outputTokens = asPositiveFiniteNumber(usage.output);
+  const outputRaw =
+    usage.contextUsage?.state === "available"
+      ? usage.contextUsage.totalTokens - usage.contextUsage.promptTokens
+      : usage.output;
+  const outputTokens = asPositiveFiniteNumber(outputRaw);
   if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
     return undefined;
   }
