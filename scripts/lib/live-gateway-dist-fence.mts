@@ -51,11 +51,12 @@ async function tryRealpath(value: string): Promise<string> {
 
 async function loadFenceRuntime() {
   try {
-    const [layout, bindings, pathGuards, serviceRuntime] = await Promise.all([
+    const [layout, bindings, pathGuards, serviceRuntime, inspection] = await Promise.all([
       import("../../src/daemon/service-layout.ts"),
       import("../../src/daemon/managed-gateway-bindings.ts"),
       import("../../src/infra/path-guards.ts"),
       import("../../src/daemon/service-runtime.ts"),
+      import("../../src/daemon/service-inspection-error.ts"),
     ]);
     return {
       summarizeGatewayServiceLayout: layout.summarizeGatewayServiceLayout,
@@ -64,6 +65,9 @@ async function loadFenceRuntime() {
       describeManagedGatewayBinding: bindings.describeManagedGatewayBinding,
       isPathInside: pathGuards.isPathInside,
       isGatewayServiceStateLive: serviceRuntime.isGatewayServiceStateLive,
+      isServiceManagerAbsent: (error: unknown) =>
+        error instanceof inspection.ServiceInspectionError &&
+        error.reason === "service-manager-unavailable",
     };
   } catch {
     return null;
@@ -195,6 +199,8 @@ export async function resolveLiveManagedGatewayDistFence(
     message:
       "[openclaw] Cannot verify that test preparation is separate from managed Gateway artifacts. Use the existing isolated test runner; no checkout artifacts were rebuilt.",
   } as const;
+  // Name each owner whose separation stayed unproven, so the refusal points at it.
+  const unverifiedOwners: string[] = [];
   const bindings = await resolveFenceBindings(env, options.requireVerified);
   if (!bindings) {
     return options.requireVerified ? unknown : { refuse: false };
@@ -250,25 +256,20 @@ export async function resolveLiveManagedGatewayDistFence(
       if (matches === false) {
         continue;
       }
-      if (matches === null) {
-        // Native readers can prove absence without setting the optional missingUnit hint.
-        unverified ||= Boolean(
-          state.command ||
-          state.installed ||
-          state.loadState.status !== "not-loaded" ||
-          state.runtime?.status !== "stopped" ||
-          runtime.isGatewayServiceStateLive(state),
-        );
-        continue;
-      }
       // Scheduler occupancy can hold old argv or a pending launch without proving
       // the current command is running. It fences overlapping outputs, not service control.
       const occupiedWindowsTask =
         process.platform === "win32" &&
         !binding.windowsStartupEntry &&
         (state.runtime?.state === "Running" || state.runtime?.state === "Queued");
-      if (!runtime.isGatewayServiceStateLive(state) && !occupiedWindowsTask) {
-        unverified ||= state.runtime?.status !== "stopped" || state.loadState.status === "unknown";
+      const live = runtime.isGatewayServiceStateLive(state) || occupiedWindowsTask;
+      // A stopped owner holds nothing. A live one whose command does not resolve to a
+      // path (e.g. a wrapper script) cannot prove separation, so it stays unverified.
+      if (!live || matches === null) {
+        if (live || state.runtime?.status !== "stopped" || state.loadState.status === "unknown") {
+          unverified = true;
+          unverifiedOwners.push(runtime.describeManagedGatewayBinding(binding, state));
+        }
         continue;
       }
       holds.push({ owner: runtime.describeManagedGatewayBinding(binding, state), binding, state });
@@ -276,11 +277,25 @@ export async function resolveLiveManagedGatewayDistFence(
       if (hasCommandProcessCleanupError(error)) {
         throw error;
       }
+      // A container or CI pod without a service manager cannot host a managed
+      // Gateway. Only the invoking selector may rely on that proof: a discovered
+      // service definition, or any other inspection failure, stays unverified.
+      if (binding.env === env && (await loadFenceRuntime())?.isServiceManagerAbsent(error)) {
+        continue;
+      }
       unverified = true;
     }
   }
   if (holds.length === 0) {
-    return options.requireVerified && unverified ? unknown : { refuse: false };
+    if (!options.requireVerified || !unverified) {
+      return { refuse: false };
+    }
+    return unverifiedOwners.length === 0
+      ? unknown
+      : {
+          refuse: true,
+          message: `${unknown.message} Unverified: ${[...new Set(unverifiedOwners)].join(", ")}.`,
+        };
   }
 
   const runtime = await loadFenceRuntime();
