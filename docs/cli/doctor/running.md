@@ -42,8 +42,10 @@ Interactive `doctor` first checks shared schema compatibility and can offer a
 source update. If the update does not take over, Doctor checks all database
 schemas before asking to pause the matching managed Gateway while you review repairs. Accepting takes maintenance custody, keeps individual repair
 prompts, and restores the service's prior state after database handles close.
-Declining ends the repair flow without changing the service or state; use
-`openclaw doctor --lint` for read-only diagnosis. Externally supervised or
+Declining skips repairs and continues the same invocation with read-only
+`--lint` checks, without changing the service or persisted state or asking for
+repair approvals. The report exits `1` if it finds warnings or errors, otherwise
+`0`. Existing `--deep` and `--allow-exec` selections still apply. Externally supervised or
 unmatched Gateways remain subject to their existing maintenance ownership checks.
 
 When ordinary `doctor` asks **Apply recommended config repairs now?**, it checks

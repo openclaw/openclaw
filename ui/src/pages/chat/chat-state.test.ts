@@ -1003,7 +1003,7 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([false, true])(
-    "keeps whole server messages above a steer (later commentary=%s)",
+    "keeps accepted steers between saved output and whole later messages (later commentary=%s)",
     (laterCommentary) => {
       const activeRunId = "active-run";
       const steerRunId = "steer-request";
@@ -1121,13 +1121,12 @@ describe("canonical session message recovery", () => {
 
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
-        ...(laterCommentary
-          ? [
-              { role: "assistant", text: "Before steer." },
-              { role: "assistant", text: "After steer." },
-            ]
-          : [{ role: "assistant", text: "Before steer. After steer." }]),
+        ...(laterCommentary ? [{ role: "assistant", text: "Before steer." }] : []),
         { role: "user", text: "Steer prompt" },
+        {
+          role: "assistant",
+          text: laterCommentary ? "After steer." : "Before steer. After steer.",
+        },
       ]);
 
       handlePageGatewayEvent(state, steerEvent);
@@ -1183,14 +1182,10 @@ describe("canonical session message recovery", () => {
       });
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
-        ...(laterCommentary
-          ? [
-              { role: "assistant", text: "Before steer." },
-              { role: "assistant", text: "After steer." },
-            ]
-          : []),
-        { role: "assistant", text: terminalText },
+        ...(laterCommentary ? [{ role: "assistant", text: "Before steer." }] : []),
         { role: "user", text: "Steer prompt" },
+        ...(laterCommentary ? [{ role: "assistant", text: "After steer." }] : []),
+        { role: "assistant", text: terminalText },
       ]);
       expect(terminalMessage.content).toEqual([{ type: "text", text: terminalText }]);
     },
