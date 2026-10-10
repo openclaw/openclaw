@@ -556,10 +556,15 @@ describe("createExecApprovalChannelRuntime", () => {
 
   it("does not leave a gateway client running when stop wins the startup race", async () => {
     const pendingClient = createDeferred<GatewayClient>();
-    mockCreateOperatorApprovalsGatewayClient.mockReturnValueOnce(pendingClient.promise);
+    const clientCreationStarted = createDeferred<void>();
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(() => {
+      clientCreationStarted.resolve();
+      return pendingClient.promise;
+    });
     const runtime = createRuntime();
 
     const startPromise = runtime.start();
+    await clientCreationStarted.promise;
     const stopPromise = runtime.stop();
     pendingClient.resolve({
       start: mockGatewayClientStarts,
