@@ -12,7 +12,11 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import { createFirstRunContext, detection } from "./model-setup-first-run.test-support.ts";
-import { ModelSetupPage } from "./model-setup-page.ts";
+import {
+  createPage,
+  mountModelSetupPage,
+  unmountModelSetupPage,
+} from "./test-helpers/solid-page.test-support.tsx";
 
 describe("first-run wizard ownership through the real Gateway store", () => {
   beforeEach(async () => {
@@ -138,10 +142,11 @@ describe("first-run wizard ownership through the real Gateway store", () => {
       const fixture = createFirstRunContext();
       const context = { ...fixture.context, gateway, runtimeConfig };
       const provider = createApplicationContextProvider(context);
-      const page = new ModelSetupPage();
+      const page = createPage(context);
       page.routeData = { firstRun: true };
       provider.append(page);
       document.body.append(provider);
+      mountModelSetupPage(page);
       try {
         await waitForFast(() =>
           expect(
@@ -285,6 +290,7 @@ describe("first-run wizard ownership through the real Gateway store", () => {
         ).toHaveLength(1);
       } finally {
         originalAnswer.resolve({ done: true, status: "cancelled" });
+        unmountModelSetupPage(page);
         page.remove();
         runtimeConfig.dispose();
         fixture.context.runtimeConfig.dispose();

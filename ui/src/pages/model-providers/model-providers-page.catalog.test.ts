@@ -9,6 +9,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  unmountPage,
   chatModelPickers,
   createAuthStatus,
   createEmptyModelProvidersRouteData,
@@ -21,7 +22,7 @@ import {
   retryCatalog,
   requestCount,
   waitForProviders,
-} from "./model-providers-page.test-support.ts";
+} from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -222,7 +223,7 @@ describe("Models page catalog publication", () => {
     );
     discover.mockReturnValue(catalogRefresh.promise);
     const page = appendPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Not configured"));
+    await waitForFast(() => expect(page.renderRoot.textContent).toContain("Not configured"));
     const editKey = [
       ...page.querySelectorAll<HTMLButtonElement>(".model-providers__card-actions button"),
     ].find((button) => button.textContent?.trim() === "Set API key");
@@ -256,7 +257,7 @@ describe("Models page catalog publication", () => {
     expect(authSignal!.aborted).toBe(false);
     expect(discover).toHaveBeenCalledOnce();
     expect(readPublished).toHaveBeenCalledTimes(2);
-    expect(page.textContent).not.toContain("Not configured");
+    expect(page.renderRoot.textContent).not.toContain("Not configured");
     expect(page.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe(
       "unsaved-key-draft",
     );
@@ -703,7 +704,7 @@ describe("Models page catalog publication", () => {
       coreCatalog.resolve(preparedCatalog);
       coreConfig.resolve({ config: refreshedConfig, hash: "refreshed-model-config" });
       pickerDiscovery.resolve(newer);
-      page.remove();
+      unmountPage(page);
     }
   });
 

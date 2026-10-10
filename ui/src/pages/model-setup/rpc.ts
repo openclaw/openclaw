@@ -1,10 +1,9 @@
-import { initialState, Task } from "@lit/task";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
+import type { ControllerHost } from "../model-providers/page-controller.ts";
 import type { ModelSetupConnection } from "./first-run-setup.ts";
 import { captureModelSetupResult, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import { MODEL_SETUP_DETECT_TIMEOUT_MS, MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
@@ -15,21 +14,62 @@ type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectRes
   token: object;
 };
 
+function createSetupRequest<Args, Result>(
+  host: ControllerHost,
+  request: (args: Args, signal: AbortSignal) => Promise<Result | undefined>,
+  onComplete?: (result: Result) => void,
+) {
+  let controller: AbortController | undefined;
+  let value: Result | undefined;
+  let completion: Promise<Result | undefined> = Promise.resolve(undefined);
+  const retire = () => {
+    const retired = controller;
+    controller = undefined;
+    retired?.abort();
+  };
+  host.addController({ hostDisconnected: retire });
+  return {
+    get value() {
+      return value;
+    },
+    get taskComplete() {
+      return completion;
+    },
+    abort: retire,
+    run(args: Args): Promise<void> {
+      controller?.abort();
+      const current = new AbortController();
+      controller = current;
+      completion = request(args, current.signal).then((result) => {
+        if (controller === current && !current.signal.aborted) {
+          value = result;
+          if (result !== undefined) {
+            onComplete?.(result);
+          }
+          host.requestUpdate();
+        }
+        return result;
+      });
+      return completion.then(() => undefined);
+    },
+  };
+}
+
 export function createModelSetupDetectTask(
-  host: ReactiveControllerHost,
+  host: ControllerHost,
   options: {
     getHello: () => ModelSetupConnection["hello"];
     onComplete: (outcome: ModelSetupDetectTaskResult) => void;
   },
 ) {
-  return new Task<
+  return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, object | null],
     ModelSetupDetectTaskResult
-  >(host, {
-    autoRun: false,
-    task: async ([client, agentId, token], { signal }) => {
+  >(
+    host,
+    async ([client, agentId, token], signal) => {
       if (!client || !token) {
-        return initialState;
+        return undefined;
       }
       const hello = options.getHello();
       return {
@@ -45,25 +85,23 @@ export function createModelSetupDetectTask(
         token,
       };
     },
-    onComplete: options.onComplete,
-  });
+    options.onComplete,
+  );
 }
 
-export function createModelSetupVerifyTask(host: ReactiveControllerHost) {
-  return new Task<
+export function createModelSetupVerifyTask(host: ControllerHost) {
+  return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, "utility" | undefined],
     ModelSetupTaskResult<SystemAgentSetupVerifyResult>
-  >(host, {
-    autoRun: false,
-    task: async ([client, agentId, modelTarget], { signal }) =>
-      client
-        ? captureModelSetupResult(client, () =>
-            client.request<SystemAgentSetupVerifyResult>(
-              "openclaw.setup.verify",
-              { ...(agentId ? { agentId } : {}), ...(modelTarget ? { modelTarget } : {}) },
-              { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal },
-            ),
-          )
-        : initialState,
-  });
+  >(host, async ([client, agentId, modelTarget], signal) =>
+    client
+      ? captureModelSetupResult(client, () =>
+          client.request<SystemAgentSetupVerifyResult>(
+            "openclaw.setup.verify",
+            { ...(agentId ? { agentId } : {}), ...(modelTarget ? { modelTarget } : {}) },
+            { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal },
+          ),
+        )
+      : undefined,
+  );
 }

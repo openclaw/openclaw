@@ -7,15 +7,18 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import "./model-setup-page.ts";
 import {
   createContext,
   mountPage,
   detection,
   recommendedIconUrl,
   customIconUrl,
-  type TestModelSetupPage,
 } from "./test-helpers/page.test-support.ts";
+import {
+  createPage,
+  mountModelSetupPage,
+  unmountModelSetupPage,
+} from "./test-helpers/solid-page.test-support.tsx";
 
 describe("ModelSetupPage catalog icons", () => {
   beforeEach(async () => {
@@ -68,10 +71,11 @@ describe("ModelSetupPage catalog icons", () => {
     request.mockRejectedValueOnce(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
     request.mockResolvedValue(detection);
     const provider = createApplicationContextProvider(context);
-    const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+    const page = createPage(context);
     page.routeData = { firstRun: false };
     provider.append(page);
     document.body.append(provider);
+    mountModelSetupPage(page);
 
     await waitForFast(() => {
       expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
@@ -140,6 +144,7 @@ describe("ModelSetupPage catalog icons", () => {
     );
     expect(page.innerHTML).not.toContain(customIconUrl);
 
+    unmountModelSetupPage(page);
     page.remove();
     await page.updateComplete;
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:acme-icon");

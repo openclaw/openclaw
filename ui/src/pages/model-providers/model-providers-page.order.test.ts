@@ -18,6 +18,8 @@ import {
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   appendPage,
+  mountPage,
+  unmountPage,
   createAuthStatus,
   createHarness,
   waitForProviders,
@@ -25,7 +27,7 @@ import {
   type ModelProvidersPageTestElement,
   startSelectedLogin,
   submitCredential,
-} from "./model-providers-page.test-support.ts";
+} from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -163,11 +165,11 @@ describe("ModelProvidersPage profile actions", () => {
       }
       return originalRequest(method);
     });
-    const rows = (page: HTMLElement) =>
+    const rows = (page: ModelProvidersPageTestElement) =>
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,
       );
-    const moveFirstAccount = (page: HTMLElement, direction: "up" | "down") => {
+    const moveFirstAccount = (page: ModelProvidersPageTestElement, direction: "up" | "down") => {
       const grip = page.querySelector<HTMLButtonElement>(
         '[data-profile-id="openai:one"] .model-providers__profile-grip',
       )!;
@@ -189,7 +191,7 @@ describe("ModelProvidersPage profile actions", () => {
     expect(rows(oldPage)).toEqual(["openai:two", "openai:three", "openai:one"]);
     expect(requestCount(request, "models.authOrderSet")).toBe(1);
 
-    oldPage.remove();
+    unmountPage(oldPage);
     const replacementPage = appendPage(context);
     await waitForProviders(replacementPage);
     await waitForFast(() =>
@@ -281,7 +283,7 @@ describe("ModelProvidersPage profile actions", () => {
       };
       const { modal: initialModal, dialog } = await openConfirmation();
       let modal = initialModal;
-      expect(page.contains(modal)).toBe(false);
+      expect(page.renderRoot.contains(modal)).toBe(false);
       expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com");
       expect(modal.textContent).toContain("work@example.com");
       expect(requestCount(request, "models.authLogout")).toBe(0);
@@ -296,7 +298,7 @@ describe("ModelProvidersPage profile actions", () => {
           notifySelection();
         },
         () => publishPhase("connecting"),
-        () => page.remove(),
+        () => unmountPage(page),
       ]) {
         ({ modal } = await openConfirmation());
         const confirm = modal.querySelector<HTMLButtonElement>("button.danger")!;
@@ -310,7 +312,7 @@ describe("ModelProvidersPage profile actions", () => {
         notifySelection();
         publishPhase("connected");
         if (!page.isConnected) {
-          document.body.append(page);
+          mountPage(page);
         }
         await page.updateComplete;
       }
@@ -361,7 +363,7 @@ describe("ModelProvidersPage profile actions", () => {
       expect(page.messages.anthropic).toBeUndefined();
     } finally {
       logout.resolve();
-      page.remove();
+      unmountPage(page);
       restoreDialogPolyfill();
     }
   });
@@ -392,7 +394,7 @@ function createAgentsHarness(listAgents: () => Promise<unknown>) {
   return harness;
 }
 
-function agentRow(page: HTMLElement, id: string) {
+function agentRow(page: ModelProvidersPageTestElement, id: string) {
   return page.querySelector<HTMLElement>(`[data-installed-agent="${id}"]`);
 }
 
@@ -403,7 +405,7 @@ describe("ModelProvidersPage installed agents", () => {
     await waitForProviders(hiddenPage);
     expect(hiddenPage.querySelector(".model-providers__installed-agents")).toBeNull();
     expect(requestCount(hidden.request, "acpx.agents.list")).toBe(0);
-    hiddenPage.remove();
+    unmountPage(hiddenPage);
 
     const { context, request, settingsAgentSelection, notifySelection } = createAgentsHarness(
       async () => ({
@@ -469,9 +471,11 @@ describe("ModelProvidersPage installed agents", () => {
       expect(agentRow(page, "opencode")?.textContent).toMatch(/discovering models/i);
       expect(agentRow(page, "opencode")?.textContent).not.toMatch(/sign.in/i);
     });
-    expect(agentRow(page, "opencode")?.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
-      false,
-    );
+    expect(
+      agentRow(page, "opencode")
+        ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+        ?.hasAttribute("disabled"),
+    ).toBe(false);
     page
       .querySelector<HTMLButtonElement>(
         ".model-providers__installed-agents .model-providers__refresh-button",
@@ -509,7 +513,7 @@ describe("ModelProvidersPage installed agents", () => {
     agentRow(page, "opencode")!.querySelector<HTMLElement>(".settings-row__title")!.click();
 
     const toggle = () =>
-      agentRow(page, "opencode")!.querySelector("wa-switch") as HTMLElement & { checked: boolean };
+      agentRow(page, "opencode")!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     await waitForFast(() => {
       expect(reads).toBe(3);
       expect(toggle().checked).toBe(false);
@@ -560,9 +564,7 @@ describe("ModelProvidersPage installed agents", () => {
       await waitForFast(() => expect(agentRow(page, "opencode")?.textContent).toContain("Saving"));
       acknowledgement.resolve({ config: config(false), hash: "saved" });
       const toggle = () =>
-        agentRow(page, "opencode")!.querySelector("wa-switch") as HTMLElement & {
-          checked: boolean;
-        };
+        agentRow(page, "opencode")!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
       await waitForFast(() => {
         expect(agentRow(page, "opencode")?.textContent).not.toContain("Saving");
         expect(toggle().checked).toBe(false);
@@ -609,9 +611,9 @@ describe("ModelProvidersPage installed agents", () => {
         "Config changed on disk.",
       ),
     );
-    const toggle = agentRow(page, "opencode")!.querySelector("wa-switch") as HTMLElement & {
-      checked: boolean;
-    };
+    const toggle = agentRow(page, "opencode")!.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
     await waitForFast(() => expect(toggle.checked).toBe(false));
   });
 
@@ -626,9 +628,11 @@ describe("ModelProvidersPage installed agents", () => {
 
     agentRow(page, "opencode")!.querySelector<HTMLElement>(".settings-row__title")!.click();
 
-    expect(agentRow(page, "opencode")!.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(
+      agentRow(page, "opencode")!
+        .querySelector<HTMLInputElement>('input[type="checkbox"]')
+        ?.hasAttribute("disabled"),
+    ).toBe(true);
     expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
       "Model changes require operator.admin access.",
     );
@@ -809,7 +813,9 @@ describe("Models account recovery", () => {
       await startSelectedLogin(page, "example-browser");
       await submitCredential(page);
       login.resolve({ done: true, status: "done" });
-      await waitForFast(() => expect(page.textContent).toContain("Provider credentials saved."));
+      await waitForFast(() =>
+        expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
+      );
       expect(page.querySelector("[data-models-account-recovery]")).not.toBeNull();
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
@@ -843,7 +849,7 @@ describe("Models account recovery", () => {
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
       expect(context.navigate).not.toHaveBeenCalled();
     } finally {
-      page.remove();
+      unmountPage(page);
       restoreDialog();
     }
   });
@@ -869,7 +875,7 @@ describe("Models account recovery", () => {
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
       });
-      expect(page.textContent).not.toContain("Provider credentials saved.");
+      expect(page.renderRoot.textContent).not.toContain("Provider credentials saved.");
     },
   );
 
@@ -1009,7 +1015,7 @@ describe("Models account recovery", () => {
     } finally {
       release.resolve();
       activation.resolve({ done: true, status: "cancelled" });
-      page.remove();
+      unmountPage(page);
     }
   });
 });

@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { flush } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -6,13 +6,17 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import { nextFrame } from "../../test-helpers/modal-dialog.ts";
-import { ModelAccountUsage } from "./account-usage.ts";
+import type { ModelAccountUsageElement } from "./account-usage.tsx";
+import "./account-usage.tsx";
 
 registerSettingsEnglish();
 
-let element: ModelAccountUsage | undefined;
-afterEach(() => element?.remove());
+let element: ModelAccountUsageElement | undefined;
+afterEach(async () => {
+  element?.remove();
+  await Promise.resolve();
+  element = undefined;
+});
 const snapshot = {
   updatedAt: 1,
   providers: [
@@ -27,7 +31,7 @@ const snapshot = {
 };
 
 async function mount(request: ReturnType<typeof createGatewayRequestMock>) {
-  element = new ModelAccountUsage();
+  element = document.createElement("openclaw-model-account-usage");
   element.client = createTestGatewayClient(request);
   element.agentId = "main";
   element.profileId = "openai:account";
@@ -54,12 +58,15 @@ it("loads automatically, renders remaining quota and balance, and refreshes that
   document.body.append(view);
   await view.updateComplete;
   expect(view.textContent).toContain("12 credits");
-  expectDefined(view.querySelector("button"), "refresh usage").click();
+  view.querySelector<HTMLButtonElement>("button")!.click();
   await expect.poll(() => request.mock.calls.length).toBe(2);
   expect(request.mock.lastCall?.[1]).toEqual({
     agentId: "main",
     profileId: "openai:account",
   });
+  await expect.poll(() => view.textContent).toContain("12 credits");
+  view.refreshUsage();
+  await expect.poll(() => request.mock.calls.length).toBe(3);
 });
 
 it("drops a pending response when the selected agent changes and shows the current error", async () => {
@@ -76,7 +83,8 @@ it("drops a pending response when the selected agent changes and shows the curre
   view.agentId = "other";
   await expect.poll(() => view.textContent).toContain("Account usage unavailable");
   stale.resolve();
-  await nextFrame();
+  await stale.promise;
+  flush();
   await view.updateComplete;
   expect(view.textContent).toContain("Account usage unavailable");
   expect(view.textContent).not.toContain("12 credits");

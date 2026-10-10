@@ -1,17 +1,24 @@
-import { render } from "lit";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSelect } from "../../components/agent-select.ts";
 import "../../components/web-awesome.ts";
 import "../../test-helpers/load-styles.ts";
 import "../../styles/model-setup.css";
 import { duringElementAnimation } from "../../test-helpers/web-awesome-animation.ts";
-import { renderManualProviderPicker } from "./provider-picker.ts";
+import { renderManualProviderPicker } from "./provider-picker.tsx";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 
 class SelectedAgentPicker extends AgentSelect {}
 customElements.define("test-selected-agent-picker", SelectedAgentPicker);
 
-afterEach(() => document.body.replaceChildren());
+const disposals: (() => void)[] = [];
+
+afterEach(() => {
+  for (const dispose of disposals.splice(0)) {
+    dispose();
+  }
+  document.body.replaceChildren();
+});
 
 describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", () => {
   it.each(["provider", "agent"] as const)(
@@ -26,19 +33,22 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
       }));
       if (kind === "provider") {
         const providers = options.map(({ value, label }) => ({ id: value, label }));
-        render(
-          renderManualProviderPicker(
-            {
-              manualProviderId: "selected",
-              actionsDisabled: false,
-              iconUrls: {},
-              onIconError: vi.fn(),
-              onManualProviderChange: selected,
-            },
-            { manualProviders: providers },
-            providers[28],
+        disposals.push(
+          render(
+            () =>
+              renderManualProviderPicker(
+                {
+                  manualProviderId: "selected",
+                  actionsDisabled: false,
+                  iconUrls: {},
+                  onIconError: vi.fn(),
+                  onManualProviderChange: selected,
+                },
+                { manualProviders: providers },
+                providers[28],
+              ),
+            host,
           ),
-          host,
         );
       } else {
         const picker = new SelectedAgentPicker();

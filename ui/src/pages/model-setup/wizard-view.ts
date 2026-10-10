@@ -23,7 +23,7 @@ const WIZARD_COPY = {
   },
 };
 
-type WizardViewProps = {
+export type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;

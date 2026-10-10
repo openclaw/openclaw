@@ -1,4 +1,6 @@
 import { setImmediate } from "node:timers/promises";
+import { render } from "@solidjs/web";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
@@ -31,19 +33,40 @@ import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
+import { ModelProvidersController } from "./model-providers-controller.ts";
+import { ModelProvidersContent } from "./model-providers-page.tsx";
 import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
-import "./model-providers-page.ts";
+
+type MountedPage = {
+  mount: () => void;
+  unmount: () => void;
+};
+const pages = new Map<ModelProvidersPageTestElement, MountedPage>();
 
 const configOwners = new Set<RuntimeConfigCapability>();
 afterEach(() => {
+  for (const page of pages.values()) {
+    page.unmount();
+  }
+  pages.clear();
   for (const owner of configOwners) {
     owner.dispose();
   }
   configOwners.clear();
 });
 
-export type ModelProvidersPageTestElement = HTMLElement & {
+export type ModelProvidersPageTestElement = Pick<
+  ModelProvidersController,
+  | "renderRoot"
+  | "querySelector"
+  | "querySelectorAll"
+  | "isConnected"
+  | "connect"
+  | "disconnect"
+  | "beforeUpdate"
+  | "afterUpdate"
+> & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
   busy: Record<string, boolean>;
@@ -72,7 +95,10 @@ const modelPickerLabels = {
   decision: "Decision Model",
 };
 
-export function modelPicker(page: Element, role: keyof typeof modelPickerLabels): SelectPicker {
+export function modelPicker(
+  page: Pick<ParentNode, "querySelector">,
+  role: keyof typeof modelPickerLabels,
+): SelectPicker {
   const picker = page.querySelector<SelectPicker>(
     `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
   );
@@ -80,7 +106,7 @@ export function modelPicker(page: Element, role: keyof typeof modelPickerLabels)
   return picker!;
 }
 
-export function chatModelPickers(page: Element): SelectPicker[] {
+export function chatModelPickers(page: Pick<ParentNode, "querySelector">): SelectPicker[] {
   return (["primary", "utility", "fallback"] as const).map((role) => modelPicker(page, role));
 }
 
@@ -96,7 +122,7 @@ export async function drainPageUpdates(page: ModelProvidersPageTestElement): Pro
   // Drain every promise continuation before checking that a retired result stayed absent.
   await setImmediate();
   await page.updateComplete;
-  await updatePickers(page);
+  await updatePickers(page.renderRoot);
 }
 
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
@@ -118,10 +144,10 @@ export function publishCatalog(
 }
 
 export async function openModelPicker(
-  page: HTMLElement,
+  page: ModelProvidersPageTestElement,
   role: keyof typeof modelPickerLabels = "primary",
 ): Promise<void> {
-  await updatePickers(page);
+  await updatePickers(page.renderRoot);
   const picker = modelPicker(page, role);
   const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger");
   expect(trigger).not.toBeNull();
@@ -295,7 +321,7 @@ export function createHarness(initialScopeId: string) {
     patch: vi.fn(async () => true),
     beforeExternalDispatch: vi.fn(async (): Promise<void> => undefined),
     runExternalMutation: vi.fn(
-      async <T>(
+      async <T,>(
         task: (client: GatewayBrowserClient) => Promise<T>,
         options: RuntimeConfigExternalMutationOptions<T> = {},
       ): Promise<RuntimeConfigExternalMutationResult<T>> => {
@@ -434,13 +460,69 @@ export function createEmptyModelProvidersRouteData(
   };
 }
 
+export function createPage(context: ApplicationContext): ModelProvidersPageTestElement {
+  const root = document.createElement("div");
+  const [revision, setRevision] = createSignal(0);
+  let mounted = false;
+  let queued = false;
+  let dispose: (() => void) | undefined;
+  const page = new ModelProvidersController(root, context, () => {
+    if (!mounted || queued) {
+      return;
+    }
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      if (!mounted) {
+        return;
+      }
+      page.beforeUpdate();
+      setRevision((value) => value + 1);
+      flush();
+      page.afterUpdate();
+    });
+  });
+  const testPage = page as unknown as ModelProvidersPageTestElement;
+  pages.set(testPage, {
+    mount: () => {
+      if (mounted) {
+        return;
+      }
+      document.body.append(root);
+      mounted = true;
+      dispose = render(() => <ModelProvidersContent controller={page} revision={revision} />, root);
+      page.connect();
+    },
+    unmount: () => {
+      if (!mounted) {
+        return;
+      }
+      mounted = false;
+      page.disconnect();
+      dispose?.();
+      dispose = undefined;
+      root.remove();
+    },
+  });
+  return testPage;
+}
+
+export function mountPage(page: ModelProvidersPageTestElement): void {
+  const mounted = pages.get(page);
+  if (!mounted) {
+    throw new Error("Page was not created by this harness");
+  }
+  mounted.mount();
+}
+
+export function unmountPage(page: ModelProvidersPageTestElement): void {
+  pages.get(page)?.unmount();
+}
+
 export function appendPage(context: ApplicationContext) {
-  const page = document.createElement(
-    "openclaw-model-providers-page",
-  ) as ModelProvidersPageTestElement;
-  page.context = context;
+  const page = createPage(context);
   page.routeData = createEmptyModelProvidersRouteData(context);
-  document.body.append(page);
+  mountPage(page);
   return page;
 }
 

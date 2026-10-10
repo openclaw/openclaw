@@ -76,7 +76,7 @@ export const page = definePage({
   loaderDeps: (_context, location) => location.search,
   loader: loadModelProvidersRouteData,
   component: () =>
-    import("./model-providers-page.ts").then(() => ({
+    import("./model-providers-page.tsx").then(() => ({
       header: true,
       render: (data: ModelProvidersRouteData | undefined, loaderPending = false) =>
         html`<openclaw-model-providers-page

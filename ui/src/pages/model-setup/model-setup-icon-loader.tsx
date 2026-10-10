@@ -1,10 +1,6 @@
-import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  hasProviderBrandIcon,
-  renderProviderBrandIcon,
-  renderProviderFallbackIcon,
-} from "../../components/provider-icon.ts";
+import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
+import { ProviderBrandIcon, ProviderFallbackIcon } from "../../components/solid/provider-icon.tsx";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import type { ModelSetupPageState } from "./state.ts";
@@ -28,20 +24,22 @@ export function renderProviderIcon(
   const localBrand = resolveSetupBrandIcon(entry);
   const iconClass = `model-setup__icon ${className}`.trim();
   if (localBrand) {
-    return renderProviderBrandIcon(localBrand, { className: iconClass });
+    return <ProviderBrandIcon provider={localBrand} class={iconClass} />;
   }
   const blobUrl = entry.icon ? props.iconUrls[entry.icon] : undefined;
   if (!blobUrl) {
-    return renderProviderFallbackIcon(entry.label, { className: iconClass });
+    return <ProviderFallbackIcon label={entry.label} class={iconClass} />;
   }
-  return html`<img
-    class=${iconClass}
-    src=${blobUrl}
-    alt=${entry.label}
-    width="24"
-    height="24"
-    @error=${() => props.onIconError(entry.icon!)}
-  />`;
+  return (
+    <img
+      class={iconClass}
+      src={blobUrl}
+      alt={entry.label}
+      width="24"
+      height="24"
+      onError={() => props.onIconError(entry.icon!)}
+    />
+  );
 }
 
 export function createModelSetupIconLoader(
@@ -67,7 +65,7 @@ export function createModelSetupIconLoader(
   }
   const loader = new PluginIconController({
     getFetchContext: () => pluginIconFetchContext(getContext()),
-    // Eligibility can change before Lit's next reconciliation callback.
+    // Eligibility can change before the next reconciliation callback.
     isConnected: (iconUrl) =>
       getContext().gateway.snapshot.phase === "connected" && currentIconUrls().has(iconUrl),
     fetchIcon: (iconUrl, context, signal) =>

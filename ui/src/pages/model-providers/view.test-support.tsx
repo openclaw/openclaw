@@ -1,9 +1,10 @@
-import { nothing, render } from "lit";
+import { render as mountSolid } from "@solidjs/testing-library";
+import { createSignal, flush } from "solid-js";
 import { onTestFinished } from "vitest";
 import type { ModelProviderCard } from "./data.ts";
-import { renderModelProviders } from "./view.ts";
+import { ModelProviders, type ModelProvidersViewProps } from "./view.tsx";
 
-type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
+const mountedViews = new WeakMap<HTMLDivElement, (props: ModelProvidersViewProps) => void>();
 
 export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
   return {
@@ -62,7 +63,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
-    installedAgents: nothing,
+    installedAgents: undefined,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
     onCloseKeyEditor: () => undefined,
@@ -96,11 +97,20 @@ export function mount(
   viewProps: ModelProvidersViewProps,
   container = document.body.appendChild(document.createElement("div")),
 ): HTMLDivElement {
-  onTestFinished(() => {
-    render(nothing, container);
-    container.remove();
-  });
-  render(renderModelProviders(viewProps), container);
+  const update = mountedViews.get(container);
+  if (update) {
+    update({ ...viewProps });
+  } else {
+    const [current, setCurrent] = createSignal(viewProps);
+    const view = mountSolid(() => <ModelProviders {...current()} />, { container });
+    mountedViews.set(container, (next) => setCurrent(next));
+    onTestFinished(() => {
+      view.unmount();
+      mountedViews.delete(container);
+      container.remove();
+    });
+  }
+  flush();
   return container;
 }
 

@@ -1,7 +1,8 @@
-import { html, nothing, type ReactiveControllerHost, type ReactiveController } from "lit";
+import { createMemo, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import type { ControllerHost } from "./page-controller.ts";
 
 registerModelSetupEnglish();
 
@@ -21,13 +22,13 @@ type DiscoveryOptions = {
   onError: (error: unknown) => void;
 };
 
-export class ModelProviderDiscoveryController implements ReactiveController {
+export class ModelProviderDiscoveryController {
   private state: "closed" | "loading" | "ready" = "closed";
   private generation = 0;
   private owner: DiscoveryOwner | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: ControllerHost,
     private readonly options: DiscoveryOptions,
   ) {
     host.addController(this);
@@ -86,7 +87,7 @@ export class ModelProviderDiscoveryController implements ReactiveController {
     this.state = "loading";
     this.host.requestUpdate();
     try {
-      await import("../model-setup/model-setup-page.ts");
+      await import("../model-setup/model-setup-page.tsx");
       if (isCurrent()) {
         this.state = "ready";
         this.host.requestUpdate();
@@ -99,38 +100,60 @@ export class ModelProviderDiscoveryController implements ReactiveController {
     }
   }
 
-  render(data: { agentLabel: string; credentialChoices: readonly string[] }) {
-    if (this.state === "closed") {
-      return nothing;
-    }
-    const generation = this.generation;
-    const close = (refresh = false) => {
-      if (generation === this.generation) {
-        this.reset();
-        if (refresh) {
-          this.options.onClose();
-        }
-      }
+  render(
+    getData: () => { agentLabel: string; credentialChoices: readonly string[] },
+    revision: () => unknown,
+  ) {
+    const Discovery = () => {
+      const state = createMemo(() => {
+        revision();
+        return this.state === "closed" ? undefined : this.state;
+      });
+      const data = createMemo(() => {
+        revision();
+        return getData();
+      });
+      return (
+        <Show when={state()} keyed>
+          {(phase) => {
+            const generation = this.generation;
+            const close = (refresh = false) => {
+              if (generation === this.generation) {
+                this.reset();
+                if (refresh) {
+                  this.options.onClose();
+                }
+              }
+            };
+            return phase === "loading" ? (
+              <openclaw-modal-dialog
+                label={t("modelSetup.discovery.title")}
+                onModal-cancel={() => close()}
+              >
+                <div class="model-setup-wizard">
+                  <div class="model-setup-wizard__body" role="status">
+                    {t("common.loading")}
+                  </div>
+                  <div class="model-setup-wizard__footer">
+                    <button class="btn" onClick={() => close()}>
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </div>
+              </openclaw-modal-dialog>
+            ) : (
+              <openclaw-model-setup-page
+                prop:routeData={{ firstRun: false }}
+                prop:embedded={true}
+                prop:credentialChoices={data().credentialChoices}
+                prop:agentLabel={data().agentLabel}
+                prop:onClose={() => close(true)}
+              />
+            );
+          }}
+        </Show>
+      );
     };
-    if (this.state === "loading") {
-      return html`<openclaw-modal-dialog
-        label=${t("modelSetup.discovery.title")}
-        @modal-cancel=${() => close()}
-      >
-        <div class="model-setup-wizard">
-          <div class="model-setup-wizard__body" role="status">${t("common.loading")}</div>
-          <div class="model-setup-wizard__footer">
-            <button class="btn" @click=${() => close()}>${t("common.cancel")}</button>
-          </div>
-        </div>
-      </openclaw-modal-dialog>`;
-    }
-    return html`<openclaw-model-setup-page
-      .routeData=${{ firstRun: false }}
-      .embedded=${true}
-      .credentialChoices=${data.credentialChoices}
-      .agentLabel=${data.agentLabel}
-      .onClose=${() => close(true)}
-    ></openclaw-model-setup-page>`;
+    return <Discovery />;
   }
 }

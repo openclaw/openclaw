@@ -13,8 +13,12 @@ import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
-import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
-import type { ModelProvidersRouteData } from "./model-providers/route.ts";
+import {
+  createEmptyModelProvidersRouteData,
+  createPage as createModelProvidersPage,
+  mountPage as mountModelProvidersPage,
+  unmountPage as unmountModelProvidersPage,
+} from "./model-providers/model-providers-page.test-support.tsx";
 import type { SessionDeleteRow } from "./sessions/selection.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { createSkill } from "./skills/view.test-support.ts";
@@ -24,7 +28,7 @@ import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";
-import "./model-providers/model-providers-page.ts";
+import "./model-providers/model-providers-page.tsx";
 import "./sessions/sessions-page.ts";
 import "./skills/skills-page.ts";
 import "./usage/usage-page.ts";
@@ -422,18 +426,26 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
-    const page = createPage(
-      "openclaw-model-providers-page",
+    const page = createModelProvidersPage(
       contextWithClient(client, { connected: true, agentsList, selectedAgentId: "main" }),
-    ) as TestPage & {
-      data: ModelProvidersData | null;
-      routeData: ModelProvidersRouteData;
-    };
+    );
     page.routeData = createEmptyModelProvidersRouteData(page.context);
-    document.body.append(page);
+    mountModelProvidersPage(page);
     await waitForFast(() => expect(authCalls).toBe(1));
 
-    await replaceContext(page, client, { connected: true, agentsList, selectedAgentId: "main" });
+    const previous = page.context.gateway.snapshot;
+    createGatewayMetadataObserver(() => true).synchronize(previous, {
+      ...previous,
+      phase: "stopped",
+    });
+    unmountModelProvidersPage(page);
+    page.context = contextWithClient(client, {
+      connected: true,
+      agentsList,
+      selectedAgentId: "main",
+    });
+    mountModelProvidersPage(page);
+    await page.updateComplete;
     await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
 
     staleAuth.resolve({ ts: 1, providers: [] });
@@ -467,10 +479,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       selectedAgentId: "main",
     });
     const staleData = { authStatus: { ts: 1, providers: [] } } as unknown as ModelProvidersData;
-    const page = createPage("openclaw-model-providers-page", context) as TestPage & {
-      routeData: ModelProvidersRouteData;
-      data: ModelProvidersData | null;
-    };
+    const page = createModelProvidersPage(context);
     page.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: { ...context.gateway.snapshot },
@@ -480,7 +489,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       selectionIntentRevision: context.settingsAgentSelection.intentRevision,
     };
 
-    document.body.append(page);
+    mountModelProvidersPage(page);
     await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
     expect(page.data).not.toBe(staleData);
   });

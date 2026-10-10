@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { activationTargetId } from "./state.ts";
-import { detected, mount, props, text } from "./test-helpers/view.test-support.ts";
-import { renderModelSetup } from "./view.ts";
+import {
+  detected,
+  mount,
+  props,
+  text,
+  renderSetup,
+  disposeViews,
+} from "./test-helpers/view.test-support.tsx";
 
 function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
   return mount(
@@ -49,9 +54,7 @@ describe("renderModelSetup", () => {
   });
 
   afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
+    disposeViews();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     delete (document as unknown as { execCommand?: unknown }).execCommand;
@@ -370,25 +373,23 @@ describe("renderModelSetup", () => {
     ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
-        render(
-          renderModelSetup(
-            props({
-              wizard: {
-                phase: "step",
-                authChoice: "provider-auth",
-                step: {
-                  id: "access-value",
-                  type: "text",
-                  message: "Provider access value",
-                  sensitive,
-                  placeholder: "Enter value",
-                },
-                busy: false,
-                validationError,
+        renderSetup(
+          props({
+            wizard: {
+              phase: "step",
+              authChoice: "provider-auth",
+              step: {
+                id: "access-value",
+                type: "text",
+                message: "Provider access value",
+                sensitive,
+                placeholder: "Enter value",
               },
-              wizardValue: "initial value",
-            }),
-          ),
+              busy: false,
+              validationError,
+            },
+            wizardValue: "initial value",
+          }),
           container,
         );
       renderStep(null);
@@ -461,7 +462,7 @@ describe("renderModelSetup", () => {
         error: "No reply received",
       };
       viewProps.actionsDisabled = false;
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(0);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
@@ -481,15 +482,15 @@ describe("renderModelSetup", () => {
 
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };
       viewProps.manualProviderId = "gemini-api-key";
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       viewProps.page = { phase: "loading" };
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };
       viewProps.activation = { phase: "testing", targetId };
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
     },

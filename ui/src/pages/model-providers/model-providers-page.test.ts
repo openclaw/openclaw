@@ -12,6 +12,9 @@ import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  createPage,
+  mountPage,
+  unmountPage,
   createApiKeyProviderData,
   createAuthStatus,
   createEmptyModelProvidersRouteData,
@@ -20,10 +23,9 @@ import {
   waitForProviders,
   requestCount,
   saveKey,
-  type ModelProvidersPageTestElement,
   advanceUsageRetries,
   focusDocument,
-} from "./model-providers-page.test-support.ts";
+} from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -36,10 +38,7 @@ describe("ModelProvidersPage agent scope", () => {
     const { context, request, snapshot } = createHarness("main");
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const page = document.createElement(
-      "openclaw-model-providers-page",
-    ) as ModelProvidersPageTestElement;
-    page.context = context;
+    const page = createPage(context);
     page.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: snapshot,
@@ -53,7 +52,7 @@ describe("ModelProvidersPage agent scope", () => {
       agentId: "main",
     };
 
-    document.body.append(page);
+    mountPage(page);
     await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
     const previousCalls = requestCount(request, "usage.status");
 
@@ -166,7 +165,7 @@ describe("ModelProvidersPage agent scope", () => {
     await page.updateComplete;
 
     expect(page.querySelector(".model-providers__profiles")).toBeNull();
-    expect(page.textContent).not.toContain("owner@example.com");
+    expect(page.renderRoot.textContent).not.toContain("owner@example.com");
     expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
       "OAuth profiles: 1",
     );
@@ -207,7 +206,7 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForProviders(page);
     runtimeConfig.patch.mockClear();
 
-    await updatePickers(page);
+    await updatePickers(page.renderRoot);
     const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
       (select) =>
         select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
@@ -240,12 +239,11 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
     await waitForProviders(page);
 
-    const groups = page.querySelectorAll<HTMLElement & { value: string }>(
-      "#settings-model-behavior wa-radio-group",
+    const groups = page.querySelectorAll<HTMLElement>(
+      "#settings-model-behavior .settings-segmented",
     );
     expect(groups).toHaveLength(2);
-    groups[0]!.value = "";
-    groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    groups[0]!.querySelector<HTMLInputElement>('input[type="radio"][value=""]')!.click();
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {
@@ -277,9 +275,13 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForProviders(page);
 
     const behavior = page.querySelector("#settings-model-behavior")!;
-    const groups = behavior.querySelectorAll<HTMLElement & { value: string }>("wa-radio-group");
-    expect([...groups].map((group) => group.value)).toEqual(["", ""]);
-    const defaults = behavior.querySelectorAll<HTMLElement>('wa-radio[value=""]');
+    const groups = behavior.querySelectorAll<HTMLElement>(".settings-segmented");
+    expect(
+      [...groups].map(
+        (group) => group.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value,
+      ),
+    ).toEqual(["", ""]);
+    const defaults = behavior.querySelectorAll<HTMLInputElement>('input[type="radio"][value=""]');
     expect(defaults).toHaveLength(2);
     defaults[0]?.click();
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
@@ -310,7 +312,7 @@ describe("ModelProvidersPage agent scope", () => {
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
-    expect(page.textContent).toContain(page.messages.openai?.warning);
+    expect(page.renderRoot.textContent).toContain(page.messages.openai?.warning);
   });
 
   it("removes stored API keys through the rendered action and retains its warning", async () => {
@@ -620,7 +622,7 @@ describe("ModelProvidersPage agent scope", () => {
     await page.updateComplete;
 
     expect(context.agents.ensureList).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Agent roster unavailable");
+    expect(page.renderRoot.textContent).toContain("Agent roster unavailable");
 
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
@@ -629,10 +631,7 @@ describe("ModelProvidersPage agent scope", () => {
   it("discards stale route data when selection changes during preload", async () => {
     const { context, snapshot, request } = createHarness("writer");
     const staleData = { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: 1 };
-    const page = document.createElement(
-      "openclaw-model-providers-page",
-    ) as ModelProvidersPageTestElement;
-    page.context = context;
+    const page = createPage(context);
     page.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: snapshot,
@@ -641,7 +640,7 @@ describe("ModelProvidersPage agent scope", () => {
       client: snapshot.client,
       agentId: "main",
     };
-    document.body.append(page);
+    mountPage(page);
 
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
@@ -738,7 +737,7 @@ describe("ModelProvidersPage usage convergence", () => {
       return original(method);
     });
     const page = appendPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("90% left"));
+    await vi.waitFor(() => expect(page.renderRoot.textContent).toContain("90% left"));
     expect(accountRequests).toEqual([
       { agentId: "main", profileId: "openai:one" },
       { agentId: "main", profileId: "openai:two" },
@@ -752,21 +751,18 @@ describe("ModelProvidersPage usage convergence", () => {
     runtimeConfig.state.configSaving = true;
     notifyRuntimeConfig();
     await page.updateComplete;
-    expect(page.textContent).toContain("90% left");
+    expect(page.renderRoot.textContent).toContain("90% left");
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     usedPercent = 90;
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
-    await vi.waitFor(() => expect(page.textContent).toContain("10% left"));
+    await vi.waitFor(() => expect(page.renderRoot.textContent).toContain("10% left"));
   });
 
   it("waits for the route loader before starting provider requests, including after reconnect", async () => {
     const harness = createHarness("main");
-    const page = document.createElement(
-      "openclaw-model-providers-page",
-    ) as ModelProvidersPageTestElement;
-    page.context = harness.context;
-    document.body.append(page);
+    const page = createPage(harness.context);
+    mountPage(page);
     await page.updateComplete;
     expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
 
@@ -800,7 +796,7 @@ describe("ModelProvidersPage usage convergence", () => {
       await page.updateComplete;
       await advanceUsageRetries();
       await page.updateComplete;
-      expect(page.textContent).toContain("did not finish loading");
+      expect(page.renderRoot.textContent).toContain("did not finish loading");
 
       const usageCallsBeforeRestart = harness.request.mock.calls.filter(
         ([method]) => method === "usage.status",
@@ -971,16 +967,16 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     await page.updateComplete;
     expect(selection.state.selectedId).toBeNull();
     expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
-    expect(page.textContent).toContain("No agents");
+    expect(page.renderRoot.textContent).toContain("No agents");
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
 
-    const groups = page.querySelectorAll<HTMLElement & { disabled: boolean; value: string }>(
-      ".model-providers__defaults wa-radio-group",
+    const groups = page.querySelectorAll<HTMLElement>(
+      ".model-providers__defaults .settings-segmented",
     );
     expect(groups).toHaveLength(2);
-    expect(groups[0]!.disabled).toBe(false);
-    groups[0]!.value = "high";
-    groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    const high = groups[0]!.querySelector<HTMLInputElement>('input[type="radio"][value="high"]')!;
+    expect(high.disabled).toBe(false);
+    high.click();
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {
@@ -997,7 +993,7 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     });
     expect(request.mock.calls.some(([method]) => method.startsWith("models."))).toBe(false);
   } finally {
-    page.remove();
+    unmountPage(page);
     selection.dispose();
   }
 });
