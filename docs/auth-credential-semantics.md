@@ -256,6 +256,12 @@ catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
 
+Deferred provider catalogs retain discovered models when a configured SecretRef
+has a matching credential in the active runtime snapshot. Catalog admission uses
+that credential only as availability evidence: it does not resolve the reference
+again or copy the value into model rows. Unresolved references and credentials
+retained in a generated catalog do not grant admission.
+
 Environment-backed profiles keep usable values from the discovery environment,
 including cold command and worker paths. When that material is missing, only the
 selected profile's activated snapshot may supply it; otherwise discovery reports

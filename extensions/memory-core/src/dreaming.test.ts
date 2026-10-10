@@ -13,6 +13,7 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,7 @@ import { createMemoryCoreTestHarness, shortTermTestState } from "./test-helpers.
 
 // `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
 const runDreamingSweepPhasesMock = vi.hoisted(() =>
-  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => ({
+  vi.fn<typeof import("./dreaming-phases.js").runDreamingSweepPhases>(async () => ({
     degradedPhases: 0,
     pendingNarratives: 0,
   })),
@@ -129,14 +130,9 @@ function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHarnessOp
       mutationCalls.push("add");
       addCalls.push(input);
       jobs.push({
+        ...input,
         id: `job-${jobs.length + 1}`,
-        declarationKey: input.declarationKey,
-        name: input.name,
-        description: input.description,
-        enabled: input.enabled,
         schedule: { ...input.schedule },
-        sessionTarget: input.sessionTarget,
-        wakeMode: input.wakeMode,
         payload: { ...input.payload },
         ...(input.delivery ? { delivery: { ...input.delivery } } : {}),
         createdAtMs: Date.now(),
@@ -216,7 +212,6 @@ function createDreamingTestContext(
 ) {
   const logger = createLogger();
   const harness = createCronHarness(params.initialJobs, params.cronOptions);
-  const onMock = vi.fn();
   const api: DreamingPluginApiTestDouble = {
     ...createTestPluginApi({
       config: params.config ?? createDreamingConfig(),
@@ -224,11 +219,11 @@ function createDreamingTestContext(
       logger,
     }),
     logger,
-    on: onMock,
+    on: vi.fn<DreamingPluginApi["on"]>(),
     scheduler: createTestPluginServiceScheduler(),
     registerService: vi.fn<DreamingPluginApi["registerService"]>(),
   };
-  Object.assign(api.runtime, params.runtime);
+  Object.assign(api.runtime, { agent: createPluginRuntimeMock().agent }, params.runtime);
   return { api, harness, logger };
 }
 
@@ -835,7 +830,7 @@ describe("dreaming service reconciliation", () => {
 
   // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
   // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
-  it("sweeps each workspace as its owning agent rather than the roster default", async () => {
+  it("sweeps each workspace as its owning agent with the configured narrative budget", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
     runDreamingSweepPhasesMock.mockClear();
     const { api, harness } = createDreamingTestContext({
@@ -845,9 +840,11 @@ describe("dreaming service reconciliation", () => {
           limit: 5,
           phases: { light: { enabled: false }, rem: { enabled: false } },
         },
-        { agents: { defaults: { workspace: workspaceDir } } },
+        { agents: { defaults: { workspace: workspaceDir, timeoutSeconds: 180 } } },
       ),
     });
+    const resolveTimeout = vi.mocked(api.runtime.agent.resolveAgentTimeoutMs);
+    resolveTimeout.mockReturnValue(180_000);
 
     registerShortTermPromotionDreamingForTest(api);
     await triggerDreamingServiceStart(api, {
@@ -873,6 +870,8 @@ describe("dreaming service reconciliation", () => {
     )[0];
     expect(sweepArgs.agentId).toBe("researcher");
     expect(sweepArgs.workspaceDir).toBe(workspaceDir);
+    expect(sweepArgs.narrativeTimeoutMs).toBe(180_000);
+    expect(resolveTimeout).toHaveBeenCalledWith({ cfg: api.config });
   });
 
   it("reports a degraded sweep when narrative cleanup fails", async () => {

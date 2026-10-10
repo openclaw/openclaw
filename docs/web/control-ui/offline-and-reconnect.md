@@ -109,6 +109,9 @@ contacting the Gateway. The service worker retains the current build and at most
 two previous builds, so open tabs can still load their original assets. Uploaded
 profile avatars use private browser caching only when the URL matches the image's
 content revision; unversioned URLs and external avatar fallbacks still revalidate.
+Content-addressed plugin interface assets stay in the private browser HTTP cache
+across grant renewal; requests reaching the Gateway still require current plugin
+authorization, and plugin data remains subject to per-call RPC authorization.
 
 Online navigations still go directly to the network so reverse-proxy HTTP
 authentication dialogs work normally. If the browser reports itself online

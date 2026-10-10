@@ -18,6 +18,8 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   cacheValidityTokensEqual,
   readSessionEntryCacheValidityToken,
@@ -25,7 +27,6 @@ import {
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
-  partitionUnchangedPlannedLifecycleArtifactEntries,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ReclamationDatabaseOptions,
@@ -297,20 +298,27 @@ export function finalizeSessionMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   plan: Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }>,
 ): Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> {
-  const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
+  const committedEntryIndices: number[] = [];
+  const unchanged = plan.entries.filter((planned, index) => {
+    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
+    if (!sqliteSessionEntriesEqual(current, planned.expectedEntry)) {
+      return false;
+    }
+    committedEntryIndices.push(index);
+    return true;
+  });
   const archivedTranscripts = deleteMaterializedSessionStatePlans(
     database,
     plan.materializedPlans,
     undefined,
-    new Set(partition.unchanged.map((entry) => entry.sessionKey)),
+    new Set(unchanged.map((entry) => entry.sessionKey)),
   );
-  deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
+  deletePlannedLifecycleArtifactEntries(database, unchanged);
   return {
     kind: plan.kind,
     value: {
       archivedTranscripts,
-      changedEntries: partition.changed,
-      committedEntries: partition.unchanged,
+      committedEntryIndices,
     },
   };
 }

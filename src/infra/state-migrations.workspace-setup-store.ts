@@ -412,6 +412,10 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
+        const attestationColumns = {
+          attested_at_ms: parsedAttestation.attestedAtMs,
+          attestation_updated_at_ms: now,
+        };
         const existingRow = readWorkspace();
         if (existingRow?.attested_at_ms != null) {
           const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
@@ -445,10 +449,7 @@ export function importAndRecordReceipt(params: {
               db,
               kysely
                 .updateTable("workspace_setup_state")
-                .set({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                })
+                .set(attestationColumns)
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
             executeSqliteQuerySync(
@@ -472,14 +473,10 @@ export function importAndRecordReceipt(params: {
                 // Orphan hashed-key attestation files carry no path; the row
                 // heals its NULL path when the workspace next appears live.
                 workspace_path: params.source.workspaceDir ?? null,
-                attested_at_ms: parsedAttestation.attestedAtMs,
-                attestation_updated_at_ms: now,
+                ...attestationColumns,
               })
               .onConflict((conflict) =>
-                conflict.column("workspace_key").doUpdateSet({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                }),
+                conflict.column("workspace_key").doUpdateSet(attestationColumns),
               ),
           );
           insertGeneratedHashes();
