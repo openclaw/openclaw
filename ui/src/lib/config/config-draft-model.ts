@@ -442,6 +442,18 @@ export function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   state.configAutoSaveStatus = "idle";
 }
 
+/**
+ * The value form patches must build on: the parsed dirty raw draft when raw
+ * mode owns the draft (mirrors mutateConfigForm's base selection), else the
+ * staged form. Null means an unparseable raw draft blocks form edits.
+ */
+export function resolveConfigDraftBase(state: RuntimeConfigState): Record<string, unknown> | null {
+  if (state.configFormDirty && state.configFormMode === "raw") {
+    return parseConfigRawDraft(state.configRaw);
+  }
+  return state.configForm;
+}
+
 function parseConfigRawDraft(raw: string): Record<string, unknown> | null {
   try {
     return asConfigRecord(parseJson5Text(raw));

@@ -9,6 +9,7 @@ import {
 import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
+import { renderChannelAgentRoutingSection } from "./view.routing.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchema | null {
@@ -93,6 +94,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
     return renderSettingsLoadingSkeleton({ label: t("channels.config.loadingSchema"), rows: 2 });
   }
   return html`
+    ${renderChannelAgentRoutingSection({ channelId, props })}
     <div class="settings-row settings-row--stacked">
       ${renderChannelConfigForm(channelId, props, disabled)}
       ${

@@ -459,6 +459,18 @@ export const en: TranslationMap & {
     generic: {
       subtitle: "Channel status and configuration.",
     },
+    routing: {
+      title: "Agent routing",
+      description:
+        "Choose which agent handles each account. Accounts without their own binding fall back to the catch-all row.",
+      catchAll: "Other accounts (catch-all)",
+      agentFor: "Agent for {account}",
+      defaultAccount: "Default account",
+      viaCatchAll: "via catch-all",
+      notSet: "Not set",
+      notSetHint:
+        "Not set works only while a single agent is configured. With multiple agents, messages on this channel are rejected until a binding selects their agent.",
+    },
     discord: {
       title: "Discord",
       subtitle: "Bot status and channel configuration.",
