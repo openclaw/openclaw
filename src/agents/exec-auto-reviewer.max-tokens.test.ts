@@ -6,6 +6,7 @@ import {
   completeWithPreparedSimpleCompletionModel,
 } from "./simple-completion-runtime.js";
 
+// mock-isolation: keep model acquisition and provider I/O outside this completion-budget unit test.
 vi.mock("./simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelForAgent: vi.fn(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
