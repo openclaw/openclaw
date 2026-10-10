@@ -22,6 +22,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import type { PreparedSessionTranscriptModelContext } from "../../config/sessions/session-transcript-context-read.js";
 import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
@@ -33,14 +34,17 @@ import {
 import {
   withOwnedSessionTranscriptWriterFence,
   captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptReader,
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
+import { cloneSessionModelContextEntries } from "./session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import {
   sessionManagerReadInitialContext,
@@ -95,6 +99,10 @@ export type {
 } from "./session-manager-types.js";
 
 export class SessionManager extends SessionManagerBranching {
+  private preparedInitialContext:
+    | (PreparedSessionTranscriptModelContext & { view: object })
+    | undefined;
+
   private constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
@@ -123,6 +131,8 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   async [sessionManagerReadInitialContext]() {
+    const prepared = this.preparedInitialContext;
+    this.preparedInitialContext = undefined;
     if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
       return this.buildSessionContext();
     }
@@ -133,7 +143,15 @@ export class SessionManager extends SessionManagerBranching {
     const cwd = this.cwd;
     const context = await readSessionManagerModelContextAsync(
       target,
-      { limits: this.boundedContextLimits },
+      {
+        limits: this.boundedContextLimits,
+        ...(prepared &&
+        Object.keys(prepared.view).every(
+          (key) => Reflect.get(prepared.view, key) === Reflect.get(initial, key),
+        )
+          ? { prepared }
+          : {}),
+      },
       (snapshot) => SessionManager.fromSelectedEntries(snapshot.events, cwd),
       this,
     );
@@ -553,8 +571,21 @@ export class SessionManager extends SessionManagerBranching {
     return openSessionManagerBoundedView(
       target,
       options,
-      (cwd, captured, context, limits) =>
-        new SessionManager(cwd, captured, context.events, { ...context, limits }),
+      (cwd, captured, context, limits) => {
+        const manager = new SessionManager(cwd, captured, context.events, { ...context, limits });
+        const branch = manager.getBranch();
+        const reader = context.completeActivePath && getOwnedSessionTranscriptReader(captured);
+        const writeToken = reader && readSqliteDatabaseWriteTokenForPath(reader.database.path);
+        if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
+          const events = cloneSessionModelContextEntries(manager.getHeader(), branch);
+          manager.preparedInitialContext = {
+            context: { events, version: context.version },
+            writeToken,
+            view: manager.captureTranscriptView(),
+          };
+        }
+        return manager;
+      },
       { selection, consume, captureView: (manager) => manager.captureTranscriptView() },
     );
   }

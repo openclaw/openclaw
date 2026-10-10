@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Choose good compromises
+
+Every design trades correctness against complexity and performance. Pick the compromise deliberately; never maximize one axis at the others' expense.
+
+- Design for failures that actually happen: crashes, restarts, retries, real concurrent writers, reported incidents. Do not engineer for millisecond races, theoretical interleavings, or adversarial timing unless they put user data, security, or money at risk, or a real incident shows them.
+- Prefer the cheap mechanism: idempotency keys, one check at the point of effect, retry, best-effort recording with a warning. Fencing tokens, revocation generations, multi-phase admission, nonce-matched settlement, and per-write cross-thread handshakes need a concrete failure that simpler code cannot handle.
+- Name the accepted edge case in a comment or the PR instead of coding around it. A rare, visible, recoverable glitch beats permanent complexity.
+- Complexity is a correctness risk too: machinery nobody can follow fails in ways nobody predicted.
+
 The task defines scope and authorization; its chosen workflow owns execution,
 review, publication, recovery, and cleanup. Explicit user instructions take
 precedence over skill guidelines and workflow defaults; host limits and required
@@ -58,7 +67,7 @@ Update instructions at their owner instead of adding competing rules here.
 - Database access runs in worker threads (read-only worker scope, SQLite writer broker), never on the Gateway main thread, which only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access is legacy: never add more; migrate what you touch.
 - SQLite format, schema-version, integrity, canonical-index, and table-existence checks run once per physical database per process load, shared with all workers and handles. This includes quarantine-store format; existing indexed durable quarantine-row guards still observe recorded corruption. Reuse admitted format facts across opens, scopes, requests, and idle close; identify replacement files by volume, inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new facts after their DDL; Doctor and explicit verification retain their checks. Never add repeated format checks; remove them when touched.
 - The Gateway process owns every OpenClaw database and its state. In-process writer receipts invalidate cached rows across workers and handles; use direct reads when a cache cannot be covered. Never add runtime foreign-commit probes (`PRAGMA data_version`, version observations, or foreign-observation scopes); remove them when touched. Outside writers, including CLI, Doctor, cron, and plugin children, must use the Gateway or hold exclusive ownership while it is stopped. Preserve live-authority checks at effect boundaries and consistent snapshots for multi-statement reads. See [database schemas](docs/reference/database-schemas.md).
-- Privileged actions need current owner-held authority: revalidate after awaited work and right before side effects. Tokens, signatures, expiry, and matching IDs alone do not prove live authority.
+- Security boundaries (credentials, approvals, tool and command execution, external side effects) need current owner-held authority: revalidate after awaited work and right before the effect. Tokens, signatures, expiry, and matching IDs alone do not prove live authority. Internal bookkeeping (scheduling, receipts, history, caches) uses idempotency and a check at the effect instead.
 - Core owns shared message tools, action vocabulary, and dispatch; channels own account, security, conversation, and transport contracts. Keep typed command/approval/URL/action distinctions until encoding; never infer commands from raw strings.
 - Carry prepared facts through hot paths; reuse process-stable plugin metadata and lifecycle-owned caches; never repeatedly load registries or freshness-poll files. Preserve lazy module boundaries and verify relevant builds on the authorized host.
 - Narrow APIs, explicit valid states, strict ESM/types. Real types or `unknown`; no `@ts-nocheck`; suppressions need an explained exception. Reuse schema/coercion owners; no duplicate guards, speculative helpers, or naming-only wrappers.

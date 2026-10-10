@@ -594,6 +594,9 @@ describe("SQLite session entry cache", () => {
     const borrowedAfter = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
+    parseSessionEntryCalls.mockClear();
+    expect(listSessionEntriesCore({ ...scope, clone: false })[0]?.entry).toBe(borrowedAfter);
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 });
