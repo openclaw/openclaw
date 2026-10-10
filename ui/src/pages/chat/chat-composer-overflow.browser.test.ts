@@ -603,7 +603,9 @@ describe("composer overflow presentation", () => {
       // Safari pointer activation does not focus buttons. Start native traversal
       // from Clear in every engine, independently of the pointer assertions above.
       const clear = commands.querySelector<HTMLButtonElement>(".agent-chat__goal-clear")!;
+      window.focus();
       clear.focus();
+      expect(document.hasFocus()).toBe(true);
       expect(document.activeElement).toBe(clear);
       if (server.browser === "webkit" && server.platform === "darwin") {
         // Option-Tab includes buttons under Safari's default keyboard settings.
