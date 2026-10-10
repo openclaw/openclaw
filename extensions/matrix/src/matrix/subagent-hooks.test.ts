@@ -17,6 +17,7 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
   getSessionBindingService: () => ({ unbind: unbindMock }),
 }));
 
+// mock-isolation: Hook fixtures own binding indexes and managers independently of process-global bindings.
 vi.mock("./thread-bindings-shared.js", () => ({
   getMatrixThreadBindingManager: getManagerMock,
   listAllBindings: listAllBindingsMock,
