@@ -82,7 +82,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   wasMentioned: boolean;
   conversationAvatar?: string;
 
-  route: ReturnType<typeof resolveAgentRoute>;
+  route: ReturnType<typeof resolveAgentRoute> & { replyDispatchAgentId?: string };
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
   boundAgentId?: string;

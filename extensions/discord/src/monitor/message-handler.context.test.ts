@@ -93,7 +93,10 @@ describe("discord message context", () => {
           },
           { storePath: state.path("sessions.json") },
         );
-        ctx.route = Object.assign({}, ctx.route, { [routeMetadata]: metadata });
+        ctx.route = Object.assign({}, ctx.route, {
+          [routeMetadata]: metadata,
+          replyDispatchAgentId: "configured-owner",
+        });
         ctx.resolveChannelIngress = (contextBinding, conversation) =>
           resolveDiscordTextCommandAccess({
             accountId: ctx.accountId,
@@ -118,6 +121,7 @@ describe("discord message context", () => {
         expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
         expect(result.ctxPayload.ConversationRoutePeerId).toBe(ctx.messageChannelId);
         expect(result.ctxPayload.SenderIsBot).toBe(true);
+        expect(result.ctxPayload.ReplyDispatchAgentId).toBe("configured-owner");
         expect(build).toHaveBeenCalledTimes(1);
         expect(build.mock.calls[0]?.[0].route).toMatchObject({ [routeMetadata]: metadata });
         expect(result.ctxPayload).toBe(await build.mock.results[0]?.value);

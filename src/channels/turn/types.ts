@@ -87,6 +87,8 @@ export type ConversationFacts = {
 
 export type RouteFacts = {
   agentId: string;
+  /** Configured owner of the Gateway-published reply runtime when execution is ACP-bound. */
+  replyDispatchAgentId?: string;
   dmScope?: DmScope;
   accountId?: string;
   routeSessionKey: string;

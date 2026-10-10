@@ -47,6 +47,7 @@ export function resolveMatrixInboundRoute(params: {
   configuredBinding: ReturnType<typeof resolveConfiguredAcpBindingRecord>;
   bindingOwnerAvailable: boolean;
   runtimeBindingId: string | null;
+  replyDispatchAgentId?: string;
   pluginId?: string;
 } {
   const baseRoute = params.resolveAgentRoute({
@@ -84,6 +85,7 @@ export function resolveMatrixInboundRoute(params: {
       configuredBinding: null,
       bindingOwnerAvailable: true,
       runtimeBindingId: runtimeBinding.bindingId,
+      replyDispatchAgentId: runtimeRoute.replyDispatchAgentId,
     };
   }
 

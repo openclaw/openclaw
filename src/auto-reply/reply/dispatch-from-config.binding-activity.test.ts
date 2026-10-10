@@ -2,7 +2,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { inspectRuntimeConversationBindingRoute } from "../../channels/plugins/binding-routing.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import type { ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import {
   acpMocks,
@@ -12,12 +15,14 @@ import {
   mockPluginBindingClaim,
   mocks,
   sessionBindingMocks,
+  sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   createAcpRuntime,
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
+  firstMockArg,
   setNoAbort,
 } from "./dispatch-from-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -424,4 +429,192 @@ describe("channel-derived ACP route admission", () => {
       expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(target);
     },
   );
+});
+
+describe("bound ACP reply-runtime ownership", () => {
+  beforeEach(describe0BeforeEach0);
+
+  it.each([
+    { name: "source session with the optional owner omitted", rewritten: false },
+    { name: "ACP-rewritten channel route with a preserved owner", rewritten: true },
+  ])("loads the configured runtime from $name", async ({ rewritten }) => {
+    setNoAbort();
+    const sourceSessionKey = "agent:main:discord:C123";
+    const boundSessionKey = "agent:opencode:acp:bound-session";
+    const sourceStorePath = "/tmp/main-sessions.json";
+    const targetStorePath = "/tmp/opencode-sessions.json";
+    const sourceEntry = { sessionId: "source-session-id", updatedAt: Date.now() };
+    const targetEntry = { sessionId: "target-session-id", updatedAt: Date.now() };
+    const stores: Record<string, Record<string, Record<string, unknown>>> = {
+      [sourceStorePath]: { [sourceSessionKey]: sourceEntry },
+      [targetStorePath]: { [boundSessionKey]: targetEntry },
+    };
+    sessionStoreMocks.resolveSessionStorePathCore.mockImplementation(
+      (_configuredPath?: unknown, options?: { agentId?: string }) =>
+        options?.agentId === "opencode" ? targetStorePath : sourceStorePath,
+    );
+    sessionStoreMocks.loadSessionStore.mockImplementation(
+      (storePath?: string) => (storePath ? stores[storePath] : undefined) ?? {},
+    );
+    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
+      (params?: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
+        existing: params?.store[params.sessionKey],
+      }),
+    );
+    sessionStoreMocks.loadSessionEntry.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey: string; storePath: string };
+      return stores[params.storePath]?.[params.sessionKey];
+    });
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "Bound ACP reply" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockImplementation(
+      (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        params.sessionKey === boundSessionKey
+          ? {
+              sessionKey: boundSessionKey,
+              storeSessionKey: boundSessionKey,
+              cfg: {},
+              storePath: "/tmp/mock-sessions.json",
+              entry: {},
+              acp: {
+                backend: "acpx",
+                agent: "opencode",
+                runtimeSessionName: "runtime:opencode",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: Date.now(),
+              },
+            }
+          : null,
+    );
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    const boundConversationBinding = {
+      bindingId: "binding-acp-current",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    } satisfies SessionBindingRecord;
+    sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversationBinding);
+    sessionBindingMocks.listBySession.mockImplementation((targetSessionKey: string) =>
+      targetSessionKey === boundSessionKey ? [boundConversationBinding] : [],
+    );
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:C123",
+      To: "discord:C123",
+      AccountId: "default",
+      SessionKey: rewritten ? boundSessionKey : sourceSessionKey,
+      ...(rewritten ? { AgentId: "opencode", ReplyDispatchAgentId: "main" } : {}),
+      BodyForAgent: "continue",
+    });
+    const preparedLookup = vi.fn(async ({ agentId }: { agentId: string }) => {
+      if (agentId !== "main") {
+        throw new Error(`unexpected prepared reply dispatch owner ${agentId}`);
+      }
+      return Object.freeze({
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/main-workspace",
+        config: cfg,
+        modelCatalog: { entries: [], routeVariants: [] },
+        inboundPluginRegistry: createTestRegistry([]),
+      });
+    });
+    const runtimeLoaders = await import("./dispatch-from-config.runtime-loaders.js");
+    const preparedLoader = vi.spyOn(runtimeLoaders, "loadPreparedModelRuntime").mockResolvedValue({
+      loadPublishedGatewayReplyDispatchRuntime: preparedLookup,
+    } as never);
+
+    let result: Awaited<ReturnType<typeof dispatchReplyFromConfig>>;
+    try {
+      result = await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+      });
+    } finally {
+      preparedLoader.mockRestore();
+    }
+
+    expect(result.queuedFinal).toBe(true);
+    expect(preparedLookup).toHaveBeenCalledWith({
+      agentId: "main",
+      demand: "interactive",
+      onRuntimeLease: expect.any(Function),
+    });
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "C123",
+    });
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-acp-current",
+      undefined,
+      boundConversationBinding.conversation,
+    );
+    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith(
+      {
+        agentId: rewritten ? "opencode" : "main",
+        storePath: rewritten ? targetStorePath : sourceStorePath,
+        sessionKey: rewritten ? boundSessionKey : sourceSessionKey,
+        readConsistency: "latest",
+      },
+      {
+        assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      },
+    );
+    const readScopes = sessionStoreMocks.loadSessionEntry.mock.calls.map(([scope]) => scope);
+    expect(readScopes).not.toContainEqual(
+      expect.objectContaining({
+        agentId: rewritten ? "main" : "opencode",
+        sessionKey: rewritten ? boundSessionKey : sourceSessionKey,
+      }),
+    );
+    expect(readScopes).not.toContainEqual(
+      expect.objectContaining({
+        storePath: rewritten ? sourceStorePath : targetStorePath,
+        sessionKey: rewritten ? boundSessionKey : sourceSessionKey,
+      }),
+    );
+    const ensureSessionOptions = firstMockArg(runtime.ensureSession, "ensure session") as
+      | { agent?: unknown; sessionKey?: unknown }
+      | undefined;
+    expect(ensureSessionOptions?.sessionKey).toBe(boundSessionKey);
+    expect(ensureSessionOptions?.agent).toBe("opencode");
+    const runTurnOptions = firstMockArg(runtime.runTurn, "run turn") as
+      | { text?: unknown }
+      | undefined;
+    expect(runTurnOptions?.text).toBe("continue");
+    expect(replyResolver).not.toHaveBeenCalled();
+    const blockPayload = firstMockArg(
+      dispatcher.sendBlockReply as ReturnType<typeof vi.fn>,
+      "block reply",
+    ) as ReplyPayload | undefined;
+    expect(blockPayload?.text).toBe("Bound ACP reply");
+  });
 });

@@ -266,9 +266,16 @@ describe("runtime conversation binding route", () => {
   });
 
   it.each([
-    { name: "agent session", binding: createBinding(), kind: "agent", agentId: "review" },
     {
-      name: "inspection",
+      name: "ACP session",
+      binding: createBinding(),
+      kind: "agent",
+      agentId: "review",
+      replyDispatchAgentId: "main",
+    },
+    {
+      name: "ACP inspection",
+      replyDispatchAgentId: "main",
       binding: createBinding(),
       kind: "agent",
       agentId: "review",
@@ -300,7 +307,7 @@ describe("runtime conversation binding route", () => {
     },
   ])(
     "projects $name and touches only its owning channel account",
-    ({ binding, kind, agentId, touchBinding }) => {
+    ({ binding, kind, agentId, touchBinding, replyDispatchAgentId }) => {
       const route = createRoute();
       const { resolveByConversation, touch } = registerAdapter(binding);
       const siblingTouches = [
@@ -329,6 +336,7 @@ describe("runtime conversation binding route", () => {
       expect(result.bindingRecord).toBe(kind === "none" ? null : binding);
       expect(result.boundSessionKey).toBe(kind === "agent" ? binding.targetSessionKey : undefined);
       expect(result.boundAgentId).toBe(agentId);
+      expect(result.replyDispatchAgentId).toBe(replyDispatchAgentId);
       expect(Object.fromEntries(Object.entries(result.route))).toEqual(
         kind === "agent"
           ? {

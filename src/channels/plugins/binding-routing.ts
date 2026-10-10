@@ -13,6 +13,7 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
+  isAcpSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -42,6 +43,8 @@ export type RuntimeConversationBindingRouteResult = {
   route: ResolvedAgentRoute;
   boundSessionKey?: string;
   boundAgentId?: string;
+  /** Configured channel owner that published the reply runtime for a bound ACP turn. */
+  replyDispatchAgentId?: string;
   pluginId?: string;
 };
 
@@ -209,6 +212,8 @@ export function inspectRuntimeConversationBindingRoute(
     bindingRecord,
     boundSessionKey,
     boundAgentId: resolvedBoundAgentId,
+    // ACP owns execution/storage identity; the configured channel agent owns admission.
+    replyDispatchAgentId: isAcpSessionKey(boundSessionKey) ? baseRoute.agentId : undefined,
     route: observe(route),
   };
 }

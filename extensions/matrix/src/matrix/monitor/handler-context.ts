@@ -55,6 +55,7 @@ export async function resolveMatrixInboundContext(config: {
     cfg,
     resolveMessageIngress,
     route: _route,
+    replyDispatchAgentId,
     isDirectMessage,
     isRoom,
     effectiveRoomUsers,
@@ -240,6 +241,7 @@ export async function resolveMatrixInboundContext(config: {
     },
     route: {
       ..._route,
+      replyDispatchAgentId,
       routeSessionKey: _route.sessionKey,
       parentSessionKey:
         threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,

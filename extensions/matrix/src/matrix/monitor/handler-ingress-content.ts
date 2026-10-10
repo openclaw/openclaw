@@ -172,6 +172,7 @@ export async function resolveMatrixIngressContent(config: {
     route: _route,
     configuredBinding: _configuredBinding,
     runtimeBindingId: _runtimeBindingId,
+    replyDispatchAgentId,
   } = resolveMatrixInboundRoute({
     cfg,
     accountId,
@@ -466,6 +467,7 @@ export async function resolveMatrixIngressContent(config: {
     ...access,
     resolveMessageIngress,
     route: _route,
+    replyDispatchAgentId,
     hasExplicitSessionBinding,
     shouldRequireMention,
     wasMentioned,

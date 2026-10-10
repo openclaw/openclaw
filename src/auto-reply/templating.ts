@@ -153,6 +153,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Configured owner of the prepared reply runtime for an ACP-bound channel turn. */
+  ReplyDispatchAgentId?: string;
   /** Participant mention facts prepared once from the physical inbound message. */
   GroupThread?: GroupThreadMentionFacts;
   /** Effective routed DM scope, including binding overrides. */
