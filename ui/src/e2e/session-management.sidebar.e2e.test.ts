@@ -212,9 +212,10 @@ suite.define(() => {
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
-      for (const name of ["Move to group", "Move to top level"]) {
-        expect(await page.getByRole("menuitem", { name, exact: true }).isEnabled()).toBe(true);
-      }
+      expect(await page.getByRole("menuitem", { name: "Move to group" }).isEnabled()).toBe(true);
+      expect(await page.getByRole("menuitem", { name: "Move to top level" }).isEnabled()).toBe(
+        true,
+      );
       await captureUiProof(suite, page, "child-session-menu.png");
       await openSessionMenuSubmenu(page, "Session settings");
       await page.getByRole("menuitem", { name: "Icon & color", exact: true }).waitFor();
