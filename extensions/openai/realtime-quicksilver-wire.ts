@@ -7,6 +7,7 @@ import {
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAILiveCall, OPENAI_LIVE_SESSIONS_URL } from "./realtime-live-api.js";
+import { resolveOpenAIRealtimeRequestHeaders } from "./realtime-provider-shared.js";
 import {
   buildOpenAIQuicksilverBackgroundContext,
   OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS,
@@ -241,19 +242,11 @@ function openAIRealtimeAuthHeaders(
     baseUrl: string;
     includeQuicksilverAlpha: boolean;
   },
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  runtime: OpenAIRealtimeHost,
 ): Record<string, string> {
-  const attributionHeaders =
-    resolveProviderRequestHeaders({
-      provider: "openai",
-      baseUrl: params.baseUrl,
-      capability: "audio",
-      transport: "http",
-      defaultHeaders: {},
-    }) ?? {};
   // x-oai-attestation is optional and intentionally omitted on unsupported clients.
   return {
-    ...attributionHeaders,
+    ...resolveOpenAIRealtimeRequestHeaders(runtime, params.baseUrl),
     Authorization: `Bearer ${params.auth.token}`,
     ...(params.includeQuicksilverAlpha ? { "OpenAI-Alpha": "quicksilver=v2" } : {}),
     "session-id": params.requestIds.sessionId,
@@ -533,19 +526,15 @@ export async function hangupOpenAIRealtimeCall(
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
   },
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  runtime: OpenAIRealtimeHost,
 ): Promise<void> {
   if (!OPENAI_REALTIME_CALL_ID_RE.test(params.callId)) {
     throw new Error("OpenAI Realtime call id is invalid");
   }
   const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;
-  const headers = resolveProviderRequestHeaders({
-    provider: "openai",
-    baseUrl: url,
-    capability: "audio",
-    transport: "http",
-    defaultHeaders: { Authorization: `Bearer ${params.apiKey}` },
-  }) ?? { Authorization: `Bearer ${params.apiKey}` };
+  const headers = resolveOpenAIRealtimeRequestHeaders(runtime, url, {
+    Authorization: `Bearer ${params.apiKey}`,
+  });
   const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers,

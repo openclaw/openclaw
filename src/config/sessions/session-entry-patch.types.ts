@@ -23,6 +23,8 @@ export type SessionEntryPatchGuard = {
   ensureIdentitySource?: SessionSourceTransactionGrant;
   /** Retained host authority; same-store predicates belong in the worker transaction. */
   assertCurrent?: () => void;
+  /** Check live effect authority at native write and commit grants, never during preparation. */
+  assertMutationAllowed?: () => void;
   /** Same-store route authority is reread inside the worker's write transaction. */
   conversation?: ConversationAuthority;
   cliHistory?: {

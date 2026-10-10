@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { invalidatePluginStateMutation } from "./plugin-state-operation-epochs.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   runWriteTransaction,
@@ -102,6 +103,7 @@ function writePluginState<T>(
 type PluginStateRegisterParams = PluginStateRegisterEntryParams & { env?: NodeJS.ProcessEnv };
 
 export function pluginStateRegister(params: PluginStateRegisterParams): void {
+  invalidatePluginStateMutation(params);
   writePluginState(
     "register",
     "Failed to register plugin state entry.",
@@ -127,6 +129,7 @@ export function pluginStateImportBatch(
   if (entries.length > PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS) {
     throw new RangeError("Plugin state doctor import batch exceeds its row limit");
   }
+  invalidatePluginStateMutation(params);
   try {
     const result = runWriteTransaction(
       "register",
@@ -168,6 +171,7 @@ export function pluginStateImportBatch(
 export function pluginStateRegisterIfAbsent(
   params: Omit<PluginStateRegisterParams, "createdAtMs">,
 ): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "register",
     "Failed to register plugin state entry.",
@@ -181,6 +185,7 @@ export function pluginStateUpdate(
     updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
   },
 ): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "register",
     "Failed to update plugin state entry.",
@@ -261,6 +266,7 @@ export function pluginStateConsume(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): unknown {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "consume",
     "Failed to consume plugin state entry.",
@@ -275,6 +281,7 @@ export function pluginStateDelete(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "delete",
     "Failed to delete plugin state entry.",
@@ -292,6 +299,7 @@ export function pluginStateDeleteIf(params: {
   predicate: (current: unknown) => boolean;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "delete",
     "Failed to conditionally delete plugin state entry.",
@@ -345,6 +353,7 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
   }
   // Copy plugin-visible envelopes before BEGIN; no plugin-owned accessors run in the transaction.
   const observed = params.entries.map(({ value: _value, ...entry }) => entry);
+  invalidatePluginStateMutation(params);
   return runWriteTransaction(
     "delete",
     ({ db }) => {
@@ -467,6 +476,7 @@ export function pluginStateClear(params: {
   namespace: string;
   env?: NodeJS.ProcessEnv;
 }): void {
+  invalidatePluginStateMutation(params);
   writePluginState(
     "clear",
     "Failed to clear plugin state namespace.",

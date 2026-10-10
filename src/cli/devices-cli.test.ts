@@ -1,6 +1,8 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { registerDevicesCli } from "./devices-cli.js";
 import { ExpectedCliError } from "./failure-output.js";
 
@@ -22,6 +24,8 @@ vi.mock("../gateway/call.js", () => ({
     message: "",
   }),
 }));
+// mock-isolation: Pairing policy is stubbed below; runtime config loading is not part of this unit contract.
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("./progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
@@ -38,7 +42,15 @@ vi.mock("../runtime.js", () => ({
     target.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
 }));
 
-beforeEach(() => {
+const roots = createSuiteTempRootTracker({ prefix: "openclaw-devices-cli-" });
+beforeAll(async () => {
+  await roots.setup();
+});
+afterAll(async () => {
+  await roots.cleanup();
+});
+beforeEach(async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", await roots.make());
   vi.clearAllMocks();
   runtime.exit.mockImplementation(() => {});
   mocks.formatGatewayTransportErrorJson.mockReturnValue(null);
@@ -448,9 +460,14 @@ describe("local fallback", () => {
       device: { deviceId: "device-1", publicKey: "pk", approvedAtMs: 1, createdAtMs: 1 },
     });
     await run("approve", "req-1");
-    expect(approveDevicePairing).toHaveBeenCalledWith("req-1", {
-      callerScopes: ["operator.admin"],
-    });
+    expect(approveDevicePairing).toHaveBeenCalledWith(
+      "req-1",
+      {
+        callerScopes: ["operator.admin"],
+        isApprovalCurrent: expect.any(Function),
+      },
+      process.env.OPENCLAW_STATE_DIR,
+    );
     expect(output()).toContain(fallbackNotice);
     expect(output()).toContain("Approved");
   });
@@ -470,9 +487,14 @@ describe("local fallback", () => {
     approveReplacement();
     await run("approve", "req-old");
     expect(listDevicePairing).toHaveBeenCalledTimes(2);
-    expect(approveDevicePairing).toHaveBeenCalledWith("req-new", {
-      callerScopes: ["operator.admin"],
-    });
+    expect(approveDevicePairing).toHaveBeenCalledWith(
+      "req-new",
+      {
+        callerScopes: ["operator.admin"],
+        isApprovalCurrent: expect.any(Function),
+      },
+      process.env.OPENCLAW_STATE_DIR,
+    );
     expect(output()).toContain(fallbackNotice);
     expect(output()).toContain(
       "Pending request req-old was replaced by same-device repair req-new; approving latest compatible request.",
