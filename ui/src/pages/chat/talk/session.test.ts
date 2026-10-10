@@ -345,6 +345,85 @@ describe("RealtimeTalkSession", () => {
     expect(relayInstances).toHaveLength(1);
   });
 
+  it("passes launch options to client-owned realtime session creation", async () => {
+    const request = vi.fn(async () => createWebRtcSession());
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "main",
+      {},
+      {
+        provider: "openai",
+        model: "gpt-realtime-2",
+        voice: "marin",
+        transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
+      },
+      { inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" },
+    );
+
+    await session.start();
+
+    expect(request).toHaveBeenCalledWith(
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        provider: "openai",
+        model: "gpt-realtime-2",
+        voice: "marin",
+        transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
+        capabilities: ["voice-transcript", "voice-selection"],
+      },
+      requestTimeoutOptions,
+    );
+    expect(transportContext(webRtcInstances[0])).toEqual(
+      expect.objectContaining({ videoDeviceId: "desk-camera" }),
+    );
+  });
+
+  it("requests camera-frame for the active video-capable provider without enabling camera", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return videoCatalog(true);
+      }
+      return createWebRtcSession();
+    });
+    const onVideoCapability = vi.fn();
+    const session = new RealtimeTalkSession({ request } as never, "main", {
+      onVideoCapability,
+    });
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(1, "talk.catalog", {}, requestTimeoutOptions);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
+      },
+      requestTimeoutOptions,
+    );
+    expect(onVideoCapability).toHaveBeenCalledWith(true);
+    expect(transportContext(webRtcInstances[0])).toEqual(
+      expect.not.objectContaining({ videoEnabled: expect.anything() }),
+    );
+
+    await session.setVideoEnabled(true);
+    expect(webRtcSetVideoEnabled).toHaveBeenCalledWith(true);
+
+    await session.switchCamera("back-camera");
+    expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
+    void session.stop();
+  });
+
   it("applies a Settings camera selection to an active video session", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.catalog") {
@@ -389,7 +468,39 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcSwitchCamera).toHaveBeenCalledOnce();
   });
 
+  it("does not request camera-frame for a provider without video-frame support", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return videoCatalog(false);
+      }
+      return createWebRtcSession();
+    });
+    const onVideoCapability = vi.fn();
+    const session = new RealtimeTalkSession({ request } as never, "main", {
+      onVideoCapability,
+    });
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        capabilities: ["voice-transcript", "voice-selection"],
+      },
+      requestTimeoutOptions,
+    );
+    expect(onVideoCapability).toHaveBeenCalledWith(false);
+  });
+
   it.each([
+    {
+      name: "config selects a client transport",
+      readConfig: async () => ({
+        config: { talk: { realtime: { transport: "provider-websocket" } } },
+      }),
+    },
     {
       name: "config cannot be read",
       readConfig: async () => {
@@ -424,6 +535,43 @@ describe("RealtimeTalkSession", () => {
   });
 
   it.each([
+    { name: "Gateway relay", config: { talk: { realtime: { transport: "gateway-relay" } } } },
+    { name: "Auto", config: {} },
+  ])("falls back to Gateway relay when config resolves $name", async ({ config }) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw new Error("browser session unavailable");
+      }
+      if (method === "talk.config") {
+        return { config };
+      }
+      if (method === "talk.session.create") {
+        return createRelaySession();
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "talk.session.create",
+      {
+        sessionKey: "main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        capabilities: ["voice-selection"],
+      },
+      requestTimeoutOptions,
+    );
+    expect(relayInstances).toHaveLength(1);
+    expect(relayStart).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { pendingMethod: "talk.client.create", restart: false },
     { pendingMethod: "talk.client.create", restart: true },
     { pendingMethod: "talk.config", restart: false },
     { pendingMethod: "talk.config", restart: true },

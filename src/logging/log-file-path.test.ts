@@ -12,10 +12,21 @@ const date = new Date(2026, 6, 22, 12, 0, 0);
 
 describe("resolveConfiguredLogFilePath", () => {
   it.each([
+    { name: "unset", env: {}, expected: "openclaw-2026-07-22.log" },
     {
       name: "explicit default",
       env: { OPENCLAW_PROFILE: "Default" },
       expected: "openclaw-2026-07-22.log",
+    },
+    {
+      name: "named",
+      env: { OPENCLAW_PROFILE: "dev" },
+      expected: "openclaw-dev-2026-07-22.log",
+    },
+    {
+      name: "sanitized",
+      env: { OPENCLAW_PROFILE: "QA_Profile" },
+      expected: "openclaw--1q-1a-0-1profile-2026-07-22.log",
     },
   ])("uses the $name profile filename", ({ env, expected }) => {
     const resolved = resolveConfiguredLogFilePath(undefined, { date, env });
@@ -35,6 +46,19 @@ describe("resolveConfiguredLogFilePath", () => {
 
     expect(underscored).not.toBe(dashed);
     expect(path.basename(dashed)).toBe("openclaw-qa--profile-2026-07-22.log");
+  });
+
+  it("keeps escaped output distinct from a profile that resembles the encoding", () => {
+    const transformed = resolveConfiguredLogFilePath(undefined, {
+      date,
+      env: { OPENCLAW_PROFILE: "QA_Profile" },
+    });
+    const lookalike = resolveConfiguredLogFilePath(undefined, {
+      date,
+      env: { OPENCLAW_PROFILE: "-1q-1a-0-1profile" },
+    });
+
+    expect(transformed).not.toBe(lookalike);
   });
 
   it("bounds direct environment profiles that exceed the CLI length contract", () => {

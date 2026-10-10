@@ -146,6 +146,12 @@ describe("browser Talk provider item ordering", () => {
       assistant: ["no", "no"],
       expected: ["haha", "nono"],
     },
+    {
+      name: "leading whitespace",
+      user: [" ", "hel", "lo "],
+      assistant: ["\n", "a", "a "],
+      expected: [" hello ", "\naa "],
+    },
   ])(
     "preserves public Live $name through the browser transcript pipeline",
     async ({ user, assistant, expected }) => {
@@ -184,6 +190,39 @@ describe("browser Talk provider item ordering", () => {
     },
   );
 
+  it.each(["user", "assistant"] as const)(
+    "replaces Codex %s caption fragments with their complete final snapshots",
+    async (role) => {
+      const call = await start();
+      const deltaType = role === "user" ? "input_transcript.added" : "output_transcript.added";
+      const utterances = [
+        { fragments: [" Hello"], snapshot: " Hello" },
+        {
+          fragments: [" Please check", " the full sentence."],
+          snapshot: " Please check the full sentence.",
+        },
+        { fragments: [" go", " go"], snapshot: " go go" },
+        { fragments: ["Tomorrow morning."], snapshot: "Next week instead." },
+      ];
+      for (const [index, utterance] of utterances.entries()) {
+        for (const text of utterance.fragments) {
+          emit(call.peer, { type: deltaType, item: { text } });
+        }
+        emit(call.peer, {
+          type: "turn.done",
+          turn: { id: `turn-${index}`, role, transcript: utterance.snapshot },
+        });
+      }
+
+      expect(call.entries()).toEqual(utterances.map(({ snapshot }) => ({ role, text: snapshot })));
+      expect(call.entryStates().every((entry) => !entry.isStreaming)).toBe(true);
+      await waitForFast(() => expect(call.writes()).toHaveLength(utterances.length));
+      expect(call.writes().map(({ params }) => [params.role, params.text])).toEqual(
+        utterances.map(({ snapshot }) => [role, snapshot.trim()]),
+      );
+    },
+  );
+
   it("keeps interleaved Codex speaker captions open until their own final snapshot", async () => {
     const call = await start();
     for (const event of [
@@ -214,7 +253,7 @@ describe("browser Talk provider item ordering", () => {
     ]);
   });
 
-  it.each(["ready", "replacement", "failure"])(
+  it.each(["ready", "stop", "replacement", "failure"])(
     "owns early provider items during SDP setup through %s",
     async (outcome) => {
       const setup = createDeferred();
@@ -547,7 +586,7 @@ describe("browser Talk provider item ordering", () => {
     ]);
   });
 
-  it.each([null])(
+  it.each([null, "missing-root"])(
     "bounds pending items with predecessor %s and drains accepted finals on overflow",
     async (previous) => {
       const call = await start();
@@ -586,6 +625,25 @@ describe("browser Talk provider item ordering", () => {
     expect(call.writes().map(({ params }) => params.text)).toEqual(["known before callback"]);
     expect(call.requests.filter(({ method }) => method === "talk.client.close")).toHaveLength(1);
     final(peer, "u1", "user", "late after callback");
+    expect(call.writes()).toHaveLength(1);
+  });
+
+  it("drains known finals before close when an earlier ASR item never finishes", async () => {
+    const call = await start();
+    item(call.peer, "u1", "user", null);
+    item(call.peer, "a1", "assistant", "u1");
+    final(call.peer, "a1", "assistant", "known answer");
+    expect(call.writes()).toEqual([]);
+    void call.session.stop();
+    await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
+    expect(
+      call.requests
+        .filter(({ method }) => method !== "talk.client.create")
+        .map(({ method }) => method),
+    ).toEqual(["talk.client.transcript", "talk.client.close"]);
+    expect(call.writes()[0]?.params.text).toBe("known answer");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("unfinished transcript"));
+    final(call.peer, "u1", "user", "too late");
     expect(call.writes()).toHaveLength(1);
   });
 });

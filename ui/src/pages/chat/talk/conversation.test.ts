@@ -79,6 +79,44 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
+  it("inserts spacing after punctuation-ended user transcript fragments", () => {
+    let state = createRealtimeTalkConversationState();
+
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Ready.",
+      final: false,
+      nowMs: 1,
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "What next?",
+      final: false,
+      nowMs: 2,
+    });
+
+    expect(state.entries).toMatchObject([
+      { role: "user", text: "Ready. What next?", isStreaming: true },
+    ]);
+  });
+
+  it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const [index, char] of "Version 1.2 is on docs.openclaw.ai today.".split("").entries()) {
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text: char,
+        final: false,
+        nowMs: index + 1,
+      });
+    }
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "Version 1.2 is on docs.openclaw.ai today.", isStreaming: true },
+    ]);
+  });
+
   it("appends a final assistant fragment that only carries the transcript tail", () => {
     let state = createRealtimeTalkConversationState();
 
@@ -154,5 +192,120 @@ describe("realtime Talk conversation", () => {
     expect(state.entries[0]?.text).not.toContain("draft ");
     expect(state.entries[0]?.text.endsWith("DONE")).toBe(true);
     expect(state.entries[0]?.isStreaming).toBe(false);
+  });
+
+  it("does not expose dangling surrogates at a bounded transcript edge", () => {
+    let state = createRealtimeTalkConversationState();
+    const transcript = `${"a".repeat(8_000)}🚀${"b".repeat(7_740)}`;
+
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: transcript,
+      final: true,
+      nowMs: 1,
+    });
+
+    const text = state.entries[0]?.text ?? "";
+    expect(text.length).toBeLessThanOrEqual(8_000);
+    expect(text).not.toMatch(
+      /(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/,
+    );
+  });
+
+  it("does not trust a natural truncation marker outside the bounded prefix", () => {
+    let state = createRealtimeTalkConversationState();
+
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: `${"a".repeat(7_998)}\n…\n${"b".repeat(500)}NEWEST`,
+      final: true,
+      nowMs: 1,
+    });
+
+    expect(state.entries[0]?.text.length).toBeLessThanOrEqual(8_000);
+    expect(state.entries[0]?.text.startsWith("a".repeat(256))).toBe(true);
+    expect(state.entries[0]?.text.endsWith("NEWEST")).toBe(true);
+  });
+
+  it.each([255, 256])(
+    "does not retain a lone high surrogate before a natural marker at offset %i",
+    (markerOffset) => {
+      let state = createRealtimeTalkConversationState();
+      const retainedText = "a".repeat(markerOffset - 1);
+
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text: `${retainedText}\uD800\n…\n${"b".repeat(8_000)}NEWEST`,
+        final: true,
+        nowMs: 1,
+      });
+
+      const text = state.entries[0]?.text ?? "";
+      expect(text.length).toBeLessThanOrEqual(8_000);
+      expect(text.startsWith(`${retainedText}\n…\n`)).toBe(true);
+      expect(text.endsWith("NEWEST")).toBe(true);
+      expect(text).not.toMatch(
+        /(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/,
+      );
+    },
+  );
+
+  it.each(["user", "assistant"] as const)(
+    "bounds oversized final %s entries while retaining the newest text",
+    (role) => {
+      let state = createRealtimeTalkConversationState();
+
+      state = updateRealtimeTalkConversation(state, {
+        role,
+        text: `Useful opening. ${"x".repeat(9_000)}NEWEST`,
+        final: true,
+        nowMs: 1,
+      });
+
+      expect(state.entries[0]?.text.length).toBeLessThanOrEqual(8_000);
+      expect(state.entries[0]?.text.startsWith("Useful opening. ")).toBe(true);
+      expect(state.entries[0]?.text.endsWith("NEWEST")).toBe(true);
+      expect(state.entries[0]?.isStreaming).toBe(false);
+    },
+  );
+
+  it("keeps alternating realtime turns as separate bubbles", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const update of [
+      { role: "user" as const, text: "Hey, what time is it?", final: true },
+      {
+        role: "assistant" as const,
+        text: "Let me look into that for you. It's currently 7:55 PM UTC.",
+        final: true,
+      },
+      { role: "user" as const, text: "How's it going?", final: true },
+      {
+        role: "assistant" as const,
+        text: "Great! Ready for the next task. What can I do for you?",
+        final: true,
+      },
+      { role: "user" as const, text: "Turn on the basement lights", final: true },
+      { role: "assistant" as const, text: "Got it, let me check on that.", final: true },
+    ]) {
+      state = updateRealtimeTalkConversation(state, update);
+    }
+
+    expect(state.entries).toMatchObject([
+      { role: "user", text: "Hey, what time is it?", isStreaming: false },
+      {
+        role: "assistant",
+        text: "Let me look into that for you. It's currently 7:55 PM UTC.",
+        isStreaming: false,
+      },
+      { role: "user", text: "How's it going?", isStreaming: false },
+      {
+        role: "assistant",
+        text: "Great! Ready for the next task. What can I do for you?",
+        isStreaming: false,
+      },
+      { role: "user", text: "Turn on the basement lights", isStreaming: false },
+      { role: "assistant", text: "Got it, let me check on that.", isStreaming: false },
+    ]);
   });
 });

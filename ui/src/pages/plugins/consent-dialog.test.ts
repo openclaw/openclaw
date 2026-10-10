@@ -53,6 +53,16 @@ describe("renderPluginConsentDialog", () => {
   it.each([
     {
       source: {
+        kind: "clawhub",
+        packageName: "@openclaw/calendar-plus",
+        integrity: "sha256-0123456789abcdefghijklmnop",
+        integrityKind: "ssri",
+      },
+      provenance: "ClawHub · @openclaw/calendar-plus",
+      integrityLabel: "Integrity: sha256-0123456789abc…",
+    },
+    {
+      source: {
         kind: "git",
         spec: "https://***:***@example.com/calendar.git?token=***#main",
         packageName: "@openclaw/calendar-plus",
@@ -150,6 +160,19 @@ describe("renderPluginConsentDialog", () => {
       expect(onConfirm).toHaveBeenCalledOnce();
     },
   );
+
+  it("explains an empty manifest and preserves external-plugin grants", () => {
+    const container = mount();
+    const text = normalizedText(container.querySelector('[data-plugin-consent="enable"]'));
+
+    expect(text).toContain("No channels, providers, or tools declared in the manifest.");
+    expect(text).toContain(
+      "Code plugins may register hooks at runtime; their hook names are not declared in the manifest.",
+    );
+    expect(text).toContain("Your grants");
+    expect(text).toContain("Enable Workboard");
+    expect(text).not.toContain("What changed");
+  });
 
   it("highlights newly declared capability groups since the previous acceptance", () => {
     const reviewToken = "a".repeat(64);

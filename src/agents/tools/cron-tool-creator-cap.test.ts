@@ -108,6 +108,15 @@ describe("cron tool creator cap", () => {
     ).toEqual({ kind: "ready", patch: { enabled: false } });
   });
 
+  it("requests current state before deriving an implicit cap for a payload edit", () => {
+    expect(
+      planCronJobUpdatePatch({
+        patch: { payload: { message: "updated" } },
+        creatorToolAllowlist: ["read", "cron"],
+      }),
+    ).toEqual({ kind: "needs-current-job" });
+  });
+
   it("preserves explicit narrower and default caps through canonical payload merge", () => {
     const storedNarrowerPayload = {
       kind: "agentTurn" as const,
@@ -179,6 +188,26 @@ describe("cron tool creator cap", () => {
         }),
       ),
     ).toEqual({ payload: { kind: "agentTurn", model: null } });
+  });
+
+  it("captures a host-created gateway alias under its canonical exec identity", () => {
+    const alias = gatewayExecAlias(testTool("exec"), "always");
+    const target: CronCreatorToolAllowlistEntry[] = [];
+
+    replaceWithEffectiveCronCreatorToolAllowlist(target, [alias, testTool("read")]);
+
+    expect(target).toEqual([
+      {
+        name: "exec",
+        aliasName: "gateway_exec",
+        execTarget: { host: "gateway", ask: "always" },
+      },
+      { name: "read" },
+    ]);
+    expect(resolveCronCreatorExecToolTarget(target)).toEqual({
+      host: "gateway",
+      ask: "always",
+    });
   });
 
   it("captures an unregistered same-name tool literally, never as shell authority", () => {
