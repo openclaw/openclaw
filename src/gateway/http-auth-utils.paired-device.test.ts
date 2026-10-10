@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
-import path from "node:path";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -156,7 +156,7 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
   await withOpenClawTestState({ label: "bootstrap-revoked-device" }, async () => {
     const root = dirs.make("bootstrap-revoked-device-");
     fs.writeFileSync(
-      path.join(root, "index.html"),
+      join(root, "index.html"),
       "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
     );
     const auth = { mode: "token" as const, token: "synthetic-shared-token", allowTailscale: false };
