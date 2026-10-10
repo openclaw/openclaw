@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   bindGitHubPublicationSource,
@@ -26,30 +25,22 @@ type MutationCommand = SqliteWorkerCommand<
   >
 >;
 
-/** A publication execution retains FIFO writes and fences unknown outcomes until settlement. */
+/** A publication execution retains FIFO writes through native settlement. */
 export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerContext) {
-  const pending = new Set<PublicationMutationReceipt>();
   const work = new AsyncWorkScope();
   let tail: Promise<void> = Promise.resolve();
   let closed = false;
-  let uncertain = false;
   const assertSource = () => {
     context.admission.assertCurrent();
     if (closed) {
       throw new Error("GitHub publication scope is closed.");
     }
   };
-  const assertReady = () => {
-    assertSource();
-    if (pending.size || uncertain) {
-      throw new Error("GitHub publication facts are pending settlement.");
-    }
-  };
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
     assertSource();
     const result = work.track(() =>
       tail.then(() => {
-        assertReady();
+        assertSource();
         return operation();
       }),
     );
@@ -62,12 +53,10 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
   };
   return {
     signal: work.signal,
-    assertCurrent: assertReady,
-    assertLifetimeCurrent: assertSource,
+    assertCurrent: assertSource,
     async close() {
       closed = true;
       await work.drain();
-      pending.clear();
     },
     async mutate(
       command: MutationCommand,
@@ -78,11 +67,24 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
         | (() => Promise<GitHubPublicationSourceCapability>),
     ): Promise<PublicationMutationReceipt> {
       const commandSnapshot = structuredClone(command);
+      const expectedKind =
+        commandSnapshot.type === "githubPublications.insert"
+          ? commandSnapshot.input.kind
+          : commandSnapshot.type.slice("githubPublications.".length);
+      const readReceipt = (facts: unknown): PublicationMutationReceipt => {
+        if (
+          !isRecord(facts) ||
+          facts.operationId !== commandSnapshot.input.operationId ||
+          facts.operation !== commandSnapshot.input.operation ||
+          !Array.isArray(facts.rows) ||
+          facts.kind !== expectedKind
+        ) {
+          throw new Error("GitHub publication receipt differs from its command.");
+        }
+        // SAFETY: the private worker response matches its exact dispatched operation.
+        return facts as PublicationMutationReceipt;
+      };
       if (source) {
-        const expectedKind =
-          command.type === "githubPublications.insert"
-            ? command.input.kind
-            : command.type.slice("githubPublications.".length);
         return enqueue(async () => {
           let retainedSource: GitHubPublicationSourceCapability | undefined;
           try {
@@ -105,17 +107,7 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             let receipt: PublicationMutationReceipt | undefined;
             let settled: Promise<unknown> = Promise.resolve();
             const accept = (facts: unknown) => {
-              if (
-                !isRecord(facts) ||
-                facts.operationId !== captured.input.operationId ||
-                facts.operation !== captured.input.operation ||
-                !Array.isArray(facts.rows) ||
-                facts.kind !== expectedKind
-              ) {
-                throw new Error("GitHub publication source receipt differs from its command.");
-              }
-              // SAFETY: the private worker response is checked against its exact dispatched operation.
-              receipt = facts as PublicationMutationReceipt;
+              receipt = readReceipt(facts);
               try {
                 assertSource();
               } catch {
@@ -131,7 +123,6 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
                   (error: unknown) => ({ ok: false as const, error }),
                 );
                 await settled;
-                uncertain = admission?.settlement?.kind === "unknown" && !admission.committed;
                 if (admission?.committed) {
                   if (!receipt) {
                     throw new Error("GitHub publication committed facts were not installed.");
@@ -164,13 +155,10 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
       }
       const captured = commandSnapshot;
       let admission: SqliteWorkerOperationAdmission | undefined;
-      let prepared: PublicationMutationReceipt | undefined;
-      let granted = false;
       let settled: Promise<unknown> = Promise.resolve();
       const check = () => {
         assertSource();
         assertCurrent();
-        assertSource();
       };
       return enqueue(() =>
         runOpenClawStateWorkerOperation(
@@ -183,21 +171,7 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             await settled;
             const committed = admission?.committed;
             if (committed) {
-              if (!prepared || !isDeepStrictEqual(committed.facts, prepared)) {
-                throw new Error("GitHub publication commit receipt changed.");
-              }
-              // Accepted results settle even after action revocation; retired scopes never publish.
-              try {
-                assertSource();
-              } catch {
-                pending.delete(prepared);
-                return prepared;
-              }
-              pending.delete(prepared);
-              return prepared;
-            }
-            if (prepared && (!granted || admission?.settlement?.kind === "completed")) {
-              pending.delete(prepared);
+              return readReceipt(committed.facts);
             }
             if (!outcome.ok) {
               throw outcome.error;
@@ -208,36 +182,8 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             assertCurrent: check,
             createAdmission: (operation) => {
               settled = operation.settled;
-              let stage: "transaction" | "commit" | "complete" = "transaction";
-              const mutationAdmission = createSqliteWorkerOperationAdmission((request, grant) => {
-                check();
-                if (request.stage !== stage) {
-                  throw new Error("GitHub publication admission is out of order.");
-                }
-                if (request.stage === "commit") {
-                  const facts = request.facts;
-                  if (
-                    !isRecord(facts) ||
-                    facts.operationId !== captured.input.operationId ||
-                    facts.operation !== captured.input.operation ||
-                    !Array.isArray(facts.rows) ||
-                    facts.kind !==
-                      (captured.type === "githubPublications.insert"
-                        ? captured.input.kind
-                        : captured.type.slice("githubPublications.".length))
-                  ) {
-                    throw new Error("GitHub publication mutation facts differ from its command.");
-                  }
-                  // SAFETY: the private admitted command supplies the typed postimages after identity checks.
-                  prepared = facts as PublicationMutationReceipt;
-                  pending.add(prepared);
-                  check();
-                  granted = grant();
-                  stage = "complete";
-                } else {
-                  grant();
-                  stage = "commit";
-                }
+              const mutationAdmission = createSqliteWorkerOperationAdmission(() => {
+                throw new Error("GitHub publication bookkeeping requires no source admission.");
               });
               admission = mutationAdmission;
               const retained = withGitHubPublicationWorkerReceipt(
@@ -247,16 +193,14 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
                 }),
                 context,
                 (facts) => {
-                  if (!prepared || !isDeepStrictEqual(facts, prepared)) {
-                    throw new Error("GitHub publication commit receipt changed.");
-                  }
+                  const receipt = readReceipt(facts);
                   // Installation precedes observers and is independent of ordinary reply delivery.
                   try {
                     assertSource();
                   } catch {
                     return;
                   }
-                  publish(prepared);
+                  publish(receipt);
                 },
               )(operation);
               return retained;
