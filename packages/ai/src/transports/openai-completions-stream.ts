@@ -120,7 +120,7 @@ export async function processCompletionsStream(
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = ToolCall & { partialArgs: string };
+  type ToolCallBlock = ToolCall & { partialJson: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
@@ -286,14 +286,14 @@ export async function processCompletionsStream(
       id: `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       name: toolCall.name,
       arguments: toolCall.arguments,
-      partialArgs: toolCall.partialArgs,
+      partialJson: toolCall.partialJson,
     };
     currentBlock = block;
     appendToolCallBlock(block);
     pushStreamEvent({
       type: "toolcall_delta",
       contentIndex: blockIndices.get(block) ?? -1,
-      delta: toolCall.partialArgs,
+      delta: toolCall.partialJson,
       partial: output,
     });
   };
@@ -329,8 +329,10 @@ export async function processCompletionsStream(
     }
     appendContentDelta({ kind: "thinking", text: "" });
   };
-  const flushReasoningTagTextPartitioner = () => {
+  const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
     const recoverUnclosed =
+      allowRecovery &&
+      !output.openclawDelivery?.textPhaseRequiresTerminal &&
       output.stopReason !== "length" &&
       output.stopReason !== "error" &&
       output.stopReason !== "aborted";
@@ -369,16 +371,8 @@ export async function processCompletionsStream(
     }
     currentTextSource = undefined;
   };
-  const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
-    if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
-      output.openclawDelivery = {
-        ...output.openclawDelivery,
-        textPhaseRequiresTerminal: true,
-      };
-    }
-    if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
-      reasoningTagTextPartitioner.markStrict();
-    }
+  const beginReasoning = (hasFollowingVisibleText: boolean) => {
+    output.openclawDelivery = { ...output.openclawDelivery, textPhaseRequiresTerminal: true };
     // Let following text finish syntax already owned by the Markdown
     // parser; otherwise packet batching cannot erase a lane boundary.
     if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
@@ -467,17 +461,14 @@ export async function processCompletionsStream(
       const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
       const hasSameChunkVisibleText = reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
       if (hasReasoningThinking) {
-        beginReasoning(hasSameChunkVisibleText, true);
+        beginReasoning(hasSameChunkVisibleText);
         appendReasoningDeltas(reasoningDeltas);
       }
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
           const parts = gemmaToolCallRecoverer?.push(contentDelta.text) ?? [contentDelta];
           for (const part of parts) {
-            const routedDeltas = hasReasoningThinking
-              ? reasoningTagTextPartitioner.push(part.text)
-              : reasoningTagTextPartitioner.pushVisible(part.text);
-            for (const routedDelta of routedDeltas) {
+            for (const routedDelta of reasoningTagTextPartitioner.pushVisible(part.text)) {
               appendPartitionedVisibleDelta(routedDelta);
             }
           }
@@ -501,7 +492,7 @@ export async function processCompletionsStream(
         // Native calls own mixed streams; emit pending raw text in its original position.
         flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitioner();
+        flushReasoningTagTextPartitioner(false);
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),
@@ -528,7 +519,7 @@ export async function processCompletionsStream(
               id: toolCall.id || "",
               name: toolCall.function?.name || "",
               arguments: {},
-              partialArgs: "",
+              partialJson: "",
               ...(initialSig ? { thoughtSignature: initialSig } : {}),
             };
             encryptedReasoning.rememberToolCall(block.id, block);
@@ -567,11 +558,11 @@ export async function processCompletionsStream(
           }
           const toolArgumentsDelta = toolCall.function?.arguments;
           if (toolArgumentsDelta) {
-            block.partialArgs += toolArgumentsDelta;
+            block.partialJson += toolArgumentsDelta;
             // Preview refresh is scheduled geometrically; the terminal
             // finalize re-parses the full buffer authoritatively either way.
-            if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
-              block.arguments = parseStreamingJson(block.partialArgs);
+            if (toolArgumentPreviewSchedules.get(block)?.(block.partialJson.length)) {
+              block.arguments = parseStreamingJson(block.partialJson);
             }
           }
           if (toolArgumentsDelta || directMode) {

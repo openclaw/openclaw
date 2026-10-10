@@ -21,6 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
@@ -38,6 +39,7 @@ import {
 } from "../terminal/open-deadline.js";
 import type { AgentTerminalOwner } from "../terminal/session-manager.types.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   authorizeTerminalNodeCommand,
   resolveTerminalOpenSpawnPlan,
@@ -151,6 +153,59 @@ type TerminalSessionOpenRequest = {
 export async function openTerminalSession(
   opts: GatewayRequestHandlerOptions,
   request: TerminalSessionOpenRequest,
+): Promise<void> {
+  const binding = request.sessionKey
+    ? captureIncognitoSessionSource({ agentId: request.agentId, sessionKey: request.sessionKey })
+    : undefined;
+  if (binding && request.sessionKey) {
+    const authority = readGatewayRequestMutationAuthority(opts);
+    const sessionKey = request.sessionKey;
+    if ("kind" in binding) {
+      return openTerminalSessionWithSource(opts, request, {
+        entry: undefined,
+        assertCurrent() {
+          authority.assertCurrent();
+          binding.assertCurrent();
+        },
+      });
+    }
+    const claim = binding.actor.sessions.captureCurrent(sessionKey);
+    return binding.actor.sessions.withSharedState(async () => {
+      const read = await binding.actor.sessions.read(
+        authority,
+        { sessionKey },
+        binding.admissionSignal,
+      );
+      const assertCurrent = () => {
+        authority.assertCurrent();
+        binding.admissionSignal?.throwIfAborted();
+        binding.actor.assertReadable();
+        claim.assertCurrent();
+        const error = resolveSessionWorkStartError(
+          sessionKey,
+          binding.actor.sessions.readSharing(sessionKey)?.entry,
+          {
+            expectedSessionId: read.entry?.sessionId,
+          },
+        );
+        if (error) {
+          throw new Error(error);
+        }
+      };
+      read.snapshot.assertCurrent();
+      return openTerminalSessionWithSource(opts, request, { entry: read.entry, assertCurrent });
+    });
+  }
+  return openTerminalSessionWithSource(opts, request);
+}
+
+async function openTerminalSessionWithSource(
+  opts: GatewayRequestHandlerOptions,
+  request: TerminalSessionOpenRequest,
+  source?: {
+    entry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
+    assertCurrent(): void;
+  },
 ): Promise<void> {
   const { respond, context } = opts;
   const invalidPlan = (message: string) =>
@@ -323,10 +378,13 @@ export async function openTerminalSession(
       agentId: requestedOwner.agentId,
       sessionKey: request.sessionKey,
     });
-    const { entry } = loadGatewaySessionEntryReadOnly(agentSessionKey, {
-      agentId: requestedOwner.agentId,
-      clone: false,
-    });
+    source?.assertCurrent();
+    const { entry } =
+      source ??
+      loadGatewaySessionEntryReadOnly(agentSessionKey, {
+        agentId: requestedOwner.agentId,
+        clone: false,
+      });
     const agentSessionId = entry?.sessionId?.trim();
     if (!agentSessionId) {
       unavailable("session is no longer available; refresh and retry");
@@ -367,15 +425,19 @@ export async function openTerminalSession(
         expectedPairingGeneration: access.node.pairingGeneration,
         // Pairing resolution can yield after admission. Fence the live authority
         // at the registry's final transport handoff, not after a CLI has started.
-        isDispatchAuthorized: () =>
-          context.isConnectionActive?.(connId) !== false &&
-          context.isTerminalEnabled() &&
-          (!request.requireCliAgents ||
-            context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
-          context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
-          authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command).ok &&
-          !deadline.controller.signal.aborted &&
-          Date.now() < deadline.expiresAtMs,
+        isDispatchAuthorized: () => {
+          source?.assertCurrent();
+          return (
+            context.isConnectionActive?.(connId) !== false &&
+            context.isTerminalEnabled() &&
+            (!request.requireCliAgents ||
+              context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
+            context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
+            authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command).ok &&
+            !deadline.controller.signal.aborted &&
+            Date.now() < deadline.expiresAtMs
+          );
+        },
         command: relay.plan.command,
         params: relay.params,
       });
@@ -401,6 +463,7 @@ export async function openTerminalSession(
   let outcome: Awaited<ReturnType<typeof manager.open>>;
   try {
     outcome = await waitForTerminalOpenDeadline(() => {
+      source?.assertCurrent();
       openingTerminal = manager.open({
         owner: agentOwner ?? { kind: "conn", connId },
         ...(agentOwner ? { viewerConnId: connId } : {}),
@@ -445,6 +508,12 @@ export async function openTerminalSession(
       errorShape(code, terminalFailureMessage(outcome.message, request.failureHint)),
     );
     return;
+  }
+  try {
+    source?.assertCurrent();
+  } catch (error) {
+    closeOpenedSession(outcome.sessionId);
+    throw error;
   }
   if (context.isConnectionActive?.(connId) === false) {
     // A browser deadline can close the socket while PTY creation is still

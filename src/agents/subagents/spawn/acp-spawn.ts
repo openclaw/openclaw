@@ -280,6 +280,7 @@ export async function spawnAcpDirect(
     requesterAgentId,
     ownerAgentId,
     ctx,
+    assertActive: ctx.assertActive,
   });
   ctx.assertActive?.();
   const ownership = resolveSubagentSpawnOwnership({

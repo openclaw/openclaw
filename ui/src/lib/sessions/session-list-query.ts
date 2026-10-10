@@ -188,6 +188,7 @@ export function canApplySessionListSnapshot(
       existing.spawnedBy !== next.spawnedBy ||
       existing.controlOwnerSessionKey !== next.controlOwnerSessionKey ||
       existing.parentSessionKey !== next.parentSessionKey ||
+      existing.sidebarRoot !== next.sidebarRoot ||
       (countsOnly &&
         (existing.hasActiveRun !== next.hasActiveRun ||
           existing.hasActiveSubagentRun !== next.hasActiveSubagentRun ||

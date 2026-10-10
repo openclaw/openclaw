@@ -59,8 +59,18 @@ async function fixture(
     }),
     host,
   );
-  host.querySelector("details")!.open = true;
+  const details = host.querySelector("details")!;
+  if (!details.open) {
+    const opened = new Promise<void>((resolve) => {
+      details.addEventListener("toggle", () => resolve(), { once: true });
+    });
+    details.open = true;
+    // The toggle handler activates the popup; hidden descendants have stale
+    // computed styles in WebKit even after their Lit update completes.
+    await opened;
+  }
   await host.querySelector("wa-popup")!.updateComplete;
+  expect(host.querySelector<HTMLInputElement>("input[type=range]")!.checkVisibility()).toBe(true);
   return {
     input: host.querySelector<HTMLInputElement>("input[type=range]")!,
     onThinkingSelect,

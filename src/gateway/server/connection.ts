@@ -34,11 +34,7 @@ import type {
   PrepareGatewayAuthenticatedReceive,
 } from "./connection-transport.js";
 import { sanitizeWsLogValue, stringMetaValue } from "./ws-connection-diagnostics.js";
-import {
-  buildHandshakeAuthLogKey,
-  HandshakeAuthLogLimiter,
-  shouldLimitMissingCredentialAuthLog,
-} from "./ws-connection/handshake-auth-log-limiter.js";
+import { HandshakeAuthLogLimiter } from "./ws-connection/handshake-auth-log-limiter.js";
 import { attachGatewayWsMessageHandlerOnDemand } from "./ws-connection/message-handler-loader.js";
 import type {
   GatewayWsMessageHandlerParams,
@@ -127,9 +123,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     connectionKind,
     request: upgradeReq,
     ingressAttribution,
-    pluginNodeCapabilities,
-    pluginSurfaceBaseUrl,
-    originCheckMetrics,
     clients,
     connectionWork,
     getPluginNodeCapabilities,
@@ -139,20 +132,9 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
         getResolvedAuth(),
         getRuntimeConfig().gateway?.trustedProxies,
       ),
-    rateLimiter,
-    browserRateLimiter,
-    nodeReapprovalCoordinator,
     isStartupPending,
-    isPendingWorkerNodeSetup,
-    admitsNodeSetupCompletion,
-    gatewayMethods,
-    events,
-    refreshHealthSnapshot,
     logGateway,
-    logHealth,
     logWsControl,
-    extraHandlers,
-    getMethodRegistry,
     buildRequestContext,
   } = params;
   if (connectionWork.isClosing) {
@@ -384,32 +366,19 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
         isExpectedLocalAppStartupAbort(code)
           ? logWsControl.debug
           : logWsControl.warn;
-      const authReason = stringMetaValue(closeMeta, "authReason");
-      // Only missing shared credentials are suppressible startup retry noise.
-      const shouldLimitMissingAuthClose =
-        closeCause === "unauthorized" &&
-        shouldLimitMissingCredentialAuthLog({
-          reason: authReason,
-          authProvided: "none",
-        });
-      const closeLogDecision = shouldLimitMissingAuthClose
-        ? unauthorizedCloseBeforeConnectLogLimiter.register(
-            buildHandshakeAuthLogKey({
-              reason: authReason,
+      const suppressedText =
+        closeCause === "unauthorized"
+          ? unauthorizedCloseBeforeConnectLogLimiter.missingCredentialLogSuffix({
+              reason: stringMetaValue(closeMeta, "authReason"),
               remoteAddr,
               client:
                 stringMetaValue(closeMeta, "clientDisplayName") ??
                 stringMetaValue(closeMeta, "client"),
               mode: stringMetaValue(closeMeta, "mode"),
               authProvided: "none",
-            }),
-          )
-        : { shouldLog: true, suppressedSinceLastLog: 0 };
-      if (closeLogDecision.shouldLog) {
-        const suppressedText =
-          closeLogDecision.suppressedSinceLastLog > 0
-            ? ` suppressed=${closeLogDecision.suppressedSinceLastLog}`
-            : "";
+            })
+          : "";
+      if (suppressedText !== undefined) {
         logFn(
           `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}${suppressedText}`,
           closeContext,
@@ -608,40 +577,17 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   }
 
   attachGatewayWsMessageHandlerOnDemand({
-    clients,
+    ...params,
     ...connectionLifecycle,
-    socket,
-    prepareAuthenticatedReceive: params.prepareAuthenticatedReceive,
     upgradeReq,
     ingressAttribution,
-    bootId: params.bootId,
-    remoteAddr,
-    remotePort,
-    localAddr,
-    localPort,
-    endpoint,
+    ...params.addresses,
     forwardedFor,
     requestHost,
     requestOrigin,
     requestUserAgent,
-    pluginSurfaceBaseUrl,
-    pluginNodeCapabilities,
     connectNonce,
-    getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration,
-    rateLimiter,
-    browserRateLimiter,
-    nodeReapprovalCoordinator,
-    isPendingWorkerNodeSetup,
-    admitsNodeSetupCompletion,
-    gatewayMethods,
-    events,
-    extraHandlers,
-    getMethodRegistry,
-    buildRequestContext,
     nodeLifecycleDispatch,
-    refreshHealthSnapshot,
-    originCheckMetrics,
-    logHealth,
   });
 }

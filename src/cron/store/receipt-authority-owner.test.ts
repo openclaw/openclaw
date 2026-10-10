@@ -162,7 +162,7 @@ async function seed(fixture: OpenClawTestState, partition = "first", enabled = t
     context,
     observation,
     read,
-    mutate(next: CronStoredJob, options?: { beforeCommit?: () => void; publish?: () => void }) {
+    mutate(next: CronStoredJob, options?: { beforeDispatch?: () => void; publish?: () => void }) {
       return runCronRuntimeMutation({
         context,
         type: "cron.mutateJobs",
@@ -173,11 +173,8 @@ async function seed(fixture: OpenClawTestState, partition = "first", enabled = t
             { version: 1, jobs: [next] },
           ),
         },
-        assertCurrent() {},
-        prepare: () => ({
-          value: { nowMs: 2 },
-          assertCurrent: options?.beforeCommit ?? (() => {}),
-        }),
+        assertCurrent: options?.beforeDispatch ?? (() => {}),
+        snapshot: { nowMs: 2 },
         publish: options?.publish ?? (() => {}),
       });
     },
@@ -188,24 +185,19 @@ async function seed(fixture: OpenClawTestState, partition = "first", enabled = t
   };
 }
 
-/** Pauses the real worker after its commit grant, then after native settlement before its reply. */
+/** Pauses the real worker before execution and after commit, before its successful reply. */
 async function gateWriter(fixture: OpenClawTestState) {
   await closeOpenClawStateDatabaseAsync();
-  const gate = new Int32Array(new SharedArrayBuffer(16));
-  Atomics.store(gate, 3, 1);
-  const granted = createDeferred();
+  const gate = new Int32Array(new SharedArrayBuffer(12));
+  const submitted = createDeferred();
   const committed = createDeferred();
-  const replied = createDeferred();
   const { port1, port2 } = new MessageChannel();
   port1.on("message", (phase) => {
-    if (phase === "granted") {
-      granted.resolve();
+    if (phase === "submitted") {
+      submitted.resolve();
     }
     if (phase === "committed") {
       committed.resolve();
-    }
-    if (phase === "reply") {
-      replied.resolve();
     }
   });
   const preload = fixture.path("authority-worker-gate.mjs");
@@ -217,40 +209,25 @@ async function gateWriter(fixture: OpenClawTestState) {
     const gate = new Int32Array(workerData.authorityGate);
     const phase = workerData.authorityPhase;
     const post = MessagePort.prototype.postMessage;
-    const load = Atomics.load;
-    let selected, decision;
+    let selected;
     parentPort.on("message", (request) => {
-      if (request.type === "execute" && load(gate, 0)) {
+      if (request.type === "execute" && Atomics.load(gate, 0)) {
         const command = deserialize(request.input);
-        if (command.type === "cron.save") selected = request.id;
+        if (command.type === "cron.save") {
+          Atomics.store(gate, 0, 0);
+          selected = request.id;
+          phase.postMessage("submitted");
+          Atomics.wait(gate, 1, 0);
+        }
       }
     });
     MessagePort.prototype.postMessage = function(message, ...args) {
-      if (selected && message?.stage === "commit") decision = message.decision;
-      if (message?.kind === "native-commit") {
-        if (selected) {
-          phase.postMessage("committed");
-          Atomics.wait(gate, 3, 0);
-        }
-        post.call(this, message, ...args);
-        if (selected) post.call(this, message);
-        return;
-      }
-      if (this === parentPort && message?.id === selected && message.ok) {
+      if (this === parentPort && message?.id === selected && message.ok === true) {
         selected = undefined;
-        phase.postMessage("reply");
+        phase.postMessage("committed");
         Atomics.wait(gate, 2, 0);
       }
       return post.call(this, message, ...args);
-    };
-    Atomics.load = function(array, index) {
-      const result = load(array, index);
-      if (decision && array.buffer === decision && result === 1) {
-        decision = undefined;
-        phase.postMessage("granted");
-        Atomics.wait(gate, 1, 0);
-      }
-      return result;
     };
   `,
   );
@@ -278,13 +255,10 @@ async function gateWriter(fixture: OpenClawTestState) {
     Atomics.notify(gate, index);
   };
   return {
-    granted: granted.promise,
+    submitted: submitted.promise,
     committed: committed.promise,
-    replied: replied.promise,
     arm: () => Atomics.store(gate, 0, 1),
-    commit: () => release(1),
-    holdNativeReceipt: () => Atomics.store(gate, 3, 0),
-    publish: () => release(3),
+    execute: () => release(1),
     reply: () => release(2),
     async terminate() {
       if (!worker) {
@@ -295,7 +269,6 @@ async function gateWriter(fixture: OpenClawTestState) {
     close() {
       release(1);
       release(2);
-      release(3);
       factory.mockRestore();
       port1.close();
       port2.close();
@@ -303,9 +276,7 @@ async function gateWriter(fixture: OpenClawTestState) {
   };
 }
 
-it("suspends through commit and reply gaps, ignores duplicate facts, and keeps partitions exact", async ({
-  signal,
-}) => {
+it("suspends authority until a committed reply and keeps partitions exact", async ({ signal }) => {
   await withOpenClawTestState({ label: "cron-authority-publication" }, async (fixture) => {
     const gate = await gateWriter(fixture);
     const first = await seed(fixture);
@@ -315,49 +286,26 @@ it("suspends through commit and reply gaps, ignores duplicate facts, and keeps p
       expect(first.observation.readForPreparation().messageRevoked).toBe(false);
       const sql = observeMainThreadSql();
       sql.calibrate();
-      let checked = false;
-      const create = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admissions = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          create((request, grant) => {
-            if (request.stage === "commit") {
-              sql.clear();
-              expect(() => first.observation.readForPreparation()).toThrow("unavailable");
-              admit(request, grant);
-              sql.expectIdle();
-              checked = true;
-            } else {
-              admit(request, grant);
-            }
-          }, attachment),
-        );
       gate.arm();
-      gate.holdNativeReceipt();
       pending = saveCronStore(first.storePath, {
         version: 1,
         jobs: [{ ...first.job, enabled: false }],
       });
       await withinTest(
-        awaitGateBeforeSettlement(gate.granted, pending, "Save missed the native commit grant"),
+        awaitGateBeforeSettlement(gate.submitted, pending, "Save missed the execution gate"),
         signal,
       );
-      expect(checked).toBe(true);
+      sql.clear();
       expect(() => first.observation.readForPreparation()).toThrow("unavailable");
-      gate.commit();
+      sql.expectIdle();
+      gate.execute();
       await withinTest(
-        awaitGateBeforeSettlement(gate.committed, pending, "Save missed native COMMIT"),
+        awaitGateBeforeSettlement(gate.committed, pending, "Save missed the committed reply gate"),
         signal,
       );
       expect(() => first.observation.readForPreparation()).toThrow("unavailable");
-      gate.publish();
-      await withinTest(
-        awaitGateBeforeSettlement(gate.replied, pending, "Save missed the ordinary reply gate"),
-        signal,
-      );
-      expect(() => first.observation.readForPreparation()).toThrow("unavailable");
+      sql.expectIdle();
       expect((await first.read()).job?.enabled).toBe(false);
-      admissions.mockRestore();
       sql.restore();
       gate.reply();
       await pending;
@@ -390,25 +338,23 @@ it("joins a committed writer when database close seals publication admission", a
     let closing: Promise<void> | undefined;
     try {
       gate.arm();
-      gate.holdNativeReceipt();
       pending = saveCronStore(owner.storePath, {
         version: 1,
         jobs: [{ ...owner.job, enabled: false }],
       });
       void pending.catch(() => {});
       await withinTest(
-        awaitGateBeforeSettlement(gate.granted, pending, "Save missed the commit grant"),
+        awaitGateBeforeSettlement(gate.submitted, pending, "Save missed the execution gate"),
         signal,
       );
-      gate.commit();
+      gate.execute();
       await withinTest(
-        awaitGateBeforeSettlement(gate.committed, pending, "Save missed native COMMIT"),
+        awaitGateBeforeSettlement(gate.committed, pending, "Save missed the committed reply gate"),
         signal,
       );
       closing = closeOpenClawStateDatabaseAsync();
       void closing.catch(() => {});
       expect(() => owner.context.admission.assertCurrent()).toThrow("read admission is closed");
-      gate.publish();
       gate.reply();
       await expect(pending).rejects.toThrow("reconciliation failed");
       await withinTest(closing, signal);
@@ -425,17 +371,17 @@ it("joins a committed writer when database close seals publication admission", a
   });
 });
 
-it("rolls a refused commit back without permanently revoking unchanged permission", async () => {
+it("refuses a stale caller before dispatch without revoking unchanged permission", async () => {
   await withOpenClawTestState({ label: "cron-authority-rollback" }, async (fixture) => {
     const owner = await seed(fixture);
     const publish = vi.fn();
-    const refusal = new Error("Synthetic live authority revoked at commit");
+    const refusal = new Error("Synthetic live authority revoked before dispatch");
     try {
       await expect(
         owner.mutate(
           { ...owner.job, enabled: false },
           {
-            beforeCommit() {
+            beforeDispatch() {
               expect(() => owner.observation.readForPreparation()).toThrow("unavailable");
               throw refusal;
             },
@@ -489,7 +435,7 @@ it.each([false, true])(
   },
 );
 
-it.for(["before commit", "after commit"] as const)(
+it.for(["before execution", "after commit"] as const)(
   "reconciles worker loss %s only after native exit without replay",
   async (phase, { signal }) => {
     await withOpenClawTestState({ label: "cron-authority-worker-loss" }, async (fixture) => {
@@ -499,20 +445,23 @@ it.for(["before commit", "after commit"] as const)(
       let pending: Promise<void> | undefined;
       try {
         gate.arm();
-        gate.holdNativeReceipt();
         pending = saveCronStore(owner.storePath, {
           version: 1,
           jobs: [{ ...owner.job, enabled: false }],
         });
         void pending.catch(() => {});
         await withinTest(
-          awaitGateBeforeSettlement(gate.granted, pending, "Save missed the commit grant"),
+          awaitGateBeforeSettlement(gate.submitted, pending, "Save missed the execution gate"),
           signal,
         );
         if (phase === "after commit") {
-          gate.commit();
+          gate.execute();
           await withinTest(
-            awaitGateBeforeSettlement(gate.committed, pending, "Save missed native COMMIT"),
+            awaitGateBeforeSettlement(
+              gate.committed,
+              pending,
+              "Save missed the committed reply gate",
+            ),
             signal,
           );
         }
@@ -520,11 +469,11 @@ it.for(["before commit", "after commit"] as const)(
         await gate.terminate();
         await expect(pending).rejects.toThrow();
         expect(owner.observation.readForPreparation()).toMatchObject({
-          facts: { job: { enabled: phase === "before commit" } },
+          facts: { job: { enabled: phase === "before execution" } },
           messageRevoked: phase === "after commit",
         });
         expect((await loadCronStore(owner.storePath)).jobs[0]?.enabled).toBe(
-          phase === "before commit",
+          phase === "before execution",
         );
         expect(
           posts.mock.calls.filter(([request]) => {
@@ -549,54 +498,28 @@ it.for(["before commit", "after commit"] as const)(
   },
 );
 
-it.each(["publication", "business notification"] as const)(
-  "retains committed invalidation and never replays after a %s failure",
-  async (failureSite) => {
-    await withOpenClawTestState(
-      { label: "cron-authority-publication-failure" },
-      async (fixture) => {
-        const owner = await seed(fixture);
-        const failure = new Error("Synthetic post-commit publication failure");
-        const publish = vi.fn(() => {
-          if (failureSite === "business notification") {
-            throw failure;
-          }
-        });
-        let installed = 0;
-        const observe = workerAdmission.observeSqliteWorkerCommittedFacts;
-        const factory = vi
-          .spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts")
-          .mockImplementation((admission, observer) => {
-            observe(
-              admission,
-              failureSite === "publication"
-                ? (receipt) => {
-                    observer(receipt);
-                    installed++;
-                    throw failure;
-                  }
-                : observer,
-            );
-          });
-        try {
-          await expect(owner.mutate({ ...owner.job, enabled: false }, { publish })).rejects.toThrow(
-            failureSite === "publication" ? "publication failed" : failure.message,
-          );
-          expect(publish).toHaveBeenCalledOnce();
-          expect(installed).toBe(failureSite === "publication" ? 1 : 0);
-          expect(owner.observation.readForPreparation()).toMatchObject({
-            facts: { job: { enabled: false } },
-            messageRevoked: true,
-          });
-          expect((await loadCronStore(owner.storePath)).jobs[0]?.enabled).toBe(false);
-        } finally {
-          factory.mockRestore();
-          await owner.close();
-        }
-      },
-    );
-  },
-);
+it("retains committed invalidation and never replays after a business notification failure", async () => {
+  await withOpenClawTestState({ label: "cron-authority-publication-failure" }, async (fixture) => {
+    const owner = await seed(fixture);
+    const failure = new Error("Synthetic post-commit publication failure");
+    const publish = vi.fn(() => {
+      throw failure;
+    });
+    try {
+      await expect(owner.mutate({ ...owner.job, enabled: false }, { publish })).rejects.toThrow(
+        failure.message,
+      );
+      expect(publish).toHaveBeenCalledOnce();
+      expect(owner.observation.readForPreparation()).toMatchObject({
+        facts: { job: { enabled: false } },
+        messageRevoked: true,
+      });
+      expect((await loadCronStore(owner.storePath)).jobs[0]?.enabled).toBe(false);
+    } finally {
+      await owner.close();
+    }
+  });
+});
 
 it("joins lost-reply worker settlement without replay, then retires old observations on reopen", async () => {
   await withOpenClawTestState({ label: "cron-authority-restart" }, async (fixture) => {
@@ -608,7 +531,7 @@ it("joins lost-reply worker settlement without replay, then retires old observat
       await lost.waitForExit();
       expect(lost.wasDropped()).toBe(true);
       expect(lost.attempts).toEqual(["cron.mutateJobs"]);
-      expect(publish).toHaveBeenCalledOnce();
+      expect(publish).not.toHaveBeenCalled();
       expect(owner.observation.readForPreparation().messageRevoked).toBe(true);
       await lost.close();
       await closeOpenClawStateDatabaseAsync();

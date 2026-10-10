@@ -40,6 +40,7 @@ import {
 } from "./view-appearance-preferences.ts";
 import { renderTabIconSection } from "./view-tab-icon.ts";
 import type { ConfigProps } from "./view-types.ts";
+import "./appearance-background.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -477,6 +478,8 @@ export function renderAppearanceSection(props: ConfigProps) {
           </div>
         </div>
       </section>
+
+      <openclaw-appearance-background></openclaw-appearance-background>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         ${renderSettingsSectionHeader(t("configView.appearance.accent"))}

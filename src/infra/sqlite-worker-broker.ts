@@ -1,11 +1,11 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
-import { notifyListeners } from "../shared/listeners.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   SQLITE_WORKER_ADMISSION_TIMEOUT_MS as ADMISSION_TIMEOUT_MS,
   assertSqliteWorkerActorReusable,
@@ -26,7 +26,7 @@ import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js
 import {
   settleSqliteWorkerJob,
   dispatchSqliteWorkerJob,
-  settleFailedSqliteWorkerJobs,
+  failSqliteWorkerSlot,
   type CompletedSqliteWorkerOutcome,
   type SqliteWorkerReplyOwner,
 } from "./sqlite-worker-broker-reply.js";
@@ -164,7 +164,10 @@ export class SqliteWorkerBroker {
     return this.inputAdmission
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
-        () => this.openAdmitted<Operations>(snapshot, client),
+        () =>
+          runWithSqliteDatabaseAdmissionTurn(snapshot.target ? [] : [snapshot.databasePath], () =>
+            this.openAdmitted<Operations>(snapshot, client),
+          ),
         snapshot.signal,
       )
       .catch((error: unknown) => {
@@ -676,36 +679,11 @@ export class SqliteWorkerBroker {
     openOutcome?: "refused-before-agent-open",
     completed?: CompletedSqliteWorkerOutcome,
   ): void {
-    if (slot.failed) {
-      return;
-    }
-    const error = toErrorObject(reason, "SQLite worker failed");
-    slot.failed = new SqliteWorkerError(error.message, "unavailable");
-    for (const actor of slot.actors) {
-      if (actor.backendClosed) {
-        continue;
-      }
-      notifyListeners(actor.nativeLostObservers ?? [], slot.failed);
-    }
-    for (const resume of this.waiters.get(slot) ?? []) {
-      resume(slot.failed);
-    }
-    const current = slot.current;
-    slot.current = undefined;
-    if (current) {
-      current.inputTransfer?.producer.cancel();
-      current.inputTransfer = undefined;
-      current.transfer = undefined;
-    }
-    const queued = slot.queue.splice(0);
-    settleFailedSqliteWorkerJobs({
-      queuedError: slot.failed,
-      current,
-      queued,
-      error,
+    failSqliteWorkerSlot(slot, reason, {
       currentError,
-      completed,
       openOutcome,
+      completed,
+      waiters: this.waiters.get(slot),
       retire: () => this.lifecycle.retire(slot),
       finish: (job, failure, value, settlement) =>
         this.finish(slot, job, failure, value, settlement),

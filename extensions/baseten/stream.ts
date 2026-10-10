@@ -1,4 +1,4 @@
-/** Baseten request payload policy for models with opt-in chat-template reasoning. */
+/** Baseten session affinity and model-specific thinking policy. */
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -6,9 +6,8 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { usesBasetenChatTemplateThinking } from "./models.js";
+import { BASETEN_BASE_URL, usesBasetenChatTemplateThinking } from "./models.js";
 
-/** Adds Baseten's `chat_template_args.enable_thinking` without dropping caller args. */
 export function createBasetenThinkingWrapper(
   ctx: ProviderWrapStreamFnContext,
 ): ProviderWrapStreamFnContext["streamFn"] {
@@ -17,6 +16,22 @@ export function createBasetenThinkingWrapper(
     // Standalone completions use dispatch aliases; the source API owns wire policy.
     if (model.provider !== "baseten" || (ctx.sourceApi ?? model.api) !== "openai-completions") {
       return underlying(model, context, options);
+    }
+    const affinity = options?.promptCacheKey ?? options?.sessionId;
+    const cacheRetention = options?.cacheRetention ?? ctx.extraParams?.cacheRetention;
+    let streamOptions = options;
+    if (
+      affinity &&
+      cacheRetention !== "none" &&
+      model.baseUrl?.trim().replace(/\/+$/u, "") === BASETEN_BASE_URL &&
+      !Object.keys({ ...model.headers, ...options?.headers }).some(
+        (name) => name.toLowerCase() === "x-session-affinity",
+      )
+    ) {
+      streamOptions = {
+        ...options,
+        headers: { ...options?.headers, "x-session-affinity": affinity },
+      };
     }
     const optIn = usesBasetenChatTemplateThinking(model.id);
     const thinkingLevel =
@@ -28,7 +43,7 @@ export function createBasetenThinkingWrapper(
       underlying,
       model,
       context,
-      thinkingLevel === undefined ? options : { ...options, reasoning: thinkingLevel },
+      thinkingLevel === undefined ? streamOptions : { ...streamOptions, reasoning: thinkingLevel },
       (payload) => {
         const normalizedModelId = model.id.trim().toLowerCase();
         if (

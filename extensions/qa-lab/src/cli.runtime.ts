@@ -618,6 +618,20 @@ function printQaCredentialDoctorTable(
   }
 }
 
+function resolveQaCommandOutputDir(repoRoot: string, outputDir: string | undefined, kind: string) {
+  return (
+    resolveRepoRelativeOutputDir(repoRoot, outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `${kind}-${createQaArtifactRunId()}`)
+  );
+}
+
+function writeQaCommandVerdict(label: string, pass: boolean) {
+  process.stdout.write(`${label} verdict: ${pass ? "pass" : "fail"}\n`);
+  if (!pass) {
+    process.exitCode = 1;
+  }
+}
+
 export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
@@ -1066,9 +1080,7 @@ export async function runQaParityReportCommand(opts: {
   if (opts.tokenEfficiency === true && opts.runtimeAxis !== true) {
     throw new Error("--token-efficiency requires --runtime-axis.");
   }
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "parity");
   await fs.mkdir(outputDir, { recursive: true });
 
   if (opts.runtimeAxis === true) {
@@ -1135,10 +1147,7 @@ export async function runQaParityReportCommand(opts: {
     renderQaAgenticParityMarkdownReport(comparison),
     comparison,
   );
-  process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
-  if (!comparison.pass) {
-    process.exitCode = 1;
-  }
+  writeQaCommandVerdict("QA parity", comparison.pass);
 }
 
 export async function runQaConfidenceReportCommand(opts: {
@@ -1152,9 +1161,7 @@ export async function runQaConfidenceReportCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const manifestPath = path.resolve(repoRoot, opts.manifest);
   const artifactRoot = path.resolve(repoRoot, opts.artifactRoot ?? ".");
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "confidence");
   await fs.mkdir(outputDir, { recursive: true });
   const manifest = await readQaConfidenceManifestFile(manifestPath);
   const reportPayload = await buildQaConfidenceReport({
@@ -1169,10 +1176,7 @@ export async function runQaConfidenceReportCommand(opts: {
     renderQaConfidenceMarkdownReport(reportPayload),
     reportPayload,
   );
-  process.stdout.write(`QA confidence verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
-  if (!reportPayload.pass) {
-    process.exitCode = 1;
-  }
+  writeQaCommandVerdict("QA confidence", reportPayload.pass);
 }
 
 export async function runQaConfidenceSelfTestCommand(opts: {
@@ -1180,18 +1184,11 @@ export async function runQaConfidenceSelfTestCommand(opts: {
   outputDir?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-self-test-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "confidence-self-test");
   const result = await writeQaConfidenceSelfTestArtifacts({ outputDir });
   process.stdout.write(`QA confidence self-test report: ${result.reportPath}\n`);
   process.stdout.write(`QA confidence self-test summary: ${result.summaryPath}\n`);
-  process.stdout.write(
-    `QA confidence self-test verdict: ${result.summary.pass ? "pass" : "fail"}\n`,
-  );
-  if (!result.summary.pass) {
-    process.exitCode = 1;
-  }
+  writeQaCommandVerdict("QA confidence self-test", result.summary.pass);
 }
 
 export async function runQaCoverageReportCommand(opts: {
@@ -1270,9 +1267,7 @@ export async function runQaJsonlReplayCommand(opts: {
     throw new Error("qa jsonl-replay currently supports mock-openai curated fixtures only.");
   }
   const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
-  const outputDir =
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${createQaArtifactRunId()}`);
+  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "jsonl-replay");
   await fs.mkdir(outputDir, { recursive: true });
   const result = await runJsonlReplay(
     {
