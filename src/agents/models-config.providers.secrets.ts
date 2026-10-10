@@ -11,10 +11,8 @@ import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credenti
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { evaluateStoredCredentialEligibility } from "./auth-profiles/credential-state.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
-import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { isSetupCredentialAccessible } from "./auth-profiles/setup-access.js";
+import { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -78,11 +76,12 @@ function resolveCatalogProviderEntryAuth(params: {
   if (input.ref || typeof input.providerConfig?.apiKey !== "string") {
     return undefined;
   }
+  const store = resolveAuthProfileStoreInput(params.authStoreInput);
   const reference = resolveProviderEntryApiKeyProfileReference({
     cfg: params.config,
     sourceConfig: params.sourceConfigForSecrets,
     provider: params.provider,
-    store: resolveAuthProfileStoreInput(params.authStoreInput),
+    store,
   });
   if (reference.kind === "profile-incompatible") {
     throw new Error(
@@ -92,12 +91,16 @@ function resolveCatalogProviderEntryAuth(params: {
   if (reference.kind !== "profile") {
     return undefined;
   }
+  // The entry classifier owns cross-provider/base-URL compatibility. Check the
+  // profile's configured provider and mode against its own stored credential.
   if (
-    !isSetupCredentialAccessible({
+    !resolveAuthProfileEligibility({
+      cfg: params.config,
+      store,
+      provider: reference.credential.provider,
       profileId: reference.profileId,
-      credential: reference.credential,
-    }) ||
-    !evaluateStoredCredentialEligibility({ credential: reference.credential }).eligible
+      authAliasLookupParams: { config: params.config, env: params.env },
+    }).eligible
   ) {
     throw new Error(
       `Per-entry apiKey "${reference.profileId}" for provider "${params.provider}" matched an unusable stored profile.`,

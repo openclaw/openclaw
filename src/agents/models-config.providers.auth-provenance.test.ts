@@ -616,6 +616,26 @@ describe("models-config provider auth provenance", () => {
         },
       );
 
+      it.each([
+        { provider: "anthropic", mode: "api_key" },
+        { provider: "openai", mode: "oauth" },
+      ] as const)("rejects an incompatible configured profile %j", async (profileConfig) => {
+        await withDiscoveryFixture("api_key", callback, async (fixture) => {
+          fixture.store.profiles[fixture.profileId] = createApiKeyCredential(
+            "openai",
+            "must-not-use-incompatible-key",
+          );
+          await fixture.discover({
+            ...configWithKey(fixture.profileId),
+            auth: { profiles: { [fixture.profileId]: profileConfig } },
+          });
+
+          expect(fixture.authorization).toEqual([]);
+          expect(fixture.errors).toHaveLength(1);
+          expect(fixture.authResults).toEqual([]);
+        });
+      });
+
       it("keeps an unknown profile-shaped literal as the actual request key", async () => {
         await withDiscoveryFixture("api_key", callback, async (fixture) => {
           fixture.store.profiles = {};
