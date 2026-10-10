@@ -556,7 +556,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
   it("does not leave a gateway client running when stop wins the startup race", async () => {
     const pendingClient = createDeferred<GatewayClient>();
-    const clientCreationStarted = createDeferred<void>();
+    const clientCreationStarted = createDeferred();
     mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(() => {
       clientCreationStarted.resolve();
       return pendingClient.promise;
