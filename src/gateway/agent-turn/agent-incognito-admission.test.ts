@@ -6,10 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import * as voiceRouting from "../../infra/voicewake-routing.js";
 import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import { agentRunHandler } from "../server-methods/agent-run-handler.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import { agentHandlers } from "../server-methods/agent.js";
+import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import * as agentJobs from "./agent-job.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
@@ -258,3 +260,52 @@ it("keeps scoped agent.wait authorization current before and after the wait", as
     }
   });
 });
+
+it.each(["explicit", "configured"] as const)(
+  "routes voice wake from the %s target without reading session data",
+  async (mode) => {
+    const explicitKey = "agent:main:dashboard:incognito-voice-explicit";
+    const routedKey = "agent:main:dashboard:incognito-voice-routed";
+    const requestedKey = mode === "explicit" ? explicitKey : "agent:main:main";
+    const { context } = createTrackedDispatch();
+    context.getRuntimeConfig = () => cfg;
+    const route = vi.spyOn(voiceRouting, "loadVoiceWakeRoutingConfig").mockResolvedValue({
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [{ trigger: "wake", target: { sessionKey: routedKey } }],
+      updatedAtMs: 1,
+    });
+    const respond = vi.fn();
+    const sql = observeHostDataSql();
+    try {
+      const result = await withIncognitoSessionActor(actor, () =>
+        prepareAgentContentPhase({
+          request: {
+            message: "voice request",
+            sessionKey: requestedKey,
+            voiceWakeTrigger: "wake",
+            idempotencyKey: `voice-${mode}`,
+          },
+          cfg,
+          context,
+          respond,
+          isRawModelRun: false,
+          normalizedAttachments: [],
+          requestedSessionKeyRaw: requestedKey,
+          requestedSessionKey: requestedKey,
+          agentId: "main",
+          knownAgents: ["main"],
+        }),
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        agentId: "main",
+        requestedSessionKey: mode === "explicit" ? explicitKey : routedKey,
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+      route.mockRestore();
+    }
+  },
+);

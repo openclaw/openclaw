@@ -2,6 +2,11 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -26,9 +31,14 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 const authority = { assertCurrent() {} };
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+let client: ReturnType<typeof createOperatorClient>;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "chat-incognito-admission" });
   setRuntimeConfigSnapshot({});
+  client = createOperatorClient({
+    profileName: "incognito-operator",
+    scopes: ["operator.admin"],
+  });
   actor = await openIncognitoTestActor(state.env, authority);
 });
 afterAll(async () => {
@@ -46,11 +56,6 @@ async function create(name: string, fields: Partial<SessionEntry> = {}) {
   assert(result.entry);
   return { canonicalKey: sessionKey, entry: result.entry, storePath: actor.path };
 }
-
-const client = createOperatorClient({
-  profileId: "incognito-operator",
-  scopes: ["operator.admin"],
-});
 
 function send(
   session: Awaited<ReturnType<typeof create>>,
@@ -197,6 +202,147 @@ it("retains metadata authority through an awaited provider preparation", async (
     }
   });
 });
+
+it.each(["unchanged", "rotation"] as const)(
+  "chat.send retains its private steering target after %s during preparation",
+  async (change) => {
+    const session = await create(`steer-${change}`, { displayName: "Existing private chat" });
+    const runId = `steer-input-${change}`;
+    const activeRunId = `steer-active-${change}`;
+    const message = "Steer private reply";
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const settled = createDeferred<void>();
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => ({}),
+      removeChatRun: vi.fn(() => settled.resolve()),
+    });
+    await withIncognitoSessionActor(actor, async () => {
+      const operation = createReplyOperation({
+        sessionKey: session.canonicalKey,
+        sessionId: session.entry.sessionId,
+        resetTriggered: false,
+      });
+      operation.bindToolAuthoritySnapshot({
+        fingerprint: () => "private-steering-authority",
+        project: () => "private-steering-authority",
+        projectAsync: async () => {
+          entered.resolve();
+          await resume.promise;
+          return "private-steering-authority";
+        },
+      });
+      operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, _options, assertCurrent) => assertCurrent(),
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        runId: activeRunId,
+        toolAuthorityFingerprint: "private-steering-authority",
+        cancel() {},
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      operation.setPhase("running");
+      replyRunRegistry.bindSourceTurnId(operation, `source-${change}`);
+      const request = send(session, context, message, runId, { queueMode: "steer" });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          request.pending.then(() => {
+            throw new Error(
+              `chat.send ended before steering preparation: ${JSON.stringify(request.respond.mock.calls)}`,
+            );
+          }),
+          "private steer preparation",
+        );
+        expect(queueMessage).not.toHaveBeenCalled();
+        expect(request.respond).not.toHaveBeenCalled();
+        if (change === "rotation") {
+          const rotated = await actor.sessions.transcript(authority, {
+            type: "session.manager.transcript.branch",
+            input: {
+              sessionKey: session.canonicalKey,
+              command: {
+                type: "session.transcript.branch",
+                input: {
+                  scope: {
+                    agentId: "main",
+                    storePath: actor.path,
+                    sessionKey: session.canonicalKey,
+                    sessionId: session.entry.sessionId,
+                  },
+                  branch: { sessionId: "steer-successor", events: [] },
+                  expectedLifecycleRevision: session.entry.lifecycleRevision,
+                },
+              },
+            },
+          });
+          assert(rotated.ok);
+        }
+        resume.resolve();
+        await request.pending;
+        await settled.promise;
+        if (change === "unchanged") {
+          expect(queueMessage).toHaveBeenCalledOnce();
+          expect(queueMessage.mock.calls[0]?.[0]).toContain(message);
+          expect(request.respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ runId, status: "started" }),
+            undefined,
+            { runId },
+          );
+          expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+            ok: true,
+            payload: { runId, status: "ok" },
+          });
+          const history = await actor.sessions.history(authority, {
+            type: "session.history.hydrate",
+            input: { sessionKey: session.canonicalKey, sessionId: session.entry.sessionId },
+          });
+          assert(history.kind === "full");
+          expect(history.snapshot.events).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({
+                role: "user",
+                content: message,
+                steerTargetRunId: activeRunId,
+              }),
+            }),
+          );
+        } else {
+          expect(queueMessage).not.toHaveBeenCalled();
+          expect(request.respond).toHaveBeenCalledWith(
+            false,
+            expect.objectContaining({ runId, status: "error" }),
+            expect.objectContaining({
+              message: expect.stringContaining("generation is no longer current"),
+            }),
+            expect.objectContaining({ runId }),
+          );
+          const successor = await actor.sessions.history(authority, {
+            type: "session.history.hydrate",
+            input: { sessionKey: session.canonicalKey, sessionId: "steer-successor" },
+          });
+          assert(successor.kind === "full");
+          expect(successor.snapshot.events).not.toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({ content: message }),
+            }),
+          );
+        }
+        expect(context.addChatRun).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
+        expect(context.chatAbortControllers.size).toBe(0);
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([request.pending]);
+        operation.complete();
+      }
+    });
+  },
+);
 
 it.each(["settle", "actor-loss"] as const)(
   "chat.send joins same-process recovery before retry acknowledgement after %s",
