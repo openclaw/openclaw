@@ -21,6 +21,7 @@ import { renderSubagentActivity } from "./chat-subagent-activity.ts";
 export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   context!: ApplicationContext;
+  @property({ type: Boolean }) compact = false;
   @property({ attribute: false }) rows: readonly ChatSubagentActivity[] = [];
   @property({ attribute: false }) onOpenSubagent?: (key: string) => void;
   @property({ attribute: false }) onOpenSession?: (key: string) => void;
@@ -127,6 +128,7 @@ export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
       }),
       this.onOpenSubagent,
       this.onOpenSession,
+      this.compact,
     );
   }
 }

@@ -9,6 +9,7 @@ import {
   filterFilesByPatterns,
   intersectIncludePatterns,
   nonBrowserTestBasenamePattern,
+  nonBrowserTsxTestBasenamePattern,
 } from "./vitest.include-patterns.ts";
 import {
   collectVitestExcludePatterns,
@@ -234,10 +235,13 @@ describe("intersectIncludePatterns", () => {
       "ui/src/shared.browser.contract.test.ts",
     ];
     const pluginFiles = ["extensions/example/browser/shared.browser-import.test.ts"];
+    const uiTsxFiles = ["ui/src/ordinary.test.tsx", "ui/src/shared.browser-import.test.tsx"];
     const files = [
       ...uiFiles,
+      ...uiTsxFiles,
       ...pluginFiles,
       "ui/src/only.browser.test.ts",
+      "ui/src/only.browser.test.tsx",
       "ui/src/helper.browser-helper.browser.test.ts",
       "ui/src/readme.ts",
       "extensions/example/browser/only.browser.test.ts",
@@ -250,10 +254,16 @@ describe("intersectIncludePatterns", () => {
     }
     const owner = [
       "ui/src/**/" + nonBrowserTestBasenamePattern,
+      "ui/src/**/" + nonBrowserTsxTestBasenamePattern,
       "extensions/*/browser/**/" + nonBrowserTestBasenamePattern,
     ];
     for (const { requested, expected } of [
       { requested: ["ui/src/**/*.test.ts"], expected: uiFiles },
+      { requested: ["ui/src/**/*.test.tsx"], expected: uiTsxFiles },
+      {
+        requested: ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"],
+        expected: [...uiFiles, ...uiTsxFiles],
+      },
       { requested: ["extensions/**/*.test.ts"], expected: pluginFiles },
       { requested: ["**/*.test.ts"], expected: [...uiFiles, ...pluginFiles] },
     ]) {
@@ -267,6 +277,10 @@ describe("intersectIncludePatterns", () => {
           .toSorted(),
       ).toEqual(expected.toSorted());
     }
+    const narrowed = narrowIncludePatternsForCli(owner, ["node", "vitest", "run", "ui/src"]);
+    expect(filterFilesByPatterns(files, narrowed!, [], matchesVitestGlob).toSorted()).toEqual(
+      [...uiFiles, ...uiTsxFiles].toSorted(),
+    );
   });
 
   it("projects arbitrary candidate globs onto a finite literal owner", () => {

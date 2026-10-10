@@ -343,6 +343,12 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         isRecord(input.command.selection) &&
         (typeof input.command.selection.profileId === "string" ||
           typeof input.command.selection.requesterProfileId === "string")) ||
+      (input.command.type === "userBackground.snapshot" &&
+        typeof input.command.profileId === "string") ||
+      (input.command.type === "userBackground.image" &&
+        typeof input.command.includeBytes === "boolean" &&
+        typeof input.command.profileId === "string" &&
+        typeof input.command.assetId === "string") ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         isStringArray(input.command.profileIds)) ||

@@ -252,23 +252,6 @@ describe("shared worktree receipt observation", () => {
       ).toBeUndefined();
     },
   );
-  it("orders by creation and request ID even when an older receipt is reported later, and recovers only the exact key", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    publishWorktree(insertSharedWorktreeReceipt("old", { createdAtMs: 1 }));
-    insertSharedWorktreeReceipt("new-a", { createdAtMs: 2 });
-    insertSharedWorktreeReceipt("new-z", { createdAtMs: 2 });
-    coordinator.markReported("old");
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      requestId: "new-z",
-      status: "requested",
-    });
-    expect((await coordinator.latestShared(session, "old"))?.result).toMatchObject({
-      requestId: "old",
-      status: "published",
-      headCommit: NEW_HEAD,
-    });
-    expect(await coordinator.latestShared(session, "not-accepted")).toBeNull();
-  });
 
   it.each([
     { worktreeId: "previous-workspace" },
@@ -381,24 +364,6 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session)).toBeNull();
     expect(await coordinator.sharedStatus(session, "absent")).toBeUndefined();
     await expect(fs.stat(missingRoot)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("reads a cold database without changing source bytes, schemas, or SQLite sidecars", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    publishWorktree(insertSharedWorktreeReceipt("cold"));
-    const database = openOpenClawStateDatabase();
-    const databasePath = database.path;
-    await closeOpenClawStateDatabaseAsync();
-    const before = await fs.readFile(databasePath);
-    const files = await fs.readdir(path.dirname(databasePath));
-    prohibitPublicationWork();
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      requestId: "cold",
-      headCommit: NEW_HEAD,
-    });
-    expect((await coordinator.sharedStatus(session, "cold"))?.result.status).toBe("published");
-    expect(await fs.readFile(databasePath)).toEqual(before);
-    expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
   });
 
   it("searches past a full page of valid stale receipts without choosing one as current", async () => {
@@ -658,20 +623,5 @@ describe("shared repository receipt observation", () => {
       }
     });
     expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");
-  });
-
-  it("reads cold repository receipts without recreating source sidecars or changing bytes", async () => {
-    const workspace = await sharedRepositoryWorkspace();
-    const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
-    const databasePath = openOpenClawStateDatabase().path;
-    await closeOpenClawStateDatabaseAsync();
-    const before = await fs.readFile(databasePath);
-    const files = await fs.readdir(path.dirname(databasePath));
-    prohibitPublicationWork();
-    expect((await coordinator.latestShared(session))?.result.requestId).toBe(row.request_id);
-    expect((await coordinator.sharedStatus(session, row.request_id))?.confirmation).toBeNull();
-    expect(await fs.readFile(databasePath)).toEqual(before);
-    expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
   });
 });

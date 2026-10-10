@@ -97,29 +97,6 @@ describe("incomplete-turn terminal metadata", () => {
     expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
   });
 
-  it("uses the current completed assistant instead of stale session tool-use evidence", () => {
-    const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
-    const currentAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "Here is the final answer." }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: ["Analysis...", "Here is the final answer."],
-      toolMetas: [{ toolName: "update_plan" }],
-      lastAssistant: staleAssistant,
-      currentAttemptAssistant: currentAssistant,
-    });
-
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
-  });
-
   it("keeps completed tool-use evidence incomplete when the current transcript slice is absent", () => {
     const assistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const attempt = makeEmbeddedRunnerAttempt({

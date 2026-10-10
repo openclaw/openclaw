@@ -92,9 +92,12 @@ export function chatSubmitState(
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
   const pendingReason = nativeChat ? chatSendPendingReason(state, state.sessionKey) : null;
+  const connectionPendingReason = nativeChat
+    ? chatSendPendingReason({ client: state.client, connected: state.connected }, state.sessionKey)
+    : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
   return {
-    ...(pendingReason && !controlCommand ? { canSend: false } : {}),
+    ...(connectionPendingReason && !controlCommand ? { canSend: false } : {}),
     submitDisabledReason:
       pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
     submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),

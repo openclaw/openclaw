@@ -886,7 +886,7 @@ function createRawOllamaStreamFn(
             method: "POST",
             headers,
             // Applied after payload hooks, so a `false` from any writer gets the model's floor.
-            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model.id)),
+            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model)),
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),

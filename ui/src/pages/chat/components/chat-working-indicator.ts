@@ -117,7 +117,7 @@ export function renderChatWorkingIndicator(
   const startedAt = waitingSubagents ? waitingSubagents.startedAt : part.startedAt;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
-  return html`
+  const status = html`
     <div
       class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""} ${waitingSubagents ? "chat-working-indicator--subagents" : ""}"
       role="status"
@@ -197,8 +197,10 @@ export function renderChatWorkingIndicator(
         }
       </span>
     </div>
-    ${options.subagentActivity ?? nothing}
   `;
+  // Keep the live activity slot stable when the parent yields or resumes.
+  return html`${waitingSubagents && options.subagentActivity ? nothing : status}
+  ${options.subagentActivity ?? nothing}`;
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how
