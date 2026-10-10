@@ -366,6 +366,7 @@ describe("dreaming sweep diary publication", () => {
             entryKey,
             agentId: "main",
             sessionId,
+            sessionKey: "agent:main:main",
             originClass: "owner",
             observedAt: NOW_MS,
           })),
