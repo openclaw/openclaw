@@ -87,6 +87,10 @@ export type InworldRealtimeEvent = {
   conversation?: { id?: string };
   item?: InworldRealtimeResponseItem;
   error?: unknown;
+  session?: {
+    audio?: { output?: { format?: unknown } };
+    output_audio_format?: unknown;
+  };
   /** Inworld back-channel interjections (`response.backchannel.*`) group deltas by this id. */
   backchannel_id?: string;
   phrase?: string;

@@ -26,6 +26,10 @@ import {
   type InworldRealtimeSessionUpdate,
   type InworldRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
+import {
+  inworldAudioIdFingerprint,
+  readInworldOutputFormat,
+} from "./realtime-voice-truncate-diagnostics.js";
 
 export class InworldRealtimePlaybackMarkOverflowError extends Error {}
 
@@ -47,7 +51,12 @@ export abstract class InworldRealtimeVoiceProtocol {
   protected outputAudioGeneration = 0;
   private interruptingPlayback = false;
   protected assistantAudioItem: InworldAssistantAudioItem | null = null;
-  private readonly producedAudioItems = new Map<string, { bytes: number; generation: number }>();
+  private readonly producedAudioItems = new Map<
+    string,
+    { responseId?: string; itemId: string; bytes: number; generation: number }
+  >();
+  private audioResponseId: string | undefined;
+  private negotiatedOutputFormat: ReturnType<typeof readInworldOutputFormat> = null;
   protected toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   protected deliveredToolCallKeys = new Set<string>();
   protected pendingToolResultAcks = new Set<string>();
@@ -127,20 +136,67 @@ export abstract class InworldRealtimeVoiceProtocol {
     return Math.min(producedAudioMs, playbackAudioMs);
   }
 
-  protected recordAssistantAudio(itemId: string | undefined, bytes: number): void {
-    if (itemId && this.config.getPlaybackState) {
-      const previous = this.producedAudioItems.get(itemId);
+  protected beginAudioResponse(responseId: string | undefined): void {
+    this.audioResponseId = responseId;
+    // Preserve distinct completed items still queued in the sink, but a new
+    // incarnation of this response must not inherit its previous byte counters.
+    for (const [key, item] of this.producedAudioItems) {
+      if (item.responseId === responseId || !this.config.getPlaybackState) {
+        this.producedAudioItems.delete(key);
+      }
+    }
+  }
+
+  protected beginAssistantAudioItem(itemId: string, responseId = this.audioResponseId): void {
+    for (const [key, item] of this.producedAudioItems) {
+      if (item.itemId === itemId) {
+        this.producedAudioItems.delete(key);
+      }
+    }
+    this.producedAudioItems.set(this.audioItemKey(itemId, responseId), {
+      responseId,
+      itemId,
+      bytes: 0,
+      generation: this.outputAudioGeneration,
+    });
+    this.assistantAudioItem = null;
+  }
+
+  protected recordNegotiatedOutputFormat(value: unknown): void {
+    if (value !== undefined) {
+      this.negotiatedOutputFormat = readInworldOutputFormat(value);
+    }
+  }
+
+  private audioItemKey(itemId: string, responseId: string | undefined): string {
+    return JSON.stringify([
+      responseId ?? null,
+      responseId ? null : this.outputAudioGeneration,
+      itemId,
+    ]);
+  }
+
+  protected recordAssistantAudio(
+    itemId: string | undefined,
+    bytes: number,
+    responseId = this.audioResponseId,
+  ): void {
+    if (itemId) {
+      const key = this.audioItemKey(itemId, responseId);
+      const previous = this.producedAudioItems.get(key);
       if (previous?.generation !== this.outputAudioGeneration) {
         // Keep completed items only while the sink still has their playback. A
         // reused ID in a successor response starts a new provider audio bound.
-        const pendingIds = new Set(this.config.getPlaybackState().map((item) => item.itemId));
-        for (const id of this.producedAudioItems.keys()) {
-          if (!pendingIds.has(id)) {
+        const pendingIds = new Set(this.config.getPlaybackState?.().map((item) => item.itemId));
+        for (const [id, item] of this.producedAudioItems) {
+          if (!pendingIds.has(item.itemId) || item.itemId === itemId) {
             this.producedAudioItems.delete(id);
           }
         }
       }
-      this.producedAudioItems.set(itemId, {
+      this.producedAudioItems.set(key, {
+        responseId,
+        itemId,
         bytes: (previous?.generation === this.outputAudioGeneration ? previous.bytes : 0) + bytes,
         generation: this.outputAudioGeneration,
       });
@@ -173,23 +229,25 @@ export abstract class InworldRealtimeVoiceProtocol {
         : item && hasLegacyPlayback
           ? [{ itemId: item.itemId, audioEndMs: this.audioEndMs(item) }]
           : [];
-      const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({
-        itemId,
-        audioEndMs: this.config.getPlaybackState
-          ? Math.max(
-              0,
-              Math.min(
-                Number.isFinite(audioEndMs) ? Math.floor(audioEndMs) : 0,
-                Math.floor(
-                  realtimeVoiceAudioDurationMs(
-                    this.audioFormat,
-                    this.producedAudioItems.get(itemId)?.bytes ?? 0,
-                  ),
+      const playbackItems = playbackState.map(({ itemId, audioEndMs }) => {
+        const produced = Array.from(this.producedAudioItems.values()).findLast(
+          (candidate) => candidate.itemId === itemId,
+        );
+        return {
+          itemId,
+          responseId: produced?.responseId,
+          countedBytes: produced?.bytes ?? 0,
+          audioEndMs: this.config.getPlaybackState
+            ? Math.max(
+                0,
+                Math.min(
+                  Number.isFinite(audioEndMs) ? Math.floor(audioEndMs) : 0,
+                  Math.floor(realtimeVoiceAudioDurationMs(this.audioFormat, produced?.bytes ?? 0)),
                 ),
-              ),
-            )
-          : audioEndMs,
-      }));
+              )
+            : audioEndMs,
+        };
+      });
       const cancelResponse =
         reason === "barge-in" &&
         (this.responseActive || this.responseCreateInFlight || playbackItems.length > 0) &&
@@ -207,6 +265,20 @@ export abstract class InworldRealtimeVoiceProtocol {
         this.sendEvent({ type: "response.cancel" }, `reason=${reason}`);
       }
       for (const playbackItem of playbackItems) {
+        console.info(
+          `[inworld] truncate ${JSON.stringify({
+            response_id: inworldAudioIdFingerprint(playbackItem.responseId),
+            item_id: inworldAudioIdFingerprint(playbackItem.itemId),
+            counted_bytes: playbackItem.countedBytes,
+            audio_end_ms: playbackItem.audioEndMs,
+            audioFormat: {
+              encoding: this.audioFormat.encoding,
+              sampleRateHz: this.audioFormat.sampleRateHz,
+              channels: this.audioFormat.channels,
+            },
+            negotiated_output_format: this.negotiatedOutputFormat,
+          })}`,
+        );
         this.sendEvent(
           {
             type: "conversation.item.truncate",
@@ -405,6 +477,8 @@ export abstract class InworldRealtimeVoiceProtocol {
     this.responseCreatePending = false;
     this.assistantAudioItem = null;
     this.producedAudioItems.clear();
+    this.audioResponseId = undefined;
+    this.negotiatedOutputFormat = null;
     this.resetInputTranscripts();
     if (!options.preserveToolCallState) {
       this.pendingToolCallIds.clear();

@@ -76,13 +76,29 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
       this.toolCallBuffers.clear();
       this.finalizedToolCallItems.clear();
       this.outputAudioGeneration += 1;
+      this.beginAudioResponse(responseId);
       this.responseActive = true;
       this.responseCreateInFlight = false;
       this.markQueue = [];
       this.assistantAudioItem = null;
       this.resetAssistantTranscript();
     }
+    if (event.type === "response.output_item.added" && this.acceptsEvent(connection)) {
+      // Publish the fresh item bound before a wire observer can barge in.
+      const itemId = event.item?.id ?? event.item_id;
+      if (itemId && (!event.item?.type || event.item.type === "message")) {
+        this.beginAssistantAudioItem(itemId, responseId);
+      }
+    }
     const audioGeneration = this.outputAudioGeneration;
+    if (
+      (event.type === "session.created" || event.type === "session.updated") &&
+      this.acceptsEvent(connection)
+    ) {
+      this.recordNegotiatedOutputFormat(
+        event.session?.audio?.output?.format ?? event.session?.output_audio_format,
+      );
+    }
     const bridgeEvent = {
       direction: "server",
       type: event.type,
@@ -149,7 +165,7 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
           );
         }
         const audio = Buffer.from(canonicalAudio, "base64");
-        this.recordAssistantAudio(event.item_id, audio.byteLength);
+        this.recordAssistantAudio(event.item_id, audio.byteLength, responseId);
         this.responseActive = true;
         const markName = this.createPlaybackMark();
         this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);
