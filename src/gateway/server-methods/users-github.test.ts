@@ -739,34 +739,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       expect(merged?.pending).toBeUndefined();
       expect(merged?.generation).not.toBe(source.generation);
       expect(merged?.generation).not.toBe(previousTarget?.generation);
-      const selected = (previousTarget ?? source).selection;
       expect(publications).toEqual([
         {
           kind: "user-github-connection",
           databasePath: openOpenClawStateDatabase().path,
-          changes: [
-            { owner: owner(), connection: null },
-            {
-              owner: owner(bob),
-              connection: {
-                generation: merged?.generation,
-                selection:
-                  selected.kind === "disconnected"
-                    ? { kind: "disconnected" }
-                    : {
-                        kind: "connected",
-                        profileId: selected.profileId,
-                        accountId: selected.accountId,
-                        login: selected.login,
-                        scopes: selected.scopes,
-                        accessExpiresAtMs: selected.accessExpiresAtMs,
-                        refreshExpiresAtMs: selected.refreshExpiresAtMs,
-                        refreshFailure: undefined,
-                        refreshing: false,
-                      },
-              },
-            },
-          ],
+          changedOwners: [owner(), owner(bob)],
           retiredProfileIds: retired,
         },
       ]);

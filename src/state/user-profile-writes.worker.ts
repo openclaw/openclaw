@@ -143,7 +143,11 @@ export function createUserProfileWriteOperation<Input, Output>(
           display: new Set(),
           profiles: new Set(),
           identities: new Set(),
-          githubConnections: { kind: "user-github-connection", changes: [], retiredProfileIds: [] },
+          githubConnections: {
+            kind: "user-github-connection",
+            changedOwners: [],
+            retiredProfileIds: [],
+          },
         };
         pending = current;
         try {
@@ -200,7 +204,7 @@ export function createUserProfileWriteOperation<Input, Output>(
             }),
             after: ids.map((id) => [id, after.get(id)]),
             emailBindings,
-            ...(current.githubConnections.changes.length ||
+            ...(current.githubConnections.changedOwners.length ||
             current.githubConnections.retiredProfileIds.length
               ? { githubConnections: current.githubConnections }
               : {}),
@@ -236,7 +240,7 @@ export function createUserProfileWriteOperation<Input, Output>(
       identity: (...ids) => ids.forEach((id) => pending?.identities.add(id)),
       publish: (...ids) => ids.forEach((id) => pending?.display.add(id)),
       publishGitHubConnections: (receipt) => {
-        pending?.githubConnections.changes.push(...receipt.changes);
+        pending?.githubConnections.changedOwners.push(...receipt.changedOwners);
         pending?.githubConnections.retiredProfileIds.push(...receipt.retiredProfileIds);
       },
     };
