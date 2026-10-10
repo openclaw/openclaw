@@ -10,7 +10,10 @@ import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refresh.test-support.js";
-import { waitForCodexAppServerClientExit } from "./shared-client-lifecycle.js";
+import {
+  getCurrentSharedClientEntry,
+  waitForCodexAppServerClientExit,
+} from "./shared-client-lifecycle.js";
 import {
   captureCodexAppServerClientLifetime,
   captureSharedCodexAppServerCatalogLifetime,
@@ -32,12 +35,53 @@ import {
 } from "./thread-ownership.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
+const CODEX_APP_SERVER_IDLE_RETIREMENT_MS = 5 * 60_000;
+
 /** Register under the shared-client suite so its auth mocks and cleanup remain authoritative. */
 export function registerSharedClientLifetimeTests(
   redirectNextStartToWebSocket: () => void,
   rejectAuth: (error: Error) => void,
 ) {
   registerSharedClientAuthRefreshTests();
+
+  it("reuses a released client during the idle grace period, then retires and closes it", async () => {
+    vi.useFakeTimers();
+    const first = createClientHarness();
+    const replacement = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(replacement.client);
+    const firstLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    await sendInitializeResult(first, "openclaw/0.155.0 (Linux; test)");
+    const client = await firstLease;
+    const closeAndWait = vi.spyOn(client, "closeAndWait");
+    expect(getCurrentSharedClientEntry(client)?.activeLeases).toBe(1);
+
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+    expect(getCurrentSharedClientEntry(client)?.activeLeases).toBe(0);
+    await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_IDLE_RETIREMENT_MS - 1_000);
+
+    const reusedLease = await getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    expect(reusedLease).toBe(client);
+    expect(startSpy).toHaveBeenCalledOnce();
+    expect(closeAndWait).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_IDLE_RETIREMENT_MS * 2);
+    expect(getCurrentSharedClientEntry(client)?.activeLeases).toBe(1);
+    expect(closeAndWait).not.toHaveBeenCalled();
+
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+    await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_IDLE_RETIREMENT_MS);
+    expect(getCurrentSharedClientEntry(client)).toBeUndefined();
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(closeAndWait).toHaveBeenCalledOnce();
+
+    const freshLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    await sendInitializeResult(replacement, "openclaw/0.155.0 (Linux; test)");
+    await expect(freshLease).resolves.toBe(replacement.client);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    releaseLeasedSharedCodexAppServerClient(replacement.client);
+  });
 
   it.each(["shared", "isolated"] as const)(
     "joins %s transport startup and closes a client returned after its deadline",
