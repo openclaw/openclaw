@@ -9,7 +9,9 @@ import {
 import type { AssistantMessage, Model } from "../llm/types.js";
 
 const completeSimple = vi.hoisted(() => vi.fn());
+// mock-isolation: Supply deterministic provider outcomes without registering live transports.
 vi.mock("../llm/stream.js", () => ({ completeSimple }));
+// mock-isolation: Provider runtime bootstrap is outside this request-lifecycle boundary.
 vi.mock("./ai-transport-runtime-host.js", () => ({}));
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
