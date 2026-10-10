@@ -54,7 +54,12 @@ export async function patchSession(
   session: SessionActionRow,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
-  refresh: { deferListRefresh?: boolean; sessionScope?: boolean } = {},
+  refresh: {
+    deferListRefresh?: boolean;
+    sessionScope?: boolean;
+    /** Return true when the caller presents this attempt's rejection locally. */
+    handleError?: (error: unknown) => boolean;
+  } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -130,7 +135,9 @@ export async function patchSession(
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
     }
-    host.sessionData.publishSessionMutationError(scope, error);
+    if (!refresh.handleError?.(error)) {
+      host.sessionData.publishSessionMutationError(scope, error);
+    }
     return "failed";
   }
 }
@@ -508,13 +515,18 @@ export async function renameSession(
       if (!patch) {
         return null;
       }
-      const result = await patchSession(host, session, patch, scope, { sessionScope: true });
-      const error = host.sessionData.sessionMutationError;
-      if (result === "failed" && error && /^label already in use:/iu.test(error)) {
-        host.sessionData.dismissSessionMutationError();
-        return t("sessionsView.sessionNameInUse");
-      }
-      return null;
+      let failure: string | null = null;
+      await patchSession(host, session, patch, scope, {
+        sessionScope: true,
+        handleError: (error) => {
+          if (!/^label already in use:/iu.test(formatUiError(error))) {
+            return false;
+          }
+          failure = t("sessionsView.sessionNameInUse");
+          return true;
+        },
+      });
+      return failure;
     },
   });
 }

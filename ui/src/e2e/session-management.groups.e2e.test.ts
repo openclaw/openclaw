@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJobsListResult } from "../api/types.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayRequest, MockGatewayWindow } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -132,74 +133,125 @@ suite.define(() => {
     }
   });
 
-  it("keeps a duplicate rename in the dialog and other rejected mutations in the sidebar", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patch"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:rename-me", "Rename me", Date.now()),
-        ]),
-      },
-      sessionKey: "agent:main:rename-me",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-      const row = page.locator('[data-session-key="agent:main:rename-me"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…" }).click();
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
-      await dialog.getByRole("button", { name: "Save" }).click();
-      await gateway.waitForRequest("sessions.patch");
-      await gateway.rejectDeferred("sessions.patch", {
-        code: "INVALID_REQUEST",
-        message: "label already in use: Rejected rename",
+  it.each([false, true])(
+    "keeps a duplicate rename in the dialog (concurrent failure: %s)",
+    async (concurrent) => {
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.patch"],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow("agent:main:rename-me", "Rename me", Date.now()),
+          ]),
+        },
+        sessionKey: "agent:main:rename-me",
       });
 
-      const error = page.locator("[data-sidebar-session-error]");
-      await expect
-        .poll(() => dialog.getByRole("alert").textContent())
-        .toContain("A session with this name already exists.");
-      await expect.poll(() => error.count()).toBe(0);
-      await expect
-        .poll(() => dialog.getByRole("textbox", { name: "Rename session" }).inputValue())
-        .toBe("Rejected rename");
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-session-duplicate-rename.png",
-        dialog.locator("dialog"),
-        [dialog.getByRole("alert")],
-      );
+      try {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
+        const row = page.locator('[data-session-key="agent:main:rename-me"]');
+        await row.waitFor({ state: "visible", timeout: 10_000 });
+        await row.hover();
+        let pendingPin: MockGatewayRequest | null = null;
+        if (concurrent) {
+          await row.getByRole("button", { name: "Pin session", exact: true }).click();
+          pendingPin = await gateway.waitForRequest("sessions.patch");
+          await gateway.deferNext("sessions.patch");
+        }
+        await row.click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Rename…" }).click();
+        const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
+        await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        const rename = await gateway.waitForRequest("sessions.patch", {
+          after: concurrent ? 1 : 0,
+        });
+        if (pendingPin) {
+          await page.evaluate(
+            ({ renameId, pinId }) => {
+              const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+              if (!mock) {
+                throw new Error("Mock Gateway is not installed");
+              }
+              mock.deliverLatest({
+                type: "res",
+                id: renameId,
+                ok: false,
+                error: {
+                  code: "INVALID_REQUEST",
+                  message: "label already in use: Rejected rename",
+                },
+              });
+              mock.deliverLatest({
+                type: "res",
+                id: pinId,
+                ok: false,
+                error: {
+                  code: "UNAVAILABLE",
+                  message: "pin rejected",
+                },
+              });
+            },
+            { renameId: rename.id, pinId: pendingPin.id },
+          );
+        } else {
+          await gateway.rejectDeferred("sessions.patch", {
+            code: "INVALID_REQUEST",
+            message: "label already in use: Rejected rename",
+          });
+        }
 
-      await gateway.deferNext("sessions.patch");
-      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Unavailable rename");
-      await dialog.getByRole("button", { name: "Save" }).click();
-      await gateway.waitForRequest("sessions.patch", { after: 1 });
-      await gateway.rejectDeferred("sessions.patch", {
-        code: "UNAVAILABLE",
-        message: "sidebar rename rejected",
-      });
+        const error = page.locator("[data-sidebar-session-error]");
+        await expect
+          .poll(() => dialog.getByRole("alert").textContent())
+          .toContain("A session with this name already exists.");
+        if (concurrent) {
+          await expect.poll(() => error.textContent()).toContain("pin rejected");
+        } else {
+          await expect.poll(() => error.count()).toBe(0);
+        }
+        await expect
+          .poll(() => dialog.getByRole("textbox", { name: "Rename session" }).inputValue())
+          .toBe("Rejected rename");
+        await captureUiProof(
+          suite,
+          page,
+          concurrent
+            ? "sidebar-session-duplicate-rename-concurrent.png"
+            : "sidebar-session-duplicate-rename.png",
+          dialog.locator("dialog"),
+          [dialog.getByRole("alert")],
+        );
 
-      await error.waitFor({ state: "visible" });
-      await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
-      expect(
-        await error
-          .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
-          .count(),
-      ).toBe(0);
+        await gateway.deferNext("sessions.patch");
+        await dialog.getByRole("textbox", { name: "Rename session" }).fill("Unavailable rename");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        const retry = await gateway.waitForRequest("sessions.patch", {
+          after: concurrent ? 2 : 1,
+        });
+        await gateway.deliverLatest({
+          type: "res",
+          id: retry.id,
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "sidebar rename rejected" },
+        });
 
-      await error.getByRole("button", { name: "Dismiss error" }).click();
-      await expect.poll(() => error.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
+        await error.waitFor({ state: "visible" });
+        await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
+        expect(
+          await error
+            .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
+            .count(),
+        ).toBe(0);
+
+        await error.getByRole("button", { name: "Dismiss error" }).click();
+        await expect.poll(() => error.count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("renames a sidebar session through an in-app dialog", async () => {
     const context = await suite.browser.newContext({

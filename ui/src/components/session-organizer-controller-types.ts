@@ -14,7 +14,6 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
     SessionDataController,
     | "beginSessionMutation"
-    | "dismissSessionMutationError"
     | "isSessionMutationScopeCurrent"
     | "publishSessionMutationError"
     | "refreshSidebarSessions"
