@@ -1,6 +1,6 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page, server, userEvent } from "vitest/browser";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
@@ -600,7 +600,17 @@ describe("composer overflow presentation", () => {
         [goal.id, status === "active" ? "pause" : "resume"],
         [goal.id, "clear"],
       ]);
-      await userEvent.tab({ shift: true });
+      // Safari pointer activation does not focus buttons. Start native traversal
+      // from Clear in every engine, independently of the pointer assertions above.
+      const clear = commands.querySelector<HTMLButtonElement>(".agent-chat__goal-clear")!;
+      clear.focus();
+      expect(document.activeElement).toBe(clear);
+      if (server.browser === "webkit" && server.platform === "darwin") {
+        // Option-Tab includes buttons under Safari's default keyboard settings.
+        await userEvent.keyboard("{Alt>}{Shift>}{Tab}{/Shift}{/Alt}");
+      } else {
+        await userEvent.tab({ shift: true });
+      }
       expect(document.activeElement).toBe(
         commands.querySelector(
           status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",

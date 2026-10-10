@@ -10148,7 +10148,6 @@
 ["ui/src/components/assistant-panel.test.ts","./home-session.runtime.ts","3512d1bf20dbfc4e462ac3729de2780f066179f22fd6371eb101865c315b0ae0",1]
 ["ui/src/components/markdown-mermaid.test.ts","../lib/clipboard.ts","83722cd240abb045bee1208cd4d94851677fedf613ddf7e4ce9ac1c3c65143a9",1]
 ["ui/src/components/menu-surface.test.ts","../app/native-browser-host.ts","ede6e031c1bb7d091007931f2ae2fc1e4d5825a5173608e489d7f1e6f7e95dd6",1]
-["ui/src/components/modal-dialog.test.ts","../app/native-browser-host.ts","239d02ef0dcfd79bb4729ee9944c9a1606ba4651fa36ab8a98201c1ec9f3569e",1]
 ["ui/src/components/session-organizer-batch-mutations.test.ts","../lib/toast.ts","68c3a82839bf89ff12172a36802f02e76794e74bef5943b01ea140589a6cb2af",1]
 ["ui/src/components/terminal/terminal-panel-cancellation.test.ts","../../app/sw-refresh.runtime.ts","0490490ce19bc229906347512d6783de58624ee2f5c9c10da3e49370ffce0276",1]
 ["ui/src/components/terminal/terminal-panel-reconnect.test.ts","../../app/sw-refresh.runtime.ts","0490490ce19bc229906347512d6783de58624ee2f5c9c10da3e49370ffce0276",1]
