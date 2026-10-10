@@ -89,6 +89,9 @@ catch, and relevant failure/reconstruction evidence. For provider-facing changes
 check final requests and permitted differences, paid-attempt accounting, fallback
 diagnostics, and durable replay effects where affected. Reject test-count claims
 and helper-only proof that bypasses the changed boundary; apply `$test-audit`.
+Check requested behavior and repository standards separately: satisfying one
+does not establish the other. Report missing requirements and unrequested scope
+even when the implementation is internally consistent.
 
 ## CODEOWNERS review
 
