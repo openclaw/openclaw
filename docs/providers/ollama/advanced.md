@@ -157,7 +157,18 @@ sidebarTitle: "Advanced"
     OpenClaw forwards thinking as Ollama expects it: top-level `think`, not
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
-    and `/think max`; non-thinking models expose only `/think off`.
+    and `/think max`; non-thinking models expose only `/think off`. When
+    `/api/show` also reports `thinking.values`, discovery caches a model-specific
+    mapping. Boolean models send `false` or `true`; graded models send their
+    supported effort strings. Advertised `xhigh` is also available through
+    `/think xhigh` and `--thinking xhigh`.
+
+    Existing selections map to the nearest supported tier using OpenClaw's
+    shared thinking ladder. For example, a model advertising `low`, `medium`,
+    and `xhigh` receives `xhigh` for High and Maximum. If the model cannot
+    disable thinking, Off uses its lowest supported tier. OpenClaw keeps its
+    existing Off default rather than adopting `thinking.default`. Discovery
+    refreshes this metadata with the model catalog; turns do not fetch it again.
 
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
@@ -190,7 +201,8 @@ sidebarTitle: "Advanced"
     when the active run only has the implicit `off` default; a non-off
     runtime command such as `/think medium` still overrides it. A truthy
     thinking request is never sent to a model explicitly marked
-    `reasoning: false`; a `think: false` request is always sent regardless.
+    `reasoning: false`. Models that cannot disable thinking use their lowest
+    supported tier for a configured `false` as well.
 
   </Accordion>
 
@@ -273,8 +285,10 @@ sidebarTitle: "Advanced"
     For native requests, `/think off`, `openclaw agent --thinking off`, and
     plugin `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level
     `think: false` unless an explicit `params.think`/`params.thinking` is
-    configured. Direct completions that omit `reasoning` keep the model default.
-    `/think low|medium|high` send the matching effort string. Verified full-effort
+    configured or discovery reports a model that cannot disable thinking.
+    Direct completions that omit `reasoning` keep the model default.
+    Without a discovered thinking descriptor, `/think low|medium|high` send
+    the matching effort string. Verified full-effort
     Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3,
     DeepSeek V4, and DeepSeek V4.1 Flash also send native
     `think: "max"` for `/think max`; other models and local servers keep the
