@@ -320,6 +320,12 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   position: relative;
 }
 
+.new-session-page__hosted-workspace {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .new-session-page__select--agent openclaw-agent-select {
   width: auto;
   max-width: min(40vw, 260px);

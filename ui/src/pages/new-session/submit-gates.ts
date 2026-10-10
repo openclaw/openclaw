@@ -73,7 +73,8 @@ export function readNewSessionSubmissionAccess(options: {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
   const target = resolveDraftSessionPlacement(pendingPlacement, place);
-  const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
+  const remoteProject =
+    !place.hostedEnvironment && !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
       method: "projects.add",

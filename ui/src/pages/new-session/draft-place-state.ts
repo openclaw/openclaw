@@ -22,6 +22,10 @@ import {
 import { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { PendingPlacementPlace } from "./draft-session-placement.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
+import {
+  environmentDeviceDisabledReason,
+  environmentCloudDisabledReason,
+} from "./hosted-environments.ts";
 import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import {
@@ -161,8 +165,35 @@ export class DraftPlaceState {
     return this.folderValue;
   }
 
+  get hostedEnvironment() {
+    return catalog.isTarget(this.read().data)
+      ? undefined
+      : this.modelControl.resolveAgentRuntime()?.workspaceEnvironment;
+  }
+
+  selectHostedEnvironment(runtimeId: string) {
+    const snapshot = this.read();
+    if (
+      snapshot.submitting ||
+      snapshot.pendingPlacementSessionKey ||
+      !this.canWrite() ||
+      catalog.isTarget(snapshot.data)
+    ) {
+      return;
+    }
+    if (this.modelControl.selectHostedEnvironment(runtimeId)) {
+      this.browser.close();
+      this.callbacks.onError(null);
+      this.callbacks.requestUpdate();
+    }
+  }
+
   get worktree(): boolean {
-    return (this.remotePlacement || this.repositoryState.worktree) && !this.remoteRepository;
+    return (
+      !this.hostedEnvironment &&
+      (this.remotePlacement || this.repositoryState.worktree) &&
+      !this.remoteRepository
+    );
   }
 
   get checkoutVisible(): boolean {
@@ -194,21 +225,22 @@ export class DraftPlaceState {
   }
 
   get deviceId(): string {
-    return this.selection.deviceId;
+    return this.hostedEnvironment ? "" : this.selection.deviceId;
   }
 
   get autoDevice(): boolean {
-    return this.selection.autoDevice;
+    return !this.hostedEnvironment && this.selection.autoDevice;
   }
 
   get remotePlacement(): boolean {
     return Boolean(
-      this.selection.deviceId || this.selection.autoDevice || this.selection.cloudProfileId,
+      !this.hostedEnvironment &&
+      (this.selection.deviceId || this.selection.autoDevice || this.selection.cloudProfileId),
     );
   }
 
   get cloudProfileId(): string {
-    return this.selection.cloudProfileId;
+    return this.hostedEnvironment ? "" : this.selection.cloudProfileId;
   }
 
   get cloudSelection() {
@@ -221,7 +253,7 @@ export class DraftPlaceState {
 
   preferenceSelection(): NewSessionPreference {
     // Remember selection intent, not a temporary projection while discovery is pending.
-    const where = this.selection.preferredWhereRestore ?? resolveNewSessionWhere(this);
+    const where = this.selection.preferredWhereRestore ?? resolveNewSessionWhere(this.selection);
     return {
       workspace: this.workspacePath(),
       folder: this.folderValue,
@@ -239,10 +271,13 @@ export class DraftPlaceState {
   }
 
   get placementPreferenceReady(): boolean {
-    return draftPlacePreferenceReady(
-      this.selection,
-      this.freshWorkspace || this.repositoryState.preferenceReady,
-      this.browser.projectsLoading || this.browser.projectsReady,
+    return (
+      Boolean(this.hostedEnvironment) ||
+      draftPlacePreferenceReady(
+        this.selection,
+        this.freshWorkspace || this.repositoryState.preferenceReady,
+        this.browser.projectsLoading || this.browser.projectsReady,
+      )
     );
   }
 
@@ -315,7 +350,7 @@ export class DraftPlaceState {
   }
 
   folderSubmissionBlocked(): boolean {
-    if (this.freshWorkspace) {
+    if (this.hostedEnvironment || this.freshWorkspace) {
       return false;
     }
     if (this.browser.projectId || this.browser.remoteProject) {
@@ -605,6 +640,16 @@ export class DraftPlaceState {
       return;
     }
     if (
+      this.hostedEnvironment &&
+      (deviceId || autoDevice) &&
+      environmentDeviceDisabledReason(this.modelControl)
+    ) {
+      return;
+    }
+    if (!this.modelControl.selectHostEnvironment()) {
+      return;
+    }
+    if (
       (deviceId &&
         this.devices().find((device) => device.deviceId === deviceId)?.selectable !== true) ||
       (autoDevice && !this.devices().some((device) => device.selectable))
@@ -618,6 +663,8 @@ export class DraftPlaceState {
       autoDevice === this.selection.autoDevice &&
       !this.selection.cloudProfileId
     ) {
+      this.browser.close();
+      this.callbacks.requestUpdate();
       return;
     }
     this.folderValidation.cancel();
@@ -644,7 +691,8 @@ export class DraftPlaceState {
       snapshot.pendingPlacementSessionKey ||
       !this.isAdmin() ||
       !profile ||
-      Boolean(this.modelControl.cloudRuntimeUnsupportedReason(profile))
+      Boolean(environmentCloudDisabledReason(this.modelControl, profile)) ||
+      !this.modelControl.selectHostEnvironment()
     ) {
       return;
     }
@@ -691,6 +739,9 @@ export class DraftPlaceState {
   }
 
   restorePreferenceSelections() {
+    if (this.hostedEnvironment) {
+      return;
+    }
     restoreDraftPlacePreferences({
       state: this.selection,
       browser: this.browser,
@@ -709,7 +760,7 @@ export class DraftPlaceState {
   }
 
   worktreeAvailable(): boolean {
-    return this.repositoryState.available();
+    return !this.hostedEnvironment && this.repositoryState.available();
   }
 
   private persistPreference(patch: Parameters<DraftGatewayState["persistPreference"]>[2]) {
