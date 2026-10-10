@@ -20,8 +20,6 @@ import {
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
   clearPendingCommentaryText,
-  hasVisibleTextBlock,
-  markTextPhaseTerminalBound,
   rememberPendingCommentaryTags,
   tagInterruptedTextPhases,
   tagPendingCommentaryText,
@@ -334,6 +332,7 @@ export async function processCompletionsStream(
   const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
     const recoverUnclosed =
       allowRecovery &&
+      !output.openclawDelivery?.textPhaseRequiresTerminal &&
       output.stopReason !== "length" &&
       output.stopReason !== "error" &&
       output.stopReason !== "aborted";
@@ -372,16 +371,8 @@ export async function processCompletionsStream(
     }
     currentTextSource = undefined;
   };
-  const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
-    // Reasoning before any visible byte leaves nothing to reclassify; only
-    // reasoning that resumes after text makes that text's phase terminal-bound.
-    if (!reasoningTagTextPartitioner.hasPending() && !hasVisibleTextBlock(output.content)) {
-      return;
-    }
-    markTextPhaseTerminalBound(output);
-    if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
-      reasoningTagTextPartitioner.markStrict();
-    }
+  const beginReasoning = (hasFollowingVisibleText: boolean) => {
+    output.openclawDelivery = { ...output.openclawDelivery, textPhaseRequiresTerminal: true };
     // Let following text finish syntax already owned by the Markdown
     // parser; otherwise packet batching cannot erase a lane boundary.
     if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
@@ -470,18 +461,14 @@ export async function processCompletionsStream(
       const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
       const hasSameChunkVisibleText = reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
       if (hasReasoningThinking) {
-        beginReasoning(hasSameChunkVisibleText, true);
+        beginReasoning(hasSameChunkVisibleText);
         appendReasoningDeltas(reasoningDeltas);
       }
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
           const parts = gemmaToolCallRecoverer?.push(contentDelta.text) ?? [contentDelta];
           for (const part of parts) {
-            const routedDeltas =
-              hasReasoningThinking && output.openclawDelivery?.textPhaseRequiresTerminal
-                ? reasoningTagTextPartitioner.push(part.text)
-                : reasoningTagTextPartitioner.pushVisible(part.text);
-            for (const routedDelta of routedDeltas) {
+            for (const routedDelta of reasoningTagTextPartitioner.pushVisible(part.text)) {
               appendPartitionedVisibleDelta(routedDelta);
             }
           }
