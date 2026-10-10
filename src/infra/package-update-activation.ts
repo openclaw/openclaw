@@ -237,17 +237,17 @@ export async function settlePendingPackageActivation(
   if (initial.phase === "rollback-in-progress") {
     throw new Error("Package restoration is unfinished; its rollback owner must finish recovery.");
   }
-  const settlement =
+  const priorSettlement =
     initial.phase === "superseded" && initial.intent && "settled" in initial.intent
       ? initial.intent
       : undefined;
   const receipt =
-    settlement || complete
+    priorSettlement || complete
       ? {
           operationId: initial.descriptor.operationId,
-          reason: settlement?.kind ?? "publication-retired",
+          reason: priorSettlement?.kind ?? "publication-retired",
           retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
-          detail: settlement?.detail,
+          detail: priorSettlement?.detail,
         }
       : undefined;
   const originalAuthority = initial.descriptor.authority;

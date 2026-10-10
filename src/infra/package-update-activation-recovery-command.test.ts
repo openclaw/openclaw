@@ -105,13 +105,13 @@ it.skipIf(process.platform === "win32")(
         db.close();
       }
       const completedBytes = fs.readFileSync(journalPath);
-      await expect(
-        settlePendingPackageActivation(prepared.packageRoot, undefined, record),
-      ).rejects.toThrow("Completed package receipt changed");
-      expect(fs.readFileSync(journalPath)).toEqual(completedBytes);
       const observed = run("status");
       expect(observed.status, observed.stderr).toBe(0);
       expect(JSON.parse(observed.stdout).phase).toBe("complete");
+      expect(fs.readFileSync(journalPath)).toEqual(completedBytes);
+      await expect(
+        settlePendingPackageActivation(prepared.packageRoot, undefined, record),
+      ).rejects.toThrow("Completed package receipt changed");
       expect(fs.readFileSync(journalPath)).toEqual(completedBytes);
 
       const retained = `${prepared.anchor}.superseded-${prepared.operationId}`;
