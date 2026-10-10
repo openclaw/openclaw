@@ -192,7 +192,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
+vi.mock("../infra/outbound/channel-bootstrap.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-bootstrap.runtime.js")>()),
   // Every channel fixture in this suite is already active. Bootstrap discovery
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),

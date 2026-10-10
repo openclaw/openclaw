@@ -149,7 +149,8 @@ vi.mock("../../plugins/loader.js", () => ({
   resolveRuntimePluginRegistry: vi.fn(),
 }));
 
-vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", () => ({
+vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/channel-bootstrap.runtime.js")>()),
   bootstrapOutboundChannelPlugin: vi.fn(),
   bootstrapOutboundChannelPluginAsync: vi.fn(),
 }));
