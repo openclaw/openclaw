@@ -366,6 +366,23 @@ CLI-writer ownership, and accepted-input custody retain their existing validator
 The model-context reader uses committed destructive changes to permanently refuse
 an overlapping read; it still validates its exact context at acceptance.
 
+Initial bounded hydration can also supply model context when it contains the whole
+active path. The manager retains detached, sanitized bytes and consumes them only
+under its existing source, writer FIFO, and native-mutation checks while the
+physical store's write revision remains unchanged. Truncated or changed views use
+the normal worker reader. Hydration and anchors share the projection's version
+and watermark in their existing snapshot.
+
+Turn writers carry current entry facts into source and custody checks. Publication
+can reuse a writer-certified entry postimage while its transaction revision still
+matches; side-table changes or callbacks force the normal persisted read. Transcript
+mutation statements supply their context postimages to later reads in the same
+unchanged transaction. Assistant rebase validation runs inside the append's write
+reservation. User and assistant commits, idempotency, and postcommit installation
+remain separate. Single-statement lifecycle guards need no extra read envelope;
+composite removal selection retains its snapshot. Schemas, stored bytes, retention,
+permissions, and update behavior are unchanged.
+
 | Writer family                                                                                 | Publication boundary                                                                                                                  |
 | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Entry creation, replacement, patch, reset, and deletion                                       | Existing entry publisher, worker replacement receipts, and lifecycle tombstones.                                                      |
@@ -2094,6 +2111,35 @@ schema, retention, permission, content limit, worker service, feature flag, or
 update migration and claims no incognito T1 retirement. P12 owns production
 selection and removal of the remaining native incognito selectors.
 
+### Incognito subagent requester and completion lifetimes (P06, inactive)
+
+Explicit actor bindings now serve subagent requester reads, capability and depth
+resolution, announcement metadata, registry reconciliation, and controlled child
+information. Child enrichment retains each run's recorded agent owner and returns
+results by run ID; durable siblings keep their grouped reads. Cross-agent private
+reads select only existing actors from the captured physical root. Selected
+absence stays absent, while a retained dead actor refuses reuse.
+
+Announcement, settle-wake, and completion custody keep the original actor alive
+through their consumers. Current-source guards remain synchronous and consume
+published session identity and lifecycle facts. Parent skill preparation finishes
+before child FIFO admission; transaction and commit guards compare the exact
+parent session, lifecycle, and skill-selection fields without waiting back on the
+parent actor. Terminal lazy policy reads and exec-approval follow-ups likewise
+retain the selected actor and refuse policy revocation or session rebound.
+
+The `sessions_send` communication-admission reread uses the same retained actor
+for an explicitly bound requester. It rereads the full entry for communication
+policy comparison and retains the exact session/lifecycle claim through final
+admission. Policy publications and current caller authority still fence delivery;
+unbound requesters keep the native reread.
+
+Production incognito acquisition remains host-owned until P12. Ordinary unbound
+calls retain their native selectors and allocate no actor. This inactive
+composition adds no freshness probes, worker service, schema, retention,
+permission, content limit, or update migration, and claims no incognito T1
+retirement. Native selector deletion remains part of the P12 cutover.
+
 ### Existing worker flows
 
 Remote model catalog refreshes capture the shared store before downloading and
@@ -2733,6 +2779,33 @@ Transaction and commit grants still check the live source. A settled result
 survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
+
+Memory source-state reads, cache pruning, standing-intent operations, and session
+collaboration writes without a preparation callback use that single-command
+path. Memory bindings reuse the canonical connection's installed policy and
+create staging tables only for a staged transfer. Small embedding-cache writes
+carry a bounded inline batch through the same revision, tombstone, capacity, and
+commit checks; larger inputs retain fragment staging. Standing-intent setup
+consumes admitted MAIN schema facts and requests a write transaction only when
+installation is needed. Temporary tables cannot redirect its canonical schema
+installation. Cold installation commits separately from the business operation.
+A confirmed schema-only receipt permits its next dispatch with fresh grants;
+an unknown write outcome never permits replay.
+
+Ordinary human chat prepares initial skill selections and authoring presentation
+in one shared-state snapshot. Both consumers retain the original requester and
+profile/library invalidation checks. Standalone empty-seed reads reuse admitted
+table absence without opening a transaction. Pending-input staging reads each
+entry, membership set, and pending row once inside its write transaction, then
+returns the persisted row with its commit receipt. The host installs custody
+from that postimage after settlement. Preparation before external work remains
+separate from mutation, and transaction and commit grants still check live
+authority. Completion validates its retained outcome with one read.
+
+These command and read consolidations change no schema version, stored data,
+durability, retention, or permission contract. Existing installations require
+no data migration; released synchronous completion and schema entry points
+remain available.
 
 During Gateway restart grace, an accepted publication sequence retains its native
 agent lease. When the process finishes active-work drain and begins shutdown

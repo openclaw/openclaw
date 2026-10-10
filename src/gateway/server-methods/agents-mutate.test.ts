@@ -26,7 +26,6 @@ import {
   registerAgentCreationCommitTests,
   resolveMockWorkspaceDir,
   type MockAgentEntry,
-  type MockConfig,
 } from "./agents-mutate.test-support.js";
 const mocks = vi.hoisted(() => ({
   sharedAuthStoreOwnership: { location: "legacy-main" } as {

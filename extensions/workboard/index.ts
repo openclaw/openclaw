@@ -26,6 +26,36 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
+    api.registerCli(
+      async ({ program }) => {
+        const { registerWorkboardCli } = await import("./src/cli.js");
+        registerWorkboardCli({
+          program,
+          withStore: async (action) => {
+            const cliStore = WorkboardStore.openSqlite(
+              resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+            );
+            try {
+              return await action(cliStore);
+            } finally {
+              await cliStore.close();
+            }
+          },
+        });
+      },
+      {
+        descriptors: [
+          {
+            name: "workboard",
+            description: "Manage Workboard cards and worker dispatch",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
+    if (api.registrationMode === "cli-metadata") {
+      return;
+    }
     const store = WorkboardStore.openSqlite(
       resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
     );
@@ -107,21 +137,6 @@ export default definePluginEntry({
           onMatched: automationNudge.nudge,
         });
       }),
-    );
-    api.registerCli(
-      async ({ program }) => {
-        const { registerWorkboardCli } = await import("./src/cli.js");
-        registerWorkboardCli({ program, store });
-      },
-      {
-        descriptors: [
-          {
-            name: "workboard",
-            description: "Manage Workboard cards and worker dispatch",
-            hasSubcommands: true,
-          },
-        ],
-      },
     );
     api.registerTool(
       (context) =>

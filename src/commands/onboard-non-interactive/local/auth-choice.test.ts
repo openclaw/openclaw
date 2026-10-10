@@ -103,7 +103,11 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
     expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      JSON.stringify(
+        { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+        null,
+        2,
+      ),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

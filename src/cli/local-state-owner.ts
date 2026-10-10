@@ -8,6 +8,7 @@ import {
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
@@ -39,6 +40,9 @@ export async function runWithLocalStateOwner<T>(params: {
   target: string;
   recoveryCommand?: string;
   requiredCapabilities?: readonly string[];
+  scopes?: readonly OperatorScope[];
+  timeoutMs?: number;
+  expectFinal?: boolean;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
   onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
   assertTargetCurrent?: () => void;
@@ -54,6 +58,7 @@ export async function runWithLocalStateOwner<T>(params: {
     OPENCLAW_CONFIG_PATH: resolveConfigPath(selectedEnv, selectedStateDir),
   };
   const input = structuredClone(params.params);
+  const scopes: OperatorScope[] = [...(params.scopes ?? ["operator.admin"])];
   const [
     {
       acquireGatewayLock,
@@ -162,9 +167,10 @@ export async function runWithLocalStateOwner<T>(params: {
           GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
           ...(params.requiredCapabilities ?? []),
         ],
-        timeoutMs: 600_000,
+        timeoutMs: params.timeoutMs ?? 600_000,
+        expectFinal: params.expectFinal,
         signal: controller.signal,
-        scopes: ["operator.admin"],
+        scopes,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         prepareDispatchCurrent: async () => {

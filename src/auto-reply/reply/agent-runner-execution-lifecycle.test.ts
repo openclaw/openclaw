@@ -45,6 +45,7 @@ import {
   replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
@@ -817,7 +818,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("forwards bundle MCP retirement to isolated heartbeat embedded runs", async () => {
+  it("forwards the event queue and bundle MCP retirement to isolated heartbeat embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
@@ -830,7 +831,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const opts = withReplySystemEventContext<InternalGetReplyOptions>(
+      { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
+      {
+        sessionKey: "agent:main:heartbeat:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      },
+    );
     const params = createMinimalRunAgentTurnParams({ opts });
     params.isHeartbeat = true;
 
@@ -842,12 +849,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       "isolated heartbeat embedded run params",
       {
         trigger: "heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
         cleanupBundleMcpOnRunEnd: true,
       },
     );
   });
 
-  it("forwards bundle MCP retirement to isolated heartbeat CLI runs", async () => {
+  it("forwards the event queue and bundle MCP retirement to isolated heartbeat CLI runs", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
@@ -862,7 +870,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "sonnet-4.6";
-    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const opts = withReplySystemEventContext<InternalGetReplyOptions>(
+      { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
+      {
+        sessionKey: "agent:main:heartbeat:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      },
+    );
     const params = createMinimalRunAgentTurnParams({ followupRun, opts });
     params.isHeartbeat = true;
 
@@ -871,6 +885,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     expectMockCallArgFields(state.runCliAgentMock, 0, "isolated heartbeat CLI run params", {
       trigger: "heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
       cleanupBundleMcpOnRunEnd: true,
     });
   });
