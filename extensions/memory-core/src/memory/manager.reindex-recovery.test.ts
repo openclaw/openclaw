@@ -215,6 +215,7 @@ describe("memory manager reindex recovery", () => {
       { source: "sessions", text: "User: published session" },
     ]);
 
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
     await memoryManager.sync();
     expect(rows.all()).toEqual([
       { source: "memory", text: "replacement memory" },
@@ -229,36 +230,57 @@ describe("memory manager reindex recovery", () => {
     expect(harness.sessionsDirtyFiles.size).toBe(0);
   });
 
-  it("does not retain nonfinite coordinates after rejected provider output", async () => {
-    const invalid = [0, Number.NaN, 0];
-    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
-    await memoryManager.sync({ reason: "cli", force: true });
-    await fs.writeFile(
-      path.join(memoryDir, "alpha.md"),
-      Array.from(
-        { length: 80 },
-        (_, index) => `Fact ${index}: keep independent reusable memory content.`,
-      ).join("\n"),
-    );
-    // SAFETY: the fixture owns this manager and its registered embedding provider.
-    const harness = memoryManager as unknown as ReindexHarness;
-    if (!harness.provider) {
-      throw new Error("fixture provider missing");
-    }
-    const embed = vi
-      .spyOn(harness.provider, "embedBatch")
-      .mockImplementationOnce(async (inputs) => {
-        expect(inputs.length).toBeGreaterThan(1);
-        return inputs.map((_, index) => (index === 0 ? [0, 1, 0] : invalid));
-      });
-    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow();
-    expect(harness.db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
-    await memoryManager.sync({ reason: "cli", force: true });
-    expect(embed).toHaveBeenCalledTimes(2);
-    expect(
-      harness.db.prepare("SELECT hash FROM memory_embedding_cache").all().length,
-    ).toBeGreaterThan(0);
-  });
+  it.for(
+    [true, false].flatMap((cacheEnabled) => [
+      {
+        cacheEnabled,
+        invalid: [0, Number.NaN, 0],
+        condition: "non-finite or non-numeric coordinate",
+      },
+      { cacheEnabled, invalid: [], condition: "empty embedding" },
+    ]),
+  )(
+    "rejects $condition with cache enabled=$cacheEnabled",
+    async ({ cacheEnabled, invalid, condition }) => {
+      await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha");
+      const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled }));
+      await memoryManager.sync({ reason: "cli", force: true });
+      await fs.writeFile(
+        path.join(memoryDir, "alpha.md"),
+        Array.from(
+          { length: 80 },
+          (_, index) => `Fact ${index}: keep independent reusable memory content.`,
+        ).join("\n"),
+      );
+      // SAFETY: the fixture owns this manager and its registered embedding provider.
+      const harness = memoryManager as unknown as ReindexHarness;
+      if (!harness.provider) {
+        throw new Error("fixture provider missing");
+      }
+      const cachedBefore = harness.db.prepare("SELECT hash FROM memory_embedding_cache").all();
+      const embed = vi
+        .spyOn(harness.provider, "embedBatch")
+        .mockImplementationOnce(async (inputs) => {
+          expect(inputs.length).toBeGreaterThan(1);
+          return inputs.map((_, index) => (index === 0 ? [0, 1, 0] : invalid));
+        });
+      await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow(
+        new RegExp(
+          `openai embeddings failed \\(model: mock-embed, batch size: \\d+\\): ${condition} at position 1`,
+        ),
+      );
+      expect(harness.db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual(
+        cachedBefore,
+      );
+      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+        { text: "published alpha" },
+      ]);
+      await memoryManager.sync({ reason: "cli", force: true });
+      expect(embed).toHaveBeenCalledTimes(2);
+      const cached = harness.db.prepare("SELECT hash FROM memory_embedding_cache").all();
+      expect(cached.length > 0).toBe(cacheEnabled);
+    },
+  );
 
   it("waits for the published writer before clearing conflicting dimensions and recovers", async () => {
     const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
@@ -302,7 +324,9 @@ describe("memory manager reindex recovery", () => {
       ).toBeGreaterThan(0);
       reservation?.release();
       await reservation?.done;
-      await expect(sync).rejects.toThrow("malformed vector response");
+      await expect(sync).rejects.toThrow(
+        /openai embeddings failed \(model: mock-embed, batch size: \d+\): expected 2 dimensions, got 3 at position 0/,
+      );
     } finally {
       reservation?.release();
       await reservation?.done;

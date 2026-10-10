@@ -131,7 +131,7 @@ describe("llama-server model mapping", () => {
     });
 
     expect(provider.models).toHaveLength(2);
-    expect(provider.models[0]).toBe(explicit);
+    expect(provider.models[0]).toMatchObject(explicit);
     expect(provider.models[1]?.id).toBe("other");
   });
 });

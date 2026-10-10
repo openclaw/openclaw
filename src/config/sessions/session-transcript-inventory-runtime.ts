@@ -10,19 +10,35 @@ import {
   readSessionEntryInWorker,
   withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import { readMemorySessionTargets } from "./session-memory-targets.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
+import {
+  readMemorySessionTargets,
+  resolveMemorySessionSince,
+  unresolvedMemorySessionTarget,
+} from "./session-memory-targets.js";
 import type { MemorySessionSelectors } from "./session-memory-targets.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 
 export async function listSessionTranscriptArchivesInWorker(input: SessionArchiveInventoryScope) {
+  const source = captureIncognitoSessionSource(input);
   const scope = {
     ...input,
     env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
     sessionIds: [...new Set(input.sessionIds ?? [])],
     archiveNames: [...new Set(input.archiveNames ?? [])],
   };
+  if (source) {
+    // Actor transcripts never create durable archive artifacts.
+    await Promise.resolve();
+    source.admissionSignal?.throwIfAborted();
+    if ("kind" in source) {
+      source.assertCurrent();
+    } else {
+      source.actor.assertReadable();
+    }
+    return [];
+  }
   if (scope.sessionIds.length === 0 && scope.archiveNames.length === 0) {
     return [];
   }
@@ -104,7 +120,15 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
     return [];
   }
   const storePath = resolveSessionStorePathForScope(scope);
-  const binding = captureIncognitoSessionBinding({ ...scope, storePath });
+  const binding = captureIncognitoSessionSource({ ...input, storePath });
+  if (binding && "kind" in binding) {
+    resolveMemorySessionSince(scope.since);
+    await Promise.resolve();
+    binding.assertCurrent();
+    return scope.sessionIds.map((sessionId) =>
+      unresolvedMemorySessionTarget(scope.agentId, sessionId),
+    );
+  }
   if (binding) {
     const { actor } = binding;
     const sessions = actor.sessions.deadlines().map(({ sessionKey, sessionId }) => ({

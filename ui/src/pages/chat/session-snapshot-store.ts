@@ -1,5 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { z } from "zod";
+import { ProgressCardSchema } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
+import { SessionRowSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   getSessionCacheValue,
@@ -11,6 +15,7 @@ import {
   type ChatCacheObserver,
   type ChatMessageCache,
   type ChatSessionSnapshot,
+  type ChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import {
   isPersistableChatSnapshotKey,
@@ -31,7 +36,7 @@ import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
-const CHAT_SNAPSHOT_PROJECTION_VERSION = 1;
+const CHAT_SNAPSHOT_PROJECTION_VERSION = 2;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
@@ -52,8 +57,29 @@ const paginationSchema = z.discriminatedUnion("hasMore", [
     .strict(),
 ]);
 
+const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
+  "key",
+  "kind",
+  "classification",
+  "participants",
+  "expandedParticipants",
+  "owner",
+  "lastRunId",
+  "status",
+  "runtimeMs",
+]);
+
 const snapshotSchema = z
   .object({
+    transcriptMetadata: z
+      .custom<ChatTranscriptMetadata>((value) => Value.Check(transcriptMetadataSchema, value))
+      .optional(),
+    progressCard: z
+      .custom<NonNullable<ChatSessionSnapshot["progressCard"]>>((value) =>
+        Value.Check(ProgressCardSchema, value),
+      )
+      .nullable()
+      .optional(),
     deltaCursor: z.string().optional(),
     displayedLeafEntryId: z.string().nullable().optional(),
     // Message contents are opaque; only the array boundary needs validation.

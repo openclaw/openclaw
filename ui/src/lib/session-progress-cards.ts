@@ -45,6 +45,7 @@ type ProgressCardEntry = {
   /** Invalidates conditional dismissals when newer numbered progress arrives. */
   dismissalGeneration: number;
   dirty: boolean;
+  hydratedScope?: object;
   /** Latest invalidation observed while a read is already in flight. */
   pendingRefreshRevision?: number | null;
   card?: ProgressCard | null;
@@ -67,6 +68,8 @@ export type SessionProgressCardStore = {
     options?: ProgressCardWatchOptions,
   ) => void;
   unwatch: (owner: object) => void;
+  hydrate: (target: ProgressCardGetParams, card: ProgressCard | null) => void;
+  invalidate: (target: ProgressCardGetParams) => void;
   load: (target: ProgressCardGetParams) => Promise<ProgressCard | null>;
   dismiss: (target: ProgressCardGetParams, card: ProgressCard) => Promise<boolean>;
   refresh: (target: ProgressCardGetParams, card: ProgressCard) => void;
@@ -178,6 +181,8 @@ export function sessionProgressCardsForGateway(
     if (scope !== presentationScope) {
       presentationScope = scope;
       lifetimes.clear();
+      entries.forEach(retireRefresh);
+      entries.clear();
     }
   };
   const acceptLifetime = (
@@ -317,6 +322,7 @@ export function sessionProgressCardsForGateway(
           return entry.card ?? null;
         }
         entry.card = card;
+        delete entry.hydratedScope;
         acceptLifetime(resolved.key, entry.target, card);
         entry.dirty =
           entry.pendingRefreshRevision !== undefined &&
@@ -359,7 +365,18 @@ export function sessionProgressCardsForGateway(
       void load(target).catch(() => undefined);
     }
   };
+  const retireClientEntries = () => {
+    const scope = gatewayPresentationScope(gateway);
+    for (const [key, entry] of entries) {
+      if (entry.hydratedScope !== scope) {
+        retireRefresh(entry);
+        entries.delete(key);
+        lifetimes.delete(key);
+      }
+    }
+  };
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
+    syncLifetimeScope();
     if (connection.transition(snapshot)) {
       entries.forEach(retireRefresh);
       notify();
@@ -383,8 +400,7 @@ export function sessionProgressCardsForGateway(
     }
     if (clientChanged) {
       knownClient = snapshot.client;
-      entries.clear();
-      lifetimes.clear();
+      retireClientEntries();
       notify();
     }
     refreshWatched();
@@ -464,11 +480,11 @@ export function sessionProgressCardsForGateway(
     if (stopGatewaySnapshots || stopGatewayEvents) {
       return;
     }
+    syncLifetimeScope();
     connection.transition(gateway.snapshot);
     if (gateway.snapshot.client !== knownClient) {
       knownClient = gateway.snapshot.client;
-      entries.clear();
-      lifetimes.clear();
+      retireClientEntries();
     }
     knownAvailable = available();
     stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
@@ -505,6 +521,35 @@ export function sessionProgressCardsForGateway(
     }
   };
   const store: SessionProgressCardStore = {
+    invalidate: (target) => {
+      const { key } = resolveTarget(target);
+      const entry = entries.get(key);
+      if (entry) {
+        retireRefresh(entry);
+        entries.delete(key);
+      }
+      lifetimes.delete(key);
+      notify();
+    },
+    hydrate: (target, card) => {
+      syncLifetimeScope();
+      const resolved = resolveTarget(target);
+      if (entries.has(resolved.key)) {
+        return;
+      }
+      const parsed = parseProgressCard({ card }, resolved.wireKey);
+      remember(resolved.key, {
+        target: resolved.target,
+        wireKey: resolved.wireKey,
+        generation: 0,
+        dismissalGeneration: 0,
+        dirty: true,
+        card: parsed,
+        hydratedScope: gatewayPresentationScope(gateway),
+      });
+      acceptLifetime(resolved.key, resolved.target, parsed);
+      notify();
+    },
     watch,
     unwatch: (owner) => watch(owner, []),
     load,
@@ -648,7 +693,10 @@ export function sessionProgressCardsForGateway(
       }
       return dismissed;
     },
-    get: (target) => entries.get(resolveTarget(target).key)?.card,
+    get: (target) => {
+      syncLifetimeScope();
+      return entries.get(resolveTarget(target).key)?.card;
+    },
     getLifetime: (target) => {
       syncLifetimeScope();
       return lifetimes.get(resolveTarget(target).key)?.token;

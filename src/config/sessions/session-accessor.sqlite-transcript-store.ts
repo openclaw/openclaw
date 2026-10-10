@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -65,13 +64,12 @@ import {
   sessionTranscriptIndexNeedsReconcile,
   shouldRebuildSessionTranscriptIndexSynchronously,
 } from "./session-transcript-index.js";
-import {
-  extractTranscriptIndexEntry,
-  hasTranscriptMessage,
-  transcriptEventContextEligibility,
-} from "./session-transcript-projection-append.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
+import {
+  isSteerConfirmationRewrite,
+  transcriptRewritePreservesProjection,
+} from "./session-transcript-rewrite-effects.js";
 import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
@@ -577,7 +575,13 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
           );
         }
       }
-      rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+      // Steering correlation changes no admitted input. Keep its running turn's fence,
+      // while every other payload rewrite still invalidates admissions and cursors.
+      if (
+        !rewrites.every((row) => isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson))
+      ) {
+        rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+      }
       if (!projectionUnchanged) {
         if (options.legacyTextStorage) {
           // Media Doctor rebuilds after the physical storage migration; schema-22 readers
@@ -589,24 +593,6 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       }
       touchTranscriptMutationInTransaction(database, resolved.sessionId);
     },
-  );
-}
-
-function transcriptRewritePreservesProjection(beforeJson: string, afterJson: string): boolean {
-  const before: unknown = JSON.parse(beforeJson);
-  const after: unknown = JSON.parse(afterJson);
-  if (!isRecord(before) || !isRecord(after)) {
-    return false;
-  }
-  const { message: _beforeMessage, ...beforeEnvelope } = before;
-  const { message: _afterMessage, ...afterEnvelope } = after;
-  // Equal envelopes preserve tree topology and timestamp; exact rewrites retain created_at,
-  // so the index extractor's fallback timestamp is identical for both versions as well.
-  return (
-    isDeepStrictEqual(beforeEnvelope, afterEnvelope) &&
-    hasTranscriptMessage(before) === hasTranscriptMessage(after) &&
-    transcriptEventContextEligibility(before) === transcriptEventContextEligibility(after) &&
-    isDeepStrictEqual(extractTranscriptIndexEntry(before, 0), extractTranscriptIndexEntry(after, 0))
   );
 }
 

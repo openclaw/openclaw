@@ -21,6 +21,7 @@ import {
   renderSidebarDismissButton,
   renderSidebarNotificationCard,
 } from "./sidebar-notification-card.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "./sidebar-update-card.ts";
 import "./viewer-facepile.ts";
 
@@ -366,7 +367,7 @@ export function renderSidebarIssueItem(
           }"
           @click=${() => handlers.onOpen(item)}
         >
-          ${t("nav.askOpenClaw")}
+          ${askBrandLabel()}
         </button>
       </div>
     </div>

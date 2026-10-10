@@ -65,14 +65,12 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
 }
 
 function expectSubagentCarrier(messages: unknown[], state: string) {
-  expect(messages).toContainEqual(
-    expect.objectContaining({
-      role: "custom",
-      customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      display: false,
-      content: expect.stringContaining(state),
-    }),
-  );
+  expect(messages.at(-1)).toMatchObject({
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    display: false,
+    content: expect.stringContaining(state),
+  });
 }
 
 describe("subagent facts through full attempt history preparation", () => {
@@ -123,8 +121,11 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
-    expect(empty.messages).not.toContainEqual(
-      expect.objectContaining({ customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE }),
-    );
+    expectSubagentCarrier(empty.messages, "## Temporal Context\n");
+    expect(empty.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(
+        /^## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
+      ),
+    });
   });
 });

@@ -342,8 +342,10 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     return 1;
   }
 
-  protected override listSessionCorpusEntries() {
-    const work = super.listSessionCorpusEntries().then(async (entries) => {
+  protected override listSessionCorpusEntries(
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
+  ) {
+    const work = super.listSessionCorpusEntries(targets).then(async (entries) => {
       this.corpusListCalls += 1;
       const callback = this.afterNextCorpusList;
       this.afterNextCorpusList = null;

@@ -39,6 +39,7 @@ function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     agent: {
       session: {
         getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
+        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
       },
     },
   });

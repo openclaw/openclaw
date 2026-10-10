@@ -10,6 +10,7 @@ import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   createPackageIntegrityReader,
   type PackageLauncherFingerprint,
@@ -551,7 +552,8 @@ it.each([
     const originalRuntimePin = original
       ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
       : undefined;
-    const migrated = new DatabaseSync(database.path);
+    // The migration owner publishes its committed schema to the already-running updater.
+    const migrated = openNodeSqliteDatabase(database.path);
     try {
       migrated.exec(`
       BEGIN IMMEDIATE;

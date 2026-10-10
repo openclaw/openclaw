@@ -27,6 +27,7 @@ import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   retainSqliteWorkerErrorCode,
+  SqliteWorkerAdmissionTimeoutError,
   SqliteWorkerError,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
@@ -121,19 +122,34 @@ function prepareSqliteWorkerOperationAdmission(
       };
   try {
     if (databasePath) {
-      // Cold agent preparation also creates its captured shared state and quarantine stores.
-      const creationPaths =
-        job.request.type === "open" && !job.request.existingIdentity
-          ? new Set(
-              [
-                job.request.databasePath,
-                databasePath,
-                ...(job.request.stateContext
-                  ? [resolveQuarantineStorePath(job.request.stateContext.environment)]
-                  : []),
-              ].map(resolveIdentityPathViaExistingAncestorSync),
-            )
-          : undefined;
+      const assertCreate = (location: string) => {
+        const creationPaths = new Set<string>();
+        if (job.request.type === "open" && !job.request.existingIdentity) {
+          creationPaths.add(resolveIdentityPathViaExistingAncestorSync(job.request.databasePath));
+          creationPaths.add(resolveIdentityPathViaExistingAncestorSync(databasePath));
+        }
+        // Existing agents prepare lazily; only their original captured companions may be created.
+        if (actor?.stateContext) {
+          const primary = resolveIdentityPathViaExistingAncestorSync(actor.databasePath);
+          for (const companion of [
+            actor.stateDatabasePath,
+            resolveQuarantineStorePath(actor.stateContext.environment),
+          ]) {
+            if (companion) {
+              const target = resolveIdentityPathViaExistingAncestorSync(companion);
+              if (target !== primary) {
+                creationPaths.add(target);
+              }
+            }
+          }
+        }
+        if (!creationPaths.has(resolveIdentityPathViaExistingAncestorSync(location))) {
+          throw new SqliteWorkerError(
+            "SQLite creation target differs from its captured database",
+            "closed",
+          );
+        }
+      };
       let schemaLease: StateDatabaseSchemaLease | undefined;
       const assertAccess = () => {
         assertCurrentJob();
@@ -147,18 +163,7 @@ function prepareSqliteWorkerOperationAdmission(
         databasePath,
         assertRequest: assertDispatchable,
         assertAccess,
-        ...(creationPaths
-          ? {
-              assertCreate(location: string) {
-                if (!creationPaths.has(resolveIdentityPathViaExistingAncestorSync(location))) {
-                  throw new SqliteWorkerError(
-                    "SQLite creation target differs from its captured database",
-                    "closed",
-                  );
-                }
-              },
-            }
-          : {}),
+        ...(job.request.type === "close" ? {} : { assertCreate }),
         acquireSchema() {
           assertAccess();
           const acquire = () => acquireStateDatabaseSchemaLease(databasePath);
@@ -299,6 +304,9 @@ function decodeSqliteWorkerReplyValue(
 function decodeSqliteWorkerReplyError(
   error: Extract<SqliteWorkerReply, { ok: false }>["error"],
 ): Error {
+  if (error.name === "SqliteWorkerAdmissionTimeoutError" && error.code === "admission-timeout") {
+    return new SqliteWorkerAdmissionTimeoutError();
+  }
   const failure = Object.assign(new Error(error.message), {
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),
@@ -456,7 +464,9 @@ export function withSqliteWorkerCleanupFailure(failure: Error, cleanupError: unk
 }
 
 export function failSqliteWorkerSlot(
-  slot: Slot,
+  slot: Pick<Slot, "failed" | "current" | "queue"> & {
+    actors: ReadonlySet<Pick<Actor, "backendClosed" | "nativeLostObservers">>;
+  },
   reason: unknown,
   owner: {
     currentError?: Error;
@@ -496,7 +506,7 @@ export function failSqliteWorkerSlot(
   });
 }
 
-export function settleFailedSqliteWorkerJobs({
+function settleFailedSqliteWorkerJobs({
   queuedError,
   current,
   queued,

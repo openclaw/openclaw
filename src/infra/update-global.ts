@@ -385,22 +385,19 @@ async function collectInstalledPackageDistErrors(params: {
     actualFiles,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
-  if (inventoryFiles !== null) {
-    return [...inventoryErrors, ...criticalErrors];
+  if (inventoryFiles === null) {
+    if (inventoryError) {
+      inventoryErrors.push(inventoryError);
+    } else if (
+      shouldRequirePackagedDistInventory(params.installedVersion) ||
+      shouldRequirePackagedDistInventory(params.expectedVersion)
+    ) {
+      inventoryErrors.push(
+        `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      );
+    }
   }
-  if (inventoryError) {
-    return [inventoryError, ...criticalErrors];
-  }
-  if (
-    shouldRequirePackagedDistInventory(params.installedVersion) ||
-    shouldRequirePackagedDistInventory(params.expectedVersion)
-  ) {
-    return [
-      `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-      ...criticalErrors,
-    ];
-  }
-  return criticalErrors;
+  return [...inventoryErrors, ...criticalErrors];
 }
 
 async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {

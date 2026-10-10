@@ -2,8 +2,16 @@ import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-d
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-exact-read.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteScope,
+  resolveSqliteSessionKey,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "./session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionRowPresenceWorkerInput } from "./session-transcript-worker.types.js";
@@ -14,6 +22,23 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
   storePath: string;
   read: () => Promise<boolean>;
 }> {
+  const binding = captureIncognitoSessionSource(input);
+  if (binding) {
+    const owner = "kind" in binding ? binding : binding.actor;
+    const storePath = owner.path;
+    const sessionKey = resolveSqliteSessionKey(input.sessionKey, owner.agentId);
+    return {
+      sessionKey,
+      storePath,
+      read: () =>
+        withIncognitoSessionEntry(
+          binding,
+          sessionKey,
+          () => {},
+          async (entry) => Boolean(entry),
+        ),
+    };
+  }
   const env = { ...(input.env ?? process.env) };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const storePath = resolveSessionStorePathForScope({ ...input, env });

@@ -62,7 +62,10 @@ describe("shared-state content version facts", () => {
     { marker: undefined, expected: [13, 7, 5] },
     { marker: 11, expected: [13, 11, 11] },
   ])("reuses marker $marker without retaining the caller's floor", ({ marker, expected }) => {
-    const database = openDatabase({ marker });
+    const database = openDatabase({
+      marker,
+      pathname: path.join(tempDirs.make("openclaw-content-version-"), "state.sqlite"),
+    });
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       for (const [index, published] of [13, undefined, 5].entries()) {

@@ -109,7 +109,6 @@ export const forcedUnitFastTestFiles = [
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/talk/agent-consult-runtime.test.ts",
   "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
