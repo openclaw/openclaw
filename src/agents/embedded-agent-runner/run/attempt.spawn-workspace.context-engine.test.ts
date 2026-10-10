@@ -29,7 +29,6 @@ function useHooks(hooks: Parameters<typeof createHookRunnerWithRegistry>[0]) {
   hoisted.getGlobalHookRunnerMock.mockReturnValue(createHookRunnerWithRegistry(hooks).runner);
 }
 const embeddedSessionId = "embedded-session";
-const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 
 const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
