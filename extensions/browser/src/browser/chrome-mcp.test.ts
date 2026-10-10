@@ -369,7 +369,7 @@ describe("chrome MCP page parsing", () => {
     expect(explicitCloseSettled).toBe(false);
     releaseClose();
     await expect(active).rejects.toThrow(/transport failed before stop/);
-    await expect(queued).rejects.toThrow(/changed before the operation/);
+    await expect(queued).rejects.toThrow("Chrome MCP profile session was replaced");
     await expect(explicitClose).resolves.toBe(true);
     expect(factoryCalls).toBe(1);
   });

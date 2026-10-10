@@ -95,7 +95,7 @@ export function registerBrowserAgentScreencastRoutes(
             maxWidth: clampScreencastOption(body.maxWidth, 320, 2000, 1280),
             maxHeight: clampScreencastOption(body.maxHeight, 320, 2000, 1280),
             quality: clampScreencastOption(body.quality, 30, 90, 70),
-            lifecycleGeneration: generation,
+            profileSignal,
             lifecycleSignal: req.screencastAuthority
               ? AbortSignal.any([lifecycle.controller.signal, req.screencastAuthority.signal])
               : lifecycle.controller.signal,

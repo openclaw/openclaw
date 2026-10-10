@@ -216,7 +216,7 @@ describe("session tab registry", () => {
       } finally {
         release.resolve();
       }
-      await expect(cleanup).resolves.toBe(replacementPhase === "during-prepare" ? 0 : 1);
+      await expect(cleanup).resolves.toBe(replacementPhase === "during-close" ? 1 : 0);
       expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
       const freshClose = vi.fn(async () => {});
       await expect(
