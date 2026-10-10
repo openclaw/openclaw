@@ -205,8 +205,17 @@ function applyUpdateRunDiagnostics(
     }
   }
   if (verification) {
-    const { recovery, rollbackOutcome, booted, noticeDelivered, doctorHint } = record.verification;
-    record.verification = { recovery, rollbackOutcome, booted, noticeDelivered, doctorHint };
+    const { recovery, rollbackOutcome, booted, checks, normalCycle, noticeDelivered, doctorHint } =
+      record.verification;
+    record.verification = {
+      recovery,
+      rollbackOutcome,
+      booted,
+      checks,
+      normalCycle,
+      noticeDelivered,
+      doctorHint,
+    };
     record.confirmedAtMs = null;
     for (const step of (steps ?? []).flatMap(updateRunStepsFromResultStep)) {
       upsertStep(record, step);

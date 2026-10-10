@@ -11,6 +11,19 @@ import { closedObject } from "./closed-object.js";
 
 const text = Type.String({ maxLength: 1024 });
 const timestamp = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const updateVerificationStatus = Type.Enum(["pass", "fail", "unknown", "skipped"]);
+const updateVerificationCheck = closedObject({
+  id: text,
+  status: updateVerificationStatus,
+  required: Type.Optional(Type.Boolean()),
+  detail: Type.Optional(text),
+  observedAtMs: Type.Optional(timestamp),
+});
+const updateVerificationNormalCycle = closedObject({
+  status: updateVerificationStatus,
+  observedAtMs: timestamp,
+  detail: Type.Optional(text),
+});
 // Native rows retain UUID identities; OCM's opaque job IDs stay in their own namespace.
 const runId = Type.String({
   pattern:
@@ -254,6 +267,8 @@ export const UpdateRunRecordSchema = closedObject({
     channelsReady: Type.Optional(Type.Boolean()),
     readyz: Type.Optional(Type.Boolean()),
     settled: Type.Optional(Type.Boolean()),
+    checks: Type.Optional(Type.Array(updateVerificationCheck, { maxItems: 32 })),
+    normalCycle: Type.Optional(updateVerificationNormalCycle),
     noticeDelivered: Type.Optional(Type.Boolean()),
     doctorHint: Type.Optional(text),
   }),

@@ -1,5 +1,27 @@
 import type { UpdateRunRecord } from "./update-run-record.js";
 
+export type UpdateRunVerificationCheck = NonNullable<
+  UpdateRunRecord["verification"]["checks"]
+>[number];
+
+const MAX_VERIFICATION_CHECKS = 32;
+
+export function isUpdateRunNormalCycleAwaiting(
+  run: UpdateRunRecord,
+  nowMs: number,
+  maxAgeMs: number,
+): boolean {
+  return (
+    run.status === "succeeded" &&
+    run.phase === "finished" &&
+    run.finishedAtMs !== null &&
+    nowMs - run.finishedAtMs >= 0 &&
+    nowMs - run.finishedAtMs <= maxAgeMs &&
+    isUpdateRunVerificationConfirmed(run.verification) &&
+    run.verification.normalCycle?.status !== "pass"
+  );
+}
+
 export function isUpdateRunVerificationConfirmed(
   verification: UpdateRunRecord["verification"],
 ): boolean {
@@ -11,6 +33,30 @@ export function isUpdateRunVerificationConfirmed(
     verification.channelsReady === true &&
     verification.pluginErrors?.length === 0
   );
+}
+
+export function recordUpdateRunVerificationCheckRecord(
+  record: UpdateRunRecord,
+  check: UpdateRunVerificationCheck,
+  options: { onlyIfRunning?: true } = {},
+): void {
+  if (options.onlyIfRunning && record.status !== "running") {
+    return;
+  }
+  const checks = [
+    ...(record.verification.checks ?? []).filter((entry) => entry.id !== check.id),
+    check,
+  ];
+  const required = checks.filter((entry) => entry.required !== false);
+  if (required.length > MAX_VERIFICATION_CHECKS) {
+    throw new Error("Required update verification checks exceed the retained check limit");
+  }
+  const optionalSlots = MAX_VERIFICATION_CHECKS - required.length;
+  const optional =
+    optionalSlots > 0
+      ? checks.filter((entry) => entry.required === false).slice(-optionalSlots)
+      : [];
+  record.verification.checks = [...required, ...optional];
 }
 
 export function recordUpdateRunVerificationRecord(

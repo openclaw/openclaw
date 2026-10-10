@@ -176,6 +176,19 @@ const candidateAdmission = z.object({
   }),
 });
 const timestamp = z.number().int().nonnegative();
+const updateVerificationStatus = z.enum(["pass", "fail", "unknown", "skipped"]);
+const updateVerificationCheck = z.object({
+  id: text,
+  status: updateVerificationStatus,
+  required: z.boolean().optional(),
+  detail: text.optional(),
+  observedAtMs: timestamp.optional(),
+});
+const updateVerificationNormalCycle = z.object({
+  status: updateVerificationStatus,
+  observedAtMs: timestamp,
+  detail: text.optional(),
+});
 const version = z.object({
   version: text.nullable().optional(),
   sha: text.nullable().optional(),
@@ -287,6 +300,8 @@ export const UpdateRunRecordSchema = z.object({
     channelsReady: z.boolean().optional(),
     readyz: z.boolean().optional(),
     settled: z.boolean().optional(),
+    checks: z.array(updateVerificationCheck).max(32).optional(),
+    normalCycle: updateVerificationNormalCycle.optional(),
     noticeDelivered: z.boolean().optional(),
     doctorHint: text.optional(),
   }),

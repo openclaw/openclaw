@@ -56,12 +56,18 @@ export type HeartbeatRunner = {
   updateConfig: (cfg: OpenClawConfig) => void;
 };
 
+export type HeartbeatNormalCycle = {
+  agentIds: readonly string[];
+  durationMs: number;
+};
+
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
   readCurrentConfig?: () => OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
+  onNormalCycle?: (cycle: HeartbeatNormalCycle) => void | Promise<void>;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce;
@@ -349,6 +355,21 @@ export function startHeartbeatRunner(opts: {
         state.agents.set(targetAgentId, targetAgent);
       }
       const { result } = await runOneAgent(targetAgent, true);
+      if (
+        result.status === "ran" &&
+        params.source === "interval" &&
+        params.intent === "scheduled" &&
+        targetAgent.intervalMs !== undefined
+      ) {
+        try {
+          await opts.onNormalCycle?.({
+            agentIds: [targetAgent.agentId],
+            durationMs: Date.now() - startedAt,
+          });
+        } catch (error) {
+          log.warn(`heartbeat normal-cycle observer failed: ${formatErrorMessage(error)}`);
+        }
+      }
       return result.status === "ran"
         ? { status: "ran", durationMs: Date.now() - startedAt }
         : result;
@@ -391,7 +412,26 @@ export function startHeartbeatRunner(opts: {
       }
     }
     if (ran) {
-      return firstFailure ?? { status: "ran", durationMs: Date.now() - startedAt };
+      const result = firstFailure ?? { status: "ran", durationMs: Date.now() - startedAt };
+      const normalCycle =
+        agentOutcomes.length > 0 &&
+        agentOutcomes.every(({ result: agentOutcome }) => agentOutcome.status === "ran");
+      if (
+        normalCycle &&
+        result.status === "ran" &&
+        params.source === "interval" &&
+        params.intent === "scheduled"
+      ) {
+        try {
+          await opts.onNormalCycle?.({
+            agentIds: enrolledAgents.map((agent) => agent.agentId),
+            durationMs: result.durationMs,
+          });
+        } catch (error) {
+          log.warn(`heartbeat normal-cycle observer failed: ${formatErrorMessage(error)}`);
+        }
+      }
+      return result;
     }
     return (
       firstGuardSkip ??

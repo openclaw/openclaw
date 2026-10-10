@@ -35,11 +35,21 @@
   flex: 0 1 auto;
   flex-direction: column;
   align-items: stretch;
+  gap: 6px;
   min-height: 0;
   max-height: calc(
     var(--chat-footer-max-height) - var(--chat-composer-top-margin) -
       var(--chat-composer-bottom-gap)
   );
+}
+
+/* A branch/PR row already carries the footer stack's separation; keep it
+   compact, but preserve the writing-surface gap when a question is present. */
+.chat-footer
+  .agent-chat__composer-shell:has(> .chat-footer__context > .chat-prs):not(
+    :has(> .chat-footer__context > .agent-chat__question-dock)
+  ) {
+  gap: 0;
 }
 
 /* Persistent context scrolls as one stack; the writing surface and menus stay outside. */
