@@ -306,7 +306,7 @@ jobs:
 
       - name: Setup Node for prepared planning
         if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -519,7 +519,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -672,7 +672,7 @@ jobs:
 
       - name: Setup Node for prepared promotion
         if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -707,7 +707,7 @@ jobs:
 
       - name: Retain verified ClawHub adoption
         if: matrix.plugin.alreadyPublished && (inputs.dry_run || inputs.prepared_artifact != '')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.plugin.artifactName }}-adoption
           path: ${{ runner.temp }}/clawhub-adoption.json
@@ -715,7 +715,7 @@ jobs:
           retention-days: 30
 
       - name: Upload ClawHub package artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.plugin.artifactName }}
           path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
@@ -739,12 +739,12 @@ jobs:
           sparse-checkout: scripts
           fetch-depth: 1
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Download prepared ClawHub packages
         if: needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: clawhub-package-*
           path: ${{ runner.temp }}/clawhub-prepared-packages
@@ -764,7 +764,7 @@ jobs:
             --directory "$RUNNER_TEMP/clawhub-prepared-packages" \
             --output "$RUNNER_TEMP/clawhub-prepared/prepared-clawhub.json"
       - name: Upload prepared ClawHub manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/clawhub-prepared/prepared-clawhub.json
@@ -788,11 +788,11 @@ jobs:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Download exact packed transactions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: clawhub-package-*
           path: ${{ runner.temp }}/clawhub-transactions/packages
@@ -814,7 +814,7 @@ jobs:
             --directory "$RUNNER_TEMP/clawhub-transactions/packages" \
             --output "$RUNNER_TEMP/clawhub-transactions/transactions.json"
       - name: Upload exact transaction identity
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/clawhub-transactions/transactions.json
@@ -854,7 +854,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
       - name: Setup Node
         if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true' || needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Wait for the release parent's ClawHub authorization
@@ -877,7 +877,7 @@ jobs:
           node scripts/clawhub-parent-authorization.mjs recovery-approval --output "$RUNNER_TEMP/openclaw-clawhub-recovery-approval/approval.json"
       - name: Upload recovery environment approval receipt
         if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-clawhub-recovery-approval-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-clawhub-recovery-approval/approval.json
@@ -937,14 +937,14 @@ jobs:
           persist-credentials: false
 
       - name: Download exact transaction roster
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: openclaw-clawhub-transactions-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/clawhub-recovery/transactions
 
       - name: Download package publication receipts
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: "*-publish-json"
           path: ${{ runner.temp }}/clawhub-recovery/publications
@@ -962,7 +962,7 @@ jobs:
             "${publications[@]}"
 
       - name: Upload sealed recovery manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-clawhub-recovery-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/clawhub-recovery/manifest/recovery-manifest.json

@@ -171,7 +171,7 @@ jobs:
 
       - name: Retain release plan and notes
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -184,7 +184,7 @@ jobs:
       - name: Retain screenshot diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-release-emulator-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -199,7 +199,7 @@ jobs:
       - name: Retain signed release artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
