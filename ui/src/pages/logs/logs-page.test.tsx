@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { LogsPage } from "./logs-page.tsx";
 
 type TestGateway = ApplicationContext["gateway"] & {
@@ -53,13 +53,13 @@ function mountPage(initial: TestContext) {
       return context().gateway;
     },
   };
-  const dispose = mountSolid(
+  const { unmount: dispose } = mountSolid(
     () => (
       <ApplicationProvider value={liveContext}>
         <LogsPage />
       </ApplicationProvider>
     ),
-    container,
+    { container },
   );
   disposers.add(dispose);
   return {

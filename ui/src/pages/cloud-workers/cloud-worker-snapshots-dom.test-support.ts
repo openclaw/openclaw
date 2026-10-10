@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* Shared jsdom harness for the Cloud workers snapshot suites. Keep DOM-only helpers
    here; the e2e suite imports the plain fixture module instead. */
-import { render } from "@solidjs/testing-library";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -12,6 +11,7 @@ import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { snapshotListFixture } from "./cloud-worker-snapshots.test-support.ts";
 import { CloudWorkersPage } from "./cloud-workers-page.tsx";
 
@@ -124,7 +124,7 @@ export function mountPage(
     runtimeConfig,
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
-  const mounted = render(() =>
+  const mounted = mountSolid(() =>
     createComponent(ApplicationProvider, {
       value: context,
       get children() {

@@ -1,20 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/web";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { LogLevel } from "./log-lines.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
 
 const views = new Map<Element, () => void>();
 function renderView(props: LogsProps, container: HTMLDivElement) {
   views.get(container)?.();
-  views.set(
-    container,
-    mountSolid(() => <LogsView {...props} />, container),
-  );
+  views.set(container, mountSolid(() => <LogsView {...props} />, { container }).unmount);
   flush();
 }
 

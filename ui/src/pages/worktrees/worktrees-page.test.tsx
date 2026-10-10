@@ -1,5 +1,4 @@
-import { render } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -7,7 +6,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
 import { WorktreesView } from "./worktrees-page.tsx";
 
@@ -113,7 +113,7 @@ function createWorktreesPage(request?: ReturnType<typeof vi.fn>) {
     mount() {
       flush();
       document.body.append(element);
-      dispose = render(() => <WorktreesView model={model} />, element);
+      dispose = mountSolid(() => <WorktreesView model={model} />, { container: element }).unmount;
       mountedPages.add(page);
     },
     unmount() {
@@ -132,7 +132,7 @@ function settle() {
 }
 
 function waitForList(request: ReturnType<typeof vi.fn>) {
-  return waitForFast(() =>
+  return waitForSolid(() =>
     expect(request).toHaveBeenCalledWith(
       "worktrees.list",
       {},
@@ -170,7 +170,7 @@ describe("WorktreesPage lifecycle", () => {
     page.model.createRepoRoot = "/tmp/repo";
     page.mount();
 
-    await waitForFast(() => expect(page.model.records).toEqual([record]));
+    await waitForSolid(() => expect(page.model.records).toEqual([record]));
     await settle();
     expect(page.element.querySelector(".callout.info")?.textContent).toContain(
       "Worktree changes require operator.admin access.",
@@ -200,7 +200,7 @@ describe("WorktreesPage lifecycle", () => {
     page.mount();
 
     await waitForList(request);
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
     const newWorktreeButton = [...page.element.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "New worktree",
     );
@@ -247,7 +247,7 @@ describe("WorktreesPage lifecycle", () => {
     const page = createWorktreesPage();
     page.setContext(context);
     page.mount();
-    await waitForFast(() => expect(page.model.records.length).toBe(1));
+    await waitForSolid(() => expect(page.model.records.length).toBe(1));
     await settle();
 
     const docsLink = page.element.querySelector<HTMLAnchorElement>(".page-subtitle a");
@@ -289,11 +289,11 @@ describe("WorktreesPage lifecycle", () => {
     });
     const page = createWorktreesPage(request);
     page.mount();
-    await waitForFast(() => expect(page.model.records).toEqual([record]));
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(page.model.records).toEqual([record]));
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
 
     const refreshing = page.model.load();
-    await waitForFast(() => expect(listRequests).toBe(2));
+    await waitForSolid(() => expect(listRequests).toBe(2));
     await settle();
 
     const deleteButton = page.element.querySelector<HTMLButtonElement>("button.danger");
@@ -339,7 +339,7 @@ describe("WorktreesPage lifecycle", () => {
     );
 
     page.mount();
-    await waitForFast(() => expect(firstRequest).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(firstRequest).toHaveBeenCalledOnce());
     expect(page.model.loading).toBe(true);
 
     page.unmount();
@@ -350,8 +350,8 @@ describe("WorktreesPage lifecycle", () => {
     );
     page.mount();
 
-    await waitForFast(() => expect(secondRequest).toHaveBeenCalledOnce());
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(secondRequest).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
 
     first.resolve({ worktrees: [] });
     await Promise.resolve();
@@ -378,7 +378,7 @@ describe("WorktreesPage lifecycle", () => {
     await waitForList(firstRequest);
 
     const removing = page.model.removeWorktree(worktree());
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(firstRequest).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" }),
     );
 
@@ -412,10 +412,10 @@ describe("WorktreesPage lifecycle", () => {
       ),
     );
     page.mount();
-    await waitForFast(() => expect(firstRequest).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(firstRequest).toHaveBeenCalledOnce());
 
     const removing = page.model.removeWorktree(worktree());
-    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
     page.setContext(
       contextWithGateway(
         gatewayWithClient({ request: secondRequest } as unknown as GatewayBrowserClient),
@@ -439,10 +439,10 @@ describe("WorktreesPage lifecycle", () => {
     const page = createWorktreesPage();
     page.setContext(contextWithGateway(source.gateway));
     page.mount();
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
 
     const removing = page.model.removeWorktree(worktree());
-    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
     source.setScopes(["operator.read"]);
     confirmation.resolve(true);
     await removing;
@@ -465,10 +465,10 @@ describe("WorktreesPage lifecycle", () => {
     const page = createWorktreesPage();
     page.setContext(contextWithGateway(source.gateway));
     page.mount();
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
 
     const removing = page.model.removeWorktree(worktree());
-    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
     source.setScopes(["operator.read"]);
     forceConfirmation.resolve(true);
     await removing;
@@ -519,7 +519,7 @@ describe("WorktreesPage lifecycle", () => {
     await waitForList(request);
 
     const restoring = page.model.restore(worktree());
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("worktrees.restore", { id: "worktree-1" }),
     );
     source.emit(false);
@@ -546,8 +546,8 @@ describe("WorktreesPage lifecycle", () => {
     });
     const page = createWorktreesPage(request);
     page.mount();
-    await waitForFast(() => expect(listRequests).toBe(1));
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(listRequests).toBe(1));
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
 
     await page.model.restore(record);
 
@@ -573,8 +573,8 @@ describe("WorktreesPage lifecycle", () => {
     });
     const page = createWorktreesPage(request);
     page.mount();
-    await waitForFast(() => expect(listRequests).toBe(1));
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(listRequests).toBe(1));
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
 
     await page.model.restore(record);
 
@@ -599,7 +599,7 @@ describe("WorktreesPage lifecycle", () => {
     });
     const page = createWorktreesPage(request);
     page.mount();
-    await waitForFast(() => expect(page.model.error).toBe("stale list failure"));
+    await waitForSolid(() => expect(page.model.error).toBe("stale list failure"));
 
     await page.model.restore(worktree());
 
@@ -623,7 +623,7 @@ describe("WorktreesPage lifecycle", () => {
     await waitForList(request);
 
     const creating = page.model.createWorktree();
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" }),
     );
     expect(page.model.operation).toBe("create");
@@ -653,16 +653,16 @@ describe("WorktreesPage lifecycle", () => {
     const page = createWorktreesPage();
     page.setContext(contextWithGateway(source.gateway));
     page.mount();
-    await waitForFast(() => expect(listRequests).toBe(1));
+    await waitForSolid(() => expect(listRequests).toBe(1));
 
     const collecting = page.model.gc();
-    await waitForFast(() => expect(request).toHaveBeenCalledWith("worktrees.gc", {}));
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith("worktrees.gc", {}));
     expect(page.model.loading).toBe(true);
     source.emit(false);
     source.emit(true);
 
-    await waitForFast(() => expect(listRequests).toBe(2));
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(listRequests).toBe(2));
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
     pendingGc.resolve({});
     await collecting;
     expect(page.model.loading).toBe(false);
@@ -683,7 +683,7 @@ describe("WorktreesPage lifecycle", () => {
     page.model.createBaseRef = "main";
     page.mount();
     await waitForList(request);
-    await waitForFast(() => expect(page.model.loading).toBe(false));
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
 
     const toggleButton = Array.from(
       page.element.querySelectorAll<HTMLButtonElement>("button"),
@@ -691,7 +691,7 @@ describe("WorktreesPage lifecycle", () => {
     const creating = page.model.createWorktree();
     toggleButton?.click();
     expect(page.model.createOpen).toBe(true);
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("worktrees.create", {
         baseRef: "main",
         name: "submitted-name",
@@ -748,7 +748,7 @@ describe("WorktreesPage lifecycle", () => {
       );
       page.model.createRepoRoot = "/tmp/repo";
       page.mount();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request).toHaveBeenCalledWith(
           "worktrees.list",
           {},
@@ -758,7 +758,7 @@ describe("WorktreesPage lifecycle", () => {
 
       page.model.loadCreateBranches();
 
-      await waitForFast(() => expect(page.model.createBranches).toEqual(["main"]));
+      await waitForSolid(() => expect(page.model.createBranches).toEqual(["main"]));
       expect(page.model.createBaseRef).toBe("");
       await page.model.createWorktree();
       expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" });
@@ -785,7 +785,7 @@ describe("WorktreesPage lifecycle", () => {
 
     page.model.loadCreateBranches();
     page.model.loadCreateBranches();
-    await waitForFast(() => expect(page.model.createBranches).toEqual(["main"]));
+    await waitForSolid(() => expect(page.model.createBranches).toEqual(["main"]));
     expect(page.model.createBaseRef).toBe("release");
 
     firstBranches.reject(new Error("stale branch failure"));
