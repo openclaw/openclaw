@@ -50,13 +50,42 @@ describe("routed CLI prompts in chat history", () => {
         sourceTool: "sessions_send",
       };
       expect(messages).toMatchObject([
-        { role: "user", content: `${envelope}\nPlease check the build.`, provenance },
+        { role: "user", content: `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`, provenance },
         { role: "user", content: [{ type: "text", text: `${envelope}\nBlock body.` }], provenance },
         { role: "user" },
       ]);
       expect(messages[2]?.provenance).toBeUndefined();
     });
   });
+
+  it.each(["string", "text block"])(
+    "matches literal routed %s content before removing generated-looking decorations",
+    async (shape) => {
+      await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+        const provenance: InputProvenance = {
+          kind: "inter_session",
+          sourceSessionKey: "agent:ops:main",
+          sourceTool: "sessions_send",
+        };
+        const envelope = buildInterSessionPromptContext(provenance).text;
+        const body = `${envelope}\nPlease check the build.`;
+        const raw = `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`;
+        const content = shape === "string" ? raw : [{ type: "text", text: raw }];
+        const plain = { ...user(body), provenance };
+        const literal = { ...user(content), provenance };
+        await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-literal" })]);
+
+        const imported = await readMessages();
+        const merged = mergeImportedChatHistoryMessages({
+          localMessages: [plain, literal],
+          importedMessages: imported,
+        });
+
+        expect(merged).toEqual([plain, { ...literal, __openclaw: imported[0]?.__openclaw }]);
+        expect(imported[0]?.content).toEqual(content);
+      });
+    },
+  );
 
   it("dedupes routed prompts whose drift note sits under the inter-session envelope", () => {
     const envelope = buildInterSessionPromptContext({

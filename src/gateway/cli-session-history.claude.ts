@@ -14,7 +14,6 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
@@ -258,9 +257,10 @@ function isClaudeCliTaskNotification(
 
 // The native row keeps the routed prompt OpenClaw sent, envelope first. Its
 // provenance is the same fact the local transcript row stores structurally.
-function readClaudeCliInterSessionPrompt(
+// Preserve raw text so literal matches win before compare-only decoration removal.
+function readClaudeCliInterSessionProvenance(
   content: string | unknown[],
-): { provenance: InputProvenance; content: string | unknown[] } | undefined {
+): InputProvenance | undefined {
   const blockIndex =
     typeof content === "string"
       ? -1
@@ -271,17 +271,7 @@ function readClaudeCliInterSessionPrompt(
   if (typeof text !== "string") {
     return undefined;
   }
-  const envelope = readInterSessionPromptEnvelope(text);
-  if (!envelope) {
-    return undefined;
-  }
-  const visibleText = stripCliSessionDriftNote(text);
-  if (typeof content === "string") {
-    return { provenance: envelope.provenance, content: visibleText };
-  }
-  const nextContent = [...content];
-  nextContent[blockIndex] = { ...block, text: visibleText };
-  return { provenance: envelope.provenance, content: nextContent };
+  return readInterSessionPromptEnvelope(text)?.provenance;
 }
 
 export function resolveClaudeCliPromptTextCandidates(
@@ -421,13 +411,9 @@ export function parseClaudeCliHistoryEntry(
       : isClaudeCliVisibleHarnessContext(entry)
         ? "cli_harness_context"
         : undefined;
-    const interSession = sourceTool ? undefined : readClaudeCliInterSessionPrompt(content);
-    if (interSession) {
-      content = interSession.content;
-    }
     const provenance = sourceTool
       ? { kind: "internal_system", sourceTool }
-      : interSession?.provenance;
+      : readClaudeCliInterSessionProvenance(content);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
