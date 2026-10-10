@@ -2062,6 +2062,35 @@ schema, retention, permission, content limit, worker service, feature flag, or
 update migration and claims no incognito T1 retirement. P12 owns production
 selection and removal of the remaining native incognito selectors.
 
+### Incognito subagent requester and completion lifetimes (P06, inactive)
+
+Explicit actor bindings now serve subagent requester reads, capability and depth
+resolution, announcement metadata, registry reconciliation, and controlled child
+information. Child enrichment retains each run's recorded agent owner and returns
+results by run ID; durable siblings keep their grouped reads. Cross-agent private
+reads select only existing actors from the captured physical root. Selected
+absence stays absent, while a retained dead actor refuses reuse.
+
+Announcement, settle-wake, and completion custody keep the original actor alive
+through their consumers. Current-source guards remain synchronous and consume
+published session identity and lifecycle facts. Parent skill preparation finishes
+before child FIFO admission; transaction and commit guards compare the exact
+parent session, lifecycle, and skill-selection fields without waiting back on the
+parent actor. Terminal lazy policy reads and exec-approval follow-ups likewise
+retain the selected actor and refuse policy revocation or session rebound.
+
+The `sessions_send` communication-admission reread uses the same retained actor
+for an explicitly bound requester. It rereads the full entry for communication
+policy comparison and retains the exact session/lifecycle claim through final
+admission. Policy publications and current caller authority still fence delivery;
+unbound requesters keep the native reread.
+
+Production incognito acquisition remains host-owned until P12. Ordinary unbound
+calls retain their native selectors and allocate no actor. This inactive
+composition adds no freshness probes, worker service, schema, retention,
+permission, content limit, or update migration, and claims no incognito T1
+retirement. Native selector deletion remains part of the P12 cutover.
+
 ### Existing worker flows
 
 Remote model catalog refreshes capture the shared store before downloading and

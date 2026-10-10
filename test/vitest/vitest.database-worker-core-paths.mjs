@@ -1,5 +1,10 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
+  "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
+  "src/agents/tools/sessions-send-tool.incognito.test.ts",
+  "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
   "src/acp/runtime/session-meta-read.cache.test.ts",
