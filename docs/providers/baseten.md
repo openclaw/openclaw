@@ -108,6 +108,16 @@ The same thinking controls apply to agent turns and standalone model completions
 Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API. Current DeepSeek V4.1 Flash and V4 Pro 0813 retain their documented controls when otherwise populated catalog rows omit the corresponding feature flags.
 </Note>
 
+## Prompt caching
+
+For the native `https://inference.baseten.co/v1` endpoint, OpenClaw sends a stable
+`x-session-affinity` header for related requests to improve prefix cache reuse.
+It uses an explicit request cache key when present, otherwise the session ID.
+An explicitly configured affinity header takes precedence. Setting
+`cacheRetention: "none"` suppresses the generated header; it does not disable
+Baseten's automatic cache. Custom endpoints retain their configured behavior.
+See [Baseten session affinity](https://docs.baseten.co/inference/model-apis/pricing-and-limits#session-affinity).
+
 ## Manual config
 
 Most setups only need the API key. To pin the provider explicitly:
