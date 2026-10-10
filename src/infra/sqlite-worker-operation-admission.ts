@@ -5,8 +5,8 @@ import { isDeepStrictEqual } from "node:util";
 import { serialize } from "node:v8";
 import {
   MessageChannel,
+  MessagePort,
   receiveMessageOnPort,
-  type MessagePort,
   type Transferable,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -25,6 +25,23 @@ import type {
 const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
+const TIMED_OUT = 3;
+// Two cron handshakes leave 3s of the other writers' 5s busy budget for SQL and rollback.
+const TRANSACTION_ADMISSION_TIMEOUT_MS = 1_000;
+
+export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerAdmissionTimeoutError"),
+  () =>
+    class AdmissionTimeoutError extends Error {
+      // Broker overload certifies non-execution; a timeout rolls back only its current transaction.
+      readonly code = "admission-timeout";
+
+      constructor() {
+        super("SQLite host admission timed out; retry after transaction rollback");
+        this.name = "SqliteWorkerAdmissionTimeoutError";
+      }
+    },
+);
 
 /** Only the factory's admission before agent open may certify this refusal. */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
@@ -259,6 +276,25 @@ export function createSqliteWorkerOperationAdmission(
       return;
     }
     const decision = new Int32Array(message.decision);
+    const expired = () => {
+      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+        if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
+          Atomics.notify(decision, 0);
+        }
+      }
+      return Atomics.load(decision, 0) === TIMED_OUT;
+    };
+    if (expired()) {
+      // The worker has abandoned this request; even policy preparation must not run late.
+      if (Array.isArray(message.ports)) {
+        for (const port of message.ports) {
+          if (port instanceof MessagePort) {
+            port.close();
+          }
+        }
+      }
+      return;
+    }
     decisions.add(decision);
     const request: SqliteWorkerAdmissionRequest = { stage: message.stage, facts: message.facts };
     try {
@@ -277,7 +313,7 @@ export function createSqliteWorkerOperationAdmission(
       return;
     }
     const grant = (beforeRelease?: () => void) => {
-      if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+      if (closed || expired() || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
       // Domain admission can reenter owner lifecycle before handing the native writer its grant.
@@ -287,10 +323,13 @@ export function createSqliteWorkerOperationAdmission(
         refuse(decision, error, "authority");
         return false;
       }
-      if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+      if (closed || expired() || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
       beforeRelease?.();
+      if (expired()) {
+        return false;
+      }
       const granted = Atomics.compareExchange(decision, 0, REQUESTED, GRANTED) === REQUESTED;
       if (granted) {
         Atomics.notify(decision, 0);
@@ -455,7 +494,7 @@ export function createSqliteWorkerOperationAdmission(
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
   attachment?: { value: unknown };
-  refusal?: SqliteWorkerError;
+  refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };
   settled?: true;
   sourceReservations?: true;
@@ -595,19 +634,39 @@ export function requestSqliteWorkerOperationAdmission(
   }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const startedAt = Date.now();
-  scope.port.postMessage({ ...request, decision: decision.buffer }, transferList);
-  // Host scheduling delay does not revoke the retained owner's authority. The
-  // broker keeps this port through settlement and joins worker exit on failure;
-  // only the live host owner can grant or refuse the pending request.
+  const deadlineNs =
+    request.stage === "transaction" || request.stage === "commit"
+      ? process.hrtime.bigint() + BigInt(TRANSACTION_ADMISSION_TIMEOUT_MS) * 1_000_000n
+      : undefined;
+  scope.port.postMessage(
+    {
+      ...request,
+      decision: decision.buffer,
+      deadlineNs,
+      ports: transferList.filter((value) => value instanceof MessagePort),
+    },
+    transferList,
+  );
+  // Cancellation revokes this request, never grants authority. Settlement still
+  // joins native rollback before the broker releases operation custody.
   while (Atomics.load(decision, 0) === REQUESTED) {
-    Atomics.wait(decision, 0, REQUESTED);
+    const remainingMs =
+      deadlineNs === undefined ? Infinity : Number(deadlineNs - process.hrtime.bigint()) / 1e6;
+    if (remainingMs <= 0) {
+      Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT);
+    } else {
+      Atomics.wait(decision, 0, REQUESTED, remainingMs);
+    }
   }
   const timing = currentSqliteOperationTiming();
   if (timing) {
     timing.hostAdmissionWaitMs += Date.now() - startedAt;
   }
   if (Atomics.load(decision, 0) !== GRANTED) {
-    const refusal = new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+    const refusal =
+      Atomics.load(decision, 0) === TIMED_OUT
+        ? new SqliteWorkerAdmissionTimeoutError()
+        : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;
     throw refusal;
   }
