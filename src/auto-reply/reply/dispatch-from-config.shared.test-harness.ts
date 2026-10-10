@@ -428,7 +428,7 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
           preserveActivity: options?.preserveActivity,
         });
         wrote = next !== undefined;
-        return next ?? null;
+        return next ? { ...next } : null;
       });
       const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
       if (wrote && entry) {
