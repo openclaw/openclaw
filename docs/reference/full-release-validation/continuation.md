@@ -156,6 +156,40 @@ Missing contracts require deliberate candidate backports, never newer-tooling
 substitution. Existing historical requests retain their original identities.
 The workflow never creates or updates repository refs itself.
 
+### Cancel an owned validation tree
+
+Preview the exact cancellation targets, then request cancellation:
+
+```bash
+pnpm frv cancel --run <parent-run-id> --dry-run --json
+pnpm frv cancel --run <parent-run-id> --json
+```
+
+The command authenticates the original sealed execution plan and dispatch
+producer logs. It cancels recorded Telegram descendants, owned diagnostic and
+artifact children, then the parent. Reused children are borrowed evidence and
+remain untouched. Current run identities and attempts are checked immediately
+before each request; unrelated runs are never selected by branch or latest-run
+order.
+
+Cancellation acceptance is not completion. JSON lists requested actions,
+remaining active run IDs, excluded borrowed children, failures, and the next
+command. Missing plans, unsettled dispatch logs, changed attempts, or unavailable
+observations stay explicit; they never prove the tree is terminal. Exit 0 requires
+a complete terminal tree (or a read-only preview); incomplete cancellation exits 1.
+Repeat the same command after an interruption or delayed response. It rereads
+GitHub state and skips terminal runs without creating a cancellation ledger,
+replacement parent, or candidate. Wait for completion before dispatching a replacement.
+
+If an earlier cancellation is not settling, explicitly use
+`pnpm frv cancel --run <parent-run-id> --force`. GitHub's force-cancel operation
+bypasses conditions such as `always()`; it is not an automatic fallback.
+
+GitHub's cancellation endpoint has no atomic run-attempt compare-and-swap. FRV
+refreshes the target and then its originating lineage immediately before each
+request, and validates exact identities again during reconciliation. Concurrent
+reruns remain an external coordination risk; do not rerun a tree while cancelling it.
+
 ### Automatic retries for declared flakes
 
 Automatic test retries are disabled. Failed or timed out jobs remain blockers;

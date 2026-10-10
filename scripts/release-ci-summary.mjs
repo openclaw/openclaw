@@ -452,7 +452,7 @@ export function releaseExecutionPlanRestoreContract(workflow) {
   return "1";
 }
 
-async function originalExecutionPlanDigest(workflow, sealer, upload, client) {
+export async function authenticateOriginalExecutionPlanDigest(workflow, sealer, upload, client) {
   if (!releaseExecutionPlanRestoreContract(workflow)) {
     return undefined;
   }
@@ -564,7 +564,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   ) {
     throw new Error("publication original execution plan sealer/upload did not succeed");
   }
-  const originalDigest = await originalExecutionPlanDigest(
+  const originalDigest = await authenticateOriginalExecutionPlanDigest(
     workflow,
     sealer,
     upload,
