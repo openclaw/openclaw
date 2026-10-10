@@ -68,58 +68,6 @@ describe("cloud target menu", () => {
     );
   });
 
-  it("keeps the Codex harness explanation primary and renders install and consent steps in details", () => {
-    const reason =
-      "This model runs on the Codex harness, which isn't installed on this device. Choose a model that uses the OpenClaw harness, or install Codex on the device.";
-    const [device] = projectDevicePlacements(
-      [
-        {
-          id: "node:paired",
-          type: "node",
-          status: "available",
-          sessionHost: true,
-          requiredNodeCommand: {
-            command: "codex.exec-server.stdio.v1",
-            state: "undeclared",
-            message: reason,
-          },
-        },
-      ],
-      { requiredNodeCommands: ["codex.exec-server.stdio.v1"], consumesWorkerSlot: false },
-    );
-    const onSelect = vi.fn();
-    const container = document.createElement("div");
-    render(
-      renderSessionMenuItem(
-        {
-          value: "device:paired",
-          label: "Paired device",
-          compact: true,
-          disabled: !device.selectable,
-          checked: false,
-          title: device.disabledReason,
-          remediation: device.remediation,
-          onSelect,
-        },
-        false,
-      ),
-      container,
-    );
-    const card = container.querySelector('[slot="content"]');
-    expect(card?.querySelector("div")?.textContent).toBe(reason);
-    expect(card?.querySelector("details")?.open).toBe(false);
-    expect(card?.querySelector("summary")?.textContent).toBe("Install Codex on this device");
-    expect(Array.from(card!.querySelectorAll("code"), (command) => command.textContent)).toEqual([
-      "openclaw plugins install @openclaw/codex",
-      "openclaw plugins enable codex",
-      "openclaw node restart",
-      "openclaw nodes pending",
-      "openclaw nodes approve <requestId>",
-    ]);
-    container.querySelector<HTMLButtonElement>('[data-value="device:paired"]')!.click();
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
   it("anchors selected cloud configuration beside its profile row", () => {
     const container = document.createElement("div");
     render(

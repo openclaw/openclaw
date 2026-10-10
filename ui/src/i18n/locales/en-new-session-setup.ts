@@ -227,8 +227,6 @@ const enNewSessionSetup = {
     connectMachineTeamHint:
       "Installs a background node service that pairs this machine with your team and can run agent sessions.",
     connectMachineCommandOnly: "Command access only (no agent sessions)",
-    codexInstallAction: "Install Codex on this device",
-    codexApproveAction: "On the Gateway, approve the updated device commands:",
     connectMachineSingleUse: "This link is single-use and expires soon.",
     connectMachineSingleUseExpires: "This link is single-use and expires at {time}.",
     connectMachineFreshCode: "Mint fresh code",

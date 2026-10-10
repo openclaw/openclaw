@@ -246,11 +246,6 @@ exec-server directly, so it does not consume or require a worker slot. Its
 required command must appear in the node's effective `invocableCommands`,
 not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
-If the selected model uses the Codex harness but the device does not provide it,
-choose a model that uses the OpenClaw harness or install Codex on that device.
-The picker keeps the install steps in its secondary help; it never switches
-harnesses automatically.
-
 Connected non-hosts, ineligible or saturated hosts, update-required devices,
 and unavailable hosts remain visible but disabled with an actionable reason.
 For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
@@ -279,7 +274,7 @@ slots does not cancel it; the node checks physical capacity when the session
 launches a turn.
 Node identity and command authorization remain checked throughout preparation.
 
-If no host is eligible, the error explains whether no session hosts are paired,
+If no host is eligible, the error explains whether no devices have session hosting enabled,
 hosts are disconnected or at capacity, a host needs an update, or the selected
 runtime is unsupported. Current pairing, connection, and command errors take
 precedence over previously advertised worker slots. The dispatch response

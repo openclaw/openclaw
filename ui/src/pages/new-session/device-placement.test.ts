@@ -219,8 +219,7 @@ describe("device placement projection", () => {
   it.each(["pending-approval", "undeclared", "unauthorized", "invocable"] as const)(
     "uses Gateway command remediation without changing %s eligibility",
     (state) => {
-      const message =
-        "This model runs on the Codex harness, which isn't installed on this device. Choose a model that uses the OpenClaw harness, or install Codex on the device.";
+      const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";
       const [device] = projectDevicePlacements(
         [
           node({
@@ -232,52 +231,6 @@ describe("device placement projection", () => {
 
       expect(device?.selectable).toBe(state === "invocable");
       expect(device?.disabledReason).toBe(state === "invocable" ? undefined : message);
-      expect(device?.remediation).toBe(state === "undeclared" ? "install-codex" : undefined);
     },
   );
-
-  it.each([
-    {
-      name: "another runtime command",
-      command: "system.run",
-    },
-    {
-      name: "another required command",
-      requiredCommand: "system.run",
-    },
-    {
-      name: "a disconnected host",
-      environment: { status: "unavailable" as const },
-    },
-    {
-      name: "a host with a reported issue",
-      environment: {
-        issues: [{ code: "worker-host-unavailable" as const, message: "Host needs repair." }],
-      },
-    },
-    {
-      name: "a placement policy blocker",
-      placementDisabledReason: "Choose an allowed worker.",
-    },
-  ])("does not prescribe Codex installation for $name", (testCase) => {
-    const [device] = projectDevicePlacements(
-      [
-        node({
-          ...testCase.environment,
-          requiredNodeCommand: {
-            command: testCase.command ?? "codex.exec-server.stdio.v1",
-            state: "undeclared",
-          },
-        }),
-      ],
-      {
-        requiredNodeCommands: [testCase.requiredCommand ?? "codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      testCase.placementDisabledReason,
-    );
-
-    expect(device?.selectable).toBe(false);
-    expect(device?.remediation).toBeUndefined();
-  });
 });
