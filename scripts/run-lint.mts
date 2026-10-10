@@ -2,6 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { main as runLitRatchet } from "./check-control-ui-lit-ratchet.mts";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
@@ -9,6 +10,13 @@ import { main as runOxlintShards } from "./run-oxlint-shards.mts";
 import { runStylelint } from "./run-stylelint.mts";
 
 await runWithFailedTrailer("lint", async () => {
+  process.exitCode = runLitRatchet(
+    process.cwd(),
+    process.env.CHECKOUT_BASE_SHA ? ["--base", process.env.CHECKOUT_BASE_SHA] : [],
+  );
+  if (process.exitCode !== 0) {
+    return;
+  }
   const tsxPath = resolveRepoToolBinPath("tsx");
   const tsxImportSpecifier = pathToFileURL(createRequire(tsxPath).resolve("tsx")).href;
 
