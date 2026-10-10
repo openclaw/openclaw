@@ -75,6 +75,7 @@ export type SharedCodexAppServerClientEntry = {
   // Anonymous releases cannot consume explicit native-subagent retains.
   anonymousLeases: number;
   pendingAcquires: number;
+  idleShutdownTimer?: ReturnType<typeof setTimeout>;
   closeWhenIdle: boolean;
   closeError?: Error;
   startupAbort?: AbortController;
@@ -368,6 +369,10 @@ export function retainSharedClientEntry(
   counter: "activeLeases" | "pendingAcquires" = "activeLeases",
 ): () => void {
   let released = false;
+  if (entry.idleShutdownTimer) {
+    clearTimeout(entry.idleShutdownTimer);
+    entry.idleShutdownTimer = undefined;
+  }
   entry[counter] += 1;
   return () => {
     if (released) {
@@ -384,5 +389,33 @@ export function releaseSharedClientEntry(
 ): void {
   entry[counter] -= 1;
   closeRetiredSharedClientEntryIfIdle(entry);
-  notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
+  const state = getSharedCodexAppServerClientState();
+  notifyDesktopGenerationDrainChecks(state);
+  if (
+    entry.activeLeases > 0 ||
+    entry.pendingAcquires > 0 ||
+    entry.closeWhenIdle ||
+    entry.idleShutdownTimer ||
+    !entry.client ||
+    state.clients.get(entry.key) !== entry
+  ) {
+    return;
+  }
+  entry.idleShutdownTimer = setTimeout(() => {
+    entry.idleShutdownTimer = undefined;
+    const client = entry.client;
+    if (
+      entry.activeLeases > 0 ||
+      entry.pendingAcquires > 0 ||
+      entry.closeWhenIdle ||
+      !client ||
+      state.clients.get(entry.key) !== entry
+    ) {
+      return;
+    }
+    state.clients.delete(entry.key);
+    entry.client = undefined;
+    void client.closeAndWait();
+  }, 60_000);
+  entry.idleShutdownTimer.unref?.();
 }
