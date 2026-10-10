@@ -61,6 +61,9 @@ async function useGatewayGraphPluginRuntime(): Promise<void> {
   onTestFinished(() => runtimeLoader.mockRestore());
 }
 
+const PLUGIN_LIFECYCLE_BUSY =
+  "Another plugin or config operation is already running; retry when it completes.";
+
 // A real plugin registry replacement must own accounts before their first route exists.
 describe("Gateway plugin replacement channel ownership", () => {
   const channelId = "reload-webhook";
@@ -471,9 +474,19 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
     await requestSettledInstanceBindingProbe(runtime);
     const initialRegistry = getActivePluginRegistry();
-    const reload = await rpcReq(socket, "plugins.reload", {
-      plugins: [{ pluginId: "instance-binding-probe" }],
-    });
+    const connected = socket;
+    // Post-ready startup maintenance refreshes the derived plugin registry under the lifecycle
+    // lease, and reload refuses immediately instead of queueing. That refusal precedes entry,
+    // so only it is retried; any entered reload result is final.
+    const reload = await vi.waitUntil(
+      async () => {
+        const result = await rpcReq(connected, "plugins.reload", {
+          plugins: [{ pluginId: "instance-binding-probe" }],
+        });
+        return result.error?.message === PLUGIN_LIFECYCLE_BUSY ? false : result;
+      },
+      { interval: 500, timeout: 30_000 },
+    );
     if (teardownFails) {
       expect(reload).toMatchObject({
         ok: false,

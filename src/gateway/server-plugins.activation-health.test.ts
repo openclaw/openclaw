@@ -29,6 +29,8 @@ vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 installInstanceBindingConfigIo();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const PLUGIN_LIFECYCLE_BUSY =
+  "Another plugin or config operation is already running; retry when it completes.";
 
 function readPersistedCount(databasePath: string, engineId: string) {
   const { DatabaseSync } = requireNodeSqlite();
@@ -287,12 +289,23 @@ it.each([false, true])(
           }
         });
       let reloadSettled = false;
-      reload = rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "instance-binding-probe" }],
-      }).then((result) => {
-        reloadSettled = true;
-        return result;
-      });
+      const connected = socket;
+      // Post-ready startup maintenance can hold the lifecycle lease; reload refuses that
+      // before entry, so only the refusal is retried.
+      reload = vi
+        .waitUntil(
+          async () => {
+            const result = await rpcReq(connected, "plugins.reload", {
+              plugins: [{ pluginId: "instance-binding-probe" }],
+            });
+            return result.error?.message === PLUGIN_LIFECYCLE_BUSY ? false : result;
+          },
+          { interval: 500, timeout: 30_000 },
+        )
+        .then((result) => {
+          reloadSettled = true;
+          return result;
+        });
       const phase = await Promise.race([
         reached.promise.then(() => "worker"),
         reload.then(() => "settled"),
