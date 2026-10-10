@@ -785,6 +785,20 @@ export const en: TranslationMap & {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
+    sessionSettings: "Session settings",
+    communication: {
+      send: "Send messages",
+      receive: "Receive messages",
+      always: "Always",
+      ask: "Ask",
+      never: "Never",
+      default: "default",
+      sendDescription:
+        "Allow this session to initiate messages to other sessions. Ask requires human approval; Never blocks them.",
+      receiveDescription:
+        "Allow other sessions to initiate messages to this session. Ask requires human approval; Never blocks them.",
+      resetDescription: "Use the configured defaults for sending and receiving messages.",
+    },
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",

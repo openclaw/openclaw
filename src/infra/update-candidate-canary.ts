@@ -45,6 +45,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
+import { createUpdateDoctorSectionTiming } from "./update-doctor-section-timing.js";
 import {
   createUpdateCanaryFailureFacts,
   createUpdateFailureFact,
@@ -159,6 +160,7 @@ export async function validateUpdateCandidateCanary(params: {
             : "candidate-plugin-inventory-cleanup",
         onProgress: params.onProgress,
         onWarning: recordStep,
+        onRemoved: recordStep,
       });
     }
   };
@@ -200,7 +202,7 @@ export async function validateUpdateCandidateCanary(params: {
   const launch = (
     entry: string,
     args: string[],
-    observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "onStdout"> = {},
+    observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "hidesLine" | "onStdout"> = {},
   ) => {
     params.signal?.throwIfAborted();
     return launchCanary({
@@ -318,11 +320,16 @@ export async function validateUpdateCandidateCanary(params: {
       }
       return milliseconds;
     };
+    const operatorTrace = env.OPENCLAW_GATEWAY_STARTUP_TRACE;
     for (const command of commands) {
       const { phase } = command;
       progress.phase = phase;
       activeLintStep = undefined;
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
+      // Only Doctor traces its existing sections; later children keep the operator's setting.
+      env.OPENCLAW_GATEWAY_STARTUP_TRACE = operatorTrace;
+      const sectionTiming = phase === "doctor" ? createUpdateDoctorSectionTiming(env) : undefined;
+      Object.assign(env, sectionTiming?.env);
       await beginStep({ name: command.name, command: command.args.join(" ") });
       startBudget();
       remaining();
@@ -337,7 +344,9 @@ export async function validateUpdateCandidateCanary(params: {
       let checksCompletedAt: number | undefined;
       const disposalWarnings: string[] = [];
       const running = launch(command.entry ?? entry, command.args, {
+        hidesLine: sectionTiming?.hidesLine,
         onLine: (line) => {
+          sectionTiming?.observeLine(line);
           const plain = stripVTControlCharacters(line).trim();
           if (phase === "lint" && plain.startsWith(UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX)) {
             disposalWarnings.push(redactSupportString(plain, { env, stateDir: params.stateDir }));
@@ -522,6 +531,7 @@ export async function validateUpdateCandidateCanary(params: {
             ? { termination: "signal" as const, signal, stderrTail: running.stderrTail() }
             : {}),
       };
+      sectionTiming?.annotate(step);
       if (doctorAdvisory) {
         step.advisory = doctorAdvisory;
       } else if (exitWarning && code === 0) {

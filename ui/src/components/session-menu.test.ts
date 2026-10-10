@@ -146,9 +146,11 @@ describe("session menu", () => {
         onClose,
       });
       const submenu = menuItem(menu, "Assign to…");
-      expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
-        "Assign to…",
-      ]);
+      expect(
+        menuItemLabels(menuItem(menu, "Session settings")).filter((label) =>
+          label.startsWith("Assign to"),
+        ),
+      ).toEqual(["Assign to…"]);
       await waitForFast(() =>
         expect(menuItemLabels(submenu)).toEqual([
           "Me",
@@ -228,8 +230,9 @@ describe("session menu", () => {
 
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
     expect(menuItemLabels(menu)).toContain("Open in");
-    expect(menuItemLabels(menu)).toContain("Assign to…");
-    expect(menuItemLabels(menu)).toContain("Icon & color");
+    expect(menuItemLabels(menu)).toContain("Session settings");
+    expect(menuItemLabels(menu)).not.toContain("Assign to…");
+    expect(menuItemLabels(menu)).not.toContain("Icon & color");
     expect(menuItemLabels(menu)).toContain("Move to group");
 
     for (const [view, labels] of [
@@ -269,9 +272,8 @@ describe("session menu", () => {
         "Mark as unread",
         "Move to top level",
         "Archive session",
-        "Icon & color",
+        "Session settings",
         "Move to group",
-        "Assign to…",
         "Fork conversation",
         "Copy",
         "Open in",

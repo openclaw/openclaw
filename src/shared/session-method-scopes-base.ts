@@ -100,6 +100,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "thinkingLevel",
   "fastMode",
   "permissionMode",
+  "communication",
 ]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([

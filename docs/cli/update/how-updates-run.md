@@ -368,6 +368,17 @@ An already-running 2026.9.5 updater retains its original silent verification win
 independent `openclaw gateway status --deep --require-rpc` and `/readyz` checks can show
 whether the old Gateway is still serving, but do not establish the updater's wait reason.
 
+The update result, `openclaw update` output, and the run history record timed steps
+for the private state copy (`candidate-state-snapshot`), the rehearsal Doctor
+(`candidate-doctor`), the test Gateway startup (`candidate-gateway-startup`), and
+temporary-copy removal (`candidate-state-cleanup`), including Git updates. Activation
+also records `post-stop-checks` (the schema, artifact, and configuration checks after the
+Gateway stops) and `git-runtime-activation`. Each Doctor the updater launches adds one
+`Doctor sections: …` diagnostic with its database preflight, configuration, and
+contribution times, plus the slowest contributions. Run history keeps these rows when
+older diagnostics are trimmed. The updater that is already installed records these
+steps, so they first appear on the update after the one that installs this version.
+
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
 root. This keeps staged assets and validation independent of the old checkout.
