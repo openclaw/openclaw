@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
-import {
-  readWindowsProcessAncestorsSync,
-  readWindowsProcessStartTimeSync,
-} from "./windows-process-start.js";
+import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const nativeIdentity = vi.hoisted(() => vi.fn());
@@ -201,85 +198,5 @@ describe("native Windows process start identity", () => {
     } else {
       expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({ timeout: 400 });
     }
-  });
-});
-
-describe("readWindowsProcessAncestorsSync", () => {
-  const child = { pid: 41, parentPid: 40, startedAt: "639000000000000030" };
-  const parent = { pid: 40, parentPid: 39, startedAt: "639000000000000020" };
-  const grandparent = { pid: 39, parentPid: 0, startedAt: "639000000000000010" };
-
-  beforeEach(() => spawnSyncMock.mockReset());
-
-  it("reads the chain with one bounded native query and no application environment", () => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify([child, parent, grandparent]),
-    });
-    expect(
-      readWindowsProcessAncestorsSync(41, 32, 700, {
-        SYSTEMROOT: "D:\\Native",
-        NODE_OPTIONS: "--synthetic-injection",
-      }),
-    ).toEqual({ pids: [40, 39], complete: true });
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(
-      "D:\\Native\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    );
-    expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({
-      timeout: 700,
-      maxBuffer: 1024 * 1024,
-      env: { SYSTEMROOT: "D:\\Native" },
-    });
-  });
-
-  it.each([
-    {
-      name: "reused grandparent within the same millisecond",
-      rows: [child, parent, { ...grandparent, startedAt: "639000000000000021" }],
-      expected: [40],
-    },
-    {
-      name: "unobservable parent creation time",
-      rows: [child, { ...parent, startedAt: null }, grandparent],
-      expected: [],
-    },
-    { name: "missing parent", rows: [child, grandparent], expected: [] },
-    {
-      name: "duplicate process identity",
-      rows: [child, parent, grandparent, { ...grandparent, startedAt: "639000000000000021" }],
-      expected: [],
-    },
-  ])("stops at $name", ({ rows, expected }) => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: JSON.stringify(rows) });
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({
-      pids: expected,
-      complete: false,
-    });
-  });
-
-  it("bounds the walk and never repeats an ancestor from a cyclic snapshot", () => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify([
-        child,
-        { ...parent, startedAt: child.startedAt },
-        { ...grandparent, parentPid: 40, startedAt: child.startedAt },
-      ]),
-    });
-    expect(readWindowsProcessAncestorsSync(41, 1, 700)).toEqual({ pids: [40], complete: false });
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({
-      pids: [40, 39],
-      complete: false,
-    });
-  });
-
-  it.each([
-    { status: null, error: new Error("timeout"), stdout: "" },
-    { status: 0, stdout: "not JSON" },
-  ])("does not invent ancestry after an unavailable query", (result) => {
-    spawnSyncMock.mockReturnValue(result);
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({ pids: [], complete: false });
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
 });

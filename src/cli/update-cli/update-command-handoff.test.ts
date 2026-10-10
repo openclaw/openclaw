@@ -190,11 +190,15 @@ describe("gatewayMaintenanceBlock", () => {
   });
 });
 
-it.runIf(process.platform === "linux" || process.platform === "darwin").each([true, false])(
-  "does not start a handoff from inherited markers without a verified ancestor (complete: %s)",
-  async (complete) => {
+it.runIf(process.platform === "linux" || process.platform === "darwin").each([
+  { complete: true, containsParent: false },
+  { complete: false, containsParent: false },
+  { complete: false, containsParent: true },
+])(
+  "does not start an unverified handoff ($complete, parent: $containsParent)",
+  async ({ complete, containsParent }) => {
     vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
-      pids: new Set([process.pid]),
+      pids: new Set(containsParent ? [process.pid, process.ppid] : [process.pid]),
       complete,
     });
     await withEnvAsync(

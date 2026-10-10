@@ -4,6 +4,14 @@ import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
+const readProcessAncestry = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
+);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessAncestry,
+}));
+
 const spawnSync = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -16,8 +24,13 @@ const runId = "8e926353-5041-468b-b0af-de4174620349";
 const originalStart = Date.parse("2026-09-03T00:00:00Z");
 const repairStart = originalStart + 1000;
 const doctorStart = repairStart + 1000;
-const ticks = (milliseconds: number) =>
-  String(BigInt(milliseconds) * 10_000n + 621355968000000000n);
+const identity = (pid: number, parentPid: number, startedAt: number) => ({
+  pid,
+  parentPid,
+  startTimeMicros: startedAt * 1000,
+  startTimeResolutionMicros: 1,
+  exited: false,
+});
 
 function updateRun(updaterStart = originalStart): UpdateRunRecord {
   return {
@@ -46,6 +59,7 @@ function updateRun(updaterStart = originalStart): UpdateRunRecord {
 
 describe("Windows update repair continuation", () => {
   beforeEach(() => {
+    readProcessAncestry.mockReset().mockReturnValue(null);
     spawnSync.mockReset();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(process, "ppid", "get").mockReturnValue(repairPid);
@@ -58,19 +72,17 @@ describe("Windows update repair continuation", () => {
     { name: "original updater", updaterStart: originalStart, expected: true },
     { name: "reused updater PID", updaterStart: repairStart + 1, expected: false },
   ])("admits Doctor only beneath the live $name", ({ updaterStart, expected }) => {
+    readProcessAncestry.mockReturnValue({
+      chain: [
+        identity(process.pid, repairPid, doctorStart),
+        identity(repairPid, updaterPid, repairStart),
+        ...(updaterStart > repairStart ? [] : [identity(updaterPid, 0, updaterStart)]),
+      ],
+      complete: true,
+      stoppedBy: updaterStart > repairStart ? "recycled-parent" : "root",
+    });
     spawnSync.mockImplementation((_command: string, args: string[]) => {
-      const script = args.at(-1) ?? "";
-      if (script.includes("Get-CimInstance")) {
-        return {
-          status: 0,
-          stdout: JSON.stringify([
-            { pid: process.pid, parentPid: repairPid, startedAt: ticks(doctorStart) },
-            { pid: repairPid, parentPid: updaterPid, startedAt: ticks(repairStart) },
-            { pid: updaterPid, parentPid: 0, startedAt: ticks(updaterStart) },
-          ]),
-        };
-      }
-      const pid = Number(/GetProcessById\((\d+)\)/.exec(script)?.[1]);
+      const pid = Number(/GetProcessById\((\d+)\)/.exec(args.at(-1) ?? "")?.[1]);
       return {
         status: 0,
         stdout: new Date(pid === repairPid ? repairStart : updaterStart).toISOString(),
@@ -89,20 +101,32 @@ describe("Windows update repair continuation", () => {
 
   it("does not authorize a reused direct parent protected by cleanup", () => {
     const replacementStart = doctorStart + 1000;
-    spawnSync.mockImplementation((_command: string, args: string[]) => ({
-      status: 0,
-      stdout: (args.at(-1) ?? "").includes("Get-CimInstance")
-        ? JSON.stringify([
-            { pid: process.pid, parentPid: repairPid, startedAt: ticks(doctorStart) },
-            { pid: repairPid, parentPid: 0, startedAt: ticks(replacementStart) },
-          ])
-        : new Date(replacementStart).toISOString(),
-    }));
+    readProcessAncestry.mockReturnValue({
+      chain: [identity(process.pid, repairPid, doctorStart)],
+      complete: true,
+      stoppedBy: "recycled-parent",
+    });
+    spawnSync.mockReturnValue({ status: 0, stdout: new Date(replacementStart).toISOString() });
     const run = updateRun();
     run.origin = {
       driver: { host: hostname(), pid: repairPid, startIdentity: String(replacementStart) },
     };
 
+    expect(getSelfAndAncestorPidsSync().has(repairPid)).toBe(true);
+    expect(inspectUpdateRepairDriverAdmission([run], runId).kind).toBe("conflict");
+  });
+  it("does not grant continuation from an incomplete chain containing the live driver", () => {
+    readProcessAncestry.mockReturnValue({
+      chain: [
+        identity(process.pid, repairPid, doctorStart),
+        identity(repairPid, updaterPid, repairStart),
+      ],
+      complete: false,
+      stoppedBy: "unreadable-parent",
+    });
+    spawnSync.mockReturnValue({ status: 0, stdout: new Date(repairStart).toISOString() });
+    const run = updateRun();
+    run.origin.previousDrivers = [];
     expect(getSelfAndAncestorPidsSync().has(repairPid)).toBe(true);
     expect(inspectUpdateRepairDriverAdmission([run], runId).kind).toBe("conflict");
   });

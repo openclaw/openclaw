@@ -60,29 +60,6 @@ function readNativeLiveness(pid: number): boolean | undefined {
 // Bound corrupted/cyclic ancestry while allowing nested service supervisors.
 export const MAX_ANCESTOR_WALK_DEPTH = 32;
 
-/** Project a best-effort ancestor chain without deciding liveness or authority. */
-export function collectProcessAncestorPids(
-  immediateParent: number,
-  readParentPid: (pid: number) => number | null,
-  throughPid?: number,
-): Set<number> {
-  const pids = new Set<number>([process.pid]);
-  if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
-    return pids;
-  }
-  pids.add(immediateParent);
-  let current = immediateParent;
-  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH && current !== throughPid; depth++) {
-    const parent = readParentPid(current);
-    if (parent == null || parent <= 0 || pids.has(parent)) {
-      break;
-    }
-    pids.add(parent);
-    current = parent;
-  }
-  return pids;
-}
-
 // Cache only a successful self read: this identity lasts for the process.
 // Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
 let selfStartTime: number | null = null;

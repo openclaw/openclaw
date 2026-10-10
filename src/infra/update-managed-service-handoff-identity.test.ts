@@ -1,7 +1,9 @@
-import childProcess, { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import type { ProcessAncestry } from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,6 +20,14 @@ import {
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
+const readProcessAncestry = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
+);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessAncestry,
+}));
+
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -27,6 +37,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  readProcessAncestry.mockReset().mockReturnValue(null);
   spawnSyncMock.mockReset();
   vi.useFakeTimers();
 });
@@ -314,8 +325,6 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     const helperPid = chain.at(-1)!;
     const startedAt = "Thu Sep 24 00:00:00 2026";
     const startIdentity = String(Date.parse(`${startedAt} UTC`) / 1000);
-    const rows = new Map(chain.map((pid, i) => [pid, { parentPid: chain[i + 1] ?? 1, startedAt }]));
-    rows.set(1, { parentPid: 0, startedAt });
     const executor = { pid: executorPid, startIdentity };
     const database = createManagedHandoffLeaseDatabase(databasePath);
     database(true, (db) =>
@@ -335,36 +344,30 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     if (!parent) {
       throw new Error("expected the seeded v1 parent");
     }
-    const probes: { failure?: string; output?: string; afterRead?: () => void } = {};
-    const nativeReads: number[] = [];
-    const read = (pid: number, field: string) => {
-      nativeReads.push(pid);
-      if (probes.failure) {
-        throw Object.assign(new Error("native inspection unavailable"), { code: probes.failure });
-      }
-      const row = rows.get(pid);
-      if (!row) {
-        throw Object.assign(new Error("process missing"), { code: "ESRCH" });
-      }
-      const output =
-        probes.output ??
-        (field === "lstart="
-          ? `${row.startedAt}\n`
-          : field === "ppid="
-            ? `${row.parentPid}\n`
-            : `${pid} ${row.parentPid} ${row.startedAt}\n`);
-      probes.afterRead?.();
-      return output;
-    };
-    vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) =>
-      read(Number(args?.[3]), String(args?.[1])),
-    );
-    // Support the original per-field probes too: the cost assertion must fail on the old path.
-    spawnSyncMock.mockImplementation((_file, args: string[]) => ({
-      status: 0,
-      stdout: read(Number(args[3]), String(args[1])),
-      stderr: "",
+    const identities = [process.pid, ...chain.filter((pid) => pid !== 1)].map((pid, index) => ({
+      pid,
+      parentPid: chain[index] ?? 1,
+      startTimeMicros: Number(startIdentity) * 1_000_000,
+      startTimeResolutionMicros: 1,
+      exited: false,
     }));
+    const probes: {
+      failure?: "access-denied" | "layout-mismatch";
+      complete?: boolean;
+      stoppedBy?: ProcessAncestry["stoppedBy"];
+      afterRead?: () => void;
+    } = {};
+    readProcessAncestry.mockImplementation(() => {
+      if (probes.failure) {
+        throw new ProcSafeError(probes.failure, "synthetic process inspection failure");
+      }
+      probes.afterRead?.();
+      return {
+        chain: identities,
+        complete: probes.complete ?? true,
+        stoppedBy: probes.stoppedBy ?? (helperIsInit ? "root" : "through-pid"),
+      };
+    });
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     const hostPlatform = process.platform;
     const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
@@ -372,9 +375,8 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
       existingUri(pathname, hostPlatform),
     );
     return {
-      rows,
+      identities,
       probes,
-      nativeReads,
       helperPid,
       executorPid,
       parent,
@@ -413,24 +415,17 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
   ] as const)("refreshes $name on the next validation", ({ edges, change }) => {
     const test = fixture(edges);
     expect(test.current()).toBe(true);
-    if (edges === 0) {
-      expect(test.nativeReads).toEqual([test.helperPid]);
-    }
     const pid = change === "helper" ? test.helperPid : test.executorPid;
-    const row = test.rows.get(pid)!;
+    const identity = test.identities.find((value) => value.pid === pid)!;
     if (change === "parent") {
-      row.parentPid = 1;
+      test.identities.splice(2);
+      identity.parentPid = 1;
+      test.probes.stoppedBy = "root";
     } else {
-      row.startedAt = "Thu Sep 24 00:00:01 2026";
+      identity.startTimeMicros += 1_000_000;
     }
     expect(test.current()).toBe(false);
     expect(test.storedParent()).toEqual(test.parent);
-    if (edges === 0) {
-      expect(test.nativeReads).toEqual([test.helperPid, test.helperPid]);
-      expect(test.kill).toHaveBeenCalledWith(test.helperPid, 0);
-    } else if (edges === 3) {
-      expect(test.nativeReads).toHaveLength(8);
-    }
   });
 
   it.each([
@@ -449,10 +444,10 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
         };
         break;
       case "denied inspection":
-        test.probes.failure = "EPERM";
+        test.probes.failure = "access-denied";
         break;
       case "malformed metadata":
-        test.probes.output = "truncated process metadata";
+        test.probes.failure = "layout-mismatch";
         break;
       case "dead process":
         test.kill.mockImplementation(() => {
@@ -460,7 +455,8 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
         });
         break;
       case "cycle":
-        test.rows.get(test.executorPid + 1)!.parentPid = test.executorPid;
+        test.probes.complete = false;
+        test.probes.stoppedBy = "cycle";
         break;
     }
     expect(test.current()).toBe(false);
@@ -469,19 +465,11 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     } else {
       expect(test.storedParent()).toEqual(test.parent);
     }
-    if (failure === "cycle") {
-      expect(test.nativeReads).toEqual([test.executorPid, test.executorPid + 1]);
-    }
   });
 
-  it.each([
-    { name: "32 ancestor edges", edges: 32, helperIsInit: false, accepted: true, reads: 33 },
-    { name: "33 ancestor edges", edges: 33, helperIsInit: false, accepted: false, reads: 32 },
-    { name: "PID 1 ancestor", edges: 2, helperIsInit: true, accepted: true, reads: 3 },
-  ])("bounds native ancestry reads with $name", ({ edges, helperIsInit, accepted, reads }) => {
-    const test = fixture(edges, helperIsInit);
-    expect(test.current()).toBe(accepted);
-    expect(test.nativeReads).toHaveLength(reads);
-    expect(new Set(test.nativeReads).size).toBe(reads);
+  it("does not authorize PID 1 as a borrowed helper", () => {
+    const test = fixture(2, true);
+    expect(test.current()).toBe(false);
+    expect(test.storedParent()).toEqual(test.parent);
   });
 });

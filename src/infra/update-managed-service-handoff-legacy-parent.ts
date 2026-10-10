@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
+import { inspectSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import type { LeaseRow } from "./update-managed-service-handoff-database.js";
 import type { BorrowedLegacyHandoffParent } from "./update-managed-service-handoff-lease-types.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
@@ -63,10 +63,9 @@ export function isBorrowedLegacyHandoffParentCurrent(
       )
     );
   };
-  return process.platform === "darwin"
-    ? processes.validateDarwinAncestorProcesses(parent.helper.pid, validate)
-    : validate(
-        getSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }),
-        processes.isProcessIdentityCurrent,
-      );
+  if (process.platform === "darwin") {
+    return processes.validateDarwinAncestorProcesses(parent.helper.pid, validate);
+  }
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  return ancestry.complete && validate(ancestry.pids, processes.isProcessIdentityCurrent);
 }
