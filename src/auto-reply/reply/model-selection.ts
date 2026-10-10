@@ -35,10 +35,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
 import {
@@ -571,19 +568,17 @@ export async function createModelSelectionState(params: {
       return cached.length > 0 ? cached : undefined;
     }
     let catalog = visibilityPolicy.catalog;
-    if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
-      const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
-      const preparedCatalog = await loadProviderScopedThinkingCatalog({
-        config: cfg,
-        agentId: params.agentId,
-        provider: selection.provider,
-        model: selection.model,
-        agentRuntime,
-      });
-      // An empty refresh cannot replace the admitted owner with a configuration-only row.
-      if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
-        catalog = createVisibilityPolicy(preparedCatalog).catalog;
-      }
+    const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
+    const preparedCatalog = await loadProviderScopedThinkingCatalog({
+      config: cfg,
+      agentId: params.agentId,
+      provider: selection.provider,
+      model: selection.model,
+      agentRuntime,
+    });
+    // An empty refresh cannot replace the admitted owner with a configuration-only row.
+    if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
+      catalog = createVisibilityPolicy(preparedCatalog).catalog;
     }
     thinkingCatalogs.set(key, catalog);
     return catalog.length > 0 ? catalog : undefined;

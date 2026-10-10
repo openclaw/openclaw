@@ -36,19 +36,6 @@ export function hasResolvedThinkingCatalogEntry(params: {
   );
 }
 
-/** Native runtimes resolve their own observations; host turns cannot borrow native-only facts. */
-export function needsThinkHydration(
-  catalog: readonly ThinkingCatalogEntry[] | undefined,
-  provider: string,
-  model: string,
-  agentRuntime: string,
-): boolean {
-  return (
-    agentRuntime !== "openclaw" ||
-    !hasResolvedThinkingCatalogEntry({ catalog, provider, model, agentRuntime })
-  );
-}
-
 export function normalizeThinkingCatalogProviders<T extends ThinkingCatalogEntry>(
   catalog: readonly T[],
 ): T[] {
