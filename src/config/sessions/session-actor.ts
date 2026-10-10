@@ -307,7 +307,7 @@ export function createSessionActor(params: {
                   new Error("Session actor requires reconciliation before another command"),
                 );
               }
-              const pending = params.replica.beginCommand({ ...captured, phase: name });
+              const pending = params.replica.beginCommand();
               const reply = await executePhase[name](scope, { ...captured, target }).then(
                 (value) => ({ ok: true as const, value }),
                 (error: unknown) => ({ ok: false as const, error }),

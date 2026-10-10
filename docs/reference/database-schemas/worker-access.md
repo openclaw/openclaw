@@ -423,6 +423,12 @@ is a different result. Payload history keeps its existing reader. Hydration and
 actor reads reuse process-wide schema and integrity admission without new format
 checks or foreign-commit probes.
 
+The persistence interface carries typed commands, explicit version and domain
+predicates, and complete postimage receipts. Database handles and SQL dialect
+operations stay inside the storage adapter. Actor writes use held state and
+in-process receipt counters instead of reading the legacy connection-local TEMP
+cache-generation table; callers awaiting cutover retain their existing cache.
+
 Typed commands cover input acceptance, run adoption and pre-hook checkpoints,
 tool results, transcript events, turn completion, pre-send custody, and delivery
 settlement. Each command uses one synchronous transaction and the resident
@@ -455,7 +461,10 @@ publication and final-authority guards during this incremental cutover.
 Confirmed rollback leaves committed state intact. A lost reply reconciles
 against native commit evidence; an unknown outcome fences further commands and
 disclosure until a read rehydrates the original owner. Neither path replays the
-mutation. Lifetime closure joins accepted commands and phase flushes before
+mutation: additive accounting reducers lack durable deduplication, so a generic
+retry could apply usage twice. The replica trusts the command owner's receipt
+validation and checks only freshness before installing its detached postimage.
+Lifetime closure joins accepted commands and phase flushes before
 releasing transport custody. Durable residency eviction drops settled snapshots,
 not stored sessions. Rehydration starts a new actor epoch and restores durable
 custody evidence without reviving a prior process's run or placement authority.
