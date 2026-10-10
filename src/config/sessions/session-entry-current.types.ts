@@ -3,6 +3,19 @@ import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  updatedAt?: SessionEntry["updatedAt"];
+  sessionStartedAt?: SessionEntry["sessionStartedAt"];
+  reasoningLevel?: SessionEntry["reasoningLevel"];
+  thinkingLevel?: SessionEntry["thinkingLevel"];
+  fastMode?: SessionEntry["fastMode"];
+  groupActivation?: SessionEntry["groupActivation"];
+  sendPolicy?: SessionEntry["sendPolicy"];
+  chatType?: SessionEntry["chatType"];
+  delivery?: SessionEntry["delivery"];
+  label?: SessionEntry["label"];
+  displayName?: SessionEntry["displayName"];
+  subject?: SessionEntry["subject"];
+  category?: SessionEntry["category"];
   incognito?: SessionEntry["incognito"];
   modelSelectionLocked?: SessionEntry["modelSelectionLocked"];
   pluginOwnerId?: SessionEntry["pluginOwnerId"];
@@ -18,6 +31,10 @@ export type SessionEntryCurrentFacts = {
   authProfileOverride?: SessionEntry["authProfileOverride"];
   authProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
   modelOverride?: SessionEntry["modelOverride"];
+  modelOverrideSource?: SessionEntry["modelOverrideSource"];
+  modelOverrideRouteResolution?: SessionEntry["modelOverrideRouteResolution"];
+  modelOverrideFallbackOriginProvider?: SessionEntry["modelOverrideFallbackOriginProvider"];
+  modelOverrideFallbackOriginModel?: SessionEntry["modelOverrideFallbackOriginModel"];
   providerOverride?: SessionEntry["providerOverride"];
   model?: SessionEntry["model"];
   modelProvider?: SessionEntry["modelProvider"];

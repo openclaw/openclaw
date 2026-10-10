@@ -4,6 +4,7 @@ import { hasPendingDiscussionOpenForDestination } from "./binding-generation.js"
 import {
   attachBindingToCurrentActiveSession,
   getClickClackDiscussionBindingStore,
+  prepareDiscussionSessionEntry,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
 import { resolveDiscussionBindingAccount } from "./eligibility.js";
@@ -57,11 +58,22 @@ export async function resolveClickClackDiscussionRoute(params: {
   }
   let binding: ClickClackDiscussionBinding | undefined;
   try {
+    const prepared = await prepareDiscussionSessionEntry(params.runtime, matched.sessionKey);
+    if (
+      isClickClackDiscussionChannelRevoked(params) ||
+      resolveDiscussionBindingAccount(
+        params.runtime.config.current() as CoreConfig,
+        matched.binding,
+      ).state !== "active"
+    ) {
+      return { state: "revoked" };
+    }
     binding = attachBindingToCurrentActiveSession({
       runtime: params.runtime,
       store,
       sessionKey: matched.sessionKey,
       binding: matched.binding,
+      prepared,
     });
   } catch (error) {
     params.runtime.logging

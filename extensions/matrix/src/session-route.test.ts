@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 // Matrix tests cover session route plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -6,7 +7,12 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  observeHostDataSql,
+  openIncognitoTestActor,
+  withIncognitoSessionBinding,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
@@ -153,7 +159,9 @@ async function resolveUserRouteForCurrentSession(params: {
   });
 }
 
-function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>) {
+function expectCurrentDmRoomRoute(
+  route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>,
+) {
   const currentRoute = expectRoute(route);
   expect(currentRoute.sessionKey).toBe(currentDmSessionKey);
   expect(currentRoute.baseSessionKey).toBe(currentDmSessionKey);
@@ -166,7 +174,7 @@ function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutbound
 }
 
 function expectFallbackUserRoute(
-  route: ReturnType<typeof resolveMatrixOutboundSessionRoute>,
+  route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>,
   params?: {
     userId?: string;
   },
@@ -183,7 +191,7 @@ function expectFallbackUserRoute(
   expect(fallbackRoute.recipientSessionExact).toBe(false);
 }
 
-function expectRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>) {
+function expectRoute(route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>) {
   if (!route) {
     throw new Error("Expected Matrix route");
   }
@@ -278,8 +286,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       target: "room:!ops:example.org",
@@ -307,9 +315,9 @@ describe("resolveMatrixOutboundSessionRoute", () => {
       replyToId: "$ReplyChild:Example.Org",
       expectedThreadId: "$ReplyChild:Example.Org",
     },
-  ])("$name", ({ threadId, replyToId, expectedThreadId }) => {
+  ])("$name", async ({ threadId, replyToId, expectedThreadId }) => {
     const route = expectRoute(
-      resolveMatrixOutboundSessionRoute({
+      await resolveMatrixOutboundSessionRoute({
         cfg: {},
         agentId: "main",
         target: "room:!ops:example.org",
@@ -324,8 +332,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     );
   });
 
-  it("does not claim room aliases as canonical inbound session ids", () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it("does not claim room aliases as canonical inbound session ids", async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       target: "#ops:example.org",
@@ -334,8 +342,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(route?.recipientSessionExact).toBe(false);
   });
 
-  it("does not claim room ids when DMs are keyed by user identity", () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it("does not claim room ids when DMs are keyed by user identity", async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       target: "!ops:example.org",
@@ -344,8 +352,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(route?.recipientSessionExact).toBe(false);
   });
 
-  it("claims a room id as canonical when DMs are room-scoped", () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it("claims a room id as canonical when DMs are room-scoped", async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: { channels: { matrix: perRoomDmMatrixConfig } },
       agentId: "main",
       target: "room:!ops:example.org",
@@ -354,9 +362,9 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(route?.recipientSessionExact).toBe(true);
   });
 
-  it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", () => {
+  it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", async () => {
     // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs.
-    const route = resolveMatrixOutboundSessionRoute({
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: { channels: { matrix: perRoomDmMatrixConfig } },
       agentId: "main",
       target: "room:!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
@@ -367,14 +375,14 @@ describe("resolveMatrixOutboundSessionRoute", () => {
 
   it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", async () => {
     const storedSession = createStoredDirectDmSession();
-    const route = resolveUserRoute({
+    const route = await resolveUserRoute({
       cfg: await createMatrixRouteConfig({
         [currentDmSessionKey]: storedSession,
       }),
       accountId: "ops",
       target: "@alice:example.org",
     });
-    const threadedRoute = resolveMatrixOutboundSessionRoute({
+    const threadedRoute = await resolveMatrixOutboundSessionRoute({
       cfg: await createMatrixRouteConfig({
         [route?.baseSessionKey ?? currentDmSessionKey]: storedSession,
       }),
@@ -396,8 +404,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(dmThreadRoute.threadId).toBe("$DmRoot:Example.Org");
   });
 
-  it('does not recover currentSessionKey threads for shared dmScope "main" DMs', () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it('does not recover currentSessionKey threads for shared dmScope "main" DMs', async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       target: "@alice:example.org",
@@ -415,4 +423,45 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(dmRoute.threadId).toBeUndefined();
     expect(dmRoute.recipientSessionExact).toBe(true);
   });
+});
+
+it("routes an explicitly bound private DM from actor metadata without host SQL", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("matrix-bound-", sessionRoot) };
+  const authority = { assertCurrent() {} };
+  const actor = await openIncognitoTestActor(env, authority);
+  const sessionKey = "agent:main:dashboard:incognito-matrix";
+  try {
+    await actor.sessions.create(authority, {
+      sessionKey,
+      entry: createStoredDirectDmSession(),
+    });
+    await withIncognitoSessionBinding({ actor }, async () => {
+      const sql = observeHostDataSql();
+      try {
+        const route = await resolveMatrixOutboundSessionRoute({
+          cfg: { session: { store: actor.path }, channels: { matrix: perRoomDmMatrixConfig } },
+          agentId: "main",
+          accountId: "ops",
+          target: "@alice:example.org",
+          currentSessionKey: sessionKey,
+        });
+        expect(route).toMatchObject({ to: "room:!dm:example.org", recipientSessionExact: true });
+        expect(sql.queries).toEqual([]);
+        await actor.close();
+        await expect(
+          resolveMatrixOutboundSessionRoute({
+            cfg: { session: { store: actor.path }, channels: { matrix: perRoomDmMatrixConfig } },
+            agentId: "main",
+            accountId: "ops",
+            target: "@alice:example.org",
+            currentSessionKey: sessionKey,
+          }),
+        ).rejects.toThrow();
+      } finally {
+        sql.restore();
+      }
+    });
+  } finally {
+    await actor.close();
+  }
 });

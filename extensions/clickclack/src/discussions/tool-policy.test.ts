@@ -10,7 +10,11 @@ import {
 } from "./binding-store.js";
 import { discussionSessionKey } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
+import {
+  asyncDiscussionTestStore,
+  bindDiscussionSessionFixture,
+  createDiscussionMemoryStore,
+} from "./service-test-support.js";
 import {
   enforceClickClackDiscussionToolTarget,
   isClickClackDiscussionSessionTarget,
@@ -48,6 +52,7 @@ function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     maxEntries: 10_000,
     overflowPolicy: "reject-new",
   });
+  bindDiscussionSessionFixture(runtime);
   runtime.state.openKeyedStore = <T>() => asyncStore as PluginStateKeyedStore<T>;
   const mainSessionKey = "agent:research:main";
   const initialBinding = {
@@ -96,6 +101,27 @@ function setup(options: { persistedBeforeOpening?: boolean } = {}) {
 }
 
 describe("ClickClack discussion session tool policy", () => {
+  it("keeps private targets denied before entering the native scoped-access guard", () => {
+    const { runtime, bindingStore, mainSessionKey } = setup();
+    const binding = bindingStore.get(mainSessionKey)!;
+    const targetSessionKey = "agent:research:dashboard:incognito-discussion";
+    bindingStore.set(targetSessionKey, binding);
+    const requesterSessionKey = discussionSessionKey({
+      runtime,
+      mainSessionKey: targetSessionKey,
+      ...binding,
+    })!;
+
+    expect(
+      enforceClickClackDiscussionToolTarget({
+        runtime,
+        event: { toolName: "sessions_history", params: { sessionKey: targetSessionKey } },
+        context: { toolName: "sessions_history", sessionKey: requesterSessionKey },
+      }),
+    ).toMatchObject({ block: true });
+    expect(runtime.agent.session.getSessionEntry).not.toHaveBeenCalled();
+  });
+
   it("authorizes a persisted binding synchronously before index preparation after restart", () => {
     const { runtime, mainSessionKey, sideSessionKey, run } = setup({
       persistedBeforeOpening: true,

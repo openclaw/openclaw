@@ -19,6 +19,7 @@ import {
 } from "./binding-generation.js";
 import {
   readDiscussionSessionEntry,
+  prepareDiscussionSessionEntry,
   type ClickClackDiscussionBinding,
   type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
@@ -215,7 +216,10 @@ export async function openClickClackDiscussionBinding(
   params: OpenDiscussionParams,
 ): Promise<ClickClackDiscussionBinding | undefined> {
   const { account, runtime, sessionKey, store } = params;
-  const entry = await readDiscussionSessionEntry(runtime, sessionKey);
+  let prepared = await prepareDiscussionSessionEntry(runtime, sessionKey, {
+    allowCurrentIncarnation: true,
+  });
+  const entry = prepared.entry;
   if (!entry || entry.archivedAt !== undefined) {
     return undefined;
   }
@@ -284,26 +288,20 @@ export async function openClickClackDiscussionBinding(
   };
   const { label, displayTitle, section, externalUrl } = describeChannel(entry);
   const assertCurrentAuthority = () => {
+    prepared.assertCurrent();
     // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
     const currentAccounts = discussionAccounts(runtime.config.current() as CoreConfig);
     const currentAccount = currentAccounts.length === 1 ? currentAccounts[0] : undefined;
-    const currentEntry = runtime.agent.session.getSessionEntry({
-      sessionKey,
-      readConsistency: "latest",
-    });
     if (
       !currentAccount ||
       currentAccount.accountId !== account.accountId ||
       normalizedServerBaseUrl(currentAccount) !== serverBaseUrl ||
       currentAccount.apiEndpoint !== account.apiEndpoint ||
       discussionCredentialFingerprint(currentAccount.token) !== credentialFingerprint ||
-      currentAccount.discussions.workspace !== account.discussions.workspace ||
-      !currentEntry?.sessionId ||
-      currentEntry.archivedAt !== undefined
+      currentAccount.discussions.workspace !== account.discussions.workspace
     ) {
       throw new Error("ClickClack discussion authority changed while opening the channel");
     }
-    return currentEntry;
   };
   return await params.withChannelMutationLock(async () => {
     await params.ensureBindingCapacity(sessionKey);
@@ -443,7 +441,9 @@ export async function openClickClackDiscussionBinding(
       throw new Error("ClickClack discussion channel is missing its route id");
     }
     const channel = resolved;
-    const currentEntry = await readDiscussionSessionEntry(runtime, sessionKey);
+    prepared.assertCurrent();
+    prepared = await prepareDiscussionSessionEntry(runtime, sessionKey);
+    const currentEntry = prepared.entry;
     if (!currentEntry?.sessionId || currentEntry.archivedAt !== undefined) {
       await clearPendingDiscussionOpen(generationScope);
       params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
@@ -507,7 +507,7 @@ export async function openClickClackDiscussionBinding(
         : {}),
     };
     try {
-      nextBinding.sessionId = assertCurrentAuthority().sessionId;
+      assertCurrentAuthority();
       store.set(sessionKey, nextBinding);
     } catch (error) {
       await clearPendingDiscussionOpen(generationScope);

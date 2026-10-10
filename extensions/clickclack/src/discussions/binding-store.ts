@@ -1,8 +1,11 @@
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import type { CoreConfig } from "../types.js";
 
 export type ClickClackDiscussionBinding = {
   accountId: string;
@@ -54,6 +57,25 @@ export async function readDiscussionSessionEntry(runtime: PluginRuntime, session
     : runtime.agent.session.getSessionEntry(params);
 }
 
+export async function prepareDiscussionSessionEntry(
+  runtime: PluginRuntime,
+  sessionKey: string,
+  options: { allowCurrentIncarnation?: boolean } = {},
+) {
+  const config = runtime.config.current() as CoreConfig;
+  const agentId = resolveSessionAgentIdStrict({ config, sessionKey });
+  return await captureSessionEntryCurrentCheck({
+    agentId,
+    sessionKey,
+    storePath: runtime.agent.session.resolveStorePath(config.session?.store, { agentId }),
+    matchGeneration: !options.allowCurrentIncarnation,
+    fields: options.allowCurrentIncarnation
+      ? ["archivedAt"]
+      : ["archivedAt", "label", "displayName", "subject", "category"],
+    errorMessage: "ClickClack discussion session changed during preparation",
+  });
+}
+
 /**
  * Refresh the replaceable session attachment without changing the durable room identity.
  * The store registers persisted state before reindexing, so a failed write leaves the
@@ -64,11 +86,26 @@ export function attachBindingToCurrentActiveSession(params: {
   store: ClickClackDiscussionBindingStore;
   sessionKey: string;
   binding: ClickClackDiscussionBinding;
+  prepared?: Awaited<ReturnType<typeof prepareDiscussionSessionEntry>>;
 }): ClickClackDiscussionBinding | undefined {
-  const entry = params.runtime.agent.session.getSessionEntry({
-    sessionKey: params.sessionKey,
-    readConsistency: "latest",
-  });
+  params.prepared?.assertCurrent();
+  if (params.prepared) {
+    const current = params.store.get(params.sessionKey);
+    if (
+      !current ||
+      current.serverBaseUrl !== params.binding.serverBaseUrl ||
+      current.channelId !== params.binding.channelId ||
+      current.externalRef !== params.binding.externalRef
+    ) {
+      return undefined;
+    }
+  }
+  const entry = params.prepared
+    ? params.prepared.entry
+    : params.runtime.agent.session.getSessionEntry({
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      });
   if (!entry?.sessionId || entry.archivedAt !== undefined) {
     return undefined;
   }

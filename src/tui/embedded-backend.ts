@@ -55,6 +55,11 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionActor,
+} from "../config/sessions/session-incognito-binding.js";
 import {
   mergeAssistantText,
   resolveAssistantTextInput,
@@ -139,6 +144,10 @@ import {
   createEmbeddedSessionReader,
   readEmbeddedHistorySessionInfo,
 } from "./embedded-session-reader.js";
+import {
+  withEmbeddedSessionSource,
+  type SelectedEmbeddedSession,
+} from "./embedded-session-source.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -186,6 +195,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
+  private stopping = false;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
   private readonly scheduler = new GatewayScheduler();
@@ -207,6 +217,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (this.unsubscribe) {
       return;
     }
+    this.stopping = false;
     setEmbeddedMode(true);
     void ensureContextWindowCacheLoaded();
     // Suppress console output from logError/logInfo that would pollute the TUI.
@@ -251,6 +262,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async stop() {
+    this.stopping = true;
     this.scheduler.beginClose();
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals?.();
@@ -259,7 +271,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribeQuestions?.();
     this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
+    const boundRunPromises: Promise<void>[] = [];
     for (const run of this.runs.values()) {
+      if (run.boundSession && run.promise) {
+        boundRunPromises.push(run.promise);
+      }
       if (run.finishing || run.lifecycleEnded) {
         if (run.promise) {
           maintenancePromises.push(run.promise);
@@ -279,6 +295,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
     }
+    await Promise.allSettled(boundRunPromises);
     this.unbindSessionProjection?.();
     this.unbindSessionProjection = undefined;
     const projection = this.sessionProjection;
@@ -303,8 +320,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
+    return withEmbeddedSessionSource(opts.sessionKey, opts.agentId, (selected, assertSelected) =>
+      this.sendChatFromSource(opts, selected, assertSelected),
+    );
+  }
+
+  private async sendChatFromSource(
+    opts: Parameters<EmbeddedTuiBackend["sendChat"]>[0],
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    assertSelected();
+    if (this.stopping) {
+      throw new Error("Local backend is stopping");
+    }
     const runId = opts.runId ?? randomUUID();
     const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
     const question = sideCommand?.[1]?.trim() || undefined;
@@ -330,13 +361,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
     let pendingQueue: LocalRunState["pendingQueue"];
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-      const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+      const { cfg, canonicalKey, entry } =
+        selected ?? loadSessionEntry(opts.sessionKey, loadOptions);
+      assertSelected();
       const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
       if (activeSessionId) {
         const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
           activeSessionId,
           opts.message,
         );
+        assertSelected();
         if (claimed) {
           return claimed;
         }
@@ -357,11 +391,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
               isInboundUserMessage: true,
             },
           ).catch((error: unknown) => {
-            if (error instanceof QuestionAnswerUnconfirmedError) {
+            if (selected || error instanceof QuestionAnswerUnconfirmedError) {
               throw error;
             }
             return undefined;
           });
+          assertSelected();
           if (outcome?.queued) {
             return { runId: queuedAfter.runId };
           }
@@ -395,6 +430,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       finishing: false,
       lifecycleEnded: false,
       registered: false,
+      boundSession: selected !== undefined,
+      incognitoIncarnation: this.currentIncognitoIncarnation(runScope),
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
       queuedRunReady: queuedRunReadiness.promise,
@@ -424,10 +461,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
+    const incarnation = this.currentIncognitoIncarnation(opts);
     const runIds: string[] = [];
     const candidates = opts.runId ? [[opts.runId, this.runs.get(opts.runId)] as const] : this.runs;
     for (const [runId, run] of candidates) {
-      if (!run || (!opts.runId && run.question) || run.sessionKey !== opts.sessionKey) {
+      if (
+        !run ||
+        run.incognitoIncarnation !== incarnation ||
+        (!opts.runId && run.question) ||
+        run.sessionKey !== opts.sessionKey
+      ) {
         continue;
       }
       if (opts.sessionKey === "global") {
@@ -449,21 +492,48 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async loadImage(opts: TuiImageRequest): Promise<TuiImageData> {
-    const { loadEmbeddedImage } = await import("./embedded-image-loader.js");
-    return await loadEmbeddedImage(opts);
+    const source = captureIncognitoSessionSource({
+      sessionKey: opts.sessionKey,
+      agentId: opts.agentId,
+    });
+    const claim =
+      source && !("kind" in source)
+        ? source.actor.sessions.captureCurrent(opts.sessionKey)
+        : undefined;
+    const load = async () => {
+      const { loadEmbeddedImage } = await import("./embedded-image-loader.js");
+      claim?.assertCurrent();
+      return loadEmbeddedImage(opts);
+    };
+    return source && !("kind" in source)
+      ? withIncognitoSessionActor(source.actor, load, source.admissionSignal)
+      : load();
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
+    return withEmbeddedSessionSource(opts.sessionKey, opts.agentId, (bound, assertSelected) =>
+      this.loadHistoryFromSource(opts, bound, assertSelected),
+    );
+  }
+
+  private async loadHistoryFromSource(
+    opts: Parameters<EmbeddedTuiBackend["loadHistory"]>[0],
+    bound: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
+    const incognitoIncarnation = this.currentIncognitoIncarnation(opts);
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
-    if (!getSubagentSessionListReadSnapshotIdentity()) {
+    if (!bound && !getSubagentSessionListReadSnapshotIdentity()) {
       await prepareOptionalSubagentSessionListReadCache();
     }
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
-      ...loadOptions,
-      includeStoreChildEntries: true,
-    });
+    const selected =
+      bound ??
+      loadGatewaySessionEntryReadOnly(opts.sessionKey, {
+        ...loadOptions,
+        includeStoreChildEntries: true,
+      });
     const {
       cfg,
       agentId: sessionAgentId,
@@ -473,6 +543,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       entry,
       canonicalKey,
     } = selected;
+    assertSelected();
     const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
@@ -516,6 +587,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ([, run]) =>
         !run.question &&
         run.terminalState !== "final" &&
+        run.incognitoIncarnation === incognitoIncarnation &&
         agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
         normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
     );
@@ -581,6 +653,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionInfo.verboseLevel = verboseLevel;
     }
 
+    assertSelected();
     return {
       sessionKey: opts.sessionKey,
       sessionId,
@@ -606,19 +679,36 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async patchSession(
     opts: Parameters<TuiBackend["patchSession"]>[0],
   ): Promise<SessionsPatchResult> {
+    return withEmbeddedSessionSource(opts.key, opts.agentId, (selected, assertSelected) =>
+      this.patchSessionFromSource(opts, selected, assertSelected),
+    );
+  }
+
+  private async patchSessionFromSource(
+    opts: Parameters<EmbeddedTuiBackend["patchSession"]>[0],
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key: opts.key,
-      agentId: opts.agentId,
-      exactRead: true,
-    });
+    const target =
+      selected ??
+      resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: opts.key,
+        agentId: opts.agentId,
+        exactRead: true,
+      });
+    assertSelected();
     const applied = await applySessionPatchProjection<{ ok: false; error: ErrorShape }>({
+      assertCurrent: assertSelected,
       ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
       storePath: target.storePath,
       resolveTarget: ({ store }) => {
+        if (selected) {
+          return { primaryKey: selected.canonicalKey, candidateKeys: selected.storeKeys };
+        }
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key: opts.key,
@@ -648,10 +738,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     const canonicalKey = target.canonicalKey ?? opts.key;
+    const assertApplied = selected
+      ? captureSessionEntrySourceAssertion({
+          scope: { agentId: target.agentId, sessionKey: canonicalKey, storePath: target.storePath },
+          expected: applied.entry,
+          fields: ["sessionId", "lifecycleRevision"],
+          assertCurrent() {},
+          refuse() {
+            throw new Error("Local session changed while preparing the patch result");
+          },
+        })
+      : assertSelected;
+    assertApplied();
     const [acpMeta] = await readAcpSessionMetaForEntries({
       cfg,
       entries: [{ agentId: target.agentId, sessionKey: canonicalKey, entry: applied.entry }],
     });
+    assertApplied();
     const projected = projectSessionPatchResult({
       canonicalKey,
       cfg,
@@ -664,8 +767,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
+    return withEmbeddedSessionSource(key, opts?.agentId, (selected, assertSelected) =>
+      this.resetSessionFromSource(key, reason, opts, selected, assertSelected),
+    );
+  }
+
+  private async resetSessionFromSource(
+    key: string,
+    reason: "new" | "reset" | undefined,
+    opts: { agentId?: string } | undefined,
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
     await this.ready;
-    if (loadGatewaySessionEntryReadOnly(key, opts).entry?.incognito === true) {
+    assertSelected();
+    if ((selected ?? loadGatewaySessionEntryReadOnly(key, opts)).entry?.incognito === true) {
       throw new Error("Incognito sessions cannot reset in place.");
     }
     const result = await performGatewaySessionReset({
@@ -686,37 +802,46 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async createSession(opts: TuiSessionCreateOptions) {
-    await this.ready;
-    await this.preparedModelRuntime.waitUntilReady();
-    const cfg = getRuntimeConfig();
-    const result = await createGatewaySession({
-      cfg,
-      operatorRoleActor: { kind: "system" },
-      ...opts,
-      creation: { via: "operator", actor: { type: "human", source: "unknown" } },
-      armSessionDiffBaselineCapture: true,
-      emitCommandHooks: Boolean(opts.parentSessionKey),
-      commandSource: "tui:embedded",
-      loadGatewayModelCatalogSnapshot: () =>
-        loadPreparedModelCatalogSnapshot({
-          config: cfg,
-          agentId: resolveSessionAgentId({
-            sessionKey: opts.key,
+    const source = captureIncognitoSessionSource({ sessionKey: opts.key, agentId: opts.agentId });
+    const create = async () => {
+      await this.ready;
+      await this.preparedModelRuntime.waitUntilReady();
+      const cfg = getRuntimeConfig();
+      const result = await createGatewaySession({
+        cfg,
+        operatorRoleActor: { kind: "system" },
+        ...opts,
+        ...(source && !("kind" in source) && isIncognitoSessionKey(opts.key)
+          ? { incognito: true }
+          : {}),
+        creation: { via: "operator", actor: { type: "human", source: "unknown" } },
+        armSessionDiffBaselineCapture: true,
+        emitCommandHooks: Boolean(opts.parentSessionKey),
+        commandSource: "tui:embedded",
+        loadGatewayModelCatalogSnapshot: () =>
+          loadPreparedModelCatalogSnapshot({
             config: cfg,
-            agentId: opts.agentId,
+            agentId: resolveSessionAgentId({
+              sessionKey: opts.key,
+              config: cfg,
+              agentId: opts.agentId,
+            }),
+            readOnly: true,
           }),
-          readOnly: true,
-        }),
-    });
-    if (!result.ok) {
-      throw new Error(result.error.message);
-    }
-    return {
-      ok: true as const,
-      key: result.key,
-      entry: result.entry,
-      resolved: result.resolved,
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      return {
+        ok: true as const,
+        key: result.key,
+        entry: result.entry,
+        resolved: result.resolved,
+      };
     };
+    return source && !("kind" in source)
+      ? withIncognitoSessionActor(source.actor, create, source.admissionSignal)
+      : create();
   }
 
   private async runBtwTurn(params: {
@@ -727,6 +852,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
     timeoutMs?: number;
     controller: AbortController;
   }) {
+    return withEmbeddedSessionSource(
+      params.sessionKey,
+      params.agentId,
+      (selected, assertSelected) => this.runBtwTurnFromSource(params, selected, assertSelected),
+    );
+  }
+
+  private async runBtwTurnFromSource(
+    params: Parameters<EmbeddedTuiBackend["runBtwTurn"]>[0],
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
     const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
     const {
       cfg,
@@ -735,13 +872,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       storePath,
       store,
       entry,
-    } = loadSessionEntry(params.sessionKey, loadOptions);
+    } = selected ?? loadSessionEntry(params.sessionKey, loadOptions);
     if (!entry?.sessionId) {
       throw new Error("/btw requires an active session with existing context.");
     }
     const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
     const { runBtwSideQuestion } = await import("../agents/btw.js");
+    assertSelected();
     const reply = await runBtwSideQuestion({
       cfg,
       agentId: sessionAgentId,
@@ -765,6 +903,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       messageProvider: INTERNAL_MESSAGE_CHANNEL,
       currentChannelId: INTERNAL_MESSAGE_CHANNEL,
     });
+    assertSelected();
     const text = reply?.text?.trim() ?? "";
     if (!text) {
       throw new Error("/btw produced no answer.");
@@ -825,12 +964,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
+    return withEmbeddedSessionSource(opts.sessionKey, opts.agentId, (selected, assertSelected) =>
+      this.runGoalCommandFromSource(opts, selected, assertSelected),
+    );
+  }
+
+  private async runGoalCommandFromSource(
+    opts: Parameters<EmbeddedTuiBackend["runGoalCommand"]>[0],
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { agentId, canonicalKey, storePath, entry } = loadSessionEntry(
-      opts.sessionKey,
-      loadOptions,
-    );
+    const { agentId, canonicalKey, storePath, entry } =
+      selected ?? loadSessionEntry(opts.sessionKey, loadOptions);
+    assertSelected();
     const parsed = parseGoalCommand(opts.command.trim());
     if (!parsed) {
       throw new Error("invalid goal command");
@@ -849,22 +997,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async runUsageCostCommand(opts: Parameters<NonNullable<TuiBackend["runUsageCostCommand"]>>[0]) {
-    await this.ready;
-    const { cfg, agentId, canonicalKey, storePath, entry } = loadSessionEntry(
-      opts.sessionKey,
-      opts.agentId ? { agentId: opts.agentId } : undefined,
+    return withEmbeddedSessionSource(opts.sessionKey, opts.agentId, (selected, assertSelected) =>
+      this.runUsageCostCommandFromSource(opts, selected, assertSelected),
     );
+  }
+
+  private async runUsageCostCommandFromSource(
+    opts: Parameters<EmbeddedTuiBackend["runUsageCostCommand"]>[0],
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
+    await this.ready;
+    const { cfg, agentId, canonicalKey, storePath, entry } =
+      selected ??
+      loadSessionEntry(opts.sessionKey, opts.agentId ? { agentId: opts.agentId } : undefined);
     const { formatSessionUsageCostSummary } =
       await import("../auto-reply/reply/commands-session-cost.runtime.js");
-    return {
-      text: await formatSessionUsageCostSummary({
-        cfg,
-        sessionKey: canonicalKey,
-        agentId,
-        sessionEntry: entry,
-        storePath,
-      }),
-    };
+    assertSelected();
+    const text = await formatSessionUsageCostSummary({
+      cfg,
+      sessionKey: canonicalKey,
+      agentId,
+      sessionEntry: entry,
+      storePath,
+    });
+    assertSelected();
+    return { text };
   }
 
   private enqueuePendingLocalMessage(params: {
@@ -983,8 +1141,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
   }
 
+  private currentIncognitoIncarnation(params: { sessionKey: string; agentId?: string }) {
+    const source = captureIncognitoSessionSource(params);
+    return source && !("kind" in source) ? source.actor.identity.incarnation : undefined;
+  }
+
   private isSameRunScope(run: LocalRunState, params: { sessionKey: string; agentId?: string }) {
     return (
+      run.incognitoIncarnation === this.currentIncognitoIncarnation(params) &&
       run.sessionKey === params.sessionKey &&
       (params.sessionKey !== "global" || run.agentId === params.agentId)
     );
@@ -1147,6 +1311,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!run) {
       return;
     }
+    try {
+      run.assertSessionCurrent?.();
+    } catch (error) {
+      run.controller.abort();
+      this.emitChatTerminal(evt.runId, run, "error", formatTuiErrorMessage(error));
+      return;
+    }
 
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : "";
@@ -1232,6 +1403,42 @@ export class EmbeddedTuiBackend implements TuiBackend {
     queuedAfter?: QueuedSessionRun;
   }) {
     try {
+      await withEmbeddedSessionSource(
+        params.sessionKey,
+        params.agentId,
+        (selected, assertSelected) => this.runTurnFromSource(params, selected, assertSelected),
+      );
+    } catch (error) {
+      const run = this.runs.get(params.runId);
+      if (run) {
+        this.emitChatTerminal(params.runId, run, "error", formatTuiErrorMessage(error));
+        run.markQueuedRunReady();
+        this.runs.delete(params.runId);
+      }
+    }
+  }
+
+  private async runTurnFromSource(
+    params: Parameters<EmbeddedTuiBackend["runTurn"]>[0],
+    selected: SelectedEmbeddedSession | undefined,
+    assertSelected: () => void,
+  ) {
+    try {
+      const source = captureIncognitoSessionSource(params);
+      const creatingActor =
+        selected && !selected.entry && source && !("kind" in source) ? source : undefined;
+      let assertCreatedCurrent: (() => void) | undefined;
+      const assertRunCurrent = creatingActor
+        ? () => {
+            creatingActor.admissionSignal?.throwIfAborted();
+            creatingActor.actor.assertReadable();
+            assertCreatedCurrent?.();
+          }
+        : assertSelected;
+      const capturedRun = this.runs.get(params.runId);
+      if (capturedRun && selected) {
+        capturedRun.assertSessionCurrent = assertRunCurrent;
+      }
       const recheckPreparedRuntimeAtAdmission = params.queuedAfter !== undefined;
       if (params.queuedAfter) {
         try {
@@ -1300,6 +1507,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           this.emitChatTerminal(params.runId, run, "aborted");
           return;
         }
+        assertSelected();
         this.emit("chat.side_result", {
           kind: "btw",
           runId: params.runId,
@@ -1313,7 +1521,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { agentId, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { agentId, canonicalKey, entry } =
+        selected ?? loadSessionEntry(params.sessionKey, loadOptions);
+      assertSelected();
       const result = await agentCommandFromIngress(
         {
           // The per-message timestamp prefix is applied at the single LLM
@@ -1334,10 +1544,25 @@ export class EmbeddedTuiBackend implements TuiBackend {
           runId: params.runId,
           abortSignal: params.controller.signal,
           allowModelOverride: false,
+          ...(creatingActor && {
+            onExecutionStarted: () => {
+              assertRunCurrent();
+              if (!assertCreatedCurrent) {
+                if (!creatingActor.actor.sessions.readSharing(canonicalKey)?.entry) {
+                  throw new Error("Local session was not created before execution");
+                }
+                // Canonical creation replaces the initial absence; retain its first generation.
+                const claim = creatingActor.actor.sessions.captureCurrent(canonicalKey);
+                assertCreatedCurrent = () => claim.assertCurrent();
+              }
+              assertRunCurrent();
+            },
+          }),
         },
         silentRuntime,
         this.deps,
       );
+      assertRunCurrent();
       const run = this.runs.get(params.runId);
       if (!run) {
         return;
@@ -1349,7 +1574,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ) {
         return;
       }
-      run.lifecycleYielded ||= isAgentLifecycleYieldedWaiting({ phase: "end", ...result?.meta });
+      run.lifecycleYielded ||= isAgentLifecycleYieldedWaiting({
+        phase: "end",
+        ...result?.meta,
+      });
 
       if (run.terminalState !== "final") {
         const finalText = payloadText(result?.payloads);

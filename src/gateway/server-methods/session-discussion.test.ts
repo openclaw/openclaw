@@ -46,8 +46,11 @@ vi.mock("../session-transcript-title-reader.js", () => ({
 vi.mock("./session-change-event.js", () => ({
   emitSessionsChanged: mocks.emitSessionsChanged,
 }));
-vi.mock("./sessions-shared.js", () => ({
-  loadAccessorSessionEntryForGatewayTarget: mocks.loadSessionTarget,
+vi.mock("../session-utils-read-lifetime.js", () => ({
+  withGatewaySessionEntryReadOnly: async (
+    params: unknown,
+    consume: (entry: unknown, assertCurrent: () => void) => Promise<unknown>,
+  ) => consume(mocks.loadSessionTarget(params), () => {}),
 }));
 
 const cfg = {
@@ -80,7 +83,7 @@ function mockSession(entry: SessionEntry | undefined): void {
     canonicalKey: sessionKey,
     entry,
     storePath,
-    target: { agentId: "main" },
+    agentId: "main",
   });
 }
 
@@ -150,6 +153,7 @@ describe("session discussion gateway methods", () => {
       cfg: ownedConfig,
       key: "global",
       agentId: "ops",
+      excludeInternalEffects: true,
     });
 
     const ownerlessConfig: OpenClawConfig = {
@@ -233,7 +237,7 @@ describe("session discussion gateway methods", () => {
       canonicalKey: sessionKey,
       entry,
       storePath,
-      target: { agentId: "main" },
+      agentId: "main",
     });
     mocks.readSessionTitleFields.mockReturnValue({
       firstUserMessage: "Plan the release",

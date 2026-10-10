@@ -78,7 +78,7 @@ function createAgentRuntime(
       return await mutator(sessionStore);
     },
   );
-  const getSessionEntry = vi.fn(
+  const getSessionEntryAsync = vi.fn(
     (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   );
   const patchSessionEntry = vi.fn(
@@ -157,7 +157,7 @@ function createAgentRuntime(
       loadSessionStore: () => sessionStore,
       saveSessionStore,
       updateSessionStore,
-      getSessionEntry,
+      getSessionEntryAsync,
       patchSessionEntry,
       upsertSessionEntry,
       runWithWorkAdmission,

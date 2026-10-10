@@ -1452,7 +1452,13 @@ export async function handleFeishuMessage(params: {
     const createAgentReplyDispatcher = (
       agentParams: Pick<
         Parameters<typeof createFeishuReplyDispatcher>[0],
-        "cfg" | "agentId" | "sessionKey" | "allowReasoningPreview" | "identity"
+        | "cfg"
+        | "agentId"
+        | "sessionKey"
+        | "allowReasoningPreview"
+        | "isReasoningPreviewCurrent"
+        | "prepareReasoningPreviewCurrent"
+        | "identity"
       >,
     ) =>
       createFeishuReplyDispatcher({
@@ -1606,7 +1612,7 @@ export async function handleFeishuMessage(params: {
               );
             },
           };
-          const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          const reasoningPreview = await resolveFeishuReasoningPreviewEnabled({
             cfg,
             agentId,
             storePath: agentStorePath,
@@ -1624,7 +1630,9 @@ export async function handleFeishuMessage(params: {
               ? createAgentReplyDispatcher({
                   cfg,
                   agentId,
-                  allowReasoningPreview,
+                  allowReasoningPreview: reasoningPreview.enabled,
+                  isReasoningPreviewCurrent: reasoningPreview.isCurrent,
+                  prepareReasoningPreviewCurrent: reasoningPreview.prepareCurrent,
                   identity: resolveAgentOutboundIdentity(cfg, agentId),
                   sessionKey: agentSessionKey,
                 })
@@ -1734,7 +1742,7 @@ export async function handleFeishuMessage(params: {
       const storePath = resolveStorePath(effectiveCfg.session?.store, {
         agentId: route.agentId,
       });
-      const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+      const reasoningPreview = await resolveFeishuReasoningPreviewEnabled({
         cfg: effectiveCfg,
         agentId: route.agentId,
         storePath,
@@ -1744,7 +1752,9 @@ export async function handleFeishuMessage(params: {
         createAgentReplyDispatcher({
           cfg: effectiveCfg,
           agentId: route.agentId,
-          allowReasoningPreview,
+          allowReasoningPreview: reasoningPreview.enabled,
+          isReasoningPreviewCurrent: reasoningPreview.isCurrent,
+          prepareReasoningPreviewCurrent: reasoningPreview.prepareCurrent,
           identity,
           sessionKey: route.sessionKey,
         });

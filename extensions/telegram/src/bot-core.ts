@@ -26,6 +26,7 @@ import {
   createNonExitingRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
@@ -257,27 +258,25 @@ export async function createTelegramBotCore(
       accountId: account.accountId,
       groupId: String(chatId),
     });
-  const resolveGroupActivation = (params: {
+  const resolveGroupActivation = async (params: {
     agentId?: string;
     sessionKey: string;
     cfg: OpenClawConfig;
   }) => {
     const agentId = params.agentId ?? ownerAgentId;
     const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
-    try {
-      const getSessionEntry = telegramDeps.getSessionEntry;
-      const storedActivation = getSessionEntry?.({
+    const storedActivation = (
+      await (telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync)({
+        agentId,
         storePath,
         sessionKey: params.sessionKey,
-      })?.groupActivation;
-      if (storedActivation === "always") {
-        return false;
-      }
-      if (storedActivation === "mention") {
-        return true;
-      }
-    } catch (err) {
-      logVerbose(`Failed to load session for activation check: ${String(err)}`);
+      })
+    )?.groupActivation;
+    if (storedActivation === "always") {
+      return false;
+    }
+    if (storedActivation === "mention") {
+      return true;
     }
     return undefined;
   };

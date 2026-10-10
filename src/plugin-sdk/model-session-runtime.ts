@@ -1,6 +1,7 @@
 /**
  * Runtime SDK subpath for model overrides and agent concurrency session helpers.
  */
+import { captureExternalSessionCommitGuard } from "../config/sessions/session-source-authority.js";
 import {
   applySessionModelSelectionInternal,
   type ApplySessionModelSelectionParams,
@@ -16,6 +17,7 @@ export const applySessionModelSelection: (
 ) => Promise<ApplySessionModelSelectionResult> = (params) =>
   applySessionModelSelectionInternal({
     ...params,
+    sessionCommitAssertion: captureExternalSessionCommitGuard(params.assertCommitAllowed),
     ...(params.validateAuthProfileSelection ? { nativeCommitValidation: true } : {}),
   });
 export type {

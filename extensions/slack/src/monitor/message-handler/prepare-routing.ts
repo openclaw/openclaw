@@ -1,5 +1,8 @@
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import {
+  captureSessionEntryCurrentCheck,
+  inspectSessionBindingByConversation,
+} from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   getConversationSession,
   resolveStorePath,
@@ -149,6 +152,29 @@ export async function resolveSlackSessionEventRoutingContext(
   const { ctx, message, eventScope } = params;
   const threadTs = message.thread_ts;
   const routing = resolveSlackRoutingContext(params);
+  const bound = routing.runtimeBinding;
+  if (bound && routing.runtimeBoundSessionKey) {
+    const current = await captureSessionEntryCurrentCheck({
+      agentId: routing.route.agentId,
+      sessionKey: routing.sessionKey,
+      storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),
+      isActive: () => {
+        const inspection = inspectSessionBindingByConversation(bound.conversation);
+        return (
+          inspection.status === "available" &&
+          inspection.binding?.bindingId === bound.bindingId &&
+          inspection.binding.boundAt === bound.boundAt &&
+          inspection.binding.targetSessionKey === bound.targetSessionKey
+        );
+      },
+      matchGeneration: params.intent === "stop",
+    });
+    return {
+      ...routing,
+      isCurrentSession: current.isCurrent,
+      assertCurrentSession: current.assertCurrent,
+    };
+  }
   const address = {
     agentId: routing.route.agentId,
     storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),

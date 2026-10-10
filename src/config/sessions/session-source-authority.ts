@@ -16,6 +16,7 @@ export type SessionSourcePredicate = {
   sessionKey: string;
   fields: (keyof SessionEntry)[];
   expected: Partial<SessionEntry> | undefined;
+  expectedUpdatedAtZero?: boolean;
   members?: readonly string[];
   transcript?: { sessionId: string; version: SessionTranscriptContextVersion };
   conversationAlternatives?: readonly (readonly SessionSourceConversationPredicate[])[];

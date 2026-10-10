@@ -20,6 +20,9 @@ export type LocalRunState = {
   toolErrorSummary?: string;
   terminalState?: "provisional" | "final";
   registered: boolean;
+  boundSession?: boolean;
+  incognitoIncarnation?: string;
+  assertSessionCurrent?: () => void;
   pendingQueue?: {
     mode: "followup" | "collect";
     messages: string[];

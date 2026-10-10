@@ -8,7 +8,11 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import {
+  rethrowIncognitoSessionError,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
@@ -170,25 +174,27 @@ export function createDiscordMessageReplyRuntime(params: {
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const sessionEntry = getSessionEntry({
+      const source = await captureSessionEntryCurrentCheck({
         agentId: route.agentId,
         sessionKey,
         storePath,
+        fields: [],
       });
+      const sessionEntry = source.entry;
       if (!sessionEntry?.sessionId) {
         return undefined;
       }
       const latest = await readLatestAssistantTextByIdentity({
-        agentId: route.agentId,
+        ...source.target,
         sessionId: sessionEntry.sessionId,
-        sessionKey,
-        storePath,
       });
+      source.assertCurrent();
       if (!latest?.timestamp || latest.timestamp < params.dispatchStartedAt) {
         return undefined;
       }
       return latest.text;
     } catch (err) {
+      rethrowIncognitoSessionError(err);
       logVerbose(`discord transcript final candidate lookup failed: ${String(err)}`);
       return undefined;
     }

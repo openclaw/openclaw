@@ -641,14 +641,15 @@ describe("Telegram registered plugin delivery", () => {
     registerCommand(
       async (ctx) => {
         const marker = parseSqliteSessionFileMarker(ctx.sessionFile);
-        if (!marker || !ctx.sessionId || !ctx.sessionKey) {
+        if (!marker || !ctx.sessionId || !ctx.sessionKey || !ctx.sessionTarget) {
           return { text: "No usable transcript identity" };
         }
-        const latest = await readLatestAssistantTextByIdentity({
+        expect(ctx.sessionTarget).toEqual({
           ...marker,
           sessionId: ctx.sessionId,
           sessionKey: ctx.sessionKey,
         });
+        const latest = await readLatestAssistantTextByIdentity(ctx.sessionTarget);
         return { text: latest?.text ?? "No transcript found" };
       },
       { progress: false },

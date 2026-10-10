@@ -1,7 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type {
-  ClickClackDiscussionBinding,
-  ClickClackDiscussionBindingStore,
+import {
+  prepareDiscussionSessionEntry,
+  type ClickClackDiscussionBinding,
+  type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 
@@ -20,7 +21,7 @@ export class DetachedDiscussionBindingRetention {
     this.#maxRetained = options.maxRetained;
   }
 
-  mark(sessionKey: string, binding: ClickClackDiscussionBinding): void {
+  async mark(sessionKey: string, binding: ClickClackDiscussionBinding): Promise<void> {
     const current = this.#store.get(sessionKey);
     if (!current || !this.#sameRoom(current, binding)) {
       return;
@@ -29,7 +30,7 @@ export class DetachedDiscussionBindingRetention {
       this.#store.set(sessionKey, { ...current, detachedAt: Date.now() });
     }
     while (this.#store.detachedCount() > this.#maxRetained) {
-      if (!this.#pruneOldest()) {
+      if (!(await this.#pruneOldest())) {
         throw new Error("ClickClack detached discussion binding retention could not be reduced");
       }
     }
@@ -54,24 +55,26 @@ export class DetachedDiscussionBindingRetention {
   async ensureCapacity(sessionKey: string): Promise<void> {
     await this.#store.prepare();
     while (!(await this.#store.hasCapacity(sessionKey))) {
-      if (!this.#pruneOldest()) {
+      if (!(await this.#pruneOldest())) {
         throw new Error("ClickClack discussion binding capacity is exhausted");
       }
     }
   }
 
-  #pruneOldest(): boolean {
+  async #pruneOldest(): Promise<boolean> {
     for (;;) {
       const oldest = this.#store.oldestDetached();
       if (!oldest) {
         return false;
       }
       const current = oldest.binding;
-      const entry = this.#runtime.agent.session.getSessionEntry({
-        sessionKey: oldest.sessionKey,
-        readConsistency: "latest",
-      });
-      if (entry) {
+      const prepared = await prepareDiscussionSessionEntry(this.#runtime, oldest.sessionKey);
+      const latest = this.#store.get(oldest.sessionKey);
+      if (!latest || !this.#sameRoom(latest, current)) {
+        continue;
+      }
+      prepared.assertCurrent();
+      if (prepared.entry) {
         this.clear(oldest.sessionKey, current);
         continue;
       }

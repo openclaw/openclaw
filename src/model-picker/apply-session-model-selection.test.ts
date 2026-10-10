@@ -11,6 +11,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
+import { applySessionModelSelection as applyPluginSessionModelSelection } from "../plugin-sdk/model-session-runtime.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -563,6 +564,33 @@ describe("applySessionModelSelection", () => {
       expectNoSelectionEffects();
     },
   );
+
+  it("rejects plugin source authority revoked during metadata preparation", async () => {
+    const entered = createDeferred();
+    const metadata = createDeferred<ModelCatalogEntry[]>();
+    vi.mocked(loadProviderScopedThinkingCatalog).mockImplementationOnce(() => {
+      entered.resolve();
+      return metadata.promise;
+    });
+    let current = true;
+    const params = createParams({
+      thinkingCatalog: [],
+      assertCommitAllowed: () => {
+        if (!current) {
+          throw new Error("Session source changed");
+        }
+      },
+    });
+    const initial = structuredClone(params.sessionEntry);
+    const pending = applyPluginSessionModelSelection(params);
+    await awaitGateBeforeSettlement(entered.promise, pending, "Model metadata was not requested");
+    current = false;
+    metadata.resolve([]);
+
+    await expect(pending).rejects.toThrow("Session source changed");
+    expect(params.sessionEntry).toEqual(initial);
+    expectNoSelectionEffects();
+  });
 
   it("rejects when the authoritative persisted row became locked", async () => {
     const tempRoot = sessionDirs.make();

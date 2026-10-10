@@ -6,6 +6,14 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/clickclack/src/discussions/service-incognito.test.ts",
+  "extensions/discord/src/monitor/native-command-session.incognito.test.ts",
+  "extensions/feishu/src/reasoning-preview.test.ts",
+  "extensions/feishu/src/reply-dispatcher.test.ts",
+  "extensions/matrix/src/session-route.test.ts",
+  "extensions/slack/src/monitor/session-run-targets.test.ts",
+  "extensions/telegram/src/bot-session-consumers.incognito.test.ts",
+  "extensions/voice-call/src/response-generator.incognito.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",

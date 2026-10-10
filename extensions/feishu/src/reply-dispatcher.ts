@@ -148,6 +148,8 @@ type CreateFeishuReplyDispatcherParams = {
   chatId: string;
   sendTarget: string;
   allowReasoningPreview?: boolean;
+  isReasoningPreviewCurrent?: () => boolean;
+  prepareReasoningPreviewCurrent?: () => Promise<void>;
   replyToMessageId?: string;
   typingTargetMessageId?: string;
   /** When true, omit reply metadata from visible messages while keeping typing on its target. */
@@ -296,6 +298,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   let reasoningText = "";
+  let pendingReasoningPreview: Promise<boolean> | undefined;
   let statusLine = "";
   let snapshotBaseText = "";
   let lastSnapshotTextLength = 0;
@@ -370,6 +373,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       generation: activeStreamingGeneration,
       startPromise: streamingStartPromise,
       text: combined,
+      isCurrent: reasoningText ? params.isReasoningPreviewCurrent : undefined,
       accountId: account.accountId,
       runtime: params.runtime,
     });
@@ -535,6 +539,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       let finalizationError: unknown;
       if (streamingToClose?.isActive()) {
         statusLine = "";
+        if (finalizedReasoningText && params.isReasoningPreviewCurrent?.() === false) {
+          throw new Error("Feishu reasoning preview policy changed before finalization");
+        }
         const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
         let closed;
         try {
@@ -627,26 +634,35 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const closeStreaming = (
     disposition: StreamingDisposition = "closed",
   ): Promise<StreamingCloseOutcome> => {
-    const session = streaming;
-    const generation = activeStreamingGeneration;
-    // Closing seals the active generation before awaiting I/O. The captured session,
-    // not that cleared generation field, owns any concurrent close/discard request.
-    if (session && inFlightStreamingClose?.session === session) {
-      return inFlightStreamingClose.promise;
-    }
-    const content = streamText;
-    const closePromise = performStreamingClose(disposition);
-    if (session && generation !== undefined) {
-      const closing = { session, generation, content, disposition, promise: closePromise };
-      inFlightStreamingClose = closing;
-      const clear = () => {
-        if (inFlightStreamingClose === closing) {
-          inFlightStreamingClose = undefined;
-        }
-      };
-      void closePromise.then(clear, clear);
-    }
-    return closePromise;
+    const close = () => {
+      const session = streaming;
+      const generation = activeStreamingGeneration;
+      // Closing seals the active generation before awaiting I/O. The captured session,
+      // not that cleared generation field, owns any concurrent close/discard request.
+      if (session && inFlightStreamingClose?.session === session) {
+        return inFlightStreamingClose.promise;
+      }
+      const content = streamText;
+      const closePromise = performStreamingClose(disposition);
+      if (session && generation !== undefined) {
+        const closing = { session, generation, content, disposition, promise: closePromise };
+        inFlightStreamingClose = closing;
+        const clear = () => {
+          if (inFlightStreamingClose === closing) {
+            inFlightStreamingClose = undefined;
+          }
+        };
+        void closePromise.then(clear, clear);
+      }
+      return closePromise;
+    };
+    return pendingReasoningPreview
+      ? pendingReasoningPreview.then(close, (error: unknown) => ({
+          disposition,
+          result: noVisibleFeishuReplyDelivery,
+          error,
+        }))
+      : close();
   };
 
   const deferStreamingDelivery = (
@@ -1536,13 +1552,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!payload.text) {
               return false;
             }
-            startStreaming();
-            const nextThinking = formatReasoningMessage(payload.text);
-            if (nextThinking) {
-              reasoningText = nextThinking;
-              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+            const apply = () => {
+              if (params.isReasoningPreviewCurrent?.() === false) {
+                return false;
+              }
+              startStreaming();
+              const nextThinking = formatReasoningMessage(payload.text!);
+              if (nextThinking) {
+                reasoningText = nextThinking;
+                flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+              }
+              return false;
+            };
+            if (!params.prepareReasoningPreviewCurrent) {
+              return apply();
             }
-            return false;
+            const pending = params.prepareReasoningPreviewCurrent().then(apply);
+            pendingReasoningPreview = pending;
+            void pending.then(
+              () => {
+                if (pendingReasoningPreview === pending) {
+                  pendingReasoningPreview = undefined;
+                }
+              },
+              () => {},
+            );
+            return pending;
           }
         : undefined,
       onReasoningEnd: reasoningPreviewEnabled ? () => false : undefined,

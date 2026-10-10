@@ -55,8 +55,8 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
-  getSessionEntry,
   readSessionUpdatedAtAsync,
   resolveSendPolicy,
   resolveStorePath,
@@ -759,6 +759,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+    const typingSession = await captureSessionEntryCurrentCheck({
+      agentId: decision.route.agentId,
+      storePath,
+      sessionKey: decision.route.sessionKey,
+      fields: ["sendPolicy"],
+    });
     // A stall invalidates capabilities; re-probing here restores typing/read after recovery.
     const privateApiStatus = await probeIMessagePrivateApi(cliPath, probeTimeoutMs);
     const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
@@ -773,7 +779,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       cfg.agents?.defaults?.typingMode;
     const sendPolicy = resolveSendPolicy({
       cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      entry: typingSession.entry,
       sessionKey: decision.route.sessionKey,
       channel: "imessage",
       chatType: decision.isGroup ? "group" : "direct",
@@ -790,6 +796,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       : undefined;
     let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
+      typingSession.assertCurrent();
       // Start channel-native feedback before the expensive history/context/model
       // path. Use a short-lived client so a slow typing RPC cannot block the
       // monitor client's watch stream. Stop is sequenced after start so fast

@@ -108,6 +108,27 @@ export function resolveStoredModelOverride(params: {
   });
 }
 
+/** Resolves parent inheritance through the asynchronous session read owner. */
+export async function resolveStoredModelOverrideAsync(
+  params: Omit<
+    Parameters<typeof resolveStoredModelOverride>[0],
+    "loadSessionEntry" | "sessionStore"
+  > & {
+    loadSessionEntry: (sessionKey: string) => Promise<SessionEntry | undefined>;
+  },
+): Promise<StoredModelOverride | null> {
+  const direct = resolveDirectStoredModelOverride(params);
+  if (direct || params.sessionEntry?.modelOverrideSource === "default") {
+    return direct;
+  }
+  const parentKey = resolveParentSessionKeyCandidate(params);
+  if (!parentKey) {
+    return null;
+  }
+  const parentEntry = await params.loadSessionEntry(parentKey);
+  return resolveStoredModelOverrideCore({ ...params, loadSessionEntry: () => parentEntry });
+}
+
 /** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverrideCore(
   params: Parameters<typeof resolveStoredModelOverride>[0] & ModelManifestNormalizationContext,

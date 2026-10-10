@@ -141,6 +141,7 @@ export function captureSessionEntrySourceAssertion(params: {
   scope: { agentId: string; sessionKey: string; storePath: string; env?: NodeJS.ProcessEnv };
   readSource?: CapturedSessionEntryReadSource;
   expected: Partial<SessionEntry> | undefined;
+  expectedUpdatedAtZero?: boolean;
   fields: readonly (keyof SessionEntry)[];
   assertCurrent: () => void;
   assertHostCurrent?: () => void;
@@ -176,7 +177,9 @@ export function captureSessionEntrySourceAssertion(params: {
       const current = incognito.readCurrent();
       if (
         (current === undefined) !== (expected === undefined) ||
-        fields.some((field) => !isDeepStrictEqual(current?.[field], expected?.[field]))
+        fields.some((field) => !isDeepStrictEqual(current?.[field], expected?.[field])) ||
+        (params.expectedUpdatedAtZero !== undefined &&
+          (current?.updatedAt === 0) !== params.expectedUpdatedAtZero)
       ) {
         params.refuse();
       }
@@ -196,6 +199,7 @@ export function captureSessionEntrySourceAssertion(params: {
                     sessionKey: params.scope.sessionKey,
                     fields,
                     expected,
+                    expectedUpdatedAtZero: params.expectedUpdatedAtZero,
                   },
                   refuse: params.refuse,
                 },
@@ -302,7 +306,9 @@ export function captureSessionEntrySourceAssertion(params: {
           result.databaseIdentity?.identity !== source.databaseIdentity ||
           result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
           (entry === undefined) !== (expected === undefined) ||
-          fields.some((field) => !isDeepStrictEqual(entry?.[field], expected?.[field]))
+          fields.some((field) => !isDeepStrictEqual(entry?.[field], expected?.[field])) ||
+          (params.expectedUpdatedAtZero !== undefined &&
+            (entry?.updatedAt === 0) !== params.expectedUpdatedAtZero)
         ) {
           params.refuse();
         }
@@ -334,6 +340,7 @@ export function captureSessionEntrySourceAssertion(params: {
                 sessionKey: scope.sessionKey,
                 fields,
                 expected,
+                expectedUpdatedAtZero: params.expectedUpdatedAtZero,
                 ...(conversations ? { conversationAlternatives: conversations.alternatives } : {}),
               },
               refuse: params.refuse,

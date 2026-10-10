@@ -4950,3 +4950,20 @@ credentials together in one auth-worker request. Catalog composition retains the
 original credential and link authority through that read and checks it before
 publication. These changes preserve schemas, stored bytes, retention, and update
 behavior.
+
+### Bound channel, discussion, and local TUI preparation
+
+Bundled channel adapters and local TUI explicit-key operations prepare selected
+session rows through the existing reader owner. Synchronous Stop, model,
+reasoning, and outbound checks retain exact generation and policy predicates;
+ordinary activity updates do not invalidate a history request, but its reset
+marker does. ClickClack discussion open, attachment, retention, and history
+prepare session facts before their existing effects without expanding discussion
+permissions. Local TUI consumers retain their selected actor through accepted
+run settlement and stop, using the canonical creation and mutation owners.
+
+This preparation is inactive for production incognito acquisition. Without an
+explicit host binding, incognito sessions retain the process-held native owner;
+no reader creates an actor or discovers a durable replacement for a private miss.
+Native selectors and their final authority checks remain until the separate
+activation cutover. There is no schema, retention, permission, or update change.

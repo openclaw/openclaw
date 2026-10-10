@@ -222,7 +222,7 @@ export async function processDiscordMessage(
         deliverySession: ReturnType<typeof getGroupThreadDeliverySession>;
       }
     | undefined;
-  const progress = createDiscordMessageProgressRuntime({
+  const progress = await createDiscordMessageProgressRuntime({
     ctx,
     sessionKey: ctxPayload.SessionKey,
     sourceRepliesAreToolOnly,

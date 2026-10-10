@@ -468,7 +468,7 @@ describe("ClickClack discussion service", () => {
     });
   });
 
-  it("rechecks the attachment incarnation after a prepared session read returns", async () => {
+  it("refuses a replaced attachment after a prepared session read returns", async () => {
     const harness = createHarness({ sessionId: "session-old", label: "Prepared attachment" });
     const sessionKey = "agent:main:prepared-attachment";
     let reads = 0;
@@ -480,8 +480,10 @@ describe("ClickClack discussion service", () => {
       return prepared;
     };
 
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-new" });
+    await expect(harness.service.open(sessionKey)).rejects.toThrow(
+      "ClickClack discussion session changed during preparation",
+    );
+    expect(harness.store.lookup(sessionKey)).toBeUndefined();
     expect(harness.createChannel).toHaveBeenCalledOnce();
   });
 

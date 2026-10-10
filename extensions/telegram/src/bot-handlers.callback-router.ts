@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   hasTelegramApprovalCallbackPrefix,
@@ -346,6 +345,7 @@ export function createTelegramCallbackRouter({
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
           senderId,
           runtimeCfg,
+          captureCurrent: true,
         });
       const retryModelAction = async <T>(action: () => Promise<T>): Promise<T> => {
         try {
@@ -405,17 +405,31 @@ export function createTelegramCallbackRouter({
           return;
         }
 
-        const { sessionState, modelData } = await retryModelAction(async () => {
-          const session = await resolveSessionState();
-          const providerData = await telegramDeps.buildModelsProviderData(
-            runtimeCfg,
-            session.agentId,
-            {
-              sessionEntry: session.sessionEntry,
-            },
-          );
-          return { sessionState: session, modelData: providerData };
-        });
+        const { sessionState, modelData, assertSessionCurrent } = await retryModelAction(
+          async () => {
+            const session = await resolveSessionState();
+            const providerData = await telegramDeps.buildModelsProviderData(
+              runtimeCfg,
+              session.agentId,
+              {
+                sessionEntry: session.sessionEntry,
+              },
+            );
+            if (!session.assertCurrent) {
+              throw new Error("Model picker session authority was not prepared.");
+            }
+            session.assertCurrent();
+            return {
+              sessionState: session,
+              modelData: providerData,
+              assertSessionCurrent: session.assertCurrent,
+            };
+          },
+        );
+        const editModelMessage = (...args: Parameters<typeof editMessageWithButtons>) => {
+          assertSessionCurrent();
+          return editMessageWithButtons(...args);
+        };
         const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
         const providerInfos: ProviderInfo[] = providers.map((provider) => ({
           id: provider,
@@ -423,15 +437,12 @@ export function createTelegramCallbackRouter({
         }));
         const showChangedModelPicker = () =>
           retryModelAction(() =>
-            editMessageWithButtons(
-              MODEL_PICKER_CHANGED_MESSAGE,
-              buildProviderKeyboard(providerInfos),
-            ),
+            editModelMessage(MODEL_PICKER_CHANGED_MESSAGE, buildProviderKeyboard(providerInfos)),
           );
 
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {
-            await retryModelAction(() => editMessageWithButtons("No providers available.", []));
+            await retryModelAction(() => editModelMessage("No providers available.", []));
             return;
           }
           const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
@@ -439,7 +450,7 @@ export function createTelegramCallbackRouter({
             .filter(Boolean)
             .join("\n");
           await retryModelAction(() =>
-            editMessageWithButtons(
+            editModelMessage(
               [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
               buildProviderKeyboard(providerInfos),
             ),
@@ -479,7 +490,7 @@ export function createTelegramCallbackRouter({
             availability,
           })}\nSelecting a model also applies its configured runtime.`;
           await retryModelAction(() =>
-            editMessageWithButtons(
+            editModelMessage(
               [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
               buttons,
             ),
@@ -507,10 +518,7 @@ export function createTelegramCallbackRouter({
           const isDefaultSelection =
             selection.provider === resolvedDefault.provider &&
             selection.model === resolvedDefault.model;
-          const persistedSessionEntry =
-            sessionState.sessionEntry ??
-            telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
-            getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
+          const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
             sessionId: randomUUID(),
@@ -549,6 +557,7 @@ export function createTelegramCallbackRouter({
                 runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
               },
               markLiveSwitchPending: true,
+              assertCommitAllowed: assertSessionCurrent,
             }),
           );
           if (applied.status !== "applied") {

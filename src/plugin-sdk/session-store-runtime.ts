@@ -42,6 +42,7 @@ import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,
   generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
+  getSessionEntryAsync,
   projectPluginSessionEntryPatch,
   type SessionStoreEntrySummary,
   type SessionStoreReadParams,
@@ -282,6 +283,13 @@ export function readAmbientTranscriptWatermark(
   params: ReadAmbientTranscriptWatermarkParams,
 ): AmbientTranscriptWatermark | undefined {
   return readAmbientTranscriptWatermarkFromEntry(getSessionEntry(params), params.key);
+}
+
+/** Reads ambient history metadata through the selected asynchronous session owner. */
+export async function readAmbientTranscriptWatermarkAsync(
+  params: ReadAmbientTranscriptWatermarkParams,
+): Promise<AmbientTranscriptWatermark | undefined> {
+  return readAmbientTranscriptWatermarkFromEntry(await getSessionEntryAsync(params), params.key);
 }
 
 /** Updates an existing session entry by store path and session key. */

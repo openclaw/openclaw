@@ -20,8 +20,9 @@ import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-re
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -173,13 +174,6 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const routeSession = getSessionEntry({
-    agentId: route.agentId,
-    storePath,
-    sessionKey: route.sessionKey,
-    readConsistency: "latest",
-  });
-  const previousTimestamp = routeSession?.updatedAt;
   const shouldIncludeChannelHistory =
     !isDirectMessage &&
     (ctx.inboundEventKind === "room_event" ||
@@ -191,26 +185,29 @@ export async function buildDiscordMessageProcessContext(params: {
     sessionKey: boundSessionKey ?? route.sessionKey,
     readConsistency: "latest" as const,
   };
-  const historySession = recoversHistory
-    ? historySessionScope.sessionKey === route.sessionKey
-      ? routeSession
-      : getSessionEntry(historySessionScope)
+  const historySource = recoversHistory
+    ? await captureSessionEntryCurrentCheck({
+        ...historySessionScope,
+        fields: ["sessionStartedAt"],
+        matchUpdatedAtZero: true,
+        isActive: () => !abortSignal?.aborted && ctx.isPolicyCurrent?.() !== false,
+      })
     : undefined;
-  const isHistoryCurrent = () => {
-    if (abortSignal?.aborted || ctx.isPolicyCurrent?.() === false) {
-      return false;
-    }
-    if (!recoversHistory) {
-      return true;
-    }
-    const current = getSessionEntry(historySessionScope);
-    return (
-      current?.sessionId === historySession?.sessionId &&
-      current?.lifecycleRevision === historySession?.lifecycleRevision &&
-      current?.sessionStartedAt === historySession?.sessionStartedAt &&
-      (current?.updatedAt === 0) === (historySession?.updatedAt === 0)
-    );
-  };
+  const historySession = historySource?.entry;
+  const routeSession =
+    historySource && historySessionScope.sessionKey === route.sessionKey
+      ? historySession
+      : await getSessionEntryAsync({
+          agentId: route.agentId,
+          storePath,
+          sessionKey: route.sessionKey,
+          readConsistency: "latest",
+        });
+  const previousTimestamp = routeSession?.updatedAt;
+  const isHistoryCurrent = () =>
+    !abortSignal?.aborted &&
+    ctx.isPolicyCurrent?.() !== false &&
+    (!historySource || historySource.isCurrent());
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
   let visibleChannelHistory: DiscordHistoryEntry[] | undefined;
   // Failed downloads (CDN error, SSRF block, size cap, timeout) produce

@@ -13,10 +13,10 @@ import { maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { hasExplicitSessionName } from "../session-title-state.js";
+import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -37,47 +37,42 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
     );
   try {
     const cfg = params.context.getRuntimeConfig();
-    const resolved = loadAccessorSessionEntryForGatewayTarget({
-      cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
+    const observedTitleRequest = withGatewaySessionEntryReadOnly(
+      {
+        cfg,
+        key: params.sessionKey,
+        agentId: params.agentId,
+        excludeInternalEffects: true,
+      },
+      async (resolved, assertCurrent) => {
+        const { entry } = resolved;
+        const sessionId = entry?.sessionId;
+        if (!entry || !sessionId || hasExplicitSessionName(entry)) {
+          return;
+        }
+        const persisted = await maybeGenerateSessionTitle({
+          cfg,
+          agentId: resolved.agentId,
+          entry,
+          sessionId,
+          sessionKey: resolved.canonicalKey,
+          storePath: resolved.storePath,
+          userMessage: "",
+        });
+        assertCurrent();
+        if (persisted) {
+          emitSessionsChanged(params.context, {
+            sessionKey: resolved.canonicalKey,
+            agentId: resolved.agentId,
+            reason: "chat.title",
+          });
+        }
+      },
+    ).catch(warn);
+    // Late titles retain the selected source until their own settlement.
+    await raceWithTimeout(observedTitleRequest, DISCUSSION_TITLE_TIMEOUT_MS, () => undefined, {
+      ref: false,
     });
-    const { entry } = resolved;
-    const sessionId = entry?.sessionId;
-    if (!entry || !sessionId || hasExplicitSessionName(entry)) {
-      return;
-    }
-
-    const observedTitleRequest = maybeGenerateSessionTitle({
-      cfg,
-      agentId: resolved.target.agentId,
-      entry,
-      sessionId,
-      // Canonical key keeps metadata writes and request dedup consistent when
-      // the open request addresses the session through an alias key.
-      sessionKey: resolved.canonicalKey,
-      storePath: resolved.storePath,
-      userMessage: "",
-    }).catch((error: unknown) => {
-      warn(error);
-      return false;
-    });
-    // Late titles remain owned by generation; discussion open bounds only its wait.
-    const persisted = await raceWithTimeout(
-      observedTitleRequest,
-      DISCUSSION_TITLE_TIMEOUT_MS,
-      () => false,
-      { ref: false },
-    );
-    if (persisted) {
-      // Mirror the dashboard first-turn path so session lists learn the new
-      // title immediately instead of on their next full refresh.
-      emitSessionsChanged(params.context, {
-        sessionKey: resolved.canonicalKey,
-        agentId: resolved.target.agentId,
-        reason: "chat.title",
-      });
-    }
   } catch (error) {
     // Titling is best-effort; provider open remains the authoritative operation.
     warn(error);

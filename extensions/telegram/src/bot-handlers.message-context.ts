@@ -1,11 +1,15 @@
 import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
-  getSessionEntry,
-  readAmbientTranscriptWatermark,
+  captureSessionEntryCurrentCheck,
+  composeSessionEntryCommitGuards,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+import {
+  getSessionEntryAsync,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -60,6 +64,7 @@ export type ResolveTelegramSessionStateParams = {
   botHasTopicsEnabled?: boolean;
   senderId?: string | number;
   runtimeCfg: OpenClawConfig;
+  captureCurrent?: boolean;
 };
 
 export type ResolvePromptContextAmbientWatermarkParams = {
@@ -152,7 +157,7 @@ export function createTelegramMessageSessionRuntime({
   RegisterTelegramHandlerParams,
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
-  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
+  const loadSessionEntry = telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -175,17 +180,46 @@ export function createTelegramMessageSessionRuntime({
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = loadSessionEntry({ storePath, sessionKey });
-    const storedOverride = resolveStoredModelOverride({
+    const sources: Array<Awaited<ReturnType<typeof captureSessionEntryCurrentCheck>>> = [];
+    const readSelectedEntry = async (selectedKey: string) => {
+      if (!params.captureCurrent) {
+        return loadSessionEntry({ agentId: route.agentId, storePath, sessionKey: selectedKey });
+      }
+      const source = await captureSessionEntryCurrentCheck({
+        agentId: route.agentId,
+        storePath,
+        sessionKey: selectedKey,
+        fields: [
+          "modelOverride",
+          "providerOverride",
+          "model",
+          "modelProvider",
+          "agentRuntimeOverride",
+          "modelOverrideSource",
+          "modelOverrideFallbackOriginProvider",
+          "modelOverrideFallbackOriginModel",
+          "modelOverrideRouteResolution",
+          "modelSelectionLocked",
+          "authProfileOverride",
+        ],
+      });
+      sources.push(source);
+      return source.entry;
+    };
+    const entry = await readSelectedEntry(sessionKey);
+    const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
-      loadSessionEntry: (parentSessionKey) =>
-        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
+      loadSessionEntry: readSelectedEntry,
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
       }).provider,
     });
+    const assertCurrent = params.captureCurrent
+      ? composeSessionEntryCommitGuards(sources.map((source) => source.assertCurrent))
+      : undefined;
+    assertCurrent?.();
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
@@ -195,6 +229,7 @@ export function createTelegramMessageSessionRuntime({
       sessionEntry: entry,
       sessionKey,
       storePath,
+      assertCurrent,
       model: storedOverride
         ? storedOverride.provider
           ? `${storedOverride.provider}/${storedOverride.model}`
@@ -207,9 +242,9 @@ export function createTelegramMessageSessionRuntime({
     };
   };
 
-  const resolvePromptContextAmbientWatermark = (
+  const resolvePromptContextAmbientWatermark = async (
     params: ResolvePromptContextAmbientWatermarkParams,
-  ): TelegramAmbientTranscriptWatermark | undefined => {
+  ): Promise<TelegramAmbientTranscriptWatermark | undefined> => {
     if (!params.isGroup) {
       return undefined;
     }
@@ -221,7 +256,9 @@ export function createTelegramMessageSessionRuntime({
       conversationId: String(params.chatId),
       ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
     });
-    return (telegramDeps.readAmbientTranscriptWatermark ?? readAmbientTranscriptWatermark)({
+    return (
+      telegramDeps.readAmbientTranscriptWatermarkAsync ?? readAmbientTranscriptWatermarkAsync
+    )({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       key,

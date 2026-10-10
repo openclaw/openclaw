@@ -269,12 +269,14 @@ export async function generateVoiceResponse(
 
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
+        abortSignal.throwIfAborted();
         const now = Date.now();
-        let sessionEntry = agentRuntime.session.getSessionEntry({
+        let sessionEntry = await agentRuntime.session.getSessionEntryAsync({
           storePath,
           sessionKey: resolvedSessionKey,
         });
 
+        abortSignal.throwIfAborted();
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
@@ -323,6 +325,7 @@ export async function generateVoiceResponse(
             error: "Voice response session could not be initialized",
           };
         }
+        abortSignal.throwIfAborted();
         const sessionId = sessionEntry.sessionId;
         const modelSelectionLocked = sessionEntry.modelSelectionLocked === true;
         // Native delegation requires an explicit pin; the host inherits ordinary runtime requests.
@@ -438,6 +441,7 @@ export async function generateVoiceResponse(
             if (!text) {
               return;
             }
+            abortSignal.throwIfAborted();
             lastFlushedText = text;
             try {
               deliveredEarly = await onEarlyText(text);
@@ -448,6 +452,7 @@ export async function generateVoiceResponse(
           },
         });
 
+        abortSignal.throwIfAborted();
         const text =
           extractSpokenTextFromPayloads(result.payloads ?? []) ??
           lastFlushedText ??

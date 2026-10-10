@@ -218,6 +218,52 @@ describe("current conversation session binding", () => {
     expect(getSessionEntry(scope)?.displayName).toBe("Original title");
   });
 
+  it("preserves activity changes but rejects a source reset inside the target writer", async () => {
+    const source = { agentId: "main", storePath, sessionKey: "agent:main:source" };
+    const target = { ...source, sessionKey: "agent:main:target" };
+    await upsertSessionEntry({
+      ...source,
+      entry: { sessionId: "source-generation", updatedAt: 100, sessionStartedAt: 100 },
+    });
+    await upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "target-generation", updatedAt: 100, displayName: "Original title" },
+    });
+    const selected = getSessionEntry(source)!;
+    const current = await captureSessionEntryCurrentCheck({
+      ...source,
+      fields: ["sessionStartedAt"],
+      matchUpdatedAtZero: true,
+      errorMessage: "Source reset before title commit",
+    });
+    replaceSessionEntrySync(source, { ...selected, updatedAt: 200 });
+    expect(current.isCurrent()).toBe(true);
+    await expect(
+      patchSessionEntry({
+        ...target,
+        skipMaintenance: true,
+        assertCommitAllowed: current.assertCurrent,
+        update: () => ({ displayName: "Accepted title" }),
+      }),
+    ).resolves.toMatchObject({ displayName: "Accepted title" });
+
+    await expect(
+      patchSessionEntry({
+        ...target,
+        skipMaintenance: true,
+        assertCommitAllowed: current.assertCurrent,
+        update: () => {
+          // A different source changes after preparation; the target's CAS still matches.
+          replaceSessionEntrySync(source, { ...selected, updatedAt: 0 });
+          return { displayName: "Rejected title" };
+        },
+      }),
+    ).rejects.toThrow("Source reset before title commit");
+    expect(current.isCurrent()).toBe(false);
+    expect(getSessionEntry(source)?.updatedAt).toBe(0);
+    expect(getSessionEntry(target)?.displayName).toBe("Accepted title");
+  });
+
   it.each(["opaque", "prepared", "composed"] as const)(
     "rejects a %s title guard when another session takes its conversation before commit",
     async (guardKind) => {

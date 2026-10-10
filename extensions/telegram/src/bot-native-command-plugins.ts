@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
+import type {
+  PluginCommandDispatchContext,
+  PluginCommandNativeCandidate,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   formatSqliteSessionFileMarker,
-  getSessionEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -54,25 +57,37 @@ async function resolveTelegramCommandTranscriptContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-}): Promise<{ sessionId?: string; sessionFile?: string; authProfileId?: string }> {
+}): Promise<{
+  sessionId?: string;
+  sessionFile?: string;
+  sessionTarget?: PluginCommandDispatchContext["sessionTarget"];
+  authProfileId?: string;
+  assertCurrent?: () => void;
+}> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return {};
   }
-  try {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ agentId: params.agentId, sessionKey, storePath });
-    const sessionId = entry?.sessionId?.trim() || randomUUID();
-    const sessionFile = formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId,
-      storePath,
-    });
-    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
-    return { sessionId, sessionFile, ...(authProfileId ? { authProfileId } : {}) };
-  } catch {
-    return {};
-  }
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  const source = await captureSessionEntryCurrentCheck({
+    agentId: params.agentId,
+    sessionKey,
+    storePath,
+    fields: ["authProfileOverride"],
+  });
+  const sessionId = source.entry?.sessionId?.trim() || randomUUID();
+  const sessionTarget = { ...source.target, sessionId };
+  const sessionFile = formatSqliteSessionFileMarker({
+    ...sessionTarget,
+  });
+  const authProfileId = normalizeOptionalString(source.entry?.authProfileOverride);
+  return {
+    sessionId,
+    sessionFile,
+    sessionTarget,
+    assertCurrent: source.assertCurrent,
+    ...(authProfileId ? { authProfileId } : {}),
+  };
 }
 
 export async function executeTelegramPluginCommand(
@@ -103,10 +118,6 @@ export async function executeTelegramPluginCommand(
   if (!dispatch) {
     return;
   }
-  const targetSessionEntry = dispatch.nativeCommandRuntime.getSessionEntry({
-    agentId: dispatch.route.agentId,
-    sessionKey: dispatch.targetSessionKey,
-  });
   const from = dispatch.isGroup
     ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
     : `telegram:${dispatch.chatId}`;
@@ -153,6 +164,7 @@ export async function executeTelegramPluginCommand(
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
   });
+  transcriptContext.assertCurrent?.();
   const result = await pluginCommandDispatch.execute({
     senderId: dispatch.senderId,
     channel: "telegram",
@@ -162,8 +174,9 @@ export async function executeTelegramPluginCommand(
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
     sessionId: transcriptContext.sessionId,
+    sessionTarget: transcriptContext.sessionTarget,
     sessionFile: transcriptContext.sessionFile,
-    authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+    authProfileId: transcriptContext.authProfileId,
     commandBody,
     config: dispatch.runtimeCfg,
     from,

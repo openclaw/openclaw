@@ -15,6 +15,10 @@ import {
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import {
+  createCurrentTurnTranscriptFinalResolver,
+  createFreshTelegramSessionEntryLoader,
+} from "./bot-message-dispatch-session.js";
+import {
   appendAssistantMirrorMessageByIdentity,
   createBot,
   createContext,
@@ -39,6 +43,46 @@ import type { TelegramDraftStream } from "./draft-stream.js";
 import type * as TelegramSendEdit from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
+  it("discards a final transcript read when the session resets before it completes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-final-reset-"));
+    const scope = {
+      agentId: "default",
+      sessionId: "before-reset",
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: path.join(root, "sessions.json"),
+    };
+    const entry = { sessionId: scope.sessionId, updatedAt: Date.now() };
+    try {
+      await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
+      const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({
+        cfg: {},
+        telegramDeps: { ...telegramDepsForTest, resolveStorePath: () => scope.storePath },
+      });
+      expect(await loadFreshSessionEntry(scope.agentId, scope.sessionKey)).toMatchObject({
+        entry: { sessionId: scope.sessionId },
+      });
+      readLatestAssistantTextByIdentity.mockImplementationOnce(async () => {
+        await patchSessionEntry({
+          ...scope,
+          update: () => ({ sessionId: "after-reset" }),
+        });
+        return { text: "Final from the previous session", timestamp: Date.now() + 1_000 };
+      });
+      const resolveFinal = createCurrentTurnTranscriptFinalResolver({
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        dispatchStartedAt: Date.now(),
+        loadFreshSessionEntry,
+      });
+
+      await expect(resolveFinal()).resolves.toBeUndefined();
+      expect(readLatestAssistantTextByIdentity).toHaveBeenCalledOnce();
+    } finally {
+      await closeQaRuntimeStores(root);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("stores accepted finals with distinct identities for same-millisecond turns", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-dispatch-transcript-"));
     const scope = {

@@ -19,7 +19,7 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
   resolveEffectiveAgentRuntime,
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -40,7 +40,8 @@ import type {
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -112,42 +113,64 @@ const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
 );
 
-function resolveSlackCommandMenuModelContext(params: {
+async function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];
   agentId: string;
   sessionKey: string;
-}): { provider?: string; model?: string; agentRuntime?: string } {
+}): Promise<{
+  context: { provider?: string; model?: string; agentRuntime?: string };
+  assertCurrent: () => void;
+}> {
   if (!params.sessionKey.trim()) {
-    return {};
+    return { context: {}, assertCurrent() {} };
   }
-  try {
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
+  const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  const assertions: Array<() => void> = [];
+  const readEntry = async (sessionKey: string) => {
+    const prepared = await captureSessionEntryCurrentCheck({
       agentId: params.agentId,
+      storePath,
+      sessionKey,
+      fields: [
+        "modelOverrideSource",
+        "modelOverride",
+        "providerOverride",
+        "model",
+        "modelProvider",
+        "modelOverrideRouteResolution",
+        "modelOverrideFallbackOriginProvider",
+        "modelOverrideFallbackOriginModel",
+        "agentHarnessId",
+        "agentRuntimeOverride",
+      ],
     });
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
-    let provider: string | undefined;
-    let model: string | undefined;
-    if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      provider = defaultModel.provider;
-      model = defaultModel.model;
-    } else {
-      const override = resolveStoredModelOverride({
-        sessionEntry: entry,
-        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-        sessionKey: params.sessionKey,
-        defaultProvider: defaultModel.provider,
-      });
-      provider = override?.model
-        ? override.provider || defaultModel.provider
-        : (normalizeOptionalString(entry?.providerOverride) ??
-          normalizeOptionalString(entry?.modelProvider));
-      model = override?.model
-        ? override.model
-        : (normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model));
-    }
-    return {
+    assertions.push(prepared.assertCurrent);
+    return prepared.entry;
+  };
+  const entry = await readEntry(params.sessionKey);
+  let provider: string | undefined;
+  let model: string | undefined;
+  if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
+    provider = defaultModel.provider;
+    model = defaultModel.model;
+  } else {
+    const override = await resolveStoredModelOverrideAsync({
+      sessionEntry: entry,
+      loadSessionEntry: readEntry,
+      sessionKey: params.sessionKey,
+      defaultProvider: defaultModel.provider,
+    });
+    provider = override?.model
+      ? override.provider || defaultModel.provider
+      : (normalizeOptionalString(entry?.providerOverride) ??
+        normalizeOptionalString(entry?.modelProvider));
+    model = override?.model
+      ? override.model
+      : (normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model));
+  }
+  return {
+    context: {
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       agentRuntime: resolveEffectiveAgentRuntime({
@@ -158,10 +181,13 @@ function resolveSlackCommandMenuModelContext(params: {
         sessionKey: params.sessionKey,
         sessionEntry: entry,
       }),
-    };
-  } catch {
-    return {};
-  }
+    },
+    assertCurrent: () => {
+      for (const assertCurrent of assertions) {
+        assertCurrent();
+      }
+    },
+  };
 }
 
 const slackExternalArgMenuStore = createSlackExternalArgMenuStore();
@@ -584,14 +610,14 @@ export function createSlackCommandHandler(params: {
           menuNeedsModelContext || commandDefinition.key === "verbose"
             ? await resolveSlashRoute()
             : undefined;
-        const menuModelContext =
+        const preparedMenuModel =
           menuNeedsModelContext && menuRoute
-            ? resolveSlackCommandMenuModelContext({
+            ? await resolveSlackCommandMenuModelContext({
                 cfg,
                 agentId: menuRoute.agentId,
                 sessionKey: menuRoute.sessionKey,
               })
-            : {};
+            : undefined;
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
@@ -611,7 +637,7 @@ export function createSlackCommandHandler(params: {
           args: commandArgs,
           cfg,
           session: menuRoute,
-          ...menuModelContext,
+          ...preparedMenuModel?.context,
           catalog: menuModelCatalog,
         });
         if (menu) {
@@ -627,6 +653,10 @@ export function createSlackCommandHandler(params: {
             createExternalMenuToken: (choices) =>
               slackExternalArgMenuStore.create({ choices, userId: command.user_id }),
           });
+          preparedMenuModel?.assertCurrent();
+          if (isCurrentSession?.() === false) {
+            throw new Error("Slack command session changed before rendering its menu");
+          }
           await respond({
             text: title,
             blocks,

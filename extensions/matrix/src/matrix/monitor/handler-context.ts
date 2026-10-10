@@ -151,7 +151,7 @@ export async function resolveMatrixInboundContext(config: {
   const sharedDmContextNotice = isDirectMessage
     ? hasExplicitSessionBinding
       ? null
-      : resolveMatrixSharedDmContextNotice({
+      : await resolveMatrixSharedDmContextNotice({
           storePath,
           sessionKey: sharedDmNoticeSessionKey,
           roomId,

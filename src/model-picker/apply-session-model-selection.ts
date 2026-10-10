@@ -33,7 +33,10 @@ import {
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
   sessionModelOverrideChangesApplied,
 } from "../config/sessions/session-snapshot-merge.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
@@ -78,6 +81,8 @@ export type ApplySessionModelSelectionParams = {
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
   validateAuthProfileSelection?: () => string | undefined;
+  /** Synchronous source authority revalidated inside the session commit. */
+  assertCommitAllowed?: () => void;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -86,6 +91,7 @@ export type ApplySessionModelSelectionParams = {
 
 export type InternalApplySessionModelSelectionParams = ApplySessionModelSelectionParams & {
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  sessionCommitAssertion?: SessionSourceAssertion;
   /** Set only by the released SDK adapter for its opaque synchronous validator. */
   nativeCommitValidation?: true;
 };
@@ -171,6 +177,7 @@ function resolveActivePlacementModelSelectionError(
 export async function applySessionModelSelectionInternal(
   params: InternalApplySessionModelSelectionParams,
 ): Promise<ApplySessionModelSelectionResult> {
+  params.sessionCommitAssertion?.();
   const startingStoreEntry = params.sessionStore[params.sessionKey];
   const startingEntry = params.storePath
     ? params.sessionEntry
@@ -354,6 +361,7 @@ export async function applySessionModelSelectionInternal(
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
       commitGuard: composeSessionSourceAssertion([
+        params.sessionCommitAssertion,
         operatorScope?.assertCurrent,
         createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
       ]),
@@ -387,6 +395,7 @@ export async function applySessionModelSelectionInternal(
     }
     persistedEntry = persistence.entry;
   } else {
+    params.sessionCommitAssertion?.();
     const commitError = validateOperatorSelection() ?? validateCommit();
     if (commitError) {
       return { status: "rejected", reason: "not-allowed", message: commitError };

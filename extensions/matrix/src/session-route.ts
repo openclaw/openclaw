@@ -5,7 +5,8 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
 import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
@@ -33,44 +34,43 @@ function resolveMatrixDmSessionScope(params: {
   );
 }
 
-function resolveMatrixCurrentDmRoomId(params: {
+async function resolveMatrixCurrentDmRoomId(params: {
   cfg: ChannelOutboundSessionRouteParams["cfg"];
   agentId: string;
   accountId: string;
   currentSessionKey?: string;
   targetUserId: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const sessionKey =
     parseThreadSessionSuffix(params.currentSessionKey).baseSessionKey ??
     params.currentSessionKey?.trim();
   if (!sessionKey) {
     return undefined;
   }
-  try {
-    const storePath = resolveStorePath(params.cfg.session?.store, {
-      agentId: params.agentId,
-    });
-    const existing = getSessionEntry({
-      storePath,
-      sessionKey,
-    });
-    const currentSession = resolveMatrixStoredSessionMeta(existing);
-    if (!currentSession) {
-      return undefined;
-    }
-    if (currentSession.accountId && currentSession.accountId !== params.accountId) {
-      return undefined;
-    }
-    if (!currentSession.directUserId || currentSession.directUserId !== params.targetUserId) {
-      return undefined;
-    }
-    return currentSession.roomId;
-  } catch {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  const prepared = await captureSessionEntryCurrentCheck({
+    agentId: params.agentId,
+    storePath,
+    sessionKey,
+    fields: ["delivery", "chatType"],
+  });
+  const currentSession = resolveMatrixStoredSessionMeta(prepared.entry);
+  if (!currentSession) {
     return undefined;
   }
+  if (currentSession.accountId && currentSession.accountId !== params.accountId) {
+    return undefined;
+  }
+  if (!currentSession.directUserId || currentSession.directUserId !== params.targetUserId) {
+    return undefined;
+  }
+  prepared.assertCurrent();
+  return currentSession.roomId;
 }
 
-export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+export async function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const target =
     resolveMatrixTargetIdentity(params.resolvedTarget?.to ?? params.target) ??
     resolveMatrixTargetIdentity(params.target);
@@ -84,7 +84,7 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
   });
   const roomScopedDmId =
     target.kind === "user" && dmSessionScope === "per-room"
-      ? resolveMatrixCurrentDmRoomId({
+      ? await resolveMatrixCurrentDmRoomId({
           cfg: params.cfg,
           agentId: params.agentId,
           accountId: effectiveAccountId,

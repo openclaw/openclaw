@@ -20,7 +20,11 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntryAsync,
+  patchSessionEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -172,7 +176,7 @@ export async function executeTelegramLoginCommand(params: {
     let terminalMessage: string;
     let modelAccess: PreparedProviderModelAccess | undefined;
     try {
-      const targetSessionEntryAtStart = dispatch.nativeCommandRuntime.getSessionEntry({
+      const targetSessionEntryAtStart = await getSessionEntryAsync({
         agentId: dispatch.route.agentId,
         sessionKey: dispatch.targetSessionKey,
       });

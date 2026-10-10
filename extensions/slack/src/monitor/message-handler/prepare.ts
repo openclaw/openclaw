@@ -36,7 +36,8 @@ import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
@@ -1200,24 +1201,20 @@ export async function prepareSlackMessage(params: {
   if (messageIngress.ingress.admission !== "dispatch") {
     return drop("final-route-denied");
   }
-  const sessionEntry = getSessionEntry({
-    storePath,
-    sessionKey,
-  });
+  const { entry: sessionEntry, isCurrent: isHistorySessionCurrent } =
+    await captureSessionEntryCurrentCheck({
+      agentId: route.agentId,
+      storePath,
+      sessionKey,
+      fields: ["sessionStartedAt"],
+      matchUpdatedAtZero: true,
+      isActive: () => !opts.abortSignal?.aborted && opts.isRuntimePolicyCurrent?.() !== false,
+    });
   const previousTimestamp = sessionEntry?.updatedAt;
   const excludedMessageIds = new Set(opts.sourceMessageIds);
   if (message.ts) {
     excludedMessageIds.add(message.ts);
   }
-  const isHistorySessionCurrent = () => {
-    const current = getSessionEntry({ storePath, sessionKey });
-    return (
-      current?.sessionId === sessionEntry?.sessionId &&
-      current?.lifecycleRevision === sessionEntry?.lifecycleRevision &&
-      current?.sessionStartedAt === sessionEntry?.sessionStartedAt &&
-      (current?.updatedAt === 0) === (sessionEntry?.updatedAt === 0)
-    );
-  };
   const assertHistoryCurrent = () => {
     opts.abortSignal?.throwIfAborted();
     if (opts.isRuntimePolicyCurrent?.() === false || !isHistorySessionCurrent()) {

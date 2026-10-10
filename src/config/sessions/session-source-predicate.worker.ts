@@ -61,6 +61,8 @@ export function readSessionSourceValidation(
     if (
       Boolean(entry) !== Boolean(source.expected) ||
       source.fields.some((field) => !isDeepStrictEqual(entry?.[field], source.expected?.[field])) ||
+      (source.expectedUpdatedAtZero !== undefined &&
+        (entry?.updatedAt === 0) !== source.expectedUpdatedAtZero) ||
       matching?.length === 0 ||
       (members !== undefined && !isDeepStrictEqual(members, source.members)) ||
       (source.transcript &&

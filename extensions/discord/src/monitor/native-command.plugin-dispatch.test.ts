@@ -362,7 +362,7 @@ describe("Discord native plugin command dispatch", () => {
           accountId: params.accountId,
         }),
     );
-    vi.spyOn(sessionStore, "getSessionEntry").mockImplementation((params) =>
+    vi.spyOn(sessionStore, "getSessionEntryAsync").mockImplementation(async (params) =>
       params.agentId !== undefined
         ? runtimeModuleMocks.getSessionEntry(params)
         : getSessionEntry(params),

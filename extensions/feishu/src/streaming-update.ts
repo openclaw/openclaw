@@ -10,6 +10,7 @@ export function queueFeishuStreamingUpdate(params: {
   text: string;
   accountId: string;
   runtime: RuntimeEnv;
+  isCurrent?: () => boolean;
 }): Promise<void> {
   const { queue, session, generation, startPromise, text, accountId, runtime } = params;
   return queue.then(async () => {
@@ -18,7 +19,7 @@ export function queueFeishuStreamingUpdate(params: {
     }
     // Updates queued before close own the captured session; updates queued after the
     // generation is sealed have no owner and cannot race provider finalization.
-    if (generation !== undefined && session?.isActive()) {
+    if (generation !== undefined && session?.isActive() && params.isCurrent?.() !== false) {
       // update admits pending text synchronously. Let the session own write ordering
       // and replacement; awaiting transport here would serialize obsolete snapshots.
       // Its retained write queue still propagates failures through awaited close/discard.

@@ -16,7 +16,7 @@ import {
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordAccountDmPolicy } from "../accounts.js";
 import { Command, type CommandInteraction, type CommandOptions } from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
@@ -452,6 +452,7 @@ async function dispatchDiscordCommandInteraction(
           readOnly: true,
         })
       : undefined;
+  menuModelContext?.assertCurrent();
   // Normal dispatch owns the unavailable-binding reply; do not offer choices it cannot apply.
   const menu =
     command.key === "verbose" && bindingReadiness?.ok === false
@@ -488,12 +489,14 @@ async function dispatchDiscordCommandInteraction(
     });
     await safeDiscordInteractionCall(
       preferFollowUp ? "interaction follow-up" : "interaction reply",
-      () =>
-        interaction[preferFollowUp ? "followUp" : "reply"]({
+      () => {
+        menuModelContext?.assertCurrent();
+        return interaction[preferFollowUp ? "followUp" : "reply"]({
           content: menuPayload.content,
           components: menuPayload.components,
           ephemeral: true,
-        }),
+        });
+      },
     );
     return { accepted: true };
   }
@@ -509,7 +512,7 @@ async function dispatchDiscordCommandInteraction(
       (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
       routeState.configuredBinding?.statefulTarget.agentId ||
       effectiveRoute.agentId;
-    const targetSessionEntry = getSessionEntry({
+    const targetSessionEntry = await getSessionEntryAsync({
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });

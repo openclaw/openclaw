@@ -66,6 +66,7 @@ export function buildDiscordCommandOptions(params: {
     model?: string;
     agentRuntime?: string;
     agentId?: string;
+    assertCurrent?: () => void;
   } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
@@ -137,6 +138,7 @@ export function buildDiscordCommandOptions(params: {
                 normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
               )
             : choices;
+          context?.assertCurrent?.();
           await interaction.respond(buildDiscordChoiceOptions(filtered));
         }
       : undefined;

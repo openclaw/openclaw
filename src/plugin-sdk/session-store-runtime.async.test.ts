@@ -290,7 +290,17 @@ it("keeps exact actor policy guards current without treating unrelated metadata 
   try {
     await actor.sessions.create(authority, {
       sessionKey: target.sessionKey,
-      entry: { ...completeEntry, incognito: true, execHost: "node", execNode: "original-node" },
+      entry: {
+        ...completeEntry,
+        incognito: true,
+        execHost: "node",
+        execNode: "original-node",
+        reasoningLevel: "off",
+        sendPolicy: "allow",
+        chatType: "direct",
+        delivery: { kind: "internal" },
+        modelOverrideSource: "user",
+      },
     });
     await withIncognitoSessionActor(actor, async () => {
       const sql = observeHostDataSql();
@@ -318,6 +328,22 @@ it("keeps exact actor policy guards current without treating unrelated metadata 
             expected: { sessionId: "selected", execNode: "original-node" },
           }),
         ).rejects.toThrow("selected session changed");
+        for (const change of [
+          { field: "reasoningLevel", patch: { reasoningLevel: "on" } },
+          { field: "sendPolicy", patch: { sendPolicy: "deny" } },
+          { field: "chatType", patch: { chatType: "group" } },
+          { field: "delivery", patch: { delivery: { kind: "none" } } },
+          { field: "modelOverrideSource", patch: { modelOverrideSource: "default" } },
+        ] as const) {
+          const policy = await captureSessionEntryCurrentCheck({
+            ...target,
+            fields: [change.field],
+          });
+          expect(policy.isCurrent()).toBe(true);
+          await patchSessionEntry({ ...target, update: () => change.patch });
+          expect(policy.isCurrent()).toBe(false);
+          expect(policy.assertCurrent).toThrow("selected session changed");
+        }
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();

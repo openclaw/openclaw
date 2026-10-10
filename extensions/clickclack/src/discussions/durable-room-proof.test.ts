@@ -10,7 +10,11 @@ import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";
 import { setClickClackRuntime } from "../runtime.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
-import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
+import {
+  asyncDiscussionTestStore,
+  bindDiscussionSessionFixture,
+  createDiscussionMemoryStore,
+} from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 type RemoteChannel = ClickClackChannel;
@@ -191,6 +195,7 @@ describe("ClickClack durable room real-behavior proof", () => {
         },
       },
     } as unknown as PluginRuntime);
+    bindDiscussionSessionFixture(runtime);
     runtime.state.openKeyedStore = <T>(
       options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
     ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);

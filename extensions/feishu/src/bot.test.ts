@@ -258,7 +258,10 @@ const {
   ),
   mockResolveBoundConversation: vi.fn((_ref?: unknown) => null as BoundConversation),
   mockTouchBinding: vi.fn(),
-  mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  mockResolveFeishuReasoningPreviewEnabled: vi.fn(async () => ({
+    enabled: false,
+    isCurrent: () => true,
+  })),
   mockTranscribeFirstAudio:
     vi.fn<typeof import("openclaw/plugin-sdk/media-runtime").transcribeFirstAudio>(),
   mockMaybeCreateDynamicAgent: vi.fn(),
@@ -490,7 +493,9 @@ describe("handleFeishuMessage ACP routing", () => {
     vi.clearAllMocks();
     resetConfiguredBindings();
     mockTouchBinding.mockReset();
-    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
+    mockResolveFeishuReasoningPreviewEnabled
+      .mockReset()
+      .mockResolvedValue({ enabled: false, isCurrent: () => true });
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
     mockMaybeCreateDynamicAgent.mockReset().mockImplementation(async ({ cfg }) => ({
       created: false,

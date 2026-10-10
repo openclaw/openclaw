@@ -18,6 +18,7 @@ import {
 import { DetachedDiscussionBindingRetention } from "./binding-retention.js";
 import {
   attachBindingToCurrentActiveSession,
+  prepareDiscussionSessionEntry,
   getClickClackDiscussionBindingStore,
   MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
   type ClickClackDiscussionBinding,
@@ -320,7 +321,8 @@ export class ClickClackDiscussionService {
         if (resolved.state !== "active") {
           return { text: "No discussion is bound to this session." };
         }
-        const attached = this.#refreshSessionAttachment(sessionKey, binding);
+        const prepared = await prepareDiscussionSessionEntry(this.#runtime, sessionKey);
+        const attached = this.#refreshSessionAttachment(sessionKey, binding, prepared);
         if (!attached) {
           return { text: "No discussion is bound to this session." };
         }
@@ -337,6 +339,17 @@ export class ClickClackDiscussionService {
           attached.channelId,
           limit,
         );
+        prepared.assertCurrent();
+        if (
+          resolveDiscussionBindingAccount(this.#currentConfig(), attached).state !== "active" ||
+          isClickClackDiscussionChannelRevoked({
+            runtime: this.#runtime,
+            serverBaseUrl: attached.serverBaseUrl,
+            channelId: attached.channelId,
+          })
+        ) {
+          return { text: "No discussion is bound to this session." };
+        }
         const text = formatDiscussionHistory(history);
         return {
           binding: attached,
@@ -376,13 +389,11 @@ export class ClickClackDiscussionService {
       this.#store.delete(sessionKey);
       return;
     }
-    // This read also guards the immediately following detached-retention mutation.
-    const entry = this.#runtime.agent.session.getSessionEntry({
-      sessionKey,
-      readConsistency: "latest",
-    });
+    const prepared = await prepareDiscussionSessionEntry(this.#runtime, sessionKey);
+    prepared.assertCurrent();
+    const entry = prepared.entry;
     if (!entry) {
-      this.#detachedBindings.mark(sessionKey, binding);
+      await this.#detachedBindings.mark(sessionKey, binding);
       return;
     }
     const activeBinding = this.#detachedBindings.clear(sessionKey, binding);
@@ -456,7 +467,7 @@ export class ClickClackDiscussionService {
       return;
     }
     const account = current.account;
-    const attached = this.#refreshSessionAttachment(sessionKey, bindingForAttachment);
+    const attached = this.#refreshSessionAttachment(sessionKey, bindingForAttachment, prepared);
     if (!attached) {
       return;
     }
@@ -499,6 +510,24 @@ export class ClickClackDiscussionService {
       return;
     }
     const client = this.#clientFactory(account);
+    const assertCurrentAuthority = () => {
+      prepared.assertCurrent();
+      const latest = this.#store.get(sessionKey);
+      if (
+        !latest ||
+        latest.serverBaseUrl !== currentBinding.serverBaseUrl ||
+        latest.channelId !== currentBinding.channelId ||
+        latest.externalRef !== currentBinding.externalRef ||
+        resolveDiscussionBindingAccount(this.#currentConfig(), currentBinding).state !== "active" ||
+        isClickClackDiscussionChannelRevoked({
+          runtime: this.#runtime,
+          serverBaseUrl: currentBinding.serverBaseUrl,
+          channelId: currentBinding.channelId,
+        })
+      ) {
+        throw new Error("ClickClack discussion authority changed while updating the channel");
+      }
+    };
     let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
     if (labelChanged) {
       updated = await this.#withChannelMutationLock(() =>
@@ -510,12 +539,15 @@ export class ClickClackDiscussionService {
           sessionKey,
           agentId: currentBinding.agentId,
           patch,
+          assertCurrentAuthority,
         }),
       );
     } else {
+      assertCurrentAuthority();
       updated = await client.updateChannel(currentBinding.channelId, patch);
       assertChannelPatch(updated, patch);
     }
+    assertCurrentAuthority();
     const latestBinding = this.#store.get(sessionKey);
     if (
       !latestBinding ||
@@ -541,6 +573,7 @@ export class ClickClackDiscussionService {
   #refreshSessionAttachment(
     sessionKey: string,
     binding: ClickClackDiscussionBinding,
+    prepared: Awaited<ReturnType<typeof prepareDiscussionSessionEntry>>,
   ): ClickClackDiscussionBinding | undefined {
     try {
       return attachBindingToCurrentActiveSession({
@@ -548,6 +581,7 @@ export class ClickClackDiscussionService {
         store: this.#store,
         sessionKey,
         binding,
+        prepared,
       });
     } catch (error) {
       this.#logger().warn(

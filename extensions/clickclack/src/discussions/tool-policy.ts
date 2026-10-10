@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -27,7 +28,10 @@ export function isClickClackDiscussionSessionTarget(params: {
   requesterSessionKey: string;
   targetSessionKey: string;
 }) {
-  if (!isDiscussionSessionKey(params.requesterSessionKey)) {
+  if (
+    !isDiscussionSessionKey(params.requesterSessionKey) ||
+    isIncognitoSessionKey(params.targetSessionKey)
+  ) {
     return undefined;
   }
   const { runtime, targetSessionKey } = params;

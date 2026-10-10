@@ -58,7 +58,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    getSessionEntry: loginSessionMocks.getSessionEntry,
+    getSessionEntryAsync: async (...args) => loginSessionMocks.getSessionEntry(...args),
     resolveStorePath: loginSessionMocks.resolveStorePath,
     patchSessionEntry: loginSessionMocks.patchSessionEntry,
   };

@@ -387,6 +387,8 @@ const telegramBotRuntimeForTest = {
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
+  getSessionEntryAsync: async (...args: Parameters<typeof getSessionEntryMock>) =>
+    getSessionEntryMock(...args),
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],

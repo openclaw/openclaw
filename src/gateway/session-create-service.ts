@@ -37,6 +37,8 @@ import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/sessio
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -140,7 +142,7 @@ export async function createGatewaySession(
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
-  const commitGuard = resolveSessionCreationCommitGuard(params, {
+  let commitGuard = resolveSessionCreationCommitGuard(params, {
     readOperatorAuthority: () => operatorAuthority,
     assertPreparedTargetCurrent: () => assertPreparedTargetCurrent?.(),
     validateSelection: () => validateRuntimeSelection?.(),
@@ -179,6 +181,23 @@ export async function createGatewaySession(
   });
   const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
   const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
+  const incognitoSource = explicitIncognito
+    ? captureIncognitoSessionSource({ agentId, sessionKey: explicitTargetKey })
+    : params.incognito === true
+      ? captureIncognitoSessionSource()
+      : undefined;
+  if (incognitoSource) {
+    const source = "kind" in incognitoSource ? incognitoSource : incognitoSource.actor;
+    if (source.agentId !== agentId) {
+      return invalidSessionRequest("session creation belongs to another incognito actor");
+    }
+    const assertCallerCurrent = commitGuard;
+    commitGuard = () => {
+      assertCallerCurrent?.();
+      incognitoSource.admissionSignal?.throwIfAborted();
+      source.assertCurrent();
+    };
+  }
   const explicitDashboardIncognito =
     explicitIncognito &&
     explicitTargetParts?.agentId === agentId &&
@@ -186,18 +205,30 @@ export async function createGatewaySession(
   if (explicitIncognito && params.incognito !== true) {
     return invalidSessionRequest("incognito-shaped session keys require incognito: true");
   }
+  if (params.incognito === true && explicitTargetKey && !explicitDashboardIncognito) {
+    return invalidSessionRequest("incognito sessions are web-only");
+  }
+  const boundInitialEntry =
+    incognitoSource && explicitTargetKey
+      ? await readSessionEntryReadOnlyInWorker(
+          { agentId, sessionKey: explicitTargetKey },
+          commitGuard,
+        )
+      : undefined;
   if (params.incognito === true && explicitTargetKey) {
-    if (!explicitDashboardIncognito) {
-      return invalidSessionRequest("incognito sessions are web-only");
-    }
     const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntry = loadExactSessionEntryFromStoreReadOnly({
-      agentId,
-      storePath: durableStorePath,
-      sessionKey: explicitTargetKey,
-      projection: "list",
-    });
-    if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
+    const durableEntry = incognitoSource
+      ? undefined
+      : loadExactSessionEntryFromStoreReadOnly({
+          agentId,
+          storePath: durableStorePath,
+          sessionKey: explicitTargetKey,
+          projection: "list",
+        });
+    const privateEntry = incognitoSource
+      ? boundInitialEntry
+      : loadGatewaySessionEntryReadOnly(explicitTargetKey).entry;
+    if (durableEntry || privateEntry) {
       return invalidSessionRequest("incognito is immutable and requires a new session key");
     }
   }
@@ -225,13 +256,15 @@ export async function createGatewaySession(
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
   // Capture the requested incarnation before worker discovery yields to authority preparation.
-  const initialTargetEntry = explicitTargetKey
-    ? resolveSessionEntryAccessTarget({
-        cfg: params.cfg,
-        sessionKey: explicitTargetKey,
-        agentId,
-      }).entry
-    : undefined;
+  const initialTargetEntry = incognitoSource
+    ? boundInitialEntry
+    : explicitTargetKey
+      ? resolveSessionEntryAccessTarget({
+          cfg: params.cfg,
+          sessionKey: explicitTargetKey,
+          agentId,
+        }).entry
+      : undefined;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -305,12 +338,19 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: targetSessionKey,
-    agentId,
-    assertActive: commitGuard,
-  });
+  const target: GatewaySessionStoreTarget = incognitoSource
+    ? {
+        agentId,
+        storePath: "kind" in incognitoSource ? incognitoSource.path : incognitoSource.actor.path,
+        canonicalKey: targetSessionKey,
+        storeKeys: [targetSessionKey],
+      }
+    : await resolveGatewaySessionStoreTargetInWorker({
+        cfg: params.cfg,
+        key: targetSessionKey,
+        agentId,
+        assertActive: commitGuard,
+      });
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,

@@ -3,6 +3,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import {
   resolveDirectStoredModelOverride,
   resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
 } from "./stored-model-overrides.js";
 
 function resolveParentOverride(parent: Partial<SessionEntry>) {
@@ -158,5 +159,50 @@ describe("resolveStoredModelOverride", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveStoredModelOverrideAsync", () => {
+  it("awaits parent inheritance and propagates storage errors without selecting a default", async () => {
+    const sessionKey = "agent:main:telegram:dm:parent:thread:child";
+    const loadSessionEntry = vi.fn(async () => ({
+      sessionId: "parent",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "selected",
+    }));
+    await expect(
+      resolveStoredModelOverrideAsync({
+        sessionKey,
+        defaultProvider: "openai",
+        loadSessionEntry,
+      }),
+    ).resolves.toMatchObject({ provider: "anthropic", model: "selected", source: "parent" });
+    expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
+    const failure = new Error("session owner unavailable");
+    loadSessionEntry.mockRejectedValueOnce(failure);
+    await expect(
+      resolveStoredModelOverrideAsync({
+        sessionKey,
+        defaultProvider: "openai",
+        loadSessionEntry,
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it("does not read a parent when the session pins a model or explicitly selects defaults", async () => {
+    const loadSessionEntry = vi.fn(async () => undefined);
+    for (const choice of [
+      { modelOverride: "selected", providerOverride: "openai" },
+      { modelOverrideSource: "default" as const },
+    ]) {
+      await resolveStoredModelOverrideAsync({
+        sessionKey: "agent:main:telegram:dm:parent:thread:child",
+        sessionEntry: { sessionId: "child", updatedAt: 1, ...choice },
+        defaultProvider: "openai",
+        loadSessionEntry,
+      });
+    }
+    expect(loadSessionEntry).not.toHaveBeenCalled();
   });
 });

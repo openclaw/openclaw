@@ -43,6 +43,8 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
   /** Live channel/run facts only; persisted routing belongs in the alternatives below. */
   isActive?: () => boolean;
   matchGeneration?: boolean;
+  /** Retain the reset marker without treating ordinary activity timestamps as a change. */
+  matchUpdatedAtZero?: boolean;
   /** Exact policy fields retained alongside the returned entry. */
   fields?: readonly (keyof SessionEntryCurrentFacts & keyof SessionEntry)[];
   /** Refuse preparation when a previously selected entry no longer matches. */
@@ -54,6 +56,7 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
   errorMessage?: string;
 }): Promise<{
   entry: SessionEntry | undefined;
+  target: Readonly<{ agentId: string; sessionKey: string; storePath: string }>;
   isCurrent: () => boolean;
   assertCurrent: () => void;
 }> {
@@ -128,9 +131,12 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
     }
     const selected = read.value;
     const selectedValues = fields.map((field) => structuredClone(selected?.[field]));
+    const expectedUpdatedAtZero = params.matchUpdatedAtZero ? selected?.updatedAt === 0 : undefined;
     if (
       expected &&
-      (!selected || fields.some((field) => !isDeepStrictEqual(selected[field], expected[field])))
+      (!selected ||
+        fields.some((field) => !isDeepStrictEqual(selected[field], expected[field])) ||
+        (params.matchUpdatedAtZero && (expected.updatedAt === 0) !== expectedUpdatedAtZero))
     ) {
       refuse();
     }
@@ -192,7 +198,7 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
       if (params.isActive?.() === false || !sourceIsCurrent()) {
         return false;
       }
-      if (fields.length > 0) {
+      if (fields.length > 0 || params.matchUpdatedAtZero) {
         const current = incognito
           ? "kind" in incognito
             ? undefined
@@ -200,7 +206,11 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
           : loadSessionEntryReadOnly(readScope);
         if (
           (current === undefined) !== (selected === undefined) ||
-          fields.some((field, index) => !isDeepStrictEqual(current?.[field], selectedValues[index]))
+          fields.some(
+            (field, index) => !isDeepStrictEqual(current?.[field], selectedValues[index]),
+          ) ||
+          (expectedUpdatedAtZero !== undefined &&
+            (current?.updatedAt === 0) !== expectedUpdatedAtZero)
         ) {
           return false;
         }
@@ -242,6 +252,7 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
               databaseBirthtime: identity.birthtime,
             },
             expected: selected,
+            expectedUpdatedAtZero,
             fields,
             assertCurrent,
             assertHostCurrent: () => {
@@ -304,9 +315,18 @@ export async function captureSessionEntryCurrentCheckInternal(inputParams: {
           });
     check.sessionSource = source;
     owner.assertCurrent();
-    if (params.fields || incognito) {
+    if (params.fields || params.matchUpdatedAtZero || incognito) {
       assertCurrent();
     }
-    return { entry: selected, isCurrent: check, assertCurrent: source };
+    return {
+      entry: selected,
+      target: {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      },
+      isCurrent: check,
+      assertCurrent: source,
+    };
   });
 }
