@@ -27,6 +27,11 @@ export type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 export type { WorkerTaskResponse } from "../infra/worker-task-pool.js";
 export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 export {
+  type AdoptedChildIdentity,
+  scheduleAdoptedChildZombieReapAfterExit,
+  scheduleAdoptedDescendantReapAfterRootExit,
+} from "../process/scoped-child-reaper.js";
+export {
   spawnTerminalPty,
   type TerminalPtyHandle,
   type TerminalPtySpawnParams,

@@ -104,6 +104,16 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+Process-tree owners that kill descendants by exact PID should also retain
+adopted-zombie cleanup from the same subpath. After the tracked root exits,
+`scheduleAdoptedDescendantReapAfterRootExit(child, identities)` reaps only the
+observed descendant PIDs that are zombies parented to the current process,
+guarded by their `<bootId>:<startTicks>` procfs identity against PID reuse.
+`scheduleAdoptedChildZombieReapAfterExit(child, usedProcessGroup)` covers the
+same adoption window for a root that was spawned leading its own process group.
+Both are Linux-only, paced, deadline-bounded, and never wait the tracked root or
+unrelated children.
+
 For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
 the same subpath. It reuses the current Node executable and resolves a real Node
 binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable

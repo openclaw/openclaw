@@ -1,7 +1,10 @@
 import { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCommandTerminationController } from "./exec-termination.js";
-import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
+import {
+  scheduleAdoptedChildZombieReapAfterExit,
+  scheduleAdoptedDescendantReapAfterRootExit,
+} from "./scoped-child-reaper.js";
 
 const proc = vi.hoisted(() => ({
   entries: vi.fn<() => string[]>(),
@@ -204,5 +207,135 @@ describe("adopted process-group cleanup", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(proc.entries).not.toHaveBeenCalled();
     expect(proc.wait).not.toHaveBeenCalled();
+  });
+});
+
+const BOOT_ID = "01234567-89ab-cdef-0123-456789abcdef";
+const BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+
+type IdentityRow = { pid: number; ppid: number; state: string; startTicks: number };
+
+function identityStatLine(row: IdentityRow): string {
+  // After the comm's closing ')', stat fields 3.. are indexed one lower; field
+  // 22 (starttime) therefore sits at index 19 of the split remainder.
+  const fields = Array.from({ length: 21 }, (_, index) =>
+    index === 0
+      ? row.state
+      : index === 1
+        ? String(row.ppid)
+        : index === 19
+          ? String(row.startTicks)
+          : "0",
+  );
+  return `${row.pid} (fixture) ${fields.join(" ")}`;
+}
+
+function setIdentities(rows: IdentityRow[]) {
+  const stats = new Map(rows.map((row) => [`/proc/${row.pid}/stat`, identityStatLine(row)]));
+  stats.set(BOOT_ID_PATH, `${BOOT_ID}\n`);
+  proc.stat.mockImplementation((path) => {
+    const stat = stats.get(path);
+    if (stat === undefined) {
+      throw new Error("process no longer exists");
+    }
+    return stat;
+  });
+}
+
+describe("adopted identity cleanup", () => {
+  it("waits for tracked-root exit and reaps only matching adopted zombies", () => {
+    const child = trackedRoot();
+    setIdentities([
+      { pid: 401, ppid: process.pid, state: "Z", startTicks: 100 },
+      { pid: 402, ppid: process.pid, state: "S", startTicks: 101 },
+      { pid: 403, ppid: 900, state: "Z", startTicks: 102 },
+    ]);
+    scheduleAdoptedDescendantReapAfterRootExit(child, [
+      { pid: 401, startedAt: `${BOOT_ID}:100` },
+      { pid: 402, startedAt: `${BOOT_ID}:101` },
+      { pid: 403, startedAt: `${BOOT_ID}:102` },
+      { pid: 404, startedAt: `${BOOT_ID}:103` },
+    ]);
+    vi.advanceTimersByTime(100);
+    expect(proc.wait).not.toHaveBeenCalled();
+
+    child.emit("exit", null, "SIGTERM");
+    vi.advanceTimersByTime(25);
+    expect(proc.wait.mock.calls).toEqual([[401, null, 1]]);
+  });
+
+  it("skips a PID that was reused under a new start identity", () => {
+    setIdentities([{ pid: 401, ppid: process.pid, state: "Z", startTicks: 999 }]);
+    scheduleAdoptedDescendantReapAfterRootExit(trackedRoot(true), [
+      { pid: 401, startedAt: `${BOOT_ID}:100` },
+    ]);
+    vi.advanceTimersByTime(100);
+    expect(proc.wait).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never waits the tracked root even when its identity is listed", () => {
+    setIdentities([{ pid: ROOT, ppid: process.pid, state: "Z", startTicks: 50 }]);
+    scheduleAdoptedDescendantReapAfterRootExit(trackedRoot(true), [
+      { pid: ROOT, startedAt: `${BOOT_ID}:50` },
+    ]);
+    vi.advanceTimersByTime(100);
+    expect(proc.wait).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retains a live descendant until it becomes an adopted zombie", () => {
+    const child = trackedRoot(true);
+    setIdentities([{ pid: 401, ppid: process.pid, state: "S", startTicks: 100 }]);
+    scheduleAdoptedDescendantReapAfterRootExit(child, [{ pid: 401, startedAt: `${BOOT_ID}:100` }]);
+    vi.advanceTimersByTime(500);
+    expect(proc.wait).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+
+    setIdentities([{ pid: 401, ppid: process.pid, state: "Z", startTicks: 100 }]);
+    vi.advanceTimersByTime(25);
+    expect(proc.wait.mock.calls).toEqual([[401, null, 1]]);
+
+    setIdentities([]);
+    vi.advanceTimersByTime(50);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops at its deadline while a retained descendant stays live", () => {
+    setIdentities([{ pid: 401, ppid: process.pid, state: "S", startTicks: 100 }]);
+    scheduleAdoptedDescendantReapAfterRootExit(trackedRoot(true), [
+      { pid: 401, startedAt: `${BOOT_ID}:100` },
+    ]);
+    vi.advanceTimersByTime(30_000);
+    expect(proc.wait).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["darwin", "win32"])("does no work on %s", (platform) => {
+    Object.defineProperty(process, "platform", { value: platform });
+    const child = trackedRoot(true);
+    scheduleAdoptedDescendantReapAfterRootExit(child, [{ pid: 401, startedAt: `${BOOT_ID}:100` }]);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(proc.stat).not.toHaveBeenCalled();
+    expect(proc.wait).not.toHaveBeenCalled();
+  });
+
+  it("schedules nothing without usable identities", () => {
+    const child = trackedRoot(true);
+    scheduleAdoptedDescendantReapAfterRootExit(child, []);
+    scheduleAdoptedDescendantReapAfterRootExit(child, [{ pid: 0, startedAt: `${BOOT_ID}:1` }]);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+  });
+
+  it("registers one cleanup when scheduled again for the same child", () => {
+    const child = trackedRoot();
+    scheduleAdoptedDescendantReapAfterRootExit(child, [{ pid: 401, startedAt: `${BOOT_ID}:100` }]);
+    scheduleAdoptedDescendantReapAfterRootExit(child, [{ pid: 402, startedAt: `${BOOT_ID}:101` }]);
+    expect(child.listenerCount("exit")).toBe(1);
+    child.emit("exit", null, "SIGKILL");
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(50);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

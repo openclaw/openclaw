@@ -85,7 +85,11 @@ export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
   expected?: CodexAppServerProcessIdentity,
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
-): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
+): Promise<
+  | { root: PosixProcess; resume: () => void; descendants: CodexAppServerProcessIdentity[] }
+  | "exited"
+  | undefined
+> {
   const rootPid = child.pid;
   if (child.exitCode != null || child.signalCode != null) {
     return "exited";
@@ -183,6 +187,13 @@ export async function terminateCodexAppServerDescendants(
         resumed = true;
         resumeTransportRoot(child, root, false);
       },
+      // Containment kills these exact identities; after the tracked root exits
+      // their zombie statuses still need an owner waitpid (#97616).
+      descendants: descendants.map((row) => ({
+        pid: row.pid,
+        pgid: row.pgid,
+        startedAt: row.startedAt,
+      })),
     };
   } finally {
     if (resumeRootOnUnwind) {

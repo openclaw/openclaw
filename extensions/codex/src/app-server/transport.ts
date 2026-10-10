@@ -1,4 +1,8 @@
 import { finished } from "node:stream/promises";
+import {
+  scheduleAdoptedChildZombieReapAfterExit,
+  scheduleAdoptedDescendantReapAfterRootExit,
+} from "openclaw/plugin-sdk/process-runtime";
 import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
 import { waitForCodexAppServerProcessRegistrationCleanup } from "./transport-process-registration.js";
 
@@ -80,6 +84,19 @@ function beginCodexAppServerTransportClose(
     const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
     if (contained === "exited") {
       return "natural";
+    }
+    if (contained) {
+      // Containment kills observed descendants by exact PID, but a zombie's
+      // status is only consumed by a waitpid from its parent. After the tracked
+      // root exits, adopted descendants still parented to this process need
+      // this owner to reap them (#97616). Descendants may not share the root's
+      // process group, so retention follows the observed identities.
+      scheduleAdoptedDescendantReapAfterRootExit(child, contained.descendants);
+    } else {
+      // Containment could not prove any descendant identities. The force-kill
+      // fallback group-kills the root, so retain the group-scoped cleanup for
+      // adopted zombies in that group.
+      scheduleAdoptedChildZombieReapAfterExit(child, isDetachedCodexRootProcessGroup());
     }
     try {
       finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume);
@@ -174,6 +191,15 @@ export async function closeCodexAppServerTransportAndWait(
 
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
   return child.exitCode != null || child.signalCode != null;
+}
+
+/**
+ * Mirrors the spawn-time process-group topology: only a detached root leads a
+ * killable process group. A hosted-gateway root shares the host's group.
+ */
+function isDetachedCodexRootProcessGroup(): boolean {
+  const hostedLifeline = process.env.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim();
+  return process.platform !== "win32" && hostedLifeline !== "stdin";
 }
 
 async function waitForCodexAppServerTransportExit(
