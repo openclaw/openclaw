@@ -73,6 +73,7 @@ export type PendingInputMutationReceipt = PendingInputIdentity & {
   lifecycleGeneration: string;
   outcome?: AgentRunTerminalOutcome;
   withdrawnInputId?: string;
+  stagedInput?: SessionPendingInputRow;
 };
 
 export type PendingInputCustodyGrant = {
