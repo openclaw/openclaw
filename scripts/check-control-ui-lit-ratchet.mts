@@ -32,15 +32,18 @@ function flatten(counts: ReadonlyMap<string, MigrationMetrics>) {
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
-    if (args.prune)
+    if (args.prune) {
       throw new Error("The Lit ratchet reads its base from Git; --prune is not supported.");
+    }
     const base = resolveRatchetBase(root, args);
-    if (!base) throw new Error("No Lit ratchet base found; pass --base <ref>.");
+    if (!base) {
+      throw new Error("No Lit ratchet base found; pass --base <ref>.");
+    }
     const previous = readInventorySources(root, { ref: base, roots: ["ui/src"] });
-    const current = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
+    const currentSources = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
     // Unchanged bytes cannot grow. Parse only changed files, keeping both sides
     // under the same counter even when the scanner itself changes.
-    const changed = [...current].filter(([file, source]) => previous.get(file) !== source);
+    const changed = [...currentSources].filter(([file, source]) => previous.get(file) !== source);
     const currentCounts = countMigrationSources(root, new Map(changed));
     const baseCounts = countMigrationSources(
       root,
@@ -64,8 +67,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
         ],
         "Use Solid for new UI code and remove Lit sites before adding replacements. New ui/src files cannot import Lit.",
       )
-    )
+    ) {
       return 1;
+    }
     console.log(`Control UI Lit ratchet OK (${changed.length} changed files, base ${base}).`);
     return 0;
   } catch (error) {
@@ -74,5 +78,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = main();
+}

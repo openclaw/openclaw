@@ -108,7 +108,9 @@ describe("Control UI Lit ratchet", () => {
     fs.writeFileSync(commonjsPath, commonjs);
     fs.writeFileSync(namespacePath, namespace);
     fs.writeFileSync(scopedPath, scoped);
-    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) git(root, args);
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
+      git(root, args);
+    }
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
     vi.spyOn(console, "log").mockImplementation(() => {});

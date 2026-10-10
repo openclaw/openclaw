@@ -11,7 +11,8 @@ const ROOTS = ["ui/src", "extensions/workboard/browser", "extensions/x/src"];
 const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
 const MAX_BUFFER = 256 * 1024 * 1024;
 
-function unwrap(node: ts.Node): ts.Node {
+function unwrap(input: ts.Node): ts.Node {
+  let node = input;
   while (
     ts.isParenthesizedExpression(node) ||
     ts.isAsExpression(node) ||
@@ -25,7 +26,9 @@ function unwrap(node: ts.Node): ts.Node {
 }
 
 function isLitModule(node: ts.Node | undefined) {
-  if (!node) return false;
+  if (!node) {
+    return false;
+  }
   const literal = unwrap(node);
   return (
     (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal)) &&
@@ -53,7 +56,7 @@ export function readInventorySources(
         .split("\0")
         .filter((file) => CODE.test(file)),
     ),
-  ].sort();
+  ].toSorted();
   if (ref || staged) {
     return loadRatchetSources(root, paths, ref);
   }
@@ -84,21 +87,35 @@ function emptyMetrics() {
 }
 export type MigrationMetrics = ReturnType<typeof emptyMetrics>;
 
-function nameOf(node: ts.Node): string | undefined {
-  node = unwrap(node);
-  if (ts.isComputedPropertyName(node)) return nameOf(node.expression);
-  if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+function nameOf(input: ts.Node): string | undefined {
+  const node = unwrap(input);
+  if (ts.isComputedPropertyName(node)) {
+    return nameOf(node.expression);
+  }
+  if (
+    ts.isIdentifier(node) ||
+    ts.isStringLiteral(node) ||
+    ts.isNoSubstitutionTemplateLiteral(node)
+  ) {
     return node.text;
-  if (ts.isPropertyAccessExpression(node)) return node.name.text;
-  if (ts.isQualifiedName(node)) return node.right.text;
-  if (ts.isElementAccessExpression(node) && node.argumentExpression)
+  }
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.name.text;
+  }
+  if (ts.isQualifiedName(node)) {
+    return node.right.text;
+  }
+  if (ts.isElementAccessExpression(node) && node.argumentExpression) {
     return nameOf(node.argumentExpression);
+  }
   return undefined;
 }
 
-function isLitLoad(node: ts.Node): boolean {
-  node = unwrap(node);
-  if (ts.isAwaitExpression(node)) return isLitLoad(node.expression);
+function isLitLoad(input: ts.Node): boolean {
+  const node = unwrap(input);
+  if (ts.isAwaitExpression(node)) {
+    return isLitLoad(node.expression);
+  }
   return (
     ts.isCallExpression(node) &&
     (unwrap(node.expression).kind === ts.SyntaxKind.ImportKeyword ||
@@ -123,8 +140,9 @@ function createLitNameResolver(tree: ts.SourceFile) {
         ts.isSourceFile(scope) ||
         ts.isFunctionLikeDeclaration(scope) ||
         ts.isClassStaticBlockDeclaration(scope)
-      )
+      ) {
         return scope;
+      }
       if (
         !functionOnly &&
         (ts.isBlock(scope) ||
@@ -134,8 +152,9 @@ function createLitNameResolver(tree: ts.SourceFile) {
           ts.isForStatement(scope) ||
           ts.isForInStatement(scope) ||
           ts.isForOfStatement(scope))
-      )
+      ) {
         return scope;
+      }
     }
     return tree;
   };
@@ -153,7 +172,9 @@ function createLitNameResolver(tree: ts.SourceFile) {
       return;
     }
     for (const element of name.elements) {
-      if (!ts.isBindingElement(element) || !element.name) continue;
+      if (!ts.isBindingElement(element) || !element.name) {
+        continue;
+      }
       const property =
         ts.isObjectBindingPattern(name) && !element.dotDotDotToken
           ? nameOf(element.propertyName ?? element.name)
@@ -169,12 +190,15 @@ function createLitNameResolver(tree: ts.SourceFile) {
     if (ts.isImportDeclaration(node)) {
       const lit = isLitModule(node.moduleSpecifier);
       const clause = node.importClause;
-      if (clause?.name) bind(scopeFor(node), clause.name.text, {});
+      if (clause?.name) {
+        bind(scopeFor(node), clause.name.text, {});
+      }
       const bindings = clause?.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings))
+      if (bindings && ts.isNamespaceImport(bindings)) {
         bind(scopeFor(node), bindings.name.text, lit ? { imported: { kind: "namespace" } } : {});
-      if (bindings && ts.isNamedImports(bindings))
-        for (const specifier of bindings.elements)
+      }
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const specifier of bindings.elements) {
           bind(
             scopeFor(node),
             specifier.name.text,
@@ -187,8 +211,10 @@ function createLitNameResolver(tree: ts.SourceFile) {
                 }
               : {},
           );
+        }
+      }
     }
-    if (ts.isImportEqualsDeclaration(node))
+    if (ts.isImportEqualsDeclaration(node)) {
       bind(
         scopeFor(node),
         node.name.text,
@@ -197,38 +223,55 @@ function createLitNameResolver(tree: ts.SourceFile) {
           ? { imported: { kind: "namespace" } }
           : {},
       );
+    }
     if (ts.isVariableDeclaration(node)) {
       const isVar =
         ts.isVariableDeclarationList(node.parent) &&
         !(node.parent.flags & ts.NodeFlags.BlockScoped);
       bindPattern(scopeFor(node, isVar), node.name, { initializer: node.initializer });
     }
-    if (ts.isFunctionLikeDeclaration(node))
-      for (const parameter of node.parameters)
+    if (ts.isFunctionLikeDeclaration(node)) {
+      for (const parameter of node.parameters) {
         bindPattern(node, parameter.name, { initializer: parameter.initializer });
-    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name)
+      }
+    }
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) {
       bind(scopeFor(node), node.name.text, {});
-    if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name)
+    }
+    if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) {
       bind(node, node.name.text, {});
+    }
     node.forEachChild(collect);
   };
   collect(tree);
   const lookup = (node: ts.Identifier): LitBinding | undefined => {
     for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
       const binding = scopes.get(scope)?.get(node.text);
-      if (binding) return binding;
+      if (binding) {
+        return binding;
+      }
     }
     return undefined;
   };
-  const resolve = (node: ts.Node, seen = new Set<LitBinding>()): LitReference | undefined => {
-    node = unwrap(node);
-    if (ts.isAwaitExpression(node)) return resolve(node.expression, seen);
-    if (isLitLoad(node)) return { kind: "namespace" };
+  const resolve = (input: ts.Node, seen = new Set<LitBinding>()): LitReference | undefined => {
+    const node = unwrap(input);
+    if (ts.isAwaitExpression(node)) {
+      return resolve(node.expression, seen);
+    }
+    if (isLitLoad(node)) {
+      return { kind: "namespace" };
+    }
     if (ts.isIdentifier(node)) {
       const binding = lookup(node);
-      if (!binding || seen.has(binding)) return undefined;
-      if (binding.imported) return binding.imported;
-      if (!binding.initializer) return undefined;
+      if (!binding || seen.has(binding)) {
+        return undefined;
+      }
+      if (binding.imported) {
+        return binding.imported;
+      }
+      if (!binding.initializer) {
+        return undefined;
+      }
       seen.add(binding);
       const reference = resolve(binding.initializer, seen);
       return binding.property
@@ -237,16 +280,21 @@ function createLitNameResolver(tree: ts.SourceFile) {
           : undefined
         : reference;
     }
-    if (ts.isPropertyAccessExpression(node) && resolve(node.expression, seen)?.kind === "namespace")
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      resolve(node.expression, seen)?.kind === "namespace"
+    ) {
       return { kind: "member", name: node.name.text };
+    }
     if (
       ts.isElementAccessExpression(node) &&
       node.argumentExpression &&
       resolve(node.expression, seen)?.kind === "namespace"
     ) {
       const argument = unwrap(node.argumentExpression);
-      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))
+      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
         return { kind: "member", name: argument.text };
+      }
     }
     return undefined;
   };
@@ -278,36 +326,50 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
       if (
         (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
         isLitModule(node.moduleSpecifier)
-      )
+      ) {
         metrics.litImports++;
+      }
       if (
         ts.isImportTypeNode(node) &&
         ts.isLiteralTypeNode(node.argument) &&
         isLitModule(node.argument.literal)
-      )
+      ) {
         metrics.litImports++;
+      }
       if (
         ts.isImportEqualsDeclaration(node) &&
         ts.isExternalModuleReference(node.moduleReference) &&
         isLitModule(node.moduleReference.expression)
-      )
+      ) {
         metrics.litImports++;
+      }
       if (ts.isCallExpression(node)) {
         const expression = unwrap(node.expression);
-        if (isLitLoad(node)) metrics.litImports++;
-        if (nameOf(node.expression) === "requestUpdate") metrics.requestUpdate++;
+        if (isLitLoad(node)) {
+          metrics.litImports++;
+        }
+        if (nameOf(node.expression) === "requestUpdate") {
+          metrics.requestUpdate++;
+        }
         if (
           ts.isPropertyAccessExpression(expression) &&
           nameOf(expression.expression) === "customElements" &&
           expression.name.text === "define"
-        )
+        ) {
           metrics.customElementDefines++;
+        }
       }
       if (ts.isTaggedTemplateExpression(node)) {
         const name = canonicalName(node.tag);
-        if (name === "html") metrics.htmlTemplates++;
-        if (name === "svg") metrics.svgTemplates++;
-        if (name === "css") metrics.cssTemplates++;
+        if (name === "html") {
+          metrics.htmlTemplates++;
+        }
+        if (name === "svg") {
+          metrics.svgTemplates++;
+        }
+        if (name === "css") {
+          metrics.cssTemplates++;
+        }
       }
       if (
         ts.isStringLiteral(node) ||
@@ -315,36 +377,50 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
         ts.isTemplateHead(node) ||
         ts.isTemplateMiddle(node) ||
         ts.isTemplateTail(node)
-      )
+      ) {
         metrics.waTags += (node.text.match(/<wa-[a-z0-9-]+(?=[\s/>])/giu) ?? []).length;
+      }
       if (
         (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-        /^wa-/u.test(node.tagName.getText(tree))
-      )
+        node.tagName.getText(tree).startsWith("wa-")
+      ) {
         metrics.waTags++;
+      }
       if (ts.isDecorator(node)) {
         const expression = unwrap(node.expression);
         const name = canonicalName(
           ts.isCallExpression(expression) ? expression.expression : expression,
         );
-        if (name === "state") metrics.stateDecorators++;
-        if (name === "property") metrics.propertyDecorators++;
-        if (name === "consume") metrics.consume++;
-        if (name === "customElement") metrics.customElementDefines++;
+        if (name === "state") {
+          metrics.stateDecorators++;
+        }
+        if (name === "property") {
+          metrics.propertyDecorators++;
+        }
+        if (name === "consume") {
+          metrics.consume++;
+        }
+        if (name === "customElement") {
+          metrics.customElementDefines++;
+        }
       }
-      if (ts.isNewExpression(node) && canonicalName(node.expression) === "Task") metrics.tasks++;
+      if (ts.isNewExpression(node) && canonicalName(node.expression) === "Task") {
+        metrics.tasks++;
+      }
       if (ts.isHeritageClause(node)) {
         for (const type of node.types) {
           const name = canonicalName(
             ts.isTypeReferenceNode(type) ? type.typeName : type.expression,
           );
-          if (node.token === ts.SyntaxKind.ImplementsKeyword && name === "ReactiveController")
+          if (node.token === ts.SyntaxKind.ImplementsKeyword && name === "ReactiveController") {
             metrics.reactiveControllers++;
+          }
           if (
             node.token === ts.SyntaxKind.ExtendsKeyword &&
             (name === "Directive" || name === "AsyncDirective")
-          )
+          ) {
             metrics.directives++;
+          }
         }
       }
       node.forEachChild(visit);
@@ -363,9 +439,12 @@ function isTest(file: string) {
 }
 function bucket(file: string) {
   const parts = file.split("/");
-  if (parts[0] === "extensions") return parts.slice(0, 2).join("/");
-  if ((parts[2] === "pages" || parts[2] === "components") && parts.length > 4)
+  if (parts[0] === "extensions") {
+    return parts.slice(0, 2).join("/");
+  }
+  if ((parts[2] === "pages" || parts[2] === "components") && parts.length > 4) {
     return parts.slice(2, 4).join("/");
+  }
   return parts.length > 3 ? parts.slice(2, 3).join("/") : "(root)";
 }
 function emptyRow() {
@@ -385,9 +464,13 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   let ref: string | undefined;
   let asJson = false;
   for (let index = 0; index < argv.length; index++) {
-    if (argv[index] === "--json") asJson = true;
-    else if (argv[index] === "--ref" && argv[index + 1]) ref = argv[++index];
-    else throw new Error("Usage: pnpm ui:solid:inventory [--json] [--ref <commit>]");
+    if (argv[index] === "--json") {
+      asJson = true;
+    } else if (argv[index] === "--ref" && argv[index + 1]) {
+      ref = argv[++index];
+    } else {
+      throw new Error("Usage: pnpm ui:solid:inventory [--json] [--ref <commit>]");
+    }
   }
   const revision = execFileSync(
     "git",
@@ -419,13 +502,14 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
         target.prodFiles++;
         target.prodLines += text.split("\n").length - Number(text.endsWith("\n"));
         target.litImportFiles += Number(metrics.litImports > 0);
-        for (const metric of Object.keys(metrics) as (keyof MigrationMetrics)[])
+        for (const metric of Object.keys(metrics) as (keyof MigrationMetrics)[]) {
           target[metric] += metrics[metric];
+        }
       }
     }
   }
   const buckets = Object.fromEntries(
-    [...rows].sort(
+    [...rows].toSorted(
       ([a, left], [b, right]) => right.prodLines - left.prodLines || a.localeCompare(b),
     ),
   );
@@ -449,12 +533,14 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     console.log(
       `# Control UI Solid migration inventory @ ${head}\n\n| bucket | ${columns.join(" | ")} |\n|---|${columns.map(() => "---:").join("|")}|`,
     );
-    for (const [key, row] of Object.entries(buckets))
+    for (const [key, row] of Object.entries(buckets)) {
       console.log(`| ${key} | ${columns.map((column) => row[column]).join(" | ")} |`);
+    }
     console.log(`| **total** | ${columns.map((column) => `**${totals[column]}**`).join(" | ")} |`);
   }
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = main();
+}
