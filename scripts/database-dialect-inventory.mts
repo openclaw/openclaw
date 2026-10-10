@@ -17,6 +17,8 @@ type DialectSite = DialectMatch & { line: number; column: number };
 export type DialectInventoryRow = { file: string; matches: DialectSite[] };
 export type DialectInventoryCache = Map<string, { text: string; matches: DialectSite[] }>;
 const roots = ["src", "extensions", "packages"];
+const SQL_STATEMENT =
+  /^[\s(]*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH|CREATE|DROP|ALTER|PRAGMA|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|VACUUM|ATTACH|DETACH|ANALYZE|REINDEX|EXPLAIN)\b/u;
 
 function productionFile(file: string) {
   return /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) && !excluded.test(file);
@@ -66,6 +68,18 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
       add(match, node.getStart(source));
     }
   };
+  const template = (node: ts.TemplateLiteral, owner: boolean, tagged = false) => {
+    const head = ts.isTemplateExpression(node) ? node.head : node;
+    if (!tagged && !SQL_STATEMENT.test(head.text)) {
+      return;
+    }
+    literal(head, owner);
+    if (ts.isTemplateExpression(node)) {
+      for (const span of node.templateSpans) {
+        literal(span.literal, owner);
+      }
+    }
+  };
   const visit = (node: ts.Node, inheritedOwner = false) => {
     let owner = inheritedOwner;
     if (ts.isFunctionLikeDeclaration(node)) {
@@ -74,13 +88,23 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
         ts.isFunctionDeclaration(node) &&
         /^(?:sqliteStringSet|sqliteStringSetEntries)$/u.test(node.name?.text ?? "");
     }
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      literal(node, owner);
-    } else if (ts.isTemplateExpression(node)) {
-      literal(node.head, owner);
-      for (const span of node.templateSpans) {
-        literal(span.literal, owner);
+    if (ts.isTaggedTemplateExpression(node)) {
+      const tag = node.tag;
+      const name = ts.isIdentifier(tag)
+        ? tag.text
+        : ts.isPropertyAccessExpression(tag)
+          ? tag.name.text
+          : "";
+      if (/sql$/iu.test(name)) {
+        template(node.template, owner, true);
       }
+      visit(tag, owner);
+      return;
+    }
+    if (ts.isStringLiteral(node) && SQL_STATEMENT.test(node.text)) {
+      literal(node, owner);
+    } else if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
+      template(node, owner);
       return; // Substitutions are outside the lexical contract, regardless of tag.
     }
     if (

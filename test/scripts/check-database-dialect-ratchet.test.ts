@@ -33,24 +33,35 @@ function fixture() {
   return { root, write, git };
 }
 
-it("counts only static literal parts and conflict methods under the frozen lexical rules", () => {
+it("counts SQL-looking static text and conflict methods while ignoring prose and fragments", () => {
   const { root, write } = fixture();
+  write(
+    "src/prose.ts",
+    [
+      'const messages = ["does not match", "a -> b", "Pragma", "failed to attach", "use glob patterns"];',
+      'const fragments = ["json_each(?)", "WHERE t MATCH ?", "select json_each(?)"];',
+      "const otherTag = label`SELECT json_each(?)`;",
+    ].join("\n"),
+  );
+  expect(inventory(root)).toEqual([]);
   write(
     "src/runtime.ts",
     [
       "// VACUUM; const ignored = /PRAGMA data_version/;",
       'const bare = "data_version schema_version user_version json_each randomblob";',
       'const quoted = \'SELECT "VACUUM", "json_each(" FROM "rowid"\';',
-      'const sql = "pRaGmA data_version; pragma_schema_version(); PRAGMA user_version";',
-      'const functions = "json_each (?) randomblob(2) json_extract(x)";',
-      'const parts = tag`BEGIN IMMEDIATE ${"VACUUM"} json_tree(${tag`PRAGMA data_version`})`;',
+      'db.prepare("PRAGMA user_version; pragma_schema_version(); PRAGMA data_version");',
+      'const functions = " (SELECT json_each (?) randomblob(2) json_extract(x)";',
+      'const parts = `BEGIN IMMEDIATE ${"VACUUM"} json_tree(${sql`PRAGMA data_version`})`;',
       'const split = "json_" + "each(?)";',
-      'const escaped = "json_\\u0065ach(?)";',
+      'const escaped = "SELECT json_\\u0065ach(?)";',
       "builder.orReplace(); builder.orIgnore /* comment */ (); builder.orAbort(); builder.orFail(); builder.orRollback();",
       'const prose = "Please VACUUM this database";',
+      "sql`... json_each(${x}) ...`; kyselySql`json_tree(${x})`; db.SQL`randomblob(2)`;",
+      'const fts = "SELECT * FROM t WHERE t MATCH ?";',
     ].join("\n"),
   );
-  write("src/infra/kysely-sync.ts", "function sqliteStringSet() { return `json_each(?)`; }");
+  write("src/infra/kysely-sync.ts", "function sqliteStringSet() { return sql`json_each(?)`; }");
   write(
     "packages/store/schema.sql",
     '-- VACUUM\n/* PRAGMA data_version */\nBEGIN DEFERRED; SELECT "rowid", printf(1);',
@@ -83,12 +94,12 @@ it("counts only static literal parts and conflict methods under the frozen lexic
     {
       file: "src/runtime.ts",
       matches: [
-        { construct: "data-version", line: 4 },
-        { construct: "pragma", line: 4 },
-        { construct: "pragma", line: 4 },
-        { construct: "schema-version", line: 4 },
         { construct: "pragma", line: 4 },
         { construct: "user-version", line: 4 },
+        { construct: "pragma", line: 4 },
+        { construct: "schema-version", line: 4 },
+        { construct: "data-version", line: 4 },
+        { construct: "pragma", line: 4 },
         { construct: "json-string-set", line: 5 },
         { construct: "randomblob", line: 5 },
         { construct: "json-projection", line: 5 },
@@ -100,7 +111,10 @@ it("counts only static literal parts and conflict methods under the frozen lexic
         { construct: "insert-conflict", line: 9 },
         { construct: "insert-conflict", line: 9 },
         { construct: "insert-conflict", line: 9 },
-        { construct: "vacuum", line: 10 },
+        { construct: "json-string-set", line: 11 },
+        { construct: "json-string-set", line: 11 },
+        { construct: "randomblob", line: 11 },
+        { construct: "fts5", line: 12 },
       ],
     },
   ]);
