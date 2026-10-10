@@ -2315,8 +2315,11 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
+  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async ({
+    signal,
+  }) => {
     openDirectChatSession();
+    const dispatchEntered = createDeferred();
     const dispatchRelease = createDeferred();
     try {
       await writeStoredMainSession({
@@ -2328,14 +2331,21 @@ describe("gateway server chat", () => {
         createDeferred<
           Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
         >();
+      const firstCatalogRequested = createDeferred();
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-          .mockImplementationOnce(() => firstCatalogSnapshot.promise)
+          .mockImplementationOnce(() => {
+            firstCatalogRequested.resolve();
+            return firstCatalogSnapshot.promise;
+          })
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+      dispatchInboundMessageMock.mockImplementation(async () => {
+        dispatchEntered.resolve();
+        return dispatchRelease.promise;
+      });
 
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -2362,9 +2372,8 @@ describe("gateway server chat", () => {
         });
 
       const first = Promise.resolve(callSend("first"));
-      await waitForFast(() => {
-        expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-      }, FAST_WAIT_OPTS);
+      await withinTest(firstCatalogRequested.promise, signal);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
 
       await callSend("duplicate");
       expect(responses).toEqual([
@@ -2393,6 +2402,7 @@ describe("gateway server chat", () => {
           error: undefined,
         },
       ]);
+      await withinTest(dispatchEntered.promise, signal);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
