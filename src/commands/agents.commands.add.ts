@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   checkAgentCreationGate,
@@ -112,7 +113,9 @@ export async function agentsAddCommand(
   }
   const cfg = writeSnapshot.snapshot.sourceConfig;
 
-  const workspaceFlag = opts.workspace?.trim();
+  // Preserve literal workspace path whitespace (trailing/leading spaces are
+  // valid directory names). Trimming silently retargets a neighboring path.
+  const workspaceFlag = readNonBlankString(opts.workspace);
   const nameInput = opts.name?.trim();
 
   if (nonInteractive) {

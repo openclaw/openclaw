@@ -17,6 +17,8 @@ import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.j
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
@@ -555,8 +557,10 @@ function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
 export async function ensureAgentWorkspace(
   params?: EnsureAgentWorkspaceParams,
 ): Promise<EnsuredAgentWorkspace> {
-  const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
-  const dir = resolveUserPath(rawDir);
+  // Preserve literal whitespace in user-supplied workspace dirs (trailing
+  // spaces are valid path segments). resolveUserPath trims and would retarget.
+  const rawDir = readNonBlankString(params?.dir) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const dir = path.resolve(rawDir.startsWith("~") ? expandHomePrefix(rawDir) : rawDir);
   const captured = {
     ...params,
     dir,
