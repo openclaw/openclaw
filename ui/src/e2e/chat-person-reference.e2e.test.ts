@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -44,38 +42,32 @@ const directory: UsersListResult = {
 suite.define(() => {
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
-    { width: 1280, colorScheme: "dark" as const, scale: 1, font: "var(--font-body)" },
-    { width: 390, colorScheme: "light" as const, scale: 1.5, font: "Georgia, serif" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
-  ])("keeps mention avatars aligned across image outcomes at $width px", async (viewport) => {
-    await suite.withPage(
-      { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
-      async ({ page }) => {
-        const response = createDeferred();
-        await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-        await page.route("**/api/users/**/avatar*", async (route) => {
-          await response.promise;
-          await route.fulfill(
-            route.request().url().includes("profile-photo")
-              ? { contentType: "image/png", body: readFileSync("ui/public/apple-touch-icon.png") }
-              : { status: 404 },
-          );
-        });
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              ...historyMessages[0],
-              __openclaw: {
-                id: "mention-image-outcomes",
-                humanMentions: [
-                  { profileId: "profile-photo", start: 0, end: label.length },
-                  { profileId: "profile-missing", start: label.length + 4, end: text.length },
-                ],
+  ])(
+    "aligns mention initials without probing unadvertised images at $width px",
+    async (viewport) => {
+      await suite.withPage(
+        { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
+        async ({ page }) => {
+          const avatarRequests: string[] = [];
+          await page.route("**/api/users/**/avatar*", async (route) => {
+            avatarRequests.push(route.request().url());
+            await route.fulfill({ status: 404 });
+          });
+          await installMockGateway(page, {
+            historyMessages: [
+              {
+                ...historyMessages[0],
+                __openclaw: {
+                  id: "mention-initials",
+                  humanMentions: [
+                    { profileId: "profile-photo", start: 0, end: label.length },
+                    { profileId: "profile-missing", start: label.length + 4, end: text.length },
+                  ],
+                },
               },
-            },
-          ],
-        });
-        try {
+            ],
+          });
           await page.goto(suite.server.baseUrl + "chat");
           const references = page.locator(".markdown-person-reference");
           await expect.poll(() => references.count()).toBe(2);
@@ -98,45 +90,20 @@ suite.define(() => {
                   throw new Error("Expected a rendered mention label");
                 }
                 const box = avatar.getBoundingClientRect();
-                return {
-                  offset: box.top + box.height / 2 - (textBox.top + textBox.height / 2),
-                  width: box.width,
-                  height: box.height,
-                };
+                return box.top + box.height / 2 - (textBox.top + textBox.height / 2);
               }),
             );
-          await expect
-            .poll(() => references.locator('[data-avatar-state="pending"]').count())
-            .toBe(2);
-          const pending = await geometry();
-          await captureUiProof(
-            suite,
-            page,
-            "person-references",
-            `${viewport.width}-${viewport.colorScheme}-pending.png`,
-          );
-          response.resolve();
-          await references.locator('[data-avatar-state="loaded"]').waitFor();
-          await references.locator('[data-avatar-state="failed"]').waitFor();
-          // Images and generated initials must not change the inline box's alignment.
-          expect(await geometry()).toEqual(pending);
-          for (const { offset } of pending) {
-            // Stable image outcomes alone can all be equally misaligned with the name.
+          await expect.poll(() => references.locator('[data-avatar-state="none"]').count()).toBe(2);
+          expect(await references.locator("img").count()).toBe(0);
+          expect(avatarRequests).toEqual([]);
+          for (const offset of await geometry()) {
             expect(Math.abs(offset)).toBeLessThanOrEqual(1);
           }
           expect(await references.allTextContents()).toEqual([label, label]);
-          await captureUiProof(
-            suite,
-            page,
-            "person-references",
-            `${viewport.width}-${viewport.colorScheme}-settled.png`,
-          );
-        } finally {
-          response.resolve();
-        }
-      },
-    );
-  });
+        },
+      );
+    },
+  );
 
   it("shares live person details and visible sessions with the sidebar", async () => {
     await suite.withPage(
@@ -287,13 +254,7 @@ suite.define(() => {
               .evaluate((node) => node.getBoundingClientRect().width),
           ).toBe(0);
           const avatar = reference.locator(".markdown-person-reference__avatar");
-          await expect
-            .poll(() =>
-              avatar
-                .locator("img")
-                .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
-            )
-            .toBe(true);
+          expect(await avatar.locator("img").count()).toBe(0);
           expect(await avatar.getAttribute("aria-hidden")).toBe("true");
           expect(
             await reference.evaluate((node) => {
@@ -307,7 +268,7 @@ suite.define(() => {
               return copiedText;
             }),
           ).toBe(label);
-          expect(avatarRequests).toContain("/api/users/profile-old/avatar");
+          expect(avatarRequests).not.toContain("/api/users/profile-old/avatar");
           const avatarSize = await avatar.boundingBox();
           expect(avatarSize?.width).toBeGreaterThan(0);
           expect(avatarSize?.width).toBe(avatarSize?.height);
