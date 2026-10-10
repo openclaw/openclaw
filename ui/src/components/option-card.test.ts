@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./option-card.ts";
 
 describe("option card", () => {
@@ -20,26 +20,23 @@ describe("option card", () => {
     const onSelect = vi.fn();
     const selected = vi.fn();
     container.addEventListener("option-select", selected);
-    render(
-      html`<openclaw-option-card
-        .props=${{
-          header: "Access",
-          question: "How should OpenClaw help?",
-          options: [
-            { value: "guarded", label: "Ask first" },
-            {
-              value: "full",
-              label: "Full access",
-              description: "Use announced defaults",
-              recommended: true,
-            },
-          ],
-          onSelect,
-        }}
-      ></openclaw-option-card>`,
-      container,
-    );
-    const card = container.querySelector("openclaw-option-card")!;
+    const card = document.createElement("openclaw-option-card");
+    card.props = {
+      header: "Access",
+      question: "How should OpenClaw help?",
+      options: [
+        { value: "guarded", label: "Ask first" },
+        {
+          value: "full",
+          label: "Full access",
+          description: "Use announced defaults",
+          recommended: true,
+        },
+      ],
+      onSelect,
+    };
+    mountSolid(() => card, { container });
+    // Solid owns the host node; its still-Lit children have a separate commit.
     await card.updateComplete;
     const recommended = container.querySelector<HTMLButtonElement>(
       ".option-card__choice--recommended",
@@ -60,19 +57,16 @@ describe("option card", () => {
     const onSkip = vi.fn();
     const skipped = vi.fn();
     container.addEventListener("option-skip", skipped);
-    render(
-      html`<openclaw-option-card
-        .props=${{
-          question: "Choose one",
-          options: [
-            { value: "one", label: "One" },
-            { value: "two", label: "Two" },
-          ],
-          onSkip,
-        }}
-      ></openclaw-option-card>`,
-      container,
-    );
+    const card = document.createElement("openclaw-option-card");
+    card.props = {
+      question: "Choose one",
+      options: [
+        { value: "one", label: "One" },
+        { value: "two", label: "Two" },
+      ],
+      onSkip,
+    };
+    mountSolid(() => card, { container });
     await container.querySelector("openclaw-option-card")!.updateComplete;
     container.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
@@ -87,18 +81,15 @@ describe("option card", () => {
       const target = document.createElement("div");
       container.append(control, target);
       control.focus();
-      render(
-        html`<openclaw-option-card
-          .props=${{
-            question: "What would you like to do first?",
-            options: [
-              { value: "chat", label: "Talk to my agent", recommended: true },
-              { value: "channels", label: "See all channels" },
-            ],
-          }}
-        ></openclaw-option-card>`,
-        target,
-      );
+      const card = document.createElement("openclaw-option-card");
+      card.props = {
+        question: "What would you like to do first?",
+        options: [
+          { value: "chat", label: "Talk to my agent", recommended: true },
+          { value: "channels", label: "See all channels" },
+        ],
+      };
+      mountSolid(() => card, { container: target });
       await target.querySelector("openclaw-option-card")!.updateComplete;
 
       expect(document.activeElement).toBe(control);

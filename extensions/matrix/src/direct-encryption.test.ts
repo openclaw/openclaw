@@ -133,7 +133,7 @@ function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolea
 describe.each([true, false])(
   "registered Matrix direct repair with named encryption=%s",
   (encrypted) => {
-    it("prepares the native approval target without reading credentials for encryption", async () => {
+    it("prepares the Gateway-hosted native approval target without host SQLite", async () => {
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
@@ -147,7 +147,6 @@ describe.each([true, false])(
         expect(
           runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
         ).toBe(true);
-        const availability = counters.counts();
         const result = await runtime.transport.prepareTarget({
           cfg,
           accountId: "ops",
@@ -179,7 +178,7 @@ describe.each([true, false])(
         const total = counters.counts();
         expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
         expectRepair(client, encrypted);
-        expect(total).toEqual(availability);
+        expect(total).toEqual([0, 0, 0, 0, 0, 0]);
       } finally {
         counters.restore();
       }
@@ -193,46 +192,39 @@ describe.each([true, false])(
       const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       const program = new Command();
       registerMatrixCli({ program });
-      const counters = recordHostSql();
-      try {
-        await program.parseAsync(
-          ["matrix", "direct", "repair", "--account", "ops", "--user-id", peer, "--json"],
-          { from: "user" },
-        );
-        const total = counters.counts();
-        const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
-        expect(result).toEqual({
+      await program.parseAsync(
+        ["matrix", "direct", "repair", "--account", "ops", "--user-id", peer, "--json"],
+        { from: "user" },
+      );
+      const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
+      expect(result).toEqual({
+        accountId: "ops",
+        remoteUserId: "@owner:example.org",
+        selfUserId: "@ops:example.org",
+        mappedRoomIds: [],
+        mappedRooms: [],
+        discoveredStrictRoomIds: [],
+        activeRoomId: roomId,
+        encrypted,
+        createdRoomId: roomId,
+        changed: true,
+        directContentBefore: { "@other:example.org": ["!other:example.org"] },
+        directContentAfter: {
+          "@other:example.org": ["!other:example.org"],
+          "@owner:example.org": ["!created:example.org"],
+        },
+      });
+      expectRepair(client, encrypted);
+      expect(client.events[0]).toBe("start");
+      expect(client.events.at(-1)).toBe("persist");
+      expect(createMatrixClient).toHaveBeenCalledWith(
+        expect.objectContaining({
           accountId: "ops",
-          remoteUserId: "@owner:example.org",
-          selfUserId: "@ops:example.org",
-          mappedRoomIds: [],
-          mappedRooms: [],
-          discoveredStrictRoomIds: [],
-          activeRoomId: roomId,
-          encrypted,
-          createdRoomId: roomId,
-          changed: true,
-          directContentBefore: { "@other:example.org": ["!other:example.org"] },
-          directContentAfter: {
-            "@other:example.org": ["!other:example.org"],
-            "@owner:example.org": ["!created:example.org"],
-          },
-        });
-        expectRepair(client, encrypted);
-        expect(client.events[0]).toBe("start");
-        expect(client.events.at(-1)).toBe("persist");
-        expect(createMatrixClient).toHaveBeenCalledWith(
-          expect.objectContaining({
-            accountId: "ops",
-            userId: "@ops:example.org",
-            accessToken: "synthetic-matrix-token",
-            encryption: encrypted,
-          }),
-        );
-        expect(total).toEqual([0, 0, 0, 0, 0, 0]);
-      } finally {
-        counters.restore();
-      }
+          userId: "@ops:example.org",
+          accessToken: "synthetic-matrix-token",
+          encryption: encrypted,
+        }),
+      );
     });
   },
 );

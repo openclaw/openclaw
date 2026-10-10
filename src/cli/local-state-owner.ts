@@ -45,8 +45,6 @@ export async function runWithLocalStateOwner<T>(params: {
   expectFinal?: boolean;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
   onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
-  /** A multi-request operation already accepted by the Gateway must never continue offline. */
-  onNoOwner?: "refuse";
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
@@ -133,11 +131,21 @@ export async function runWithLocalStateOwner<T>(params: {
       assertOwnerCurrent();
     };
     assertCurrent();
-    const { captureRuntimeConfigAsyncReader } = await import("../config/io.runtime.js");
+    const { getRuntimeConfig } = await import("../config/config.js");
     assertCurrent();
-    const config = await captureRuntimeConfigAsyncReader({ assertCurrent })();
-    assertCurrent();
-    return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
+    let config: OpenClawConfig | undefined;
+    return await params.runLocal({
+      env,
+      // Loading config can write state. Config-free owners must reach their own admission first.
+      get config() {
+        assertCurrent();
+        config ??= getRuntimeConfig();
+        assertCurrent();
+        return config;
+      },
+      signal: controller.signal,
+      assertCurrent,
+    });
   };
   const route = async (
     owner: Omit<GatewayLockIdentity, "port"> & { port?: number },
@@ -230,13 +238,6 @@ export async function runWithLocalStateOwner<T>(params: {
     const owner = await discover();
     if (owner) {
       return await route(owner);
-    }
-    if (params.onNoOwner === "refuse") {
-      return refuse(
-        new Error(
-          "The selected Gateway is no longer running; inspect the operation before retrying",
-        ),
-      );
     }
     let lock;
     try {
