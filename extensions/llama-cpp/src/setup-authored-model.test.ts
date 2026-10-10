@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -29,6 +30,29 @@ function authoredChatContext(source: string, confirm = true): ProviderAuthContex
 }
 
 describe("llama.cpp authored model setup", () => {
+  it.each([
+    "llama-cpp/selected",
+    "Chosen",
+    "llama-cpp/Chosen",
+    "llama-cpp/selected@llama-cpp:default",
+  ])("keeps the selected model when the primary is %s", async (primary) => {
+    const ctx = authoredChatContext(DEFAULT_LLAMA_CPP_MODEL_URI);
+    await fs.writeFile(modelPath, "GGUF");
+    ctx.config.agents = {
+      defaults: {
+        model: { primary },
+        models: { "llama-cpp/selected": { alias: "Chosen" } },
+      },
+    };
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(result.defaultModel).toBe("llama-cpp/selected");
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models[0]?.id).toBe(
+      "selected",
+    );
+  });
+
   it.each([
     {
       source:
