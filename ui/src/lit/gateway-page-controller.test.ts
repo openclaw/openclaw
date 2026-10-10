@@ -196,6 +196,11 @@ describe("GatewayPageController", () => {
     expect(controller.capture()).toBeNull();
     expect(identityChanges).not.toHaveBeenCalled();
 
+    // Lit may commit a queued update after removal; it must not reopen the binding.
+    host.update();
+    expect(controller.capture()).toBeNull();
+    expect(identityChanges).not.toHaveBeenCalled();
+
     host.connect();
     expect(controller.capture()).not.toBeNull();
     expect(identityChanges).toHaveBeenCalledTimes(1);

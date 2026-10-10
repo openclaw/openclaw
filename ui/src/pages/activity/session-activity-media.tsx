@@ -1,5 +1,5 @@
-import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { html } from "lit";
+import { createRenderEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -7,10 +7,11 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
-import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
 import {
@@ -20,7 +21,7 @@ import {
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
 
-registerActivityEnglish();
+registerEnglishCatalog(registerActivityEnglish);
 
 type ImageEntry = {
   images: ImageBlock[];
@@ -86,31 +87,62 @@ async function queued(state: ConnectionImages, key: string, run: () => Promise<v
   }
 }
 
-class ActivitySessionMedia extends OpenClawLightDomElement {
-  @property({ attribute: false }) context!: ApplicationContext;
-  @property() sessionKey = "";
-  @property() agentId = "";
-  @property({ type: Number }) revision = 0;
-  @property({ attribute: false }) session?: GatewaySessionRow;
+export type ActivitySessionMediaProps = {
+  context: ApplicationContext;
+  sessionKey: string;
+  agentId: string;
+  revision: number;
+  session?: GatewaySessionRow;
+};
 
-  private visible = false;
+// The cache and admission owner stays synchronous; Solid only observes its presentation.
+class ActivitySessionMediaState {
+  visible = false;
   private observer?: IntersectionObserver;
   private entry?: ImageEntry;
   private settledEntry?: ImageEntry;
-  private displayedImages: ImageBlock[] = [];
-  private owner?: ConnectionImages;
+  displayedImages: ImageBlock[] = [];
+  owner?: ConnectionImages;
   private key = "";
   private boundImageIdentity = "";
-  private lightbox: ImageLightboxItem | null = null;
+  lightbox: ImageLightboxItem | null = null;
   private imageRequest = 0;
   private observedPending?: Promise<void>;
-  private readonly refresh = () => this.requestUpdate();
-  private readonly subscriptions = new SubscriptionsController(this).watchStore(
-    () => this.context?.gateway,
-  );
+  private disposed = false;
 
-  override connectedCallback() {
-    super.connectedCallback();
+  constructor(
+    readonly props: ActivitySessionMediaProps,
+    private readonly host: HTMLElement,
+    private readonly notify: () => void,
+  ) {}
+
+  private get context() {
+    return this.props.context;
+  }
+  private get sessionKey() {
+    return this.props.sessionKey;
+  }
+  private get agentId() {
+    return this.props.agentId;
+  }
+  private get revision() {
+    return this.props.revision;
+  }
+  private get session() {
+    return this.props.session;
+  }
+  private get isConnected() {
+    return !this.disposed && this.host.isConnected;
+  }
+
+  readonly refresh = () => {
+    if (!this.disposed) {
+      this.synchronize();
+      this.notify();
+    }
+  };
+
+  connect() {
     // Visibility is required before transcript discovery; never fall back to an eager scan.
     if (typeof IntersectionObserver === "undefined") {
       return;
@@ -118,27 +150,28 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     this.observer = new IntersectionObserver(
       (entries) => {
         this.visible = entries.some((entry) => entry.isIntersecting);
-        this.requestUpdate();
+        this.refresh();
       },
       { rootMargin: "200px" },
     );
-    this.observer.observe(this);
+    this.observer.observe(this.host);
   }
 
-  override disconnectedCallback() {
+  dispose() {
+    this.disposed = true;
     this.observer?.disconnect();
     this.visible = false;
-    this.subscriptions.clear();
-    this.closeImage();
+    this.closeImage(false);
     releaseChatMediaResourceSubscriber(this.refresh);
-    super.disconnectedCallback();
   }
 
-  private closeImage = () => {
+  readonly closeImage = (notify = true) => {
     this.imageRequest++;
     this.lightbox?.release?.();
     this.lightbox = null;
-    this.requestUpdate();
+    if (notify) {
+      this.refresh();
+    }
   };
 
   private get imageIdentity(): string {
@@ -150,7 +183,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     ]);
   }
 
-  override willUpdate() {
+  synchronize() {
     const { client, hello, phase } = this.context.gateway.snapshot;
     const owner = client && phase === "connected" ? connectionImages(client, hello) : undefined;
     const imageIdentity = this.imageIdentity;
@@ -158,7 +191,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     if (owner !== this.owner || imageIdentity !== this.boundImageIdentity) {
       this.settledEntry = undefined;
       this.displayedImages = [];
-      this.closeImage();
+      this.closeImage(false);
       releaseChatMediaResourceSubscriber(this.refresh);
       this.boundImageIdentity = imageIdentity;
     }
@@ -196,7 +229,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     }
   }
 
-  private load = (entry = this.entry) => {
+  readonly load = (entry = this.entry) => {
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
     const owner = this.owner;
@@ -279,110 +312,180 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       })
       .finally(() => {
         entry.pending = undefined;
-        this.requestUpdate();
+        this.refresh();
       });
-    this.requestUpdate();
+    this.refresh();
   };
 
-  override render() {
-    const entry = this.settledEntry ?? this.entry;
-    const owner = this.owner;
+  get displayEntry() {
+    const { client } = this.context.gateway.snapshot;
+    return this.owner && client ? (this.settledEntry ?? this.entry) : undefined;
+  }
+
+  imageOptions() {
+    const owner = this.owner!;
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
-    if (!entry || !owner || !client) {
-      return nothing;
-    }
     const currentConnection = () =>
       gateway.snapshot.client === client &&
       gateway.snapshot.hello === hello &&
       gateway.snapshot.phase === "connected";
-    const loadAction = (label: string) => html`<button
-      class="activity-feed__note-action"
-      ?disabled=${Boolean(entry.pending)}
-      @click=${() => this.load(entry)}
-    >
-      ${label}
-    </button>`;
-    const hasImages = this.displayedImages.length > 0;
-    const older =
-      entry.cursor && entry.images.length < 4 && !entry.error
-        ? [loadAction(t(entry.pending ? "common.loading" : "activity.images.older"))]
-        : [];
-    const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
-    const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
-      entry.error
-        ? html`<span role="status">${t("activity.images.failed")}</span
-            >${loadAction(t("common.retry"))}`
-        : hasImages
-          ? nothing
-          : older
-    }`;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;
-    return html`
-      ${
-        hasImages || showNote
-          ? html`<div class="activity-feed__media">
-              ${
-                hasImages
-                  ? renderMessageImages(
-                      this.displayedImages,
-                      {
-                        sessionKey: this.sessionKey,
-                        agentId: this.agentId,
-                        connectionEpoch: owner.epoch,
-                        policyKey: assistantMediaPolicyKey(this.session),
-                        resourceBasePath: this.context.resourceBasePath,
-                        authToken: resolveControlUiAuthToken({
-                          hello,
-                          settings: { token: gateway.connection.token },
-                          password: gateway.connection.password,
-                        }),
-                        onRequestUpdate: this.refresh,
-                        onRequestOpenImage: () => ++this.imageRequest,
-                        onOpenImage: (item, version) => {
-                          if (
-                            !this.isConnected ||
-                            this.owner !== owner ||
-                            this.imageIdentity !== imageIdentity ||
-                            !currentConnection() ||
-                            version !== this.imageRequest
-                          ) {
-                            item.release?.();
-                            return;
-                          }
-                          this.lightbox?.release?.();
-                          this.lightbox = item;
-                          this.requestUpdate();
-                        },
-                        resolveArtifactDownload: (params, signal) =>
-                          resolveArtifactDownloadSource(
-                            {
-                              get client() {
-                                return gateway.snapshot.client;
-                              },
-                              get connected() {
-                                return currentConnection();
-                              },
-                              resourceBasePath: this.context.resourceBasePath,
-                            },
-                            { ...params, agentId },
-                            signal,
-                          ),
-                      },
-                      older,
-                    )
-                  : nothing
-              }
-              ${showNote ? html`<div class="activity-feed__note">${note}</div>` : nothing}
-            </div>`
-          : nothing
-      }
-      ${renderChatImageLightbox(this.lightbox, this.closeImage)}
-    `;
+    return {
+      sessionKey: this.sessionKey,
+      agentId,
+      connectionEpoch: owner.epoch,
+      policyKey: assistantMediaPolicyKey(this.session),
+      resourceBasePath: this.context.resourceBasePath,
+      authToken: resolveControlUiAuthToken({
+        hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      }),
+      onRequestUpdate: this.refresh,
+      onRequestOpenImage: () => ++this.imageRequest,
+      onOpenImage: (item: ImageLightboxItem, version?: number) => {
+        if (
+          !this.isConnected ||
+          this.owner !== owner ||
+          this.imageIdentity !== imageIdentity ||
+          !currentConnection() ||
+          version !== this.imageRequest
+        ) {
+          item.release?.();
+          return;
+        }
+        this.lightbox?.release?.();
+        this.lightbox = item;
+        this.refresh();
+      },
+      resolveArtifactDownload: (
+        params: Parameters<typeof resolveArtifactDownloadSource>[1],
+        signal?: AbortSignal,
+      ) =>
+        resolveArtifactDownloadSource(
+          {
+            get client() {
+              return gateway.snapshot.client;
+            },
+            get connected() {
+              return currentConnection();
+            },
+            resourceBasePath: this.context.resourceBasePath,
+          },
+          { ...params, agentId },
+          signal,
+        ),
+    };
   }
 }
 
-if (!customElements.get("openclaw-activity-session-media")) {
-  customElements.define("openclaw-activity-session-media", ActivitySessionMedia);
+function ActivitySessionMediaContent(
+  props: ActivitySessionMediaProps,
+  host: SolidBridgeElement<ActivitySessionMediaProps>,
+) {
+  const [revision, setRevision] = createSignal(0);
+  const state = new ActivitySessionMediaState(props, host, () => setRevision((value) => value + 1));
+  const gateway = projectGateway(props.context.gateway);
+  createRenderEffect(
+    () => props.context.gateway,
+    (source) => gateway.replaceSource(source),
+  );
+  createRenderEffect(
+    () => [gateway.read(), props.sessionKey, props.agentId, props.revision, props.session],
+    () => state.refresh(),
+  );
+  onSettled(() => state.connect());
+  onCleanup(() => state.dispose());
+  const entry = () => {
+    revision();
+    return state.displayEntry;
+  };
+  const hasImages = () => {
+    revision();
+    return state.displayedImages.length > 0;
+  };
+  const older = () => {
+    const value = entry();
+    return Boolean(value?.cursor && value.images.length < 4 && !value.error);
+  };
+  const showNote = () => {
+    const value = entry();
+    return Boolean(value?.error || value?.omitted || (!hasImages() && value?.cursor));
+  };
+  const load = () => state.load(entry());
+  const loadLabel = () => t(entry()?.pending ? "common.loading" : "activity.images.older");
+  const gallery = () => {
+    revision();
+    // The unported chat gallery owns these children and its resource directives.
+    const previews = older()
+      ? [
+          html`<button
+            class="activity-feed__note-action"
+            ?disabled=${Boolean(entry()?.pending)}
+            @click=${() => state.load(entry())}
+          >
+            ${loadLabel()}
+          </button>`,
+        ]
+      : [];
+    return renderMessageImages(state.displayedImages, state.imageOptions(), previews);
+  };
+  const lightbox = () => {
+    revision();
+    return renderChatImageLightbox(state.lightbox, () => state.closeImage());
+  };
+  return (
+    <>
+      {(hasImages() || showNote()) && (
+        <div class="activity-feed__media">
+          {hasImages() && <LitContent content={gallery()} />}
+          {showNote() && (
+            <div class="activity-feed__note">
+              {entry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
+              {entry()?.error ? (
+                <>
+                  <span role="status">{t("activity.images.failed")}</span>
+                  <button
+                    class="activity-feed__note-action"
+                    disabled={Boolean(entry()?.pending)}
+                    onClick={load}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </>
+              ) : (
+                !hasImages() &&
+                older() && (
+                  <button
+                    class="activity-feed__note-action"
+                    disabled={Boolean(entry()?.pending)}
+                    onClick={load}
+                  >
+                    {loadLabel()}
+                  </button>
+                )
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <LitContent content={lightbox()} />
+    </>
+  );
 }
+
+export const ActivitySessionMedia = defineSolidBridge<ActivitySessionMediaProps>(
+  "openclaw-activity-session-media",
+  ActivitySessionMediaContent,
+  {
+    properties: {
+      context: { default: undefined!, attribute: false },
+      sessionKey: { default: "" },
+      agentId: { default: "" },
+      revision: { default: 0, type: Number },
+      session: { default: undefined, attribute: false },
+    },
+  },
+);

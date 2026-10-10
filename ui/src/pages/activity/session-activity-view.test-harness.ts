@@ -1,8 +1,34 @@
-import { vi } from "vitest";
+import { createSignal, flush } from "@solidjs/signals";
+import { render, type JSX } from "@solidjs/web";
+import { afterEach, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
-import type { renderSessionActivityView } from "./session-activity-view.ts";
+import type { renderSessionActivityView } from "./session-activity-view.tsx";
+
+export function mountSolid<Props extends object>(component: (props: Props) => JSX.Element) {
+  const mounts = new Map<HTMLElement, { update: (props: Props) => void; dispose: () => void }>();
+  afterEach(() => {
+    for (const mount of mounts.values()) {
+      mount.dispose();
+    }
+    mounts.clear();
+  });
+  return (input: Props, container: HTMLElement) => {
+    const mounted = mounts.get(container);
+    if (mounted) {
+      mounted.update(input);
+    } else {
+      const [current, setCurrent] = createSignal<Props>(() => input, { equals: false });
+      const reactiveProps = new Proxy(input, {
+        get: (_target, key) => Reflect.get(current(), key),
+      });
+      const dispose = render(() => component(reactiveProps), container);
+      mounts.set(container, { update: (next) => setCurrent(() => next), dispose });
+    }
+    flush();
+  };
+}
 
 export function row(
   key: string,

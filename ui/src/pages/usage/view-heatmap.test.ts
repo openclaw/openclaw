@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import { dailyEntry } from "./usage-chart.test-support.ts";
-import { renderUsageHeatmap } from "./view-heatmap.ts";
+import { renderUsageHeatmap } from "./view-heatmap.tsx";
+import { mountUsageView } from "./view-mount.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -12,12 +12,13 @@ afterEach(() => {
 describe("renderUsageHeatmap", () => {
   it("renders the selected activity range from usage cost data", () => {
     const container = document.createElement("div");
-    render(
-      renderUsageHeatmap(
-        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
-        "2025-07-11",
-        "2026-07-09",
-      ),
+    mountUsageView(
+      () =>
+        renderUsageHeatmap(
+          [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
+          "2025-07-11",
+          "2026-07-09",
+        ),
       container,
     );
 
@@ -34,8 +35,8 @@ describe("renderUsageHeatmap", () => {
 
   it("keeps short ranges at their natural cell width", () => {
     const container = document.createElement("div");
-    render(
-      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
+    mountUsageView(
+      () => renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
       container,
     );
 

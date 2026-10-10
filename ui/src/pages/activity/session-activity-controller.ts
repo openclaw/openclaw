@@ -1,5 +1,4 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -58,7 +57,7 @@ function summaryRevision(row: GatewaySessionRow): string {
 }
 
 /** The Activity query owns its page; selecting a person must not replace the sidebar roster. */
-export class SessionActivityController implements ReactiveController {
+export class SessionActivityController {
   result?: SessionsListResult;
   error?: string;
   incomplete = false;
@@ -98,18 +97,16 @@ export class SessionActivityController implements ReactiveController {
     refresh: () => this.load(this.client, this.filters, "refresh"),
   });
 
-  constructor(private readonly host: ReactiveControllerHost) {
-    host.addController(this);
-  }
+  constructor(private readonly notify: () => void) {}
 
-  hostConnected(): void {
+  connect(): void {
     this.updatePageLifecycleListeners(true);
     if (this.observesPageLifecycle) {
       this.handlePageLifecycle(new Event("pageshow"));
     }
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.updatePageLifecycleListeners(false);
     this.resetQuery();
   }
@@ -279,12 +276,12 @@ export class SessionActivityController implements ReactiveController {
           }
           this.applySummaryBatch(this.result, rows, readRevision, null);
         }
-        this.host.requestUpdate();
+        this.notify();
       }
     } finally {
       if (this.summaryPending === pending) {
         this.summaryPending = undefined;
-        this.host.requestUpdate();
+        this.notify();
         void this.ensureSummaries();
       }
     }
@@ -403,7 +400,7 @@ export class SessionActivityController implements ReactiveController {
             this.result = next.result;
             requiresRefresh = next.requiresRefresh;
             this.incomplete ||= this.filters === "current" && requiresRefresh;
-            this.host.requestUpdate();
+            this.notify();
           }
         }
         if (this.pending && this.filters === "current") {
@@ -474,7 +471,7 @@ export class SessionActivityController implements ReactiveController {
     }
     if (!client || !filters) {
       this.resetQuery();
-      this.host.requestUpdate();
+      this.notify();
       return Promise.resolve();
     }
     const now = new Date();
@@ -549,7 +546,7 @@ export class SessionActivityController implements ReactiveController {
       this.incomplete = false;
     }
     const readRevision = ++this.historyRevision;
-    this.host.requestUpdate();
+    this.notify();
     void client
       .request<SessionsListResult>("sessions.list", request, { signal: pending.controller.signal })
       .then((result) => {
@@ -596,7 +593,7 @@ export class SessionActivityController implements ReactiveController {
           this.pending = undefined;
           this.pendingChanges.length = 0;
           this.requestState = "idle";
-          this.host.requestUpdate();
+          this.notify();
         }
         pending.completion.resolve();
       });

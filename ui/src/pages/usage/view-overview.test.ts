@@ -1,16 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { renderCostBreakdownCompact } from "./view-chart.ts";
+import { renderCostBreakdownCompact } from "./view-chart.tsx";
+import { mountUsageView } from "./view-mount.test-support.ts";
 import {
   renderCostWindowComparison,
   renderFilterChips,
   renderSessionsCard,
   renderUsageInsights,
-} from "./view-overview.ts";
+} from "./view-overview.tsx";
 import { createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
@@ -65,27 +66,28 @@ describe("renderUsageInsights", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
-    render(
-      renderUsageInsights(
-        totals,
-        {
-          ...aggregates,
-          byAgent: [
-            { agentId: "main", totals },
-            { agentId: "research", totals },
-          ],
-        },
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
+    mountUsageView(
+      () =>
+        renderUsageInsights(
+          totals,
+          {
+            ...aggregates,
+            byAgent: [
+              { agentId: "main", totals },
+              { agentId: "research", totals },
+            ],
+          },
+          {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          false,
+          true,
+          [],
+          1,
+          1,
+        ),
       container,
     );
 
@@ -129,21 +131,22 @@ describe("renderUsageInsights", () => {
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
+    mountUsageView(
+      () =>
+        renderUsageInsights(
+          totals,
+          aggregates,
+          {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          false,
+          true,
+          [],
+          1,
+          1,
+        ),
       container,
     );
 
@@ -170,21 +173,22 @@ describe("renderUsageInsights", () => {
       ],
     } as UsageAggregates;
 
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
+    mountUsageView(
+      () =>
+        renderUsageInsights(
+          costTotals,
+          costAggregates,
+          {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          false,
+          true,
+          [],
+          1,
+          1,
+        ),
       container,
     );
 
@@ -208,21 +212,22 @@ describe("renderUsageInsights", () => {
       ],
     } as UsageAggregates;
 
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        false,
-        [],
-        1,
-        1,
-      ),
+    mountUsageView(
+      () =>
+        renderUsageInsights(
+          costTotals,
+          costAggregates,
+          {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          false,
+          false,
+          [],
+          1,
+          1,
+        ),
       container,
     );
 
@@ -233,18 +238,19 @@ describe("renderUsageInsights", () => {
 describe("usage overview presentation owners", () => {
   it.each(["tokens", "cost"] as const)("preserves ordered %s breakdown categories", (mode) => {
     const container = document.createElement("div");
-    render(
-      renderCostBreakdownCompact(
-        {
-          ...totals,
-          totalCost: 1,
-          outputCost: 0.2,
-          inputCost: 0.1,
-          cacheWriteCost: 0.3,
-          cacheReadCost: 0.4,
-        },
-        mode,
-      ),
+    mountUsageView(
+      () =>
+        renderCostBreakdownCompact(
+          {
+            ...totals,
+            totalCost: 1,
+            outputCost: 0.2,
+            inputCost: 0.1,
+            cacheWriteCost: 0.3,
+            cacheReadCost: 0.4,
+          },
+          mode,
+        ),
       container,
     );
 
@@ -282,11 +288,12 @@ describe("usage overview presentation owners", () => {
       selectedSessions: ["agent:main:usage"],
     });
     Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
-    render(
-      renderFilterChips(
-        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        props,
-      ),
+    mountUsageView(
+      () =>
+        renderFilterChips(
+          [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+          props,
+        ),
       container,
     );
 
@@ -307,17 +314,18 @@ describe("usage overview presentation owners", () => {
 describe("renderCostWindowComparison", () => {
   it("shows the selected range and shorter calendar periods", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [
-          dailyEntry("2026-06-01", 100, 1),
-          dailyEntry("2026-06-25", 400, 4),
-          dailyEntry("2026-07-01", 500, 5),
-        ],
-        "2026-06-01",
-        "2026-07-01",
-        "local",
-      ),
+    mountUsageView(
+      () =>
+        renderCostWindowComparison(
+          [
+            dailyEntry("2026-06-01", 100, 1),
+            dailyEntry("2026-06-25", 400, 4),
+            dailyEntry("2026-07-01", 500, 5),
+          ],
+          "2026-06-01",
+          "2026-07-01",
+          "local",
+        ),
       container,
     );
 
@@ -335,13 +343,14 @@ describe("renderCostWindowComparison", () => {
 
   it("preserves sub-cent totals and daily averages", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [dailyEntry("2026-07-01", 300, 0.003)],
-        "2026-06-02",
-        "2026-07-01",
-        "local",
-      ),
+    mountUsageView(
+      () =>
+        renderCostWindowComparison(
+          [dailyEntry("2026-07-01", 300, 0.003)],
+          "2026-06-02",
+          "2026-07-01",
+          "local",
+        ),
       container,
     );
 
@@ -379,12 +388,61 @@ describe("renderSessionsCard", () => {
       sessionsTab: options.tab ?? "all",
     });
     props.callbacks.details.onSelectSession = options.onSelect ?? noop;
-    render(
-      renderSessionsCard(sessions, props, options.totalSessions ?? sessions.length),
+    mountUsageView(
+      () => renderSessionsCard(sessions, props, options.totalSessions ?? sessions.length),
       container,
     );
     return container;
   };
+
+  it("preserves sort focus while changing the row order", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: {
+        ...base.callbacks,
+        display: {
+          ...base.callbacks.display,
+          onChange: (patch: Partial<UsageProps["display"]>) =>
+            setDisplay((current) => ({ ...current, ...patch })),
+        },
+      },
+    };
+    const sessions = [
+      {
+        key: "alpha",
+        label: "Alpha",
+        updatedAt: 2,
+        usage: { ...totals, totalTokens: 100, totalCost: 1 },
+      },
+      {
+        key: "beta",
+        label: "Beta",
+        updatedAt: 1,
+        usage: { ...totals, totalTokens: 50, totalCost: 5 },
+      },
+    ];
+    const container = document.body.appendChild(document.createElement("div"));
+    mountUsageView(() => renderSessionsCard(sessions, usage, sessions.length), container);
+    const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
+    select.focus();
+    for (const [sort, first] of [
+      ["cost", "Beta"],
+      ["recent", "Alpha"],
+    ] as const) {
+      select.value = sort;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      flush();
+      expect(container.querySelector(".sessions-sort select")).toBe(select);
+      expect(document.activeElement).toBe(select);
+      expect(select.value).toBe(sort);
+      expect(container.querySelector(".session-bar-title")?.textContent).toBe(first);
+    }
+  });
 
   it("identifies mixed-agent sessions", async () => {
     const container = renderCard([
@@ -551,7 +609,7 @@ describe("renderSessionsCard", () => {
     const props = createUsageProps();
     props.filters.selectedSessions = ["agent:main:selected"];
     props.callbacks.details.onSelectSession = onSelectSession;
-    render(renderSessionsCard(sessions, props, sessions.length), container);
+    mountUsageView(() => renderSessionsCard(sessions, props, sessions.length), container);
 
     const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
     const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");

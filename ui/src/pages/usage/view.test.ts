@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { buildUsageFilterOptions } from "./query.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
+import { mountUsageView } from "./view-mount.test-support.ts";
 import { createUsageProps, usageSession } from "./view.test-support.ts";
-import { renderUsage } from "./view.ts";
+import { renderUsage } from "./view.tsx";
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
   return Array.from(container.querySelectorAll(".usage-insight-card")).find(
@@ -85,22 +86,23 @@ it.each([
   ];
   const onExportJson = vi.fn();
   const container = document.createElement("div");
-  render(
-    renderUsage(
-      createUsageProps({
-        data: {
-          ...base.data,
-          sessions: [matched, other, earlier],
-          totals: { ...selectedDay, totalCost: 170 },
-          costDaily: [{ ...selectedDay, totalTokens: 999, totalCost: 100 }],
-        },
-        filters: { ...base.filters, ...scope, timeZone: "utc", selectedDays: [selectedDay.date] },
-        callbacks: {
-          ...base.callbacks,
-          display: { ...base.callbacks.display, onExportJson },
-        },
-      }),
-    ),
+  mountUsageView(
+    () =>
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...base.data,
+            sessions: [matched, other, earlier],
+            totals: { ...selectedDay, totalCost: 170 },
+            costDaily: [{ ...selectedDay, totalTokens: 999, totalCost: 100 }],
+          },
+          filters: { ...base.filters, ...scope, timeZone: "utc", selectedDays: [selectedDay.date] },
+          callbacks: {
+            ...base.callbacks,
+            display: { ...base.callbacks.display, onExportJson },
+          },
+        }),
+      ),
     container,
   );
   expect(
@@ -127,7 +129,10 @@ it.each([
 it("renders shared skeletons while initial usage is loading", () => {
   const container = document.createElement("div");
   const props = createUsageProps();
-  render(renderUsage(createUsageProps({ data: { ...props.data, loading: true } })), container);
+  mountUsageView(
+    () => renderUsage(createUsageProps({ data: { ...props.data, loading: true } })),
+    container,
+  );
 
   const blocks = container.querySelectorAll(".usage-skeleton-block");
   expect(blocks).toHaveLength(3);
@@ -145,17 +150,18 @@ describe("renderUsage", () => {
     const fixture = createRecordedCostUsage();
     const sessions = sessionIndex === null ? fixture.sessions : [fixture.sessions[sessionIndex]!];
     const container = document.createElement("div");
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...base.data,
-            sessions,
-            totals: sessionIndex === null ? fixture.totals : sessions[0]!.usage!,
-            aggregates: buildAggregatesFromSessions(sessions),
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...base.data,
+              sessions,
+              totals: sessionIndex === null ? fixture.totals : sessions[0]!.usage!,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+          }),
+        ),
       container,
     );
 
@@ -189,13 +195,24 @@ describe("renderUsage", () => {
       });
       const clearedFilters = { ...props.filters };
       const container = document.createElement("div");
+      const [currentFilters, setFilters] = createSignal(props.filters);
+      mountUsageView(
+        () =>
+          renderUsage({
+            ...props,
+            get filters() {
+              return currentFilters();
+            },
+          }),
+        container,
+      );
       for (const { filters, missing, value } of [
         { filters: clearedFilters, missing: true, value: "$0.03" },
         { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
         { filters: clearedFilters, missing: true, value: "$0.03" },
       ]) {
-        props.filters = filters;
-        render(renderUsage(props), container);
+        setFilters(filters);
+        flush();
         expect(averageCostSummary(container)).toEqual({
           hint: missing
             ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
@@ -209,8 +226,9 @@ describe("renderUsage", () => {
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = document.createElement("div");
     const base = createUsageProps();
-    render(
-      renderUsage(createUsageProps({ data: { ...base.data, providerUsageUnavailable: true } })),
+    mountUsageView(
+      () =>
+        renderUsage(createUsageProps({ data: { ...base.data, providerUsageUnavailable: true } })),
       container,
     );
 
@@ -221,7 +239,7 @@ describe("renderUsage", () => {
 
   it("keeps the provider panel hidden when usage is empty without a failure", () => {
     const container = document.createElement("div");
-    render(renderUsage(createUsageProps()), container);
+    mountUsageView(() => renderUsage(createUsageProps()), container);
 
     expect(container.textContent).not.toContain("Provider usage is unavailable");
   });
@@ -257,17 +275,18 @@ describe("renderUsage", () => {
         { timeZone: "local", selectedDay: "2026-05-14", visible: false },
       ] as const) {
         const container = document.createElement("div");
-        render(
-          renderUsage(
-            createUsageProps({
-              data: { ...createUsageProps().data, sessions: [pendingSession] },
-              filters: {
-                ...createUsageProps().filters,
-                selectedDays: [selectedDay],
-                timeZone,
-              },
-            }),
-          ),
+        mountUsageView(
+          () =>
+            renderUsage(
+              createUsageProps({
+                data: { ...createUsageProps().data, sessions: [pendingSession] },
+                filters: {
+                  ...createUsageProps().filters,
+                  selectedDays: [selectedDay],
+                  timeZone,
+                },
+              }),
+            ),
           container,
         );
 
@@ -287,22 +306,23 @@ describe("renderUsage", () => {
       usageSession("agent:research:main", "research", "anthropic"),
     ];
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            sessions,
-            totals: sessions[0]?.usage ?? null,
-            aggregates: buildAggregatesFromSessions(sessions),
-          },
-          filters: {
-            ...createUsageProps().filters,
-            query: "agent:research",
-            queryDraft: "agent:research",
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              sessions,
+              totals: sessions[0]?.usage ?? null,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+            filters: {
+              ...createUsageProps().filters,
+              query: "agent:research",
+              queryDraft: "agent:research",
+            },
+          }),
+        ),
       container,
     );
 
@@ -318,22 +338,23 @@ describe("renderUsage", () => {
     const container = document.createElement("div");
     const sessions = [usageSession("agent:main:main", "main", "openai")];
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            sessions,
-            totals: sessions[0]?.usage ?? null,
-            aggregates: buildAggregatesFromSessions(sessions),
-          },
-          filters: {
-            ...createUsageProps().filters,
-            query: "missing-session",
-            queryDraft: "missing-session",
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              sessions,
+              totals: sessions[0]?.usage ?? null,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+            filters: {
+              ...createUsageProps().filters,
+              query: "missing-session",
+              queryDraft: "missing-session",
+            },
+          }),
+        ),
       container,
     );
 
@@ -354,22 +375,26 @@ describe("renderUsage", () => {
       }
       const onExportJson = vi.fn();
       const container = document.createElement("div");
-      render(
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...base.data,
-              sessions: [session],
-              costDaily: [{ ...totals, date: "2026-05-14" }],
-            },
-            filters: {
-              ...base.filters,
-              selectedSessions: filter === "session" ? [session.key] : [],
-              selectedDays: filter === "day" ? ["2026-05-14"] : [],
-            },
-            callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
-          }),
-        ),
+      mountUsageView(
+        () =>
+          renderUsage(
+            createUsageProps({
+              data: {
+                ...base.data,
+                sessions: [session],
+                costDaily: [{ ...totals, date: "2026-05-14" }],
+              },
+              filters: {
+                ...base.filters,
+                selectedSessions: filter === "session" ? [session.key] : [],
+                selectedDays: filter === "day" ? ["2026-05-14"] : [],
+              },
+              callbacks: {
+                ...base.callbacks,
+                display: { ...base.callbacks.display, onExportJson },
+              },
+            }),
+          ),
         container,
       );
       container
@@ -403,16 +428,17 @@ describe("renderUsage", () => {
       },
     } satisfies UsageProps["data"]["sessions"][number];
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: { ...createUsageProps().data, sessions: [session] },
-          filters: {
-            ...createUsageProps().filters,
-            selectedSessions: [session.key],
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: { ...createUsageProps().data, sessions: [session] },
+            filters: {
+              ...createUsageProps().filters,
+              selectedSessions: [session.key],
+            },
+          }),
+        ),
       container,
     );
 
@@ -427,7 +453,7 @@ describe("renderUsage", () => {
   it("omits the duplicate inner page heading because the shell owns tab headings", () => {
     const container = document.createElement("div");
 
-    render(renderUsage(createUsageProps()), container);
+    mountUsageView(() => renderUsage(createUsageProps()), container);
 
     expect(container.querySelector(".usage-page-header")).toBeNull();
     expect(container.querySelector(".usage-page-title")).toBeNull();
@@ -437,26 +463,125 @@ describe("renderUsage", () => {
   it("leaves agent scoping to the shared page header control", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            sessions: [
-              {
-                key: "agent:main:main",
-                agentId: "main",
-                lastUpdated: Date.now(),
-                usage: null,
-              } as UsageProps["data"]["sessions"][number],
-            ],
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              sessions: [
+                {
+                  key: "agent:main:main",
+                  agentId: "main",
+                  lastUpdated: Date.now(),
+                  usage: null,
+                } as UsageProps["data"]["sessions"][number],
+              ],
+            },
+          }),
+        ),
       container,
     );
 
     expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
+  });
+
+  it("retains an open query menu while selecting multiple options", () => {
+    const base = createUsageProps();
+    const sessions = ["clear", "second"].map((provider) =>
+      usageSession(`session:${provider}`, "main", provider),
+    );
+    const [filters, setFilters] = createSignal(base.filters);
+    const onQueryDraftChange = vi.fn((queryDraft: string) =>
+      setFilters((current) => ({ ...current, queryDraft })),
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    try {
+      mountUsageView(
+        () =>
+          renderUsage({
+            ...base,
+            get filters() {
+              return filters();
+            },
+            data: { ...base.data, sessions, aggregates: buildAggregatesFromSessions(sessions) },
+            callbacks: {
+              ...base.callbacks,
+              filters: { ...base.callbacks.filters, onQueryDraftChange },
+            },
+          }),
+        container,
+      );
+      const first = [...container.querySelectorAll(".usage-filter-option")].find(
+        (item) => item.textContent?.trim() === "clear",
+      )!;
+      const dropdown = first.closest("wa-dropdown")!;
+      dropdown.open = true;
+      for (const provider of ["clear", "second"]) {
+        const option = [...dropdown.querySelectorAll("wa-dropdown-item")].find(
+          (item) => item.textContent?.trim() === provider,
+        )!;
+        option.checked = true;
+        const event = new CustomEvent("wa-select", {
+          detail: { item: option },
+          bubbles: true,
+          cancelable: true,
+        });
+        dropdown.dispatchEvent(event);
+        flush();
+        expect(event.defaultPrevented).toBe(true);
+        expect(first.closest("wa-dropdown")).toBe(dropdown);
+        expect(container.contains(dropdown)).toBe(true);
+        expect(dropdown.open).toBe(true);
+        expect(option.checked).toBe(true);
+      }
+      expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("updates the existing breakdown when mode and totals change", () => {
+    const base = createUsageProps();
+    const initial: UsageTotals = {
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 120,
+      inputCost: 0.8,
+      outputCost: 0.2,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      totalCost: 1,
+      missingCostEntries: 0,
+    };
+    const [data, setData] = createSignal({ ...base.data, totals: initial });
+    const [display, setDisplay] = createSignal(base.display);
+    const container = document.createElement("div");
+    mountUsageView(
+      () =>
+        renderUsage({
+          ...base,
+          get data() {
+            return data();
+          },
+          get display() {
+            return display();
+          },
+        }),
+      container,
+    );
+    const breakdown = container.querySelector(".cost-breakdown")!;
+    expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("120");
+    setDisplay((current) => ({ ...current, chartMode: "cost" }));
+    flush();
+    expect(container.querySelector(".cost-breakdown")).toBe(breakdown);
+    expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("Total: $1.00");
+    setData((current) => ({ ...current, totals: { ...initial, inputCost: 1.8, totalCost: 2 } }));
+    flush();
+    expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("Total: $2.00");
+    expect(breakdown.querySelector(".cost-breakdown-legend")?.textContent).toContain("$1.80");
   });
 
   it("keeps filter option values distinct from menu commands", () => {
@@ -472,7 +597,7 @@ describe("renderUsage", () => {
     });
     props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
 
-    render(renderUsage(props), container);
+    mountUsageView(() => renderUsage(props), container);
     const option = [...container.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.textContent?.trim() === "clear",
     )!;
@@ -541,7 +666,21 @@ describe("renderUsage", () => {
         (button) => button.textContent?.trim() === label,
       );
 
-    render(renderUsage(props), container);
+    const [data, setData] = createSignal(props.data);
+    const [display, setDisplay] = createSignal(props.display);
+    mountUsageView(
+      () =>
+        renderUsage({
+          ...props,
+          get data() {
+            return data();
+          },
+          get display() {
+            return display();
+          },
+        }),
+      container,
+    );
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
@@ -552,19 +691,22 @@ describe("renderUsage", () => {
       "provider:second",
     );
 
-    props.display.chartMode = "cost";
-    render(renderUsage(props), container);
+    setDisplay({ ...display(), chartMode: "cost" });
+    flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
     expect(values()).toEqual(["second", "first"]);
     // The replacement report is already scoped by the Gateway.
-    props.data.sessions = props.data.sessions.filter((session) => session.agentId === "main");
-    render(renderUsage(props), container);
+    setData({
+      ...data(),
+      sessions: data().sessions.filter((session) => session.agentId === "main"),
+    });
+    flush();
     expect(values()).toEqual(["first"]);
     expect(container.querySelector(".usage-query-suggestion")).toBeNull();
 
-    props.data.sessions = [usageSession("replacement", "main", "second-new")];
-    render(renderUsage(props), container);
+    setData({ ...data(), sessions: [usageSession("replacement", "main", "second-new")] });
+    flush();
     expect(values()).toEqual(["second-new"]);
     container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
     expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
@@ -575,16 +717,17 @@ describe("renderUsage", () => {
   it("reports a stalled provider refresh instead of hiding the section", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            providerUsage: [],
-            providerUsageStalled: true,
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              providerUsage: [],
+              providerUsageStalled: true,
+            },
+          }),
+        ),
       container,
     );
 
@@ -597,22 +740,23 @@ describe("renderUsage", () => {
   it("keeps available provider usage visible when refresh stalls", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            providerUsage: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                windows: [{ label: "Weekly", usedPercent: 25 }],
-              },
-            ],
-            providerUsageStalled: true,
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              providerUsage: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  windows: [{ label: "Weekly", usedPercent: 25 }],
+                },
+              ],
+              providerUsageStalled: true,
+            },
+          }),
+        ),
       container,
     );
 
@@ -627,39 +771,40 @@ describe("renderUsage", () => {
   it("renders provider plans, quotas, and billing independently of session usage", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            providerUsage: [
-              {
-                provider: "openrouter",
-                displayName: "OpenRouter",
-                plan: "Production",
-                windows: [{ label: "API key budget", usedPercent: 25 }],
-                billing: [
-                  {
-                    type: "balance",
-                    label: "Account balance",
-                    amount: 64.5,
-                    unit: "USD",
-                  },
-                  {
-                    type: "budget",
-                    label: "API key budget",
-                    used: 5,
-                    limit: 20,
-                    unit: "USD",
-                  },
-                  { type: "budget", used: 12.5, limit: 20, unit: " jPy " },
-                  { type: "budget", used: 1.5, limit: 3, unit: " Credits " },
-                ],
-              },
-            ],
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              providerUsage: [
+                {
+                  provider: "openrouter",
+                  displayName: "OpenRouter",
+                  plan: "Production",
+                  windows: [{ label: "API key budget", usedPercent: 25 }],
+                  billing: [
+                    {
+                      type: "balance",
+                      label: "Account balance",
+                      amount: 64.5,
+                      unit: "USD",
+                    },
+                    {
+                      type: "budget",
+                      label: "API key budget",
+                      used: 5,
+                      limit: 20,
+                      unit: "USD",
+                    },
+                    { type: "budget", used: 12.5, limit: 20, unit: " jPy " },
+                    { type: "budget", used: 1.5, limit: 3, unit: " Credits " },
+                  ],
+                },
+              ],
+            },
+          }),
+        ),
       container,
     );
 
@@ -703,77 +848,78 @@ describe("renderUsage", () => {
       inputCost: 0.1,
     };
 
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...base.data,
-            sessionsLimitReached: true,
-            totals,
-            costDaily: [
-              {
-                ...totals,
-                date: "2026-05-01",
-                input: 990,
-                totalTokens: 990,
-                totalCost: 9.9,
-                inputCost: 9.9,
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...base.data,
+              sessionsLimitReached: true,
+              totals,
+              costDaily: [
+                {
+                  ...totals,
+                  date: "2026-05-01",
+                  input: 990,
+                  totalTokens: 990,
+                  totalCost: 9.9,
+                  inputCost: 9.9,
+                },
+                visibleDay,
+              ],
+              aggregates: {
+                messages: {
+                  total: 100,
+                  user: 50,
+                  assistant: 50,
+                  toolCalls: 0,
+                  toolResults: 0,
+                  errors: 0,
+                },
+                tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+                byModel: [],
+                byProvider: [],
+                byAgent: [],
+                byChannel: [],
+                daily: [],
               },
-              visibleDay,
-            ],
-            aggregates: {
-              messages: {
-                total: 100,
-                user: 50,
-                assistant: 50,
-                toolCalls: 0,
-                toolResults: 0,
-                errors: 0,
-              },
-              tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-              byModel: [],
-              byProvider: [],
-              byAgent: [],
-              byChannel: [],
-              daily: [],
-            },
-            sessions: [
-              {
-                key: "agent:main:visible",
-                agentId: "main",
-                updatedAt: Date.UTC(2026, 4, 14, 12),
-                usage: {
-                  input: 10,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 10,
-                  totalCost: 0.1,
-                  inputCost: 0.1,
-                  outputCost: 0,
-                  cacheReadCost: 0,
-                  cacheWriteCost: 0,
-                  missingCostEntries: 0,
-                  dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
-                  messageCounts: {
-                    total: 2,
-                    user: 1,
-                    assistant: 1,
-                    toolCalls: 0,
-                    toolResults: 0,
-                    errors: 0,
+              sessions: [
+                {
+                  key: "agent:main:visible",
+                  agentId: "main",
+                  updatedAt: Date.UTC(2026, 4, 14, 12),
+                  usage: {
+                    input: 10,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 10,
+                    totalCost: 0.1,
+                    inputCost: 0.1,
+                    outputCost: 0,
+                    cacheReadCost: 0,
+                    cacheWriteCost: 0,
+                    missingCostEntries: 0,
+                    dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
+                    messageCounts: {
+                      total: 2,
+                      user: 1,
+                      assistant: 1,
+                      toolCalls: 0,
+                      toolResults: 0,
+                      errors: 0,
+                    },
                   },
                 },
-              },
-            ],
-          },
-          filters: {
-            ...base.filters,
-            startDate: "2026-05-01",
-            endDate: "2026-05-14",
-          },
-        }),
-      ),
+              ],
+            },
+            filters: {
+              ...base.filters,
+              startDate: "2026-05-01",
+              endDate: "2026-05-14",
+            },
+          }),
+        ),
       container,
     );
 
@@ -826,18 +972,19 @@ describe("renderUsage", () => {
     ];
 
     const unfiltered = document.createElement("div");
-    render(renderUsage(createUsageProps({ data })), unfiltered);
+    mountUsageView(() => renderUsage(createUsageProps({ data })), unfiltered);
     expect(unfiltered.querySelector(".cost-window-analysis")).not.toBeNull();
 
     for (const filterCase of filterCases) {
       const container = document.createElement("div");
-      render(
-        renderUsage(
-          createUsageProps({
-            data,
-            filters: { ...base.filters, ...filterCase },
-          }),
-        ),
+      mountUsageView(
+        () =>
+          renderUsage(
+            createUsageProps({
+              data,
+              filters: { ...base.filters, ...filterCase },
+            }),
+          ),
         container,
       );
       expect(container.querySelector(".cost-window-analysis")).toBeNull();
@@ -855,16 +1002,17 @@ describe("renderUsage", () => {
       missingCostEntries: 0,
     };
     const container = document.createElement("div");
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            // The gateway always returns a totals object, even with no usage.
-            totals: zeroTotals as UsageProps["data"]["totals"],
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              // The gateway always returns a totals object, even with no usage.
+              totals: zeroTotals as UsageProps["data"]["totals"],
+            },
+          }),
+        ),
       container,
     );
     expect(container.querySelector(".usage-empty-state")).not.toBeNull();
@@ -872,15 +1020,16 @@ describe("renderUsage", () => {
 
   it("does not render the empty state under an error callout", () => {
     const container = document.createElement("div");
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            error: "usage failed",
-          },
-        }),
-      ),
+    mountUsageView(
+      () =>
+        renderUsage(
+          createUsageProps({
+            data: {
+              ...createUsageProps().data,
+              error: "usage failed",
+            },
+          }),
+        ),
       container,
     );
     expect(container.querySelector(".usage-callout")).not.toBeNull();

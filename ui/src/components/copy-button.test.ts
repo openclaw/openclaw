@@ -5,8 +5,6 @@ import { GitHubIdentityController } from "../features/github-connections/github-
 import { renderGitHubConnectionSetup } from "../features/github-connections/github-identity-view.ts";
 import { renderWorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.ts";
 import { renderDevicePairSetup } from "../pages/devices/view-pairing.runtime.ts";
-import { renderSessionsCard } from "../pages/usage/view-overview.ts";
-import { createUsageProps } from "../pages/usage/view.test-support.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
@@ -103,15 +101,6 @@ const surfaces = [
       return renderGitHubConnectionSetup(controller);
     },
     selector: ".github-device-code + button",
-  },
-  {
-    name: "usage session label",
-    view: (text: string) => {
-      const props = createUsageProps();
-      props.display.sessionSort = "recent";
-      return renderSessionsCard([{ key: "session", label: text, usage: null }], props, 1);
-    },
-    selector: ".session-bar-actions button",
   },
   {
     name: "workspace conflict command",

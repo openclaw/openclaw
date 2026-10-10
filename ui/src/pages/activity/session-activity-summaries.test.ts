@@ -29,13 +29,7 @@ const listing = (sessions: GatewaySessionRow[]): SessionsListResult => ({
   sessions,
   defaults: { model: null, modelProvider: null, contextTokens: null },
 });
-const controller = () =>
-  new SessionActivityController({
-    addController() {},
-    removeController() {},
-    requestUpdate() {},
-    updateComplete: Promise.resolve(true),
-  });
+const controller = () => new SessionActivityController(() => {});
 
 it("backfills eligible mixed rows and refuses retries for visible read-only sessions", async () => {
   const sessions = [
@@ -71,7 +65,7 @@ it("backfills eligible mixed rows and refuses retries for visible read-only sess
   await Promise.resolve();
   expect(request).toHaveBeenCalledTimes(2);
   expect(state.result?.sessions[2]?.activitySummary).toEqual(sessions[2]!.activitySummary);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("rechecks latest row permissions before queued batches and does not consume skipped attempts", async () => {
@@ -124,7 +118,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
   await vi.waitFor(() => expect(batches).toHaveLength(3));
   expect(batches[2]).toEqual([staleRow.key]);
   expect(request).toHaveBeenCalledTimes(6);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("backfills visible missing recaps in bounded batches without repeating reads or reordering sessions", async () => {
@@ -160,7 +154,7 @@ it("backfills visible missing recaps in bounded batches without repeating reads 
   expect(state.result?.totalCount).toBe(25);
   void state.load(client, filters);
   expect(batches).toHaveLength(2);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("keeps cached recaps readable without requesting generation on a read-only connection", async () => {
@@ -182,7 +176,7 @@ it("keeps cached recaps readable without requesting generation on a read-only co
   await vi.waitFor(() => expect(state.result).toEqual(result));
   state.retrySummary(state.result!.sessions[1]!);
   expect(request).toHaveBeenCalledTimes(1);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("does not let a delayed backfill response overwrite a newer session-list recap", async () => {
@@ -207,7 +201,7 @@ it("does not let a delayed backfill response overwrite a newer session-list reca
   await pending;
   await Promise.resolve();
   expect(state.result?.sessions[0]).toEqual(newRow);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("backfills newly visible sessions after the current batch settles", async () => {
@@ -243,7 +237,7 @@ it("backfills newly visible sessions after the current batch settles", async () 
     expect(request).toHaveBeenCalledTimes(4);
   } finally {
     finish({ sessions: [] });
-    state.hostDisconnected();
+    state.dispose();
     await pending;
   }
 });
@@ -277,7 +271,7 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
     });
     const state = controller();
     try {
-      state.hostConnected();
+      state.connect();
       void state.load(client, filters, "query", true);
       await vi.waitFor(() => expect(held).toBe(true));
       if (visibilityState !== "hidden") {
@@ -297,7 +291,7 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
       );
     } finally {
       finish(response(heldMethod));
-      state.hostDisconnected();
+      state.dispose();
       await pending;
       vi.unstubAllGlobals();
     }
@@ -333,7 +327,7 @@ it("retains a failed recap and retries it without turning the session list into 
     expect(state.result?.sessions[0]?.activitySummary?.state).toBe("updating"),
   );
   expect(request).toHaveBeenCalledTimes(3);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("stops queued backfill batches when write access is revoked", async () => {
@@ -359,7 +353,7 @@ it("stops queued backfill batches when write access is revoked", async () => {
   await Promise.resolve();
   expect(request).toHaveBeenCalledTimes(2);
   expect(state.result?.sessions).toEqual(sessions);
-  state.hostDisconnected();
+  state.dispose();
 });
 
 it("keeps an explicit retry queued while another visible batch is pending", async () => {
@@ -398,5 +392,5 @@ it("keeps an explicit retry queued while another visible batch is pending", asyn
     { sessions: [{ key: retryRow.key, agentId: "main" }] },
     expect.anything(),
   );
-  state.hostDisconnected();
+  state.dispose();
 });

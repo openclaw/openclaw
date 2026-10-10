@@ -1,10 +1,11 @@
-import { html, nothing } from "lit";
+import { createMemo } from "@solidjs/signals";
+import { For } from "solid-js";
 import type {
   ExecutionIdentityContextV1,
   PrincipalRefV1,
 } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   renderRunInspectorDecisions,
   renderRunInspectorMissingEvidence,
@@ -14,7 +15,7 @@ import {
   renderRunInspectorValues,
   runInspectorCoverageKey,
   runInspectorCoverageLabel,
-} from "./run-inspector-evidence-view.ts";
+} from "./run-inspector-evidence-view.tsx";
 import {
   activityRunInspectorSelectorHref,
   classifyRunInspection,
@@ -24,7 +25,7 @@ import {
 } from "./run-inspector-model.ts";
 import "./run-inspector.css";
 
-registerActivityEnglish();
+registerEnglishCatalog(registerActivityEnglish);
 
 type EvidenceState = "present" | "absent" | "unknown" | "unsupported";
 
@@ -77,36 +78,34 @@ function renderFact(fact: IdentityFact) {
     (fact.state === "present"
       ? undefined
       : t(`activity.runInspector.reasons.${fact.state}`, { label: fact.label.toLowerCase() }));
-  return html`
-    <div class="run-inspector__fact" data-state=${fact.state}>
+  return (
+    <div class="run-inspector__fact" data-state={fact.state}>
       <dt>
-        <span>${fact.label}</span>
+        <span>{fact.label}</span>
         <span
-          class="run-inspector__state run-inspector__state--${fact.state}"
+          class={`run-inspector__state run-inspector__state--${fact.state}`}
           role="img"
-          aria-label=${t("activity.runInspector.evidenceStateLabel", {
+          aria-label={t("activity.runInspector.evidenceStateLabel", {
             state: stateLabel,
           })}
         >
-          ${stateLabel}
+          {stateLabel}
         </span>
       </dt>
       <dd>
-        ${
-          values.length > 0
-            ? renderRunInspectorValues(
-                "values",
-                values.map(([labelKey, value, mono, href]) => [
-                  labelKey,
-                  renderRunInspectorSafeRef(value, mono, href),
-                ]),
-              )
-            : nothing
-        }
-        ${reason ? html`<p class="run-inspector__reason">${reason}</p>` : nothing}
+        {values.length > 0
+          ? renderRunInspectorValues(
+              "values",
+              values.map(([labelKey, value, mono, href]) => [
+                labelKey,
+                renderRunInspectorSafeRef(value, mono, href),
+              ]),
+            )
+          : undefined}
+        {reason ? <p class="run-inspector__reason">{reason}</p> : undefined}
       </dd>
     </div>
-  `;
+  );
 }
 
 function identityFacts(context: ExecutionIdentityContextV1, basePath: string): IdentityFact[] {
@@ -241,108 +240,111 @@ function renderUnavailableResult(
   onLoadMoreExecutions: () => void,
 ) {
   if (result.identity.state === "present") {
-    return nothing;
+    return undefined;
   }
   const kind = classifyRunInspection(result);
   const key = kind === "not-found" ? "notFound" : kind;
   const title = t(`activity.runInspector.diagnostic.${key}.title`);
   const identity = result.identity;
-  return html`
-    <div class="run-inspector__result-state" role="status" aria-label=${title}>
-      <h3>${title}</h3>
-      <p>${t(`activity.runInspector.diagnostic.${key}.description`)}</p>
-      <p>
-        ${t("activity.runInspector.diagnosticReason")}
-        ${renderRunInspectorSafeRef(identity.reasonCode, true)}
-      </p>
-    </div>
-    ${
-      identity.state === "ambiguous"
-        ? html`
-            <ol
-              class="run-inspector__candidate-list"
-              aria-label=${t("activity.runInspector.candidates.listLabel")}
-            >
-              ${identity.candidates.map(
-                (candidate) => html`
-                  <li>
-                    <span
-                      >${t("activity.runInspector.candidates.recorded", {
-                        date: new Date(candidate.createdAt).toLocaleString(),
-                      })}</span
-                    >
-                    <a
-                      href=${activityRunInspectorSelectorHref(
-                        { kind: "execution", id: candidate.executionId },
-                        basePath,
-                      )}
-                    >
-                      ${t("activity.runInspector.candidates.executionReference")}
-                      ${renderRunInspectorSafeRef(candidate.executionId, true)}
-                    </a>
-                  </li>
-                `,
+  return (
+    <>
+      <div class="run-inspector__result-state" role="status" aria-label={title}>
+        <h3>{title}</h3>
+        <p>{t(`activity.runInspector.diagnostic.${key}.description`)}</p>
+        <p>
+          {t("activity.runInspector.diagnosticReason")}
+          {renderRunInspectorSafeRef(identity.reasonCode, true)}
+        </p>
+      </div>
+      {identity.state === "ambiguous" ? (
+        <>
+          <ol
+            class="run-inspector__candidate-list"
+            aria-label={t("activity.runInspector.candidates.listLabel")}
+          >
+            <For each={identity.candidates} keyed={(candidate) => candidate.executionId}>
+              {(candidate) => (
+                <li>
+                  <span>
+                    {t("activity.runInspector.candidates.recorded", {
+                      date: new Date(candidate().createdAt).toLocaleString(),
+                    })}
+                  </span>
+                  <a
+                    href={activityRunInspectorSelectorHref(
+                      { kind: "execution", id: candidate().executionId },
+                      basePath,
+                    )}
+                  >
+                    {t("activity.runInspector.candidates.executionReference")}
+                    {renderRunInspectorSafeRef(candidate().executionId, true)}
+                  </a>
+                </li>
               )}
-            </ol>
-            ${
-              result.nextExecutionCursor
-                ? renderRunInspectorPagination(
-                    "candidates",
-                    executionPageStatus,
-                    onLoadMoreExecutions,
-                  )
-                : nothing
-            }
-          `
-        : nothing
-    }
-    ${renderRunInspectorMissingEvidence(identity.missingEvidence)}
-    ${renderRunInspectorRemediation(identity.remediation)}
-  `;
+            </For>
+          </ol>
+          {result.nextExecutionCursor
+            ? renderRunInspectorPagination("candidates", executionPageStatus, onLoadMoreExecutions)
+            : undefined}
+        </>
+      ) : undefined}
+      {renderRunInspectorMissingEvidence(identity.missingEvidence)}
+      {renderRunInspectorRemediation(identity.remediation)}
+    </>
+  );
 }
 
 function renderReady(
   props: RunInspectorProps,
   state: Extract<RunInspectorState, { status: "ready" }>,
 ) {
-  const { basePath, selector, selectorId, onLoadMoreDecisions, onLoadMoreExecutions } = props;
   const result = state.result;
   const currentCoverageLabel = runInspectorCoverageLabel(result.coverage.state);
-  return html`
-    <div
-      class="run-inspector__coverage run-inspector__coverage--${result.coverage.state}"
-      role="status"
-      aria-label=${t("activity.runInspector.coverageStatusLabel", {
-        state: currentCoverageLabel,
-      })}
-    >
-      <strong>${currentCoverageLabel}</strong>
-      <span>
-        ${t(
-          `activity.runInspector.coverage.${runInspectorCoverageKey(result.coverage.state)}.description`,
-        )}
-      </span>
-    </div>
-    ${
-      result.identity.state === "present"
-        ? html`
-            <section
-              class="run-inspector__section"
-              aria-labelledby="run-inspector-identity-heading"
-            >
-              <h3 id="run-inspector-identity-heading">
-                ${t("activity.runInspector.identityHeading")}
-              </h3>
-              <dl class="run-inspector__facts">
-                ${identityFacts(result.identity.context, basePath).map(renderFact)}
-              </dl>
-            </section>
-            ${renderRunInspectorMissingEvidence(result.coverage.missingEvidence)}
-            ${renderRunInspectorDecisions(state, selector, selectorId, basePath, onLoadMoreDecisions)}
-          `
-        : renderUnavailableResult(result, basePath, state.executionPageStatus, onLoadMoreExecutions)
-    }
-  `;
+  return (
+    <>
+      <div
+        class={`run-inspector__coverage run-inspector__coverage--${result.coverage.state}`}
+        role="status"
+        aria-label={t("activity.runInspector.coverageStatusLabel", {
+          state: currentCoverageLabel,
+        })}
+      >
+        <strong>{currentCoverageLabel}</strong>
+        <span>
+          {t(
+            `activity.runInspector.coverage.${runInspectorCoverageKey(result.coverage.state)}.description`,
+          )}
+        </span>
+      </div>
+      {result.identity.state === "present" ? (
+        <>
+          <section class="run-inspector__section" aria-labelledby="run-inspector-identity-heading">
+            <h3 id="run-inspector-identity-heading">
+              {t("activity.runInspector.identityHeading")}
+            </h3>
+            <dl class="run-inspector__facts">
+              {identityFacts(result.identity.context, props.basePath).map(renderFact)}
+            </dl>
+          </section>
+          {renderRunInspectorMissingEvidence(result.coverage.missingEvidence)}
+          {renderRunInspectorDecisions(
+            state,
+            props.selector,
+            props.selectorId,
+            props.basePath,
+            props.onLoadMoreDecisions,
+          )}
+        </>
+      ) : (
+        renderUnavailableResult(
+          result,
+          props.basePath,
+          state.executionPageStatus,
+          props.onLoadMoreExecutions,
+        )
+      )}
+    </>
+  );
 }
 
 function renderPanel(
@@ -356,50 +358,52 @@ function renderPanel(
         ? { label: t("activity.runInspector.restart"), onClick: props.onRestart }
         : { label: t("activity.runInspector.retry"), onClick: props.onRetry }
       : undefined;
-  return html`
+  return (
     <div
       class="run-inspector__panel"
-      role=${state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
+      role={state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
     >
-      <h3>${t(`activity.runInspector.panels.${key}.title`)}</h3>
-      <p>${t(`activity.runInspector.panels.${key}.description`)}</p>
-      ${
-        action
-          ? html`<button type="button" class="btn" @click=${action.onClick}>
-              ${action.label}
-            </button>`
-          : nothing
-      }
+      <h3>{t(`activity.runInspector.panels.${key}.title`)}</h3>
+      <p>{t(`activity.runInspector.panels.${key}.description`)}</p>
+      {action ? (
+        <button type="button" class="btn" onClick={action.onClick}>
+          {action.label}
+        </button>
+      ) : undefined}
     </div>
-  `;
+  );
 }
 
 export function renderRunInspector(props: RunInspectorProps) {
-  const state = props.state;
-  const identity =
-    state.status === "ready" && state.result.identity.state === "present"
+  const identity = createMemo(() => {
+    const state = props.state;
+    return state.status === "ready" && state.result.identity.state === "present"
       ? state.result.identity.context
       : null;
-  const content = state.status === "ready" ? renderReady(props, state) : renderPanel(props, state);
+  });
+  const content = createMemo(() => {
+    const state = props.state;
+    return state.status === "ready" ? renderReady(props, state) : renderPanel(props, state);
+  });
 
-  return html`
+  return (
     <section
       id="activity-run-panel"
       class="run-inspector"
-      data-run-id=${identity?.runId ?? nothing}
-      data-execution-id=${identity?.executionId ?? nothing}
-      aria-label=${t("activity.runInspector.mode")}
+      data-run-id={identity()?.runId ?? undefined}
+      data-execution-id={identity()?.executionId ?? undefined}
+      aria-label={t("activity.runInspector.mode")}
     >
       <div class="settings-section__header">
         <div>
-          <h2 class="settings-section__heading">${t("activity.runInspector.mode")}</h2>
-          <p class="run-inspector__intro">${t("activity.runInspector.intro")}</p>
+          <h2 class="settings-section__heading">{t("activity.runInspector.mode")}</h2>
+          <p class="run-inspector__intro">{t("activity.runInspector.intro")}</p>
         </div>
       </div>
       <div class="run-inspector__warning" role="note">
-        ${t("activity.runInspector.bestEffortWarning")}
+        {t("activity.runInspector.bestEffortWarning")}
       </div>
-      ${content}
+      {content()}
     </section>
-  `;
+  );
 }

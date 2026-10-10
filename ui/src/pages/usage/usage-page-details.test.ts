@@ -20,7 +20,7 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage-page.ts";
+import type { UsageRouteData } from "./usage-page.tsx";
 
 afterEach(cleanupUsagePageTest);
 

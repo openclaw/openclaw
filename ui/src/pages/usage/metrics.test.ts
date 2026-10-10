@@ -1,12 +1,15 @@
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderUsageMosaic } from "./metrics-view.tsx";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
-  renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
 import type { UsageSessionEntry, UsageTotals } from "./types.ts";
+import { mountUsageView } from "./view-mount.test-support.ts";
+import { createUsageProps } from "./view.test-support.ts";
+import { renderUsage } from "./view.tsx";
 
 const emptyUsageTotals: UsageTotals = {
   input: 0,
@@ -337,10 +340,32 @@ describe("usage mosaic token buckets", () => {
     const session = makeSessionWithTokenBuckets([
       { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
     ]);
-    const onSelectHour = vi.fn();
+    const base = createUsageProps();
+    const [filters, setFilters] = createSignal({
+      ...base.filters,
+      selectedHours: [10],
+      timeZone: "utc" as const,
+    });
+    const onSelectHour = vi.fn((hour: number, _shiftKey: boolean) =>
+      setFilters((current) => ({
+        ...current,
+        selectedHours: current.selectedHours.includes(hour) ? [] : [hour],
+      })),
+    );
     const container = document.createElement("div");
     document.body.append(container);
-    render(renderUsageMosaic([session], "utc", [10], onSelectHour), container);
+    mountUsageView(
+      () =>
+        renderUsage({
+          ...base,
+          get filters() {
+            return filters();
+          },
+          data: { ...base.data, sessions: [session], totals: session.usage! },
+          callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onSelectHour } },
+        }),
+      container,
+    );
 
     const cells = container.querySelectorAll<HTMLButtonElement>(".usage-hour-cell");
     const selectedHour = cells[10];
@@ -355,6 +380,10 @@ describe("usage mosaic token buckets", () => {
     expect(document.activeElement).toBe(selectedHour);
     selectedHour?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectHour).toHaveBeenCalledWith(10, true);
+    flush();
+    expect(container.querySelectorAll(".usage-hour-cell")[10]).toBe(selectedHour);
+    expect(document.activeElement).toBe(selectedHour);
+    expect(selectedHour?.getAttribute("aria-pressed")).toBe("false");
     unselectedHour?.click();
     expect(onSelectHour).toHaveBeenCalledWith(11, false);
 
@@ -370,7 +399,7 @@ describe("usage mosaic token buckets", () => {
       { date: "2026-02-01", quarterIndex: 68, totalTokens: 10_000 },
     ]);
     const container = document.createElement("div");
-    render(renderUsageMosaic([session], "local", [], vi.fn()), container);
+    mountUsageView(() => renderUsageMosaic([session], "local", [], vi.fn()), container);
 
     const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
     expect(cells[1]?.title).toContain("10.0K");
@@ -387,7 +416,7 @@ describe("usage mosaic token buckets", () => {
       session.usage.totalTokens = 10_000;
     }
     const container = document.createElement("div");
-    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+    mountUsageView(() => renderUsageMosaic([session], "utc", [], vi.fn()), container);
 
     const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
     expect(cells).toHaveLength(24);
@@ -419,7 +448,7 @@ describe("usage mosaic token buckets", () => {
       },
     } as unknown as UsageSessionEntry;
     const container = document.createElement("div");
-    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+    mountUsageView(() => renderUsageMosaic([session], "utc", [], vi.fn()), container);
 
     const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
     expect(cells[11]?.title).toContain("10.0K");

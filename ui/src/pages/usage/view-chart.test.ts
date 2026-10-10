@@ -1,10 +1,13 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+/* @vitest-environment jsdom */
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostDailyEntry } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
-import { renderDailyChartCompact } from "./view-chart.ts";
+import { renderDailyChartCompact } from "./view-chart.tsx";
+import { mountUsageView } from "./view-mount.test-support.ts";
+import { createUsageProps } from "./view.test-support.ts";
+import { renderUsage } from "./view.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -16,12 +19,13 @@ function renderDailyChart(
   const container = document.createElement("div");
   document.body.append(container);
   const onSelectDay = vi.fn<(day: string, shiftKey: boolean, orderedDays: string[]) => void>();
-  render(
-    renderDailyChartCompact(daily, [], chartMode, dailyChartMode, () => {}, onSelectDay, {
-      startDate: daily[0]?.date ?? "2026-05-01",
-      endDate: daily.at(-1)?.date ?? "2026-05-01",
-      complete: true,
-    }),
+  mountUsageView(
+    () =>
+      renderDailyChartCompact(daily, [], chartMode, dailyChartMode, () => {}, onSelectDay, {
+        startDate: daily[0]?.date ?? "2026-05-01",
+        endDate: daily.at(-1)?.date ?? "2026-05-01",
+        complete: true,
+      }),
     container,
   );
   return {
@@ -33,14 +37,51 @@ function renderDailyChart(
 
 describe("renderDailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)], "tokens");
-    const bar = expectDefined(bars[0], "daily usage bar");
+    const entry = dailyEntry("2026-05-04", 500, 0.2);
+    const base = createUsageProps();
+    const [filters, setFilters] = createSignal({
+      ...base.filters,
+      startDate: entry.date,
+      endDate: entry.date,
+    });
+    const onSelectDay = vi.fn((day: string, _shiftKey: boolean, _orderedDays: string[]) =>
+      setFilters((current) => ({
+        ...current,
+        selectedDays: current.selectedDays.includes(day) ? [] : [day],
+      })),
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    mountUsageView(
+      () =>
+        renderUsage({
+          ...base,
+          get filters() {
+            return filters();
+          },
+          data: { ...base.data, totals: entry, costDaily: [entry] },
+          callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onSelectDay } },
+        }),
+      container,
+    );
+    const bar = expectDefined(
+      container.querySelector<HTMLElement>(".daily-bar-wrapper"),
+      "daily usage bar",
+    );
+    bar.focus();
 
     bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true, ["2026-05-04"]);
+    flush();
+    expect(container.querySelector(".daily-bar-wrapper")).toBe(bar);
+    expect(document.activeElement).toBe(bar);
+    expect(bar.getAttribute("aria-pressed")).toBe("true");
 
     bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false, ["2026-05-04"]);
+    flush();
+    expect(container.querySelector(".daily-bar-wrapper")).toBe(bar);
+    expect(document.activeElement).toBe(bar);
+    expect(bar.getAttribute("aria-pressed")).toBe("false");
 
     const space = new KeyboardEvent("keydown", {
       bubbles: true,

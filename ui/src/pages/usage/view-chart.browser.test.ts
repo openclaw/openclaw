@@ -1,10 +1,10 @@
-import { html, render } from "lit";
 import { afterEach, expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
+import { renderCostBreakdownCompact, renderDailyChartCompact } from "./view-chart.tsx";
 import "../../styles.css";
 import "../../styles/usage.css";
-import { renderCostBreakdownCompact, renderDailyChartCompact } from "./view-chart.ts";
+import { mountUsageView } from "./view-mount.test-support.ts";
 
 registerUsageEnglish();
 afterEach(() => document.body.replaceChildren());
@@ -21,9 +21,9 @@ it("keeps token segments proportional and legend markers round beside form style
   };
   const container = document.createElement("div");
   document.body.append(container);
-  render(
-    html`
-      ${renderDailyChartCompact(
+  mountUsageView(
+    () => [
+      renderDailyChartCompact(
         [{ ...totals, date: "2026-09-18" }],
         [],
         "tokens",
@@ -31,9 +31,9 @@ it("keeps token segments proportional and legend markers round beside form style
         () => {},
         () => {},
         { startDate: "2026-09-18", endDate: "2026-09-18", complete: true },
-      )}
-      ${renderCostBreakdownCompact(totals, "tokens")}
-    `,
+      ),
+      renderCostBreakdownCompact(totals, "tokens"),
+    ],
     container,
   );
   await Promise.all(

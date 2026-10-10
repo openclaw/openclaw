@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageCreator } from "../../../../src/shared/usage-types.js";
-import { renderUsageCreatorFilter, renderUsageCreators } from "./view-creators.ts";
+import { renderUsageCreatorFilter, renderUsageCreators } from "./view-creators.tsx";
+import { mountUsageView } from "./view-mount.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -27,10 +28,17 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   const onSelect = vi.fn<(key: string | null) => void>();
   const container = document.createElement("div");
   document.body.append(container);
-  const draw = (options: SessionUsageCreator[]) =>
-    render(
-      html`${renderUsageCreatorFilter({ options, selectedKey: alex.key, onSelect })}
-      ${renderUsageCreators({
+  const [options, setOptions] = createSignal<SessionUsageCreator[]>([alex, jordan]);
+  mountUsageView(
+    () => [
+      renderUsageCreatorFilter({
+        get options() {
+          return options();
+        },
+        selectedKey: alex.key,
+        onSelect,
+      }),
+      renderUsageCreators({
         groups: [
           {
             ...alex,
@@ -43,10 +51,10 @@ it("keeps all creator choices after filtering and passes opaque identities throu
         selectedKey: alex.key,
         mode: "tokens",
         onSelect,
-      })}`,
-      container,
-    );
-  draw([alex, jordan]);
+      }),
+    ],
+    container,
+  );
 
   const select = container.querySelector("select")!;
   expect(select.getAttribute("aria-label")).toBe("Filter by session creator");
@@ -66,7 +74,8 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   rowButton.click();
   expect(onSelect).toHaveBeenLastCalledWith(alex.key);
 
-  draw([]);
+  setOptions([]);
+  flush();
   const unavailable = container.querySelector("select")!;
   expect(unavailable).toBe(select);
   expect(unavailable.value).toBe(alex.key);
@@ -76,7 +85,8 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   unavailable.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(null);
 
-  draw([alex, jordan]);
+  setOptions([alex, jordan]);
+  flush();
   select.value = jordan.key;
   select.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);
@@ -92,22 +102,23 @@ it.each([
   const onSelect = vi.fn<(key: string | null) => void>();
   const container = document.createElement("div");
   document.body.append(container);
-  render(
-    renderUsageCreators({
-      groups: [
-        {
-          key: "unattributed:opaque-key",
-          actor,
-          totals: createEmptyCostUsageTotals(),
-          sessionCount: 2,
-          daily: [],
-          sessionActivity: [],
-        },
-      ],
-      selectedKey: null,
-      mode: "cost",
-      onSelect,
-    }),
+  mountUsageView(
+    () =>
+      renderUsageCreators({
+        groups: [
+          {
+            key: "unattributed:opaque-key",
+            actor,
+            totals: createEmptyCostUsageTotals(),
+            sessionCount: 2,
+            daily: [],
+            sessionActivity: [],
+          },
+        ],
+        selectedKey: null,
+        mode: "cost",
+        onSelect,
+      }),
     container,
   );
 

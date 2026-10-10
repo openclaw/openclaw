@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
-import { html, render, type LitElement } from "lit";
+
+import { render } from "@solidjs/web";
+import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -13,10 +16,16 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
-import "./session-activity-media.ts";
+import { ActivitySessionMedia, type ActivitySessionMediaProps } from "./session-activity-media.tsx";
 
 const observers = new Map<Element, (visible: boolean) => void>();
 let container: HTMLDivElement;
+const disposals: Array<() => void> = [];
+
+function mountSolid(view: Parameters<typeof render>[0]) {
+  disposals.push(render(view, container));
+  flush();
+}
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -51,7 +60,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(null, container);
+  for (const dispose of disposals.splice(0)) {
+    dispose();
+  }
+  flush();
   container.remove();
   observers.clear();
   vi.unstubAllGlobals();
@@ -69,11 +81,7 @@ function images(label: string, count = 4): ArtifactsListResult {
   };
 }
 
-type MediaRow = LitElement & {
-  revision: number;
-  session?: GatewaySessionRow;
-  agentId: string;
-};
+type MediaRow = SolidBridgeElement<ActivitySessionMediaProps>;
 
 function mountMedia(
   request: GatewayRequestHandler,
@@ -89,14 +97,8 @@ function mountMedia(
 ) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  render(
-    html`<openclaw-activity-session-media
-      .context=${context}
-      .sessionKey=${sessionKey}
-      .agentId=${agentId}
-      .session=${session}
-    ></openclaw-activity-session-media>`,
-    container,
+  mountSolid(() =>
+    createComponent(ActivitySessionMedia, { context, sessionKey, agentId, session }),
   );
   return { harness, row: container.querySelector<MediaRow>("openclaw-activity-session-media")! };
 }
@@ -106,9 +108,14 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  render(
-    html`${[0, 1, 2, 3].map((index) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${`agent:main:images-${index}`} agentId="main"></openclaw-activity-session-media>`)}`,
-    container,
+  mountSolid(() =>
+    [0, 1, 2, 3].map((index) =>
+      createComponent(ActivitySessionMedia, {
+        context,
+        sessionKey: `agent:main:images-${index}`,
+        agentId: "main",
+      }),
+    ),
   );
   await vi.waitFor(() => expect(observers.size).toBe(4));
   expect(request).not.toHaveBeenCalled();
@@ -135,7 +142,7 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
       "https://images.example.test/first-0.png",
     ),
   );
-  const first = rows[0] as LitElement & { revision: number; session?: GatewaySessionRow };
+  const first = rows[0] as MediaRow;
   const lightbox = first.querySelector("openclaw-image-lightbox");
   first.revision = 1;
   try {
@@ -268,11 +275,24 @@ it("coalesces queued revisions without moving the session behind later arrivals"
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  const show = (revision: number) =>
-    render(
-      html`${[0, 1, 2, 3].map((index) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${`agent:main:queue-${index}`} agentId="main" .revision=${index === 2 ? revision : 0}></openclaw-activity-session-media>`)}`,
-      container,
-    );
+  const show = (revision: number) => {
+    const rows = container.querySelectorAll<MediaRow>("openclaw-activity-session-media");
+    if (rows.length) {
+      rows[2]!.revision = revision;
+      flush();
+    } else {
+      mountSolid(() =>
+        [0, 1, 2, 3].map((index) =>
+          createComponent(ActivitySessionMedia, {
+            context,
+            sessionKey: `agent:main:queue-${index}`,
+            agentId: "main",
+            revision: index === 2 ? revision : 0,
+          }),
+        ),
+      );
+    }
+  };
   show(1);
   await vi.waitFor(() => expect(observers.size).toBe(4));
   for (const notify of observers.values()) {
@@ -281,7 +301,7 @@ it("coalesces queued revisions without moving the session behind later arrivals"
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   show(2);
   await Promise.all(
-    [...container.querySelectorAll<LitElement>("openclaw-activity-session-media")].map(
+    [...container.querySelectorAll<MediaRow>("openclaw-activity-session-media")].map(
       (row) => row.updateComplete,
     ),
   );
@@ -470,15 +490,16 @@ it("keeps queued pagination separate from background revalidation", async () => 
     });
     const harness = createGatewayHarness(createTestGatewayClient(request));
     const context = createContext(harness.gateway, createSessions("main", []));
-    render(
-      html`${["target", "0", "1"].map((sessionKey) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${sessionKey} agentId="main"></openclaw-activity-session-media>`)}`,
-      container,
-    );
-    const rows = [
-      ...container.querySelectorAll<LitElement & { revision: number }>(
-        "openclaw-activity-session-media",
+    mountSolid(() =>
+      ["target", "0", "1"].map((sessionKey) =>
+        createComponent(ActivitySessionMedia, {
+          context,
+          sessionKey,
+          agentId: "main",
+        }),
       ),
-    ];
+    );
+    const rows = [...container.querySelectorAll<MediaRow>("openclaw-activity-session-media")];
     const row = rows[0]!;
     await Promise.all(rows.map((element) => element.updateComplete));
     observers.get(row)?.(true);
