@@ -251,7 +251,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const result = await startTalkRealtimeAgentConsult(request, {
         sessionTarget: target,
         callId: params.callId,
-        voiceSessionId,
+        requestedVoiceSessionId: explicitVoiceSessionId ?? relaySessionId,
         args: params.args ?? {},
         relaySessionId: normalizeOptionalString(params.relaySessionId),
         connId,

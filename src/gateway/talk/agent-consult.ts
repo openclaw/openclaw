@@ -46,7 +46,7 @@ export async function startTalkRealtimeAgentConsult(
   params: {
     sessionTarget: PreparedTalkSessionTarget;
     callId: string;
-    voiceSessionId: string;
+    requestedVoiceSessionId?: string;
     args: unknown;
     relaySessionId?: string;
     connId?: string;
@@ -71,7 +71,8 @@ export async function startTalkRealtimeAgentConsult(
     request.client?.connect?.scopes,
     request.client,
   );
-  // Stable caller identity survives reconnect; chat owns reservation and replay.
+  // Only an explicitly requested voice ID scopes replay. An implicit record
+  // may be regenerated after close/reconnect; chat still owns that call's replay.
   const idempotencyKey =
     "talk-" +
     sha256Hex(
@@ -80,7 +81,7 @@ export async function startTalkRealtimeAgentConsult(
         authority.replyCaller?.ApprovalReviewerDeviceId,
         params.sessionTarget.agentId,
         params.sessionTarget.canonicalKey,
-        params.voiceSessionId,
+        params.requestedVoiceSessionId,
         params.callId,
       ]),
     );

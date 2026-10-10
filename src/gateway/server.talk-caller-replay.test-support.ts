@@ -20,6 +20,7 @@ import {
 } from "./local-user-ingress.js";
 import * as callerContext from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { readLegacyVoiceBinding } from "./talk/handlers/client-legacy-voice-bindings.js";
 import {
   connectReq,
   rpcReq,
@@ -239,12 +240,13 @@ export async function runTalkCallerReplay({
       host.close();
     }
   });
+  let legacyVoiceForCleanup: string | undefined;
   try {
     const peers = { writer: await connect("writer"), reader: await connect("reader") };
-    const consult = (who: Caller, callId: string, socket = peers[who]) =>
+    const consult = (who: Caller, callId: string, socket = peers[who], legacy = false) =>
       rpcReq<{ runId: string }>(socket, "talk.client.toolCall", {
         sessionKey,
-        voiceSessionId,
+        ...(legacy ? {} : { voiceSessionId }),
         callId,
         name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         args: { question: "Carry out the action." },
@@ -514,10 +516,69 @@ export async function runTalkCallerReplay({
     expect(clients.get("writer")?.connect.scopes).not.toContain("operator.write");
     expect(clients.get("reader")?.connect.scopes).not.toContain("operator.write");
     expect(approvals).toHaveLength(0);
+    // Legacy clients omit the logical voice ID. Retiring its inferred record
+    // must not turn a retransmitted call into another native effect.
+    const legacyClosed = once(peers.writer, "close");
+    peers.writer.close();
+    await legacyClosed;
+    peers.writer = await connect("writer");
+    const beforeLegacy = attempts.length;
+    const legacy = await consult("writer", "legacy-retry", peers.writer, true);
+    expect(legacy.ok, JSON.stringify(legacy)).toBe(true);
+    await waitRun(legacy.payload?.runId);
+    const originalLegacyVoice = readLegacyVoiceBinding(
+      expectDefined(clients.get("writer"), "legacy caller").connId,
+      sessionKey,
+    );
+    legacyVoiceForCleanup = originalLegacyVoice;
+    const legacyEffects = await effects();
+    const closeLegacyVoice = await rpcReq(peers.writer, "talk.client.close", {
+      sessionKey,
+      voiceSessionId: expectDefined(originalLegacyVoice, "legacy voice binding"),
+    });
+    expect(closeLegacyVoice.ok, JSON.stringify(closeLegacyVoice)).toBe(true);
+    const reconnectLegacy = once(peers.writer, "close");
+    peers.writer.close();
+    await reconnectLegacy;
+    peers.writer = await connect("writer");
+    const legacyRetry = await consult("writer", "legacy-retry", peers.writer, true);
+    if (legacyRetry.ok) {
+      await waitRun(legacyRetry.payload?.runId);
+    }
+    const regeneratedLegacyVoice = readLegacyVoiceBinding(
+      expectDefined(clients.get("writer"), "reconnected legacy caller").connId,
+      sessionKey,
+    );
+    legacyVoiceForCleanup = regeneratedLegacyVoice;
+    expect(regeneratedLegacyVoice).toBeTypeOf("string");
+    expect(regeneratedLegacyVoice).not.toBe(originalLegacyVoice);
+    expect(legacyRetry.ok).toBe(false);
+    expect(attempts).toHaveLength(beforeLegacy + 1);
+    expect(await effects()).toBe(legacyEffects);
+    console.info("Legacy regenerated-session retry observed:", {
+      regeneratedVoiceSession: regeneratedLegacyVoice !== originalLegacyVoice,
+      retryAcceptedAsNew: legacyRetry.ok,
+      retryDispatches: attempts.length - beforeLegacy - 1,
+      effectsUnchanged: (await effects()) === legacyEffects,
+    });
+    const freshLegacy = await consult("writer", "legacy-new-call", peers.writer, true);
+    expect(freshLegacy.ok, JSON.stringify(freshLegacy)).toBe(true);
+    await waitRun(freshLegacy.payload?.runId);
+    expect(attempts).toHaveLength(beforeLegacy + 2);
+    expect(await effects()).toBe(`${legacyEffects}effect\n`);
     console.info("Authenticated caller replay observed:", JSON.stringify(outcomes));
   } finally {
     hold?.release.resolve();
     observeCaller.mockRestore();
+    if (legacyVoiceForCleanup) {
+      const writerSocket = sockets.at(-1);
+      const closeRegeneratedVoice = await rpcReq(
+        expectDefined(writerSocket, "legacy cleanup socket"),
+        "talk.client.close",
+        { sessionKey, voiceSessionId: legacyVoiceForCleanup },
+      );
+      expect(closeRegeneratedVoice.ok, JSON.stringify(closeRegeneratedVoice)).toBe(true);
+    }
     for (const socket of sockets) {
       socket.close();
     }
