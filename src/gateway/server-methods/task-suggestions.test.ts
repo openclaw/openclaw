@@ -27,7 +27,6 @@ import {
   GIT_CWD,
   operatorClient,
   requirePayload,
-  readTaskSuggestionRollbackFixture,
   SOURCE_SESSION_KEY,
 } from "./task-suggestions.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -99,12 +98,17 @@ vi.mock("../session-utils-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils-store.js")>();
   return {
     ...actual,
-    withGatewaySessionEntry: (...args: Parameters<typeof actual.withGatewaySessionEntry>) =>
-      readTaskSuggestionRollbackFixture(
-        actual.withGatewaySessionEntry,
-        sessionReadState.mode,
-        ...args,
-      ),
+    loadGatewaySessionEntryReadOnly: (
+      ...args: Parameters<typeof actual.loadGatewaySessionEntryReadOnly>
+    ) => {
+      if (sessionReadState.mode === "throw") {
+        throw new Error("session inspection unavailable");
+      }
+      const loaded = actual.loadGatewaySessionEntryReadOnly(...args);
+      return sessionReadState.mode === "present"
+        ? { ...loaded, entry: { sessionId: "surviving-session", updatedAt: 1 } }
+        : loaded;
+    },
   };
 });
 
