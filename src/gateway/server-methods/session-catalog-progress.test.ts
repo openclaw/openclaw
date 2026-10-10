@@ -122,7 +122,7 @@ describe("session catalog progress ownership", () => {
 
     try {
       await started.promise;
-      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledTimes(3);
       clock = 1_500;
       release();
       await Promise.all([

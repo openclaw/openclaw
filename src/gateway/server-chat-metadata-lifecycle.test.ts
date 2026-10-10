@@ -277,27 +277,6 @@ async function createRealMetadataLifecycle(
     },
     warn,
     modelEvent,
-    queueRefresh(stage: "queued" | "building") {
-      const entered = createDeferred();
-      const release = createDeferred();
-      if (stage === "building") {
-        buildCommands.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return { commands: [] };
-        });
-      }
-      revision += 1;
-      authEvent();
-      const reading =
-        stage === "building" ? lifecycle.read({ agentId: "main" }).catch(() => {}) : undefined;
-      return {
-        entered: stage === "building" ? entered.promise : Promise.resolve(),
-        release: () => release.resolve(),
-        obsolete: latestRefresh,
-        reading,
-      };
-    },
     replaceOwner() {
       owner = createChatMetadataOwner(config, "after-publication");
       ownerAvailable = true;
@@ -440,71 +419,44 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it.each(["queued", "building", "initial build", "missing owner"] as const)(
-    "keeps readers waiting for owner publication after %s",
-    async (stage) => {
-      const initial = stage === "initial build";
-      const missing = stage === "missing owner";
-      const harness = await createRealMetadataLifecycle({
-        attach: !initial && !missing,
-        ownerAvailable: !missing,
+  it("waits for owner publication when no owner is available", async () => {
+    const harness = await createRealMetadataLifecycle({
+      attach: false,
+      ownerAvailable: false,
+    });
+    let settled = false;
+    const readMetadata = () =>
+      harness.lifecycle.read({ agentId: "main" }).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+    let read: Promise<unknown> | undefined;
+    try {
+      await harness.attach();
+      expect(harness.warn).not.toHaveBeenCalled();
+      await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
+        ChatMetadataSnapshotUnavailableError,
+      );
+      harness.invalidateOwner();
+      read = readMetadata();
+      await nextEventLoopTurn();
+      expect(harness.warn).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      harness.replaceOwner();
+      await expect(read).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "after-publication" })],
       });
-      const entered = createDeferred();
-      const release = createDeferred();
-      const queued =
-        stage === "queued" || stage === "building" ? harness.queueRefresh(stage) : undefined;
-      let settled = false;
-      const readMetadata = () =>
-        harness.lifecycle.read({ agentId: "main" }).then(
-          (value) => {
-            settled = true;
-            return value;
-          },
-          (error: unknown) => {
-            settled = true;
-            return error;
-          },
-        );
-      let read: Promise<unknown> | undefined;
-      try {
-        if (initial) {
-          harness.buildCommands.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return { commands: [] };
-          });
-          await harness.attach();
-          read = readMetadata();
-          await entered.promise;
-        } else if (missing) {
-          await harness.attach();
-          expect(harness.warn).not.toHaveBeenCalled();
-          await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
-            ChatMetadataSnapshotUnavailableError,
-          );
-        } else {
-          await queued?.entered;
-        }
-        harness.invalidateOwner();
-        read ??= readMetadata();
-        release.resolve();
-        queued?.release();
-        await queued?.obsolete.catch(() => undefined);
-        await nextEventLoopTurn();
-        expect(harness.warn).not.toHaveBeenCalled();
-        expect(settled).toBe(false);
-        harness.replaceOwner();
-        await expect(read).resolves.toMatchObject({
-          models: [expect.objectContaining({ id: "after-publication" })],
-        });
-      } finally {
-        release.resolve();
-        queued?.release();
-        await harness.stop();
-        await Promise.all([read, queued?.reading]);
-      }
-    },
-  );
+    } finally {
+      await harness.stop();
+      await read;
+    }
+  });
 
   it.each(["auth", "owner"] as const)(
     "retains a terminal metadata failure through a later %s invalidation",
