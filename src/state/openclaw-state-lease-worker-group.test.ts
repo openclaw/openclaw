@@ -139,13 +139,14 @@ describe("state lease group admission", () => {
     "maintenance",
     "maintenance-owner",
     "effect",
+    "transaction-replacement",
     "commit",
     "member-0",
     "member-1",
     "caller",
     "expiry",
     "async",
-  ] as const)("refuses commit after %s authority changes", async (kind) => {
+  ] as const)("refuses grants after %s authority changes", async (kind) => {
     const context = sourceContext();
     let now = 1_000;
     let sourceCurrent = true;
@@ -170,7 +171,15 @@ describe("state lease group admission", () => {
     const members = [fixture(context), fixture(context, "target")];
     const authority = {
       assertCurrent() {
+        if (kind === "transaction-replacement") {
+          authority.beforeTransaction = () => {};
+        }
         if (!currentCaller) {
+          throw callerError;
+        }
+      },
+      beforeTransaction() {
+        if (kind === "transaction-replacement") {
           throw callerError;
         }
       },
@@ -197,6 +206,12 @@ describe("state lease group admission", () => {
         async (scope) => {
           const current = job(scope.createAdmission);
           const held = facts(scope.identities, 2_000);
+          if (kind === "transaction-replacement") {
+            expect(current.request("transaction", held)).toBe(2);
+            expect(current.admission.failure).toBe(callerError);
+            current.settled.resolve({ kind: "completed" });
+            return;
+          }
           expect(current.request("transaction", held)).toBe(1);
           if (kind === "admission") {
             context.admission.assertCurrent = () => {};

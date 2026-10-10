@@ -14,7 +14,11 @@ import {
   type PolicyEvidenceRule,
 } from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
-import { agentScopedPolicyTargets, policyHasRules, scopedAgentIdMatches } from "./policy-scope.js";
+import {
+  agentScopedPolicyTargets,
+  policyHasRules,
+  scopedAgentEvidenceMatches,
+} from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function secretAuthProvenanceFindings(
@@ -67,30 +71,16 @@ export function dataHandlingFindings(
         evidence,
         (entry) =>
           entry.kind !== "memorySessionTranscriptIndexing" ||
-          scopedDataHandlingAgentMatches(entry, target.agentId, evidence.dataHandling ?? []),
+          scopedAgentEvidenceMatches(
+            entry,
+            target.agentId,
+            evidence.dataHandling ?? [],
+            entry.id === "agents-defaults-memory-session-transcripts",
+          ),
       ),
     );
   }
   return findings;
-}
-
-function scopedDataHandlingAgentMatches(
-  entry: PolicyDataHandlingEvidence,
-  policyAgentId: string,
-  entries: readonly PolicyDataHandlingEvidence[],
-): boolean {
-  if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
-    return true;
-  }
-  return (
-    entry.id === "agents-defaults-memory-session-transcripts" &&
-    !entries.some(
-      (candidate) =>
-        candidate.scope === "agent" &&
-        candidate.kind === entry.kind &&
-        scopedAgentIdMatches(candidate.agentId, policyAgentId),
-    )
-  );
 }
 
 function dataHandlingFindingsForRule(

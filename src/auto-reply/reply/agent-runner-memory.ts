@@ -476,7 +476,7 @@ export async function runSessionCompactionIfNeeded(params: {
       amount: 0,
       expectedSession: entry,
       sessionStore: compactionStore,
-      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch,
+      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch ?? null,
     });
     assertActive();
     if (compactionCount === undefined) {
@@ -608,7 +608,7 @@ export async function runSessionCompactionIfNeeded(params: {
       tokensAfter,
       compactionKind,
       expectedSession: acceptedEntry,
-      transcriptByteCompactionLatch,
+      transcriptByteCompactionLatch: transcriptByteCompactionLatch ?? null,
       authorize: () => {
         assertActive();
         return true;
@@ -1198,25 +1198,22 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionEntry: entry,
           agentRuntime: sessionRuntimeOverride,
         });
-        const { embeddedContext, senderContext, runBaseParams } =
-          await buildEmbeddedRunExecutionParams({
-            run: {
-              ...maintenanceRun,
-              thinkLevel: candidateThinkLevel,
-            },
-            sessionCtx: {},
-            hasRepliedRef: undefined,
-            provider,
-            model,
-            runId: flushRunId,
-            promptCacheKey: params.opts?.promptCacheKey,
-            allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
-          });
+        const runBaseParams = await buildEmbeddedRunExecutionParams({
+          run: {
+            ...maintenanceRun,
+            thinkLevel: candidateThinkLevel,
+          },
+          sessionCtx: {},
+          hasRepliedRef: undefined,
+          provider,
+          model,
+          runId: flushRunId,
+          promptCacheKey: params.opts?.promptCacheKey,
+          allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
+        });
         const runtime = await embeddedAgentRuntimeLoader.load();
         const result = await runtime.runEmbeddedAgent({
           preparedRunAdmission,
-          ...embeddedContext,
-          ...senderContext,
           ...runBaseParams,
           ...memorySession,
           agentHarnessId: resolveSessionPinnedHarnessId(entry),

@@ -24,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
@@ -102,7 +103,11 @@ describe("memory manager shared agent connection", () => {
     expect(() => sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" })).toThrow(
       /foreign_key_check/,
     );
-    const result = await getMemorySearchManager({ cfg: createConfig(), agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: createConfig(),
+      agentId: "main",
+    });
     expect(result.manager).toBeNull();
     expect(result.error).toMatch(/foreign_key_check/);
   });
@@ -154,6 +159,7 @@ describe("memory manager shared agent connection", () => {
     );
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const creating = MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg,
       agentId: "main",
       purpose: "maintenance",

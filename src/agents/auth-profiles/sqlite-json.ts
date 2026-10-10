@@ -6,7 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
-import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -56,7 +56,7 @@ function inspectAuthProfileTable(
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
   const tableName = authProfileTableName(target, databaseKind);
-  if (getSqliteReadScopeRevision(db)?.schema.tables.has(tableName)) {
+  if (getAdmittedSqliteSchemaFacts(db)?.tables.has(tableName)) {
     return null;
   }
   const schemaObject = executeWithCachedStatement(
@@ -172,7 +172,7 @@ export function readAuthProfileRows(
   const stateTable = authProfileTableName("state", databaseKind);
   let schemaObjects: Array<Record<string, unknown>>;
   try {
-    const admittedTables = getSqliteReadScopeRevision(database)?.schema.tables;
+    const admittedTables = getAdmittedSqliteSchemaFacts(database)?.tables;
     if (admittedTables?.has(storeTable) && admittedTables.has(stateTable)) {
       schemaObjects = [
         { name: storeTable, type: "table" },

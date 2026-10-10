@@ -13,7 +13,7 @@ import {
 } from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -42,13 +42,20 @@ export type ChannelsAddOptions = {
 
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["agent", "channel", "account"]);
 
-function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
+// CLI registration is selection-scoped; only legacy setup needs metadata coercion.
+function buildChannelSetupInput(opts: ChannelsAddOptions, mode: "legacy" | "contract") {
+  const valueMetadataByAttributeName =
+    mode === "legacy"
+      ? resolveChannelSetupCliOptionMetadata(opts.channel).valueMetadataByAttributeName
+      : null;
+  const entries = Object.entries(opts).filter(
+    ([key, value]) => !CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) && value !== undefined,
+  );
+  if (!valueMetadataByAttributeName) {
+    return Object.fromEntries(entries);
+  }
   const input: Record<string, unknown> = {};
-  const { valueMetadataByAttributeName } = resolveChannelSetupCliOptionMetadata(opts.channel);
-  for (const [key, value] of Object.entries(opts)) {
-    if (CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) || value === undefined) {
-      continue;
-    }
+  for (const [key, value] of entries) {
     const metadata = valueMetadataByAttributeName.get(key);
     if (metadata?.valueType !== "int") {
       input[key] =
@@ -69,18 +76,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
     }
     input[key] = parsed;
   }
-  return input as ChannelSetupInput;
-}
-
-// Safe to forward every defined key: CLI registration is selection-scoped.
-// Modern setup drops Commander defaults in resolveChannelsAddOptions; legacy
-// setup keeps manifest defaults and drops empty-string defaults only for ints.
-function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(opts).filter(
-      ([key, value]) => !CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) && value !== undefined,
-    ),
-  );
+  return input;
 }
 
 /** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
@@ -114,6 +110,12 @@ async function configureChannelAccount(
   const cfg = writeSnapshot.snapshot.sourceConfig;
   let nextConfig = cfg;
   let pluginRegistrySourceChanged = false;
+  const effectContext = () => ({
+    runtime,
+    ...(params?.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
+  });
 
   const useWizard = params?.hasFlags === false;
   if (useWizard) {
@@ -143,13 +145,10 @@ async function configureChannelAccount(
     await runChannelsAddWizardFlow({
       writeSnapshot,
       agentId,
-      runtime,
       prompter,
       workspaceDir,
       ...(target.kind === "resolved" ? { initialChannel: target.channel } : {}),
-      ...(params?.beforePersistentEffect
-        ? { beforePersistentEffect: params.beforePersistentEffect }
-        : {}),
+      ...effectContext(),
     });
     return;
   }
@@ -214,12 +213,9 @@ async function configureChannelAccount(
         cfg: nextConfig,
         entry: catalogEntry,
         prompter,
-        runtime,
         workspaceDir,
         promptInstall: false,
-        ...(params?.beforePersistentEffect
-          ? { beforePersistentEffect: params.beforePersistentEffect }
-          : {}),
+        ...effectContext(),
       });
       nextConfig = result.cfg;
       if (!result.installed) {
@@ -244,17 +240,17 @@ async function configureChannelAccount(
   }
 
   const selectedChannel = channel;
+  const unsupportedAddMessage = () =>
+    `${formatUnsupportedChannelActionMessage({
+      channel: selectedChannel,
+      action: "non-interactive add",
+    })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`;
   return withCommandPluginMetadata(
     { config: nextConfig, workspaceDir: resolveWorkspaceDir() },
     async () => {
       const plugin = await loadScopedPlugin(selectedChannel, catalogEntry?.pluginId);
       if (!plugin) {
-        runtime.error(
-          `${formatUnsupportedChannelActionMessage({
-            channel: selectedChannel,
-            action: "non-interactive add",
-          })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`,
-        );
+        runtime.error(unsupportedAddMessage());
         runtime.exit(1);
         return;
       }
@@ -263,20 +259,12 @@ async function configureChannelAccount(
         plugin,
         requestedAccountId: opts.account,
         resolveInput: () =>
-          plugin.setupContract ? buildChannelOwnedSetupInput(opts) : buildChannelSetupInput(opts),
-        runtime,
-        ...(params?.beforePersistentEffect
-          ? { beforePersistentEffect: params.beforePersistentEffect }
-          : {}),
+          buildChannelSetupInput(opts, plugin.setupContract ? "contract" : "legacy"),
+        ...effectContext(),
       });
       if (!prepared.ok) {
         runtime.error(
-          prepared.error.kind === "unsupported"
-            ? `${formatUnsupportedChannelActionMessage({
-                channel: selectedChannel,
-                action: "non-interactive add",
-              })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`
-            : prepared.error.message,
+          prepared.error.kind === "unsupported" ? unsupportedAddMessage() : prepared.error.message,
         );
         runtime.exit(1);
         return;
@@ -285,10 +273,7 @@ async function configureChannelAccount(
         cfg: nextConfig,
         channel: selectedChannel,
         prepared: prepared.value,
-        runtime,
-        ...(params?.beforePersistentEffect
-          ? { beforePersistentEffect: params.beforePersistentEffect }
-          : {}),
+        ...effectContext(),
       });
       nextConfig = normalizeExternalChannelSetupConfig({
         cfg: applied.nextConfig,
@@ -325,10 +310,7 @@ async function configureChannelAccount(
             },
           ],
           configPath: committed.path,
-          runtime,
-          ...(params?.beforePersistentEffect
-            ? { beforePersistentEffect: params.beforePersistentEffect }
-            : {}),
+          ...effectContext(),
         });
       }
     },

@@ -9,6 +9,8 @@
  * This is in-process source-composition evidence, not live deployment proof.
  */
 import "../test-utils/prepare-compiled-subprocesses.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -38,6 +40,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
@@ -68,7 +71,7 @@ import {
   setTestPluginRegistry,
 } from "./test-helpers.js";
 
-type Case = "allowed" | "guest" | "revoked";
+type Case = "allowed" | "guest" | "delegation-revoked" | "revoked";
 type Post = {
   id: string;
   author_id: string;
@@ -84,6 +87,7 @@ type TransportCase = {
   replies: string[];
 };
 let networkCase: TransportCase | undefined;
+let rejectIngress: ((error: unknown) => void) | undefined;
 const appToken = "synthetic-x-composition-app-token";
 const userToken = "synthetic-x-composition-user-token";
 
@@ -150,6 +154,25 @@ vi.mock("../plugin-sdk/ssrf-runtime.js", async (importOriginal) => ({
     release: async () => {},
   }),
 }));
+// Observe the real delivery promise: retryable failures settle in the durable queue,
+// not the monitor logger. Do not replace admission, delivery, or its result.
+vi.mock("../plugin-sdk/channel-outbound.js", async (importOriginal) => {
+  const original = await importOriginal<typeof channelOutbound>();
+  const create: typeof original.createChannelIngressMonitor = (options) =>
+    original.createChannelIngressMonitor({
+      ...options,
+      deliver: async (...args) => {
+        try {
+          return await options.deliver(...args);
+        } catch (error) {
+          console.error("[x-proof] ingress delivery failed", error);
+          rejectIngress?.(error);
+          throw error;
+        }
+      },
+    });
+  return { ...original, createChannelIngressMonitor: create };
+});
 vi.mock("../plugin-sdk/runtime-fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugin-sdk/runtime-fetch.js")>()),
   fetchWithRuntimeDispatcher: xResponse,
@@ -201,13 +224,24 @@ describe("X publication production-owner composition", () => {
           ...getRuntimeConfig().agents?.defaults,
           model: { primary: "x-proof/proof-model" },
         },
-        entries: { main: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+        entries: {
+          main: {
+            skills: [],
+            tools: { fs: { workspaceOnly: true }, deny: ["exec", "write", "edit", "apply_patch"] },
+            subagents: { allowAgents: ["coder"], delegateToolsTo: ["coder"] },
+          },
+          coder: { skills: [], tools: { fs: { workspaceOnly: true } } },
+        },
       },
       channels,
+      bindings: [{ agentId: "main", match: { channel: "x", accountId: "default" } }],
       messages: { queue: { mode: "collect" }, inbound: { debounceMs: 0 } },
       skills: { load: { watch: false } },
       gateway: { publicOrigin: "https://public-proof.example.test" },
-      tools: { codeMode: false },
+      tools: {
+        codeMode: false,
+        exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
+      },
       models: {
         providers: {
           "x-proof": {
@@ -236,6 +270,7 @@ describe("X publication production-owner composition", () => {
       enabled: true,
     });
     const sessionStore = resolveSessionStorePathCore(cfg().session?.store, { agentId: "main" });
+    const childStore = resolveSessionStorePathCore(cfg().session?.store, { agentId: "coder" });
     const gateway = createDirectChatContext({
       getRuntimeConfig: cfg,
       loadGatewayModelCatalog: async () => [
@@ -255,7 +290,17 @@ describe("X publication production-owner composition", () => {
     };
     const runtime = createPluginRuntime();
     bindGatewayContextResolver(runtime.subagent, () => gateway);
-    const logger = { info() {}, warn() {}, error() {}, debug() {} };
+    let rejectMonitor: ((error: Error) => void) | undefined;
+    const reportMonitorFailure = (message: string) => {
+      console.error("[x-proof] monitor failure", message);
+      rejectMonitor?.(new Error(message));
+    };
+    const logger = {
+      info() {},
+      warn: reportMonitorFailure,
+      error: reportMonitorFailure,
+      debug() {},
+    };
     const builder = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
     const record = createPluginRecord({ id: "x", origin: "bundled" });
     const api = builder.createApi(record, { config: cfg(), registrationMode: "full" });
@@ -278,6 +323,7 @@ describe("X publication production-owner composition", () => {
     let activeCase: Case = "allowed";
     let creating = false;
     let revokedInCatalogWait = false;
+    let delegationRevokedInCatalogWait = false;
     const creationRequests: Array<{ kind: Case; parent: unknown }> = [];
     const catalog = gateway.loadGatewayModelCatalogSnapshot;
     gateway.loadGatewayModelCatalogSnapshot = async (request) => {
@@ -288,6 +334,12 @@ describe("X publication production-owner composition", () => {
         revokedInCatalogWait = true;
         const next = structuredClone(cfg());
         next.channels!.x!.autoPublishWorkSessions = false;
+        setRuntimeConfigSnapshot(next);
+      }
+      if (creating && activeCase === "delegation-revoked" && !delegationRevokedInCatalogWait) {
+        delegationRevokedInCatalogWait = true;
+        const next = structuredClone(cfg());
+        next.agents!.entries!.main!.subagents!.delegateToolsTo = [];
         setRuntimeConfigSnapshot(next);
       }
       return snapshot;
@@ -330,7 +382,17 @@ describe("X publication production-owner composition", () => {
       const key = expectDefined(params.sessionKey, "admitted session key");
       console.info("[x-proof] model admitted", key);
       const child = key.includes(":dashboard:");
-      const work = (async () => {
+      const modelCaller = expectDefined(
+        createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: child ? "coder" : "main",
+          sessionKey: key,
+        }),
+        "admitted model execution scope",
+      );
+      // The deterministic model replaces the runner, including its admitted caller
+      // boundary. Child tools must not borrow the intake turn’s completed receipt.
+      const work = withGatewayToolCallerIdentity(modelCaller, async () => {
         if (
           params.userTurnTranscriptRecorder &&
           !params.userTurnTranscriptRecorder.hasPersisted()
@@ -369,15 +431,20 @@ describe("X publication production-owner composition", () => {
                 senderIsOwner: params.senderIsOwner,
                 groupId: params.groupId,
                 conversationToolPolicy: params.conversationToolPolicy,
-                runtimeToolAllowlist: ["sessions_spawn"],
                 toolConstructionPlan: {
-                  includeBaseCodingTools: false,
-                  includeShellTools: false,
+                  includeBaseCodingTools: true,
+                  includeShellTools: true,
                   includeChannelTools: false,
                   includeOpenClawTools: true,
                   includePluginTools: false,
                 },
               });
+              for (const name of ["exec", "write", "edit"]) {
+                expect(
+                  tools.some((tool) => tool.name === name),
+                  name,
+                ).toBe(false);
+              }
               const spawn = expectDefined(
                 tools.find((tool) => tool.name === "sessions_spawn"),
                 "real sessions_spawn tool",
@@ -386,6 +453,7 @@ describe("X publication production-owner composition", () => {
                 task: "Persist the synthetic publication composition answer.",
                 label: "X publication " + activeCase,
                 runtime: "subagent",
+                agentId: "coder",
                 visible: true,
                 context: "isolated",
                 expectsCompletionMessage: false,
@@ -398,14 +466,68 @@ describe("X publication production-owner composition", () => {
             console.info("[x-proof] spawn error", activeCase, String(error));
           }
         } else {
+          const tools = await createOpenClawCodingToolsAsync({
+            config: params.config,
+            agentId: "coder",
+            sessionKey: key,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            operationalRunInstance: admitted.operationalRunInstance,
+            workspaceDir: params.workspaceDir,
+            inputProvenance: params.inputProvenance,
+            toolConstructionPlan: {
+              includeBaseCodingTools: true,
+              includeShellTools: true,
+              includeChannelTools: false,
+              includeOpenClawTools: false,
+              includePluginTools: false,
+            },
+          });
+          for (const name of ["exec", "write", "edit"]) {
+            expect(
+              tools.some((tool) => tool.name === name),
+              name,
+            ).toBe(true);
+          }
+          const writer = expectDefined(
+            tools.find((tool) => tool.name === "write"),
+            "child writer",
+          );
+          const proofPath = path.join(params.workspaceDir, "delegation-proof.txt");
+          await writer.execute("delegated-write", {
+            path: proofPath,
+            content: "coding handoff works",
+          });
+          expect(await fs.readFile(proofPath, "utf8")).toBe("coding handoff works");
+          const executor = expectDefined(
+            tools.find((tool) => tool.name === "exec"),
+            "child executor",
+          );
+          const executed = await executor.execute(
+            "delegated-exec",
+            {
+              command: "echo coding-handoff-works",
+              workdir: params.workspaceDir,
+            },
+            signal,
+          );
+          expect(executed.details).toMatchObject({ status: "completed", exitCode: 0 });
+          expect(executed.content).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining("coding-handoff-works"),
+              }),
+            ]),
+          );
           text = "X publication composition: durable child answer.";
         }
         const appended = await appendTranscriptMessage(
           {
-            agentId: "main",
+            agentId: child ? "coder" : "main",
             sessionKey: key,
             sessionId: params.sessionId,
-            storePath: sessionStore,
+            storePath: child ? childStore : sessionStore,
           },
           { message: { role: "assistant", content: text } },
         );
@@ -418,9 +540,10 @@ describe("X publication production-owner composition", () => {
           meta: { durationMs: 0, stopReason: "stop" as const },
           acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(admitted.operationalRunInstance),
         };
-      })();
+      });
       if (child) {
         childRuns.add(work);
+        void work.catch((error: unknown) => childWritten.reject(error));
       }
       return work;
     });
@@ -435,6 +558,7 @@ describe("X publication production-owner composition", () => {
         controlUiBasePath: "",
         getRuntimeConfig: cfg,
         getGatewayRequestContext: () => gateway,
+        httpRequestLifetime: gateway,
       },
     });
     const channel = api.runtime.channel;
@@ -452,11 +576,23 @@ describe("X publication production-owner composition", () => {
         throw error;
       }
     };
-    const rows = () => listSessionEntriesCore({ agentId: "main", storePath: sessionStore });
+    const rows = () => listSessionEntriesCore({ agentId: "coder", storePath: childStore });
     try {
-      for (const [index, kind] of (["allowed", "guest", "revoked"] as const).entries()) {
+      for (const [index, kind] of (
+        ["allowed", "guest", "delegation-revoked", "revoked"] as const
+      ).entries()) {
+        if (kind === "delegation-revoked" || kind === "revoked") {
+          const restored = structuredClone(cfg());
+          restored.agents!.entries!.main!.subagents!.delegateToolsTo = ["coder"];
+          // The public grant deliberately retires on any config change. Use a
+          // private handoff to prove delegation itself rejects the deferred commit.
+          restored.channels!.x!.autoPublishWorkSessions = kind !== "delegation-revoked";
+          setRuntimeConfigSnapshot(restored);
+        }
         activeCase = kind;
         dispatched = Promise.withResolvers<void>();
+        rejectMonitor = dispatched.reject;
+        rejectIngress = dispatched.reject;
         const rootId = String(500 + index * 100);
         const mention = post(
           String(Number(rootId) + 1),
@@ -501,6 +637,8 @@ describe("X publication production-owner composition", () => {
             signal,
           );
         } finally {
+          rejectMonitor = undefined;
+          rejectIngress = undefined;
           abort.abort();
           try {
             await monitor;
@@ -518,6 +656,14 @@ describe("X publication production-owner composition", () => {
             error: expect.stringContaining("hidden helpers"),
           });
           expect(creationRequests.filter((request) => request.kind === kind)).toEqual([]);
+        } else if (kind === "delegation-revoked") {
+          expect(publicReads).toEqual([]);
+          expect(publications.get(kind)).toBe(false);
+          expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
+          expect(delegationRevokedInCatalogWait).toBe(true);
+          expect(outcomes.get(kind)).toMatchObject({
+            error: expect.stringContaining("authorization changed"),
+          });
         } else {
           expect(publicReads).toEqual([
             { path: "/2/tweets", appOnly: true, ids: expect.arrayContaining([rootId, mention.id]) },
@@ -528,7 +674,7 @@ describe("X publication production-owner composition", () => {
             expect(outcomes.get(kind)).toMatchObject({ status: "accepted", publicRead: true });
             const key = await withinTest(childWritten.promise, signal);
             const entry = expectDefined(
-              loadSessionEntry({ agentId: "main", sessionKey: key, storePath: sessionStore }),
+              loadSessionEntry({ agentId: "coder", sessionKey: key, storePath: childStore }),
               "committed child row",
             );
             const publication = expectDefined(
@@ -538,7 +684,7 @@ describe("X publication production-owner composition", () => {
             expect(publication.sessionId).toBe(entry.sessionId);
             // The append checkpoint precedes the run's final session metadata writes.
             const childReleased = getSessionWorkAdmissionRelease({
-              scope: sessionStore,
+              scope: childStore,
               identities: [key, entry.sessionId],
             });
             if (childReleased) {
@@ -549,7 +695,7 @@ describe("X publication production-owner composition", () => {
               isPublicSessionShareActive(
                 cfg(),
                 {
-                  agentId: "main",
+                  agentId: "coder",
                   sessionKey: key,
                   sessionId: publication.sessionId,
                   shareId: publication.id,
@@ -594,7 +740,7 @@ describe("X publication production-owner composition", () => {
       await Promise.all(
         children.flatMap(({ sessionKey, entry }) => {
           const drain = getSessionWorkAdmissionRelease({
-            scope: sessionStore,
+            scope: childStore,
             identities: [sessionKey, entry.sessionId],
           });
           return drain ? [drain] : [];

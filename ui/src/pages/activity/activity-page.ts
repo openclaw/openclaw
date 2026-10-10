@@ -458,10 +458,6 @@ class ActivityPage extends OpenClawLightDomElement {
     this.context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
   }
 
-  private selectMode(mode: "sessions" | "live") {
-    this.context.navigate("activity", { search: mode === "live" ? "?view=live" : "" });
-  }
-
   private applyGatewayEvent(gateway: ApplicationContext["gateway"], event: GatewayEventFrame) {
     if (this.context.gateway !== gateway) {
       return;
@@ -625,7 +621,10 @@ class ActivityPage extends OpenClawLightDomElement {
               panelId: "activity-mode-panel",
               className: "activity-mode-tabs",
               variant: "sub",
-              onSelect: (selected) => this.selectMode(selected),
+              onSelect: (selected) =>
+                this.context.navigate("activity", {
+                  search: selected === "live" ? "?view=live" : "",
+                }),
             })
       }
       <div

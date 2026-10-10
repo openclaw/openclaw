@@ -12,7 +12,9 @@ import {
 } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import { checkMidTurnPrecheck } from "./run/preemptive-compaction.js";
 import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
@@ -21,7 +23,6 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
-  markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -34,7 +35,6 @@ import {
   makeGuardableAgent,
   getToolResultText,
   applyGuardToContext,
-  applyMidTurnPrecheckGuardToContext,
   expectOpenClawTruncation,
 } from "./tool-result-context-guard.test-support.js";
 
@@ -91,19 +91,24 @@ function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuar
   };
 }
 
-function pressureCheck(
+async function pressureCheck(
   agent: ReturnType<typeof makeGuardableAgent>,
   messages: AgentMessage[],
   toolResultMaxChars?: number,
 ) {
-  return applyMidTurnPrecheckGuardToContext(agent, messages, {
-    contextWindowTokens: 200_000,
+  installToolResultContextGuard({ agent, contextWindowTokens: 200_000 });
+  const projected = await expectDefined(agent.transformContext, "installed guard")(
+    messages,
+    new AbortController().signal,
+  );
+  checkMidTurnPrecheck({
+    context: { messages: convertToLlm(projected), systemPrompt: "sys" },
     contextTokenBudget: 20_000,
     reserveTokens: 12_000,
     toolResultMaxChars,
-    systemPrompt: "sys",
-    prePromptMessageCount: 1,
+    onPrecheck: () => {},
   });
+  return projected;
 }
 
 describe("installToolResultContextGuard", () => {
@@ -403,28 +408,31 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
-  it("projects transcript text for ingest and strips its marker from provider messages", async () => {
+  it("keeps original text for ingestion and replays the recorded model projection", async () => {
     const engine = makeEngine();
     const { run } = hook(engine, { getPrePromptMessageCount: () => 0 });
-    const prompt = makeUser("model-only context\n\nvisible prompt");
-    markTranscriptPromptText(prompt, "visible prompt");
+    const prompt = {
+      ...makeUser("visible prompt"),
+      __openclaw: {
+        modelPromptProjection: { version: 1, text: "model-only context\n\nvisible prompt" },
+      },
+    };
     const transformed = await run([prompt, makeToolResult("one", "result")]);
     expect(engine.afterTurn.mock.calls[0]?.[0].messages[0]).toMatchObject({
       role: "user",
       content: "visible prompt",
     });
-    expect(JSON.stringify(engine.afterTurn.mock.calls[0]?.[0].messages)).not.toContain(
-      "__openclawTranscriptPromptText",
-    );
     expect(engine.assemble.mock.calls[0]?.[0].messages[0]).toMatchObject({
       role: "user",
-      content: "model-only context\n\nvisible prompt",
+      content: "visible prompt",
     });
-    expect(transformed[0]).toMatchObject({
+    expect(normalizeMessagesForLlmBoundary(transformed)[0]).toMatchObject({
       role: "user",
       content: "model-only context\n\nvisible prompt",
     });
-    expect(JSON.stringify(transformed)).not.toContain("__openclawTranscriptPromptText");
+    expect(JSON.stringify(normalizeMessagesForLlmBoundary(transformed))).not.toContain(
+      "modelPromptProjection",
+    );
   });
 
   it("repairs orphan results from an engine returning its working array", async () => {

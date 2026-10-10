@@ -35,6 +35,7 @@ import {
 } from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import {
   beginPromptCacheObservation,
   completePromptCacheObservation,
@@ -45,6 +46,7 @@ import {
   setActiveEmbeddedRun,
 } from "../runs.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -171,6 +173,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
       systemPrompt,
       resourceLoader: createResourceLoader(),
     });
+    const convert = session.agent.convertToLlm;
+    session.agent.convertToLlm = (messages) =>
+      convert(normalizeMessagesForLlmBoundary(messages, { includeTimestamp: false }));
     const transcriptPrompt = "Answer the new request with ACK.";
     const prependContext = "Prepared hook context. ".repeat(210);
     const appendContext = "End of prepared hook context.";
@@ -437,9 +442,28 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(session.getLastAssistantText()).toBe("recovered");
   });
 
-  it.each([false, true])(
-    "persists context across retry and reopen: append-only=%s",
-    async (appendOnlyRuntimeContext) => {
+  it.each([
+    { name: "transient override", api: "openai-completions", override: false, retained: false },
+    { name: "retained override", api: "openai-completions", override: true, retained: true },
+    { name: "generic completions", api: "openai-completions", retained: true },
+    { name: "native Ollama", api: "ollama", retained: true },
+  ])(
+    "persists runtime context across provider retry and session reopen: $name",
+    async ({ api, override, retained }) => {
+      const { appendOnlyRuntimeContext } = resolveTranscriptPolicy({
+        modelApi: api,
+        runtimeHandle: {
+          provider: "fixture",
+          plugin: {
+            id: "fixture",
+            label: "Fixture",
+            auth: [],
+            ...(override === undefined
+              ? {}
+              : { buildReplayPolicy: () => ({ appendOnlyRuntimeContext: override }) }),
+          },
+        },
+      });
       await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
         const target = {
           agentId: "main",
@@ -465,7 +489,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
           sessionManager: SessionManager.open(target, state.workspaceDir),
           settingsManager,
         });
-        if (appendOnlyRuntimeContext) {
+        if (retained) {
           await first.session.sendCustomMessage(
             { customType: "test.extension-context", content: "extension context", display: false },
             { deliverAs: "nextTurn" },
@@ -502,8 +526,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
           (entry) =>
             entry.type === "custom_message" && entry.customType === "openclaw.runtime-context",
         );
-        expect(carriers).toHaveLength(appendOnlyRuntimeContext ? 2 : 0);
-        if (appendOnlyRuntimeContext) {
+        expect(carriers).toHaveLength(retained ? 2 : 0);
+        if (retained) {
           for (const carrier of carriers) {
             expect(carrier).toMatchObject({ display: false });
             const previous = entries[entries.indexOf(carrier) - 1];

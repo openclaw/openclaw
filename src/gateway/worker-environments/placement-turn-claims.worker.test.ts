@@ -10,6 +10,7 @@ import {
 } from "../../agents/session-placement-forced-terminal-settlement.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -79,6 +80,9 @@ async function workerClaim(name: string) {
 
 function losePlacementReply(sessionId: string, outcome: "committed" | "unknown") {
   if (outcome === "unknown") {
+    vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+      () => {},
+    );
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
       (admit, attachment) => {
@@ -517,16 +521,12 @@ it("preserves same-session FIFO and cannot conditionally release a successor", a
 
 it("rolls back claim admission when live authority is revoked at commit", async () => {
   let revoked = false;
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          revoked = true;
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      revoked = true;
+    }
+    admit(request, grant);
+  });
   await expect(
     placements.claimTurn(input("refused"), () => {
       if (revoked) {
@@ -545,21 +545,17 @@ it("fences retained authority before release commit and closes observers after s
   const closed = vi.fn();
   const unsubscribe = placements.registerTurnClaimClosedHandler(closed);
   authority.onRevoked(revoked);
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
   let commitObservation: { current: boolean; revoked: number; closed: number } | undefined;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        if (request.stage === "commit") {
-          commitObservation = {
-            current: authority.isCurrent(),
-            revoked: revoked.mock.calls.length,
-            closed: closed.mock.calls.length,
-          };
-        }
-      }, attachment),
-  );
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (request.stage === "commit") {
+      commitObservation = {
+        current: authority.isCurrent(),
+        revoked: revoked.mock.calls.length,
+        closed: closed.mock.calls.length,
+      };
+    }
+  });
   try {
     const released = placements.waitForTurnClaimRelease(claim.sessionId, {});
     await placements.releaseTurn(claim);

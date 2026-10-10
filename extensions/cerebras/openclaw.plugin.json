@@ -59,7 +59,7 @@
             "cost": {
               "input": 0.35,
               "output": 0.75,
-              "cacheRead": 0,
+              "cacheRead": 0.35,
               "cacheWrite": 0
             }
           },
@@ -73,7 +73,7 @@
             "cost": {
               "input": 0.99,
               "output": 1.49,
-              "cacheRead": 0,
+              "cacheRead": 0.99,
               "cacheWrite": 0
             }
           }

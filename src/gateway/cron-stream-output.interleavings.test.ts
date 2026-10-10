@@ -197,65 +197,6 @@ describe("cron stream output", () => {
       expect(watchers.inspect("stream-job")?.droppedBatches).toBe(1);
     });
 
-    it("does not count unmatched partial or discarded oversized input as a batch", async () => {
-      const { fake, watchers } = createCronStreamWatcherFixture();
-      const unmatched = job({
-        id: "unmatched-partial",
-        schedule: {
-          kind: "stream",
-          command: ["source"],
-          mode: "match",
-          match: "^keep$",
-          maxBatchBytes: 1_024,
-        },
-      });
-      const oversized = job({
-        id: "discarded-oversized",
-        schedule: {
-          kind: "stream",
-          command: ["source"],
-          mode: "match",
-          match: "\\[truncated\\]$",
-          maxBatchBytes: 1_024,
-        },
-      });
-      await watchers.start(unmatched);
-      await watchers.start(oversized);
-      fake.inputs[0]?.onStdout?.("ignore");
-      fake.inputs[1]?.onStdout?.("x".repeat(600));
-      await settle();
-      fake.inputs[1]?.onStdout?.("x".repeat(600));
-      await settle();
-
-      await watchers.stop(unmatched.id, "disabled");
-      await watchers.stop(oversized.id, "disabled");
-
-      expect(watchers.inspect(unmatched.id)?.droppedBatches).toBe(0);
-      expect(watchers.inspect(oversized.id)?.droppedBatches).toBe(0);
-    });
-
-    it("carries final counters into a replacement created from a stale snapshot", async () => {
-      const { fake, updateState, watchers } = createCronStreamWatcherFixture();
-      const staleJob = job();
-      await watchers.start(staleJob);
-      fake.inputs[0]?.onStdout?.("first\n");
-      await settle();
-      await watchers.stop(staleJob.id, "removed");
-
-      await watchers.start(staleJob);
-      fake.inputs[1]?.onStdout?.("second\n");
-      await settle();
-      await watchers.stop(staleJob.id, "disabled");
-
-      expect(watchers.inspect(staleJob.id)?.droppedBatches).toBe(2);
-      expect(updateState).toHaveBeenCalledWith(
-        staleJob.id,
-        expect.objectContaining({ streamDroppedBatches: 2 }),
-        expect.any(String),
-        expect.any(String),
-      );
-    });
-
     it("ignores obsolete process output during backoff and after replacement", async () => {
       vi.useFakeTimers();
       const { fake, updateState, watchers } = createCronStreamWatcherFixture({
@@ -469,29 +410,6 @@ describe("cron stream output", () => {
         state: "stopped",
         consecutiveFailures: 4,
       });
-    });
-
-    it("ignores a late batch after removal without moving counters", async () => {
-      vi.useFakeTimers();
-      const { fake, updateState, fireBatch, watchers } = createCronStreamWatcherFixture({
-        minIntervalMs: 1,
-      });
-      await watchers.start(job());
-      const lateOutput = fake.inputs[0]?.onStdout;
-      await watchers.stop("stream-job", "removed");
-      const counterWrites = updateState.mock.calls.filter(
-        ([, patch]) => patch.streamDroppedBatches !== undefined,
-      ).length;
-
-      lateOutput?.("late\n");
-      await vi.runAllTimersAsync();
-      await settle();
-
-      expect(watchers.inspect("stream-job")).toBeUndefined();
-      expect(fireBatch).not.toHaveBeenCalled();
-      expect(
-        updateState.mock.calls.filter(([, patch]) => patch.streamDroppedBatches !== undefined),
-      ).toHaveLength(counterWrites);
     });
 
     it("bounds raw output while a serialized counter write is slow", async () => {

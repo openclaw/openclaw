@@ -77,11 +77,6 @@ function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unkn
   return current;
 }
 
-function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
-  const tokens = parseLocalSchemaRefPointer(ref);
-  return tokens ? resolveJsonPointerPath(rootDocument, tokens) : undefined;
-}
-
 export const SCHEMA_MAP_KEYS = new Set([
   "$defs",
   "definitions",
@@ -257,7 +252,7 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
         typeof node.$ref !== "string" ||
         !/^#\/(\$defs|definitions)\/[^/]+$/.test(node.$ref) ||
         node.nullable === true ||
-        resolveLocalJsonPointer(schema, node.$ref) === undefined
+        tryResolveLocalRef(node.$ref, undefined, schema) === undefined
       ) {
         return false;
       }

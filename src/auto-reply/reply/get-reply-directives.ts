@@ -1,12 +1,13 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { listModelAliasCandidates } from "../../agents/model-selection-shared.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -39,17 +40,13 @@ import {
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
-import {
-  reserveSkillCommandNames,
-  resolveConfiguredDirectiveAliases,
-} from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { createModelSelectionState } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { createReplyModelLevelResolver } from "./reply-model-levels.js";
@@ -149,11 +146,12 @@ export async function resolveReplyDirectives(params: {
   const canInterpretTextDirectives =
     allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true;
   const commandTextHasSlash = commandText.includes("/");
-  const hasConfiguredModelAliases =
-    commandTextHasSlash &&
-    Object.values(cfg.agents?.defaults?.models ?? {}).some((entry) =>
-      Boolean(normalizeOptionalString(entry.alias)),
-    );
+  const configuredModelAliases = commandTextHasSlash
+    ? listModelAliasCandidates(cfg, agentId)
+        .map((candidate) => candidate.alias)
+        .filter(Boolean)
+    : [];
+  const hasConfiguredModelAliases = configuredModelAliases.length > 0;
   const hasSkillReferences =
     canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const reservedCommands = new Set<string>();
@@ -166,13 +164,9 @@ export async function resolveReplyDirectives(params: {
     }
   }
 
-  const rawAliases = hasConfiguredModelAliases
-    ? resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash,
-        reservedCommands,
-      })
-    : [];
+  const rawAliases = configuredModelAliases.filter(
+    (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
+  );
   const skillCommandContext = {
     workspaceDir,
     cfg,
@@ -193,7 +187,9 @@ export async function resolveReplyDirectives(params: {
           skillFilter,
         })
       : [];
-  reserveSkillCommandNames({ reservedCommands, skillCommands });
+  for (const skill of skillCommands) {
+    reservedCommands.add(normalizeLowercaseStringOrEmpty(skill.name));
+  }
 
   const allSkillCommands =
     hasSkillReferences && skillFilter !== undefined
@@ -400,15 +396,17 @@ export async function resolveReplyDirectives(params: {
   }
   ({ provider, model } = modelState);
 
-  let contextTokens = useFastReplyRuntime
-    ? DEFAULT_CONTEXT_TOKENS
-    : resolveContextTokens({
+  const contextTokenProjection = useFastReplyRuntime
+    ? undefined
+    : resolveModelContextTokenProjection({
         cfg,
+        allowAsyncLoad: false,
         provider,
         model,
         modelContextWindow: modelState.modelContextWindow,
         modelContextTokens: modelState.modelContextTokens,
       });
+  let contextTokens = contextTokenProjection?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
@@ -440,6 +438,7 @@ export async function resolveReplyDirectives(params: {
     resolvedElevatedLevel,
     defaultActivation: () => defaultActivation,
     contextTokens,
+    contextTokenProjection,
     effectiveModelDirective,
   });
   if (applyResult.kind === "reply") {
@@ -539,6 +538,7 @@ export async function resolveReplyDirectives(params: {
         : modelState.requestedRouteResolution,
       modelState,
       contextTokens,
+      contextTokenProjection: applyResult.contextTokenProjection,
       inlineStatusRequested,
       directiveAck,
       perMessageQueueMode,

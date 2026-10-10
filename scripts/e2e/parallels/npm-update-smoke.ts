@@ -564,7 +564,6 @@ export class NpmUpdateSmoke {
   private updateTargetTarball = "";
   private targetTarballPath = "";
   private targetTarballBuildCommit = "";
-  private targetDependencyPackages: NpmRegistryPackage[] = [];
   private targetRegistryPackages: NpmRegistryPackage[] = [];
   private targetTarballVersion = "";
   private targetRegistryHostUrl = "";
@@ -820,7 +819,7 @@ export class NpmUpdateSmoke {
         buildCommitShort: this.targetTarballBuildCommit.slice(0, 7),
         path: hostedTarballPath,
         version: this.targetTarballVersion,
-        registryPackages: [...this.targetDependencyPackages, ...this.targetRegistryPackages],
+        registryPackages: this.targetRegistryPackages,
       };
     } else if (!this.options.updateTarget || this.options.updateTarget === "local-main") {
       const providerConfig = resolveProviderConfig(this.options.provider);
@@ -1362,59 +1361,44 @@ export class NpmUpdateSmoke {
       ]);
       this.targetTarballVersion = targetPackageJson.version ?? "";
       this.targetTarballBuildCommit = targetBuildCommit;
-      this.targetDependencyPackages = await Promise.all(
-        this.options.dependencyTarballs.map(async (dependencyTarball) => {
-          const tarballPath = path.resolve(dependencyTarball);
-          if (!existsSync(tarballPath)) {
-            throw new Error(`dependency tarball does not exist: ${tarballPath}`);
-          }
-          const dependencyPackage = await extractPackageJsonFromTgz<{
-            name?: string;
-            version?: string;
-          }>(tarballPath, "package/package.json");
-          const name = dependencyPackage.name ?? "";
-          const version = dependencyPackage.version ?? "";
-          if (!name || !version || name === "openclaw") {
-            throw new Error(`dependency tarball has invalid package metadata: ${tarballPath}`);
-          }
-          if (targetPackageJson.dependencies?.[name] !== version) {
-            throw new Error(
-              `target tarball requires ${name}@${targetPackageJson.dependencies?.[name] ?? "<missing>"}, but companion tarball provides ${version}`,
-            );
-          }
-          return { name, version, tarballPath };
-        }),
-      );
-      this.targetRegistryPackages = await Promise.all(
-        this.options.registryPackageTarballs.map(async (registryPackageTarball) => {
-          const tarballPath = path.resolve(registryPackageTarball);
-          if (!existsSync(tarballPath)) {
-            throw new Error(`registry package tarball does not exist: ${tarballPath}`);
-          }
-          const registryPackage = await extractPackageJsonFromTgz<{
-            name?: string;
-            version?: string;
-          }>(tarballPath, "package/package.json");
-          const name = registryPackage.name ?? "";
-          const version = registryPackage.version ?? "";
-          if (!name || !version || name === "openclaw") {
-            throw new Error(`registry package tarball has invalid metadata: ${tarballPath}`);
-          }
-          if (version !== this.targetTarballVersion) {
-            throw new Error(
-              `registry package ${name}@${version} does not match candidate ${this.targetTarballVersion}`,
-            );
-          }
-          return { name, version, tarballPath };
-        }),
-      );
-      const registryPackageNames = new Set(
-        [...this.targetDependencyPackages, ...this.targetRegistryPackages].map((pkg) => pkg.name),
-      );
-      if (
-        registryPackageNames.size !==
-        this.targetDependencyPackages.length + this.targetRegistryPackages.length
-      ) {
+      const readTarballs = (tarballs: string[], kind: "dependency" | "registry package") =>
+        Promise.all(
+          tarballs.map(async (tarball) => {
+            const tarballPath = path.resolve(tarball);
+            if (!existsSync(tarballPath)) {
+              throw new Error(`${kind} tarball does not exist: ${tarballPath}`);
+            }
+            const pkg = await extractPackageJsonFromTgz<{
+              name?: string;
+              version?: string;
+            }>(tarballPath, "package/package.json");
+            const name = pkg.name ?? "";
+            const version = pkg.version ?? "";
+            if (!name || !version || name === "openclaw") {
+              throw new Error(
+                `${kind} tarball has invalid ${kind === "dependency" ? "package " : ""}metadata: ${tarballPath}`,
+              );
+            }
+            if (kind === "dependency") {
+              if (targetPackageJson.dependencies?.[name] !== version) {
+                throw new Error(
+                  `target tarball requires ${name}@${targetPackageJson.dependencies?.[name] ?? "<missing>"}, but companion tarball provides ${version}`,
+                );
+              }
+            } else if (version !== this.targetTarballVersion) {
+              throw new Error(
+                `registry package ${name}@${version} does not match candidate ${this.targetTarballVersion}`,
+              );
+            }
+            return { name, version, tarballPath };
+          }),
+        );
+      this.targetRegistryPackages = [
+        ...(await readTarballs(this.options.dependencyTarballs, "dependency")),
+        ...(await readTarballs(this.options.registryPackageTarballs, "registry package")),
+      ];
+      const registryPackageNames = new Set(this.targetRegistryPackages.map((pkg) => pkg.name));
+      if (registryPackageNames.size !== this.targetRegistryPackages.length) {
         throw new Error("candidate registry tarballs must have unique package names");
       }
       if (!this.targetTarballVersion || !this.targetTarballBuildCommit) {

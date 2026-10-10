@@ -1,8 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+export type SessionSourceConversationPredicate = {
+  conversationRef: string;
+  sessionKey: string | null;
+};
 
 /** Prepared source facts are compared again on the existing writer's connection. */
 export type SessionSourcePredicate = {
@@ -12,6 +18,7 @@ export type SessionSourcePredicate = {
   expected: Partial<SessionEntry> | undefined;
   members?: readonly string[];
   transcript?: { sessionId: string; version: SessionTranscriptContextVersion };
+  conversationAlternatives?: readonly (readonly SessionSourceConversationPredicate[])[];
 };
 
 export type SessionSourcePredicateFacts = {
@@ -19,9 +26,36 @@ export type SessionSourcePredicateFacts = {
   members?: readonly string[];
 };
 
+/** Current source facts supplied by the mutation's own transaction. */
+export type SessionSourceTransactionGrant = {
+  source: CapturedSessionEntryReadSource;
+  agentId: string;
+  sessionKey: string;
+  assertCurrent: (facts: SessionPendingInputAuthorityFacts) => void;
+};
+
+export type SessionSourceWriteGrant = {
+  assertCurrent: () => void;
+  assertLifetimeCurrent: () => void;
+  release: () => void | Promise<void>;
+  transaction?: SessionSourceTransactionGrant;
+};
+
+export type SessionSourceValidation = {
+  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
+  conversationMatches: Array<{
+    index: number;
+    alternatives: number[];
+    acceptedAlternatives?: number[];
+  }>;
+};
+
 export type PreparedSessionSourceAuthority = {
+  transaction?: SessionSourceTransactionGrant;
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
+  /** Released SDK callbacks can perform arbitrary synchronous SQLite reads. */
+  opaqueCommitGuard?: boolean;
   /** Wrapper checks need a native transaction unless the caller owns a prepared commit hook. */
   hasOpaqueCheck?: boolean;
   assertCurrent: () => void;
@@ -30,6 +64,8 @@ export type PreparedSessionSourceAuthority = {
   checks: {
     predicate: SessionSourcePredicate;
     refuse: (facts: SessionSourcePredicateFacts) => never;
+    /** The returned array is filled by the next host assertion. */
+    acceptConversationMatches?: (alternatives: readonly number[]) => number[];
   }[];
   release?: () => void | Promise<void>;
   scopedSources?: ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceAuthority>;
@@ -37,14 +73,48 @@ export type PreparedSessionSourceAuthority = {
 
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
+  opaqueCommitGuard?: boolean;
   /** Checks the scope owner without invoking storage-dependent source predicates. */
   assertScopeCurrent?: () => void;
   prepareSessionSource?: () => Promise<PreparedSessionSourceAuthority>;
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
 };
 
+/** Public boolean callbacks stay callable; bundled owners also carry their prepared writer source. */
+export type SessionSourceCheck = (() => boolean) & { sessionSource?: SessionSourceAssertion };
+
 export function sessionEntryCommitGuardOptions(source: SessionSourceAssertion | undefined) {
   return source?.nativeSource ? { assertCommitAllowed: source } : { workerGuard: { source } };
+}
+
+/** Install transaction facts before composed host assertions recheck their live alternatives. */
+export function acceptSessionSourceValidation(
+  source: PreparedSessionSourceAuthority,
+  validation: SessionSourceValidation | undefined,
+): void {
+  const refused = validation?.refusedSource;
+  if (refused) {
+    source.checks[refused.index]?.refuse(refused.facts);
+    throw new Error("Session source refusal omitted its prepared assertion");
+  }
+  for (const [index, check] of source.checks.entries()) {
+    if (!check.acceptConversationMatches) {
+      continue;
+    }
+    const matched = validation?.conversationMatches.find((entry) => entry.index === index);
+    if (
+      !matched ||
+      matched.alternatives.some(
+        (alternative) =>
+          !Number.isSafeInteger(alternative) ||
+          alternative < 0 ||
+          alternative >= (check.predicate.conversationAlternatives?.length ?? 0),
+      )
+    ) {
+      throw new Error("Session source validation omitted its matching alternatives");
+    }
+    matched.acceptedAlternatives = check.acceptConversationMatches(matched.alternatives);
+  }
 }
 
 const sessionSourceScopes = new AsyncLocalStorage<
@@ -54,7 +124,7 @@ const sessionSourceScopes = new AsyncLocalStorage<
 /** Classify request/SDK callbacks before adapters compose them with prepared internal authority. */
 export function captureExternalSessionCommitGuard(guard: SessionSourceAssertion | undefined) {
   return guard && !guard.prepareSessionSource
-    ? Object.assign(() => guard(), { nativeSource: true })
+    ? Object.assign(() => guard(), { nativeSource: true, opaqueCommitGuard: true })
     : guard;
 }
 
@@ -78,7 +148,21 @@ export async function prepareSessionSourceAuthority(
 ): Promise<PreparedSessionSourceAuthority> {
   return assertion?.prepareSessionSource
     ? assertion.prepareSessionSource()
-    : { assertCurrent: () => assertion?.(), checks: [], nativeSource: assertion?.nativeSource };
+    : {
+        assertCurrent: () => assertion?.(),
+        checks: [],
+        nativeSource: assertion?.nativeSource,
+        opaqueCommitGuard: assertion?.opaqueCommitGuard,
+      };
+}
+
+/** Bootstrap grants consume prepared liveness, never opaque or native source reads. */
+export function assertPreparedSessionSourceCurrent(source: PreparedSessionSourceAuthority): void {
+  if (source.assertPreparedCurrent) {
+    source.assertPreparedCurrent();
+  } else if (!source.nativeSource) {
+    source.assertCurrent();
+  }
 }
 
 export async function prepareSessionSourceScope(
@@ -105,6 +189,7 @@ export function bindPreparedSessionSourceAssertion(
     assertRetained,
     Object.assign(() => prepared.assertCurrent(), {
       nativeSource: prepared.nativeSource,
+      opaqueCommitGuard: prepared.opaqueCommitGuard,
       prepareSessionSource: () => {
         assertRetained();
         return prepareSessionSourceAuthority(retainedSource);
@@ -186,7 +271,10 @@ export function createDynamicSessionSourceAssertion(
       prepareSessionSourceScope: () => prepareSelected(prepareSessionSourceScope),
     },
   );
-  return assertion;
+  return Object.defineProperty(assertion, "nativeSource", {
+    enumerable: true,
+    get: () => select()?.nativeSource,
+  });
 }
 
 /** Preserve each owner's error/lifetime wrapper while preparing its storage-dependent sources. */
@@ -206,11 +294,7 @@ export function composeSessionSourceAssertion(
     const release = () => releaseSessionSourceAuthorities(prepared);
     const assertPreparedSources = () => {
       for (const source of prepared) {
-        if (source.assertPreparedCurrent) {
-          source.assertPreparedCurrent();
-        } else if (!source.nativeSource) {
-          source.assertCurrent();
-        }
+        assertPreparedSessionSourceCurrent(source);
       }
     };
     try {
@@ -230,6 +314,7 @@ export function composeSessionSourceAssertion(
             ...(scoped ? { assertPreparedCurrent: () => source?.assertScopeCurrent?.() } : {}),
             checks: [],
             nativeSource: source?.nativeSource,
+            opaqueCommitGuard: source?.opaqueCommitGuard,
           },
         );
       }
@@ -238,13 +323,14 @@ export function composeSessionSourceAssertion(
       }
       return {
         nativeSource: prepared.some((source) => source.nativeSource),
+        opaqueCommitGuard: prepared.some((source) => source.opaqueCommitGuard),
         hasOpaqueCheck: options?.hasOpaqueCheck || prepared.some((source) => source.hasOpaqueCheck),
         assertCurrent: () => check(() => prepared.forEach((source) => source.assertCurrent())),
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
         ...(scoped ? { scopedSources } : {}),
         checks: prepared.flatMap((source, index) =>
-          source.checks.map(({ predicate, refuse }) => ({
-            predicate,
+          source.checks.map(({ refuse, ...preparedCheck }) => ({
+            ...preparedCheck,
             refuse: (facts) => {
               check(() => {
                 prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
@@ -284,5 +370,8 @@ export function composeSessionSourceAssertion(
       prepareSessionSourceScope: () => prepare(true),
     },
   );
-  return assertion;
+  return Object.defineProperty(assertion, "nativeSource", {
+    enumerable: true,
+    get: () => sources.some((source) => source?.nativeSource),
+  });
 }

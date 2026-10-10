@@ -18,6 +18,8 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   cacheValidityTokensEqual,
   readSessionEntryCacheValidityToken,
@@ -25,7 +27,6 @@ import {
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
-  partitionUnchangedPlannedLifecycleArtifactEntries,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ReclamationDatabaseOptions,
@@ -87,8 +88,8 @@ function captureWorkerAgeSnapshotInTransaction(
   database: Pick<OpenClawAgentDatabase, "db" | "path" | "agentId">,
   maintenance: SessionEntryMaintenanceInput["maintenance"],
 ) {
-  // The transaction owner refreshed after BEGIN; capture the same admitted snapshot.
-  const revision = readSessionEntryCacheValidityToken(database.db, "cached");
+  // Capture the writer receipt and local generation alongside this snapshot.
+  const revision = readSessionEntryCacheValidityToken(database.db);
   const capture = captureSessionEntryMaintenanceAgeFact(database.db, maintenance);
   let id = ageCaptureIds.get(capture);
   if (id === undefined) {
@@ -208,7 +209,7 @@ export function readSessionMaintenanceInWorker(
                 previous &&
                 previous.incarnation === observed.incarnation &&
                 previous.capture === ageCaptureIds.get(capture) &&
-                // Final deadline publication retains the owner's foreign-write cadence.
+                // Final deadline publication must still match the owning writer's receipt.
                 (!plan.expected ||
                   cacheValidityTokensEqual(
                     previous.revision,
@@ -227,8 +228,6 @@ export function readSessionMaintenanceInWorker(
               readPreservation(input),
             );
             if (prepared.kind === "write") {
-              // Selected victims have not changed yet; their future age hint is not committed.
-              invalidateSessionEntryMaintenanceAgeFact(database.db);
               return {
                 kind:
                   plan.kind === "maintenance-plan"
@@ -283,28 +282,43 @@ export function reclaimSessionMaintenanceInTransaction(
   return runSqliteSessionDeletionTransaction(
     (database) => {
       callbacks.beforeMutation?.();
-      const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
-      const archivedTranscripts = deleteMaterializedSessionStatePlans(
-        database,
-        plan.materializedPlans,
-        undefined,
-        new Set(partition.unchanged.map((entry) => entry.sessionKey)),
-      );
-      deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
-      const result: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> = {
-        kind: plan.kind,
-        value: {
-          archivedTranscripts,
-          changedEntries: partition.changed,
-          committedEntries: partition.unchanged,
-        },
-      };
+      const result = finalizeSessionMaintenanceInDatabase(database, plan);
       callbacks.onCommit?.(database, result);
       return result;
     },
     plan.databaseOptions,
     { operationLabel: "session.maintenance.finalize" },
   );
+}
+
+/** The native adapter and canonical executor share the same optimistic removal partition. */
+export function finalizeSessionMaintenanceInDatabase(
+  database: OpenClawAgentDatabase,
+  plan: Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }>,
+): Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> {
+  const committedEntryIndices: number[] = [];
+  const unchanged = plan.entries.filter((planned, index) => {
+    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
+    if (!sqliteSessionEntriesEqual(current, planned.expectedEntry)) {
+      return false;
+    }
+    committedEntryIndices.push(index);
+    return true;
+  });
+  const archivedTranscripts = deleteMaterializedSessionStatePlans(
+    database,
+    plan.materializedPlans,
+    undefined,
+    new Set(unchanged.map((entry) => entry.sessionKey)),
+  );
+  deletePlannedLifecycleArtifactEntries(database, unchanged);
+  return {
+    kind: plan.kind,
+    value: {
+      archivedTranscripts,
+      committedEntryIndices,
+    },
+  };
 }
 
 export function runSessionMaintenanceMetadataInTransaction(

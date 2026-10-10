@@ -181,8 +181,8 @@ export function createAcpReplyProjector(params: {
     if (isLive) {
       clearLiveIdleTimer();
       flushLiveBuffer();
-    }
-    if (!isLive) {
+      drainChunker();
+    } else {
       if (await params.shouldSendToolSummaries()) {
         for (const entry of pendingToolDeliveries.splice(0)) {
           await params.deliver("tool", entry.payload, entry.meta);
@@ -195,8 +195,6 @@ export function createAcpReplyProjector(params: {
         bufferedText = "";
         await params.deliver("final", { text });
       }
-    } else {
-      drainChunker();
     }
     await blockReplyPipeline.flush({ force: true });
   };

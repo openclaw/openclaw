@@ -9,6 +9,40 @@ title: "Configuration — agent sessions"
 
 `session.*` keys: how conversations map to sessions, when a session resets, and who can see or join one.
 
+## Communication defaults
+
+Configure whether sessions may initiate or accept messages from other sessions:
+
+```json5
+{
+  session: {
+    communication: {
+      send: "always",
+      receive: "ask",
+    },
+  },
+}
+```
+
+Both directions accept `always`, `ask`, or `never`; omitted values default to
+`always`. `ask` requires a human decision before sending or admitting the message
+as new peer input. Existing access restrictions still apply to `always`.
+
+The Control UI **Session settings** submenu can override either direction. **Reset** removes the
+override, so later configuration changes apply again. Existing explicit overrides
+are not overwritten when defaults change. Resets preserve the session settings,
+new explicit children and forks inherit them, and delegated work remains subject
+to its parent restrictions. Adopting an existing session never replaces its settings.
+Changes apply to new admissions, not already accepted messages.
+
+These preferences do not replace `tools.sessions.visibility`, human sharing, or
+the channel-oriented `sendPolicy`. Requested replies and authorized task results
+retain their existing completion authority. See [Session tools](/concepts/session-tool#communication-preferences).
+
+Older versions do not enforce these preferences. Before downgrading, remove the
+new configuration keys and restore any restrictions through the older version
+of tool and session policy.
+
 ## Session
 
 ```json5
@@ -81,7 +115,7 @@ title: "Configuration — agent sessions"
 - **`groupScope`**: how groups, rooms, and channels are grouped.
   - `per-group` (default): keep each non-direct peer in its channel-scoped session.
   - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
-- **`notifyOnCreate`**: queue a system notice in the owning agent's Home conversation for each new session (default: `true`). Includes available title, creator, and creation source, without copying messages. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. Notices are bounded and in memory, so they do not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
+- **`notifyOnCreate`**: queue new-session awareness in the owning agent's Home conversation (default: `true`). Pending creations share one bounded summary with available title, creator, and creation source, without copying messages. Older entries are omitted when the summary is full, leaving queue capacity for reminders and other events. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. The summary is in memory and does not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
 - **`resetTriggers`**: explicit commands or phrases that reset the session. Matching is case-insensitive; list each desired spelling because command aliases are not added automatically. For example, `["/tell"]` resets `/tell` messages, while `/steer` keeps its normal steering behavior. Follow-up text after a matching trigger is preserved, including later lines.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.

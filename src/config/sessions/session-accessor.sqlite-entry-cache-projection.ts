@@ -3,7 +3,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -30,10 +30,12 @@ export function loadSessionEntrySnapshot(
   prepared?: ValidatedSessionMetadata,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
-  // Validation lends complete parsed facts only within this read. A concurrent external commit
-  // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
+  // Only the same settled writer receipt can certify the parsed validation rows.
   const metadata =
-    prepared && prepared.dataVersion === readSqliteDataVersion(database.db) ? prepared : undefined;
+    prepared?.writeRevision !== undefined &&
+    prepared.writeRevision === readSqliteDatabaseWriteRevision(database.db)
+      ? prepared
+      : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
   const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.

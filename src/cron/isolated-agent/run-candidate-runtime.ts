@@ -3,7 +3,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { resolveProviderScopedAuthProfile } from "../../auto-reply/reply/agent-runner-auth-profile.js";
+import { resolveRunAuthProfile } from "../../auto-reply/reply/agent-runner-auth-profile.js";
 import { readConfiguredModelAuthProfileProvider } from "../../config/sessions/auth-profile-override-provenance.js";
 import { bindRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { isCliProvider } from "./run-execution.runtime.js";
@@ -60,14 +60,16 @@ export function prepareCronCandidateAuthSelection(
     params.cronSession.sessionEntry,
   );
   const selectedAuthProfile = configuredAuthProvider
-    ? resolveProviderScopedAuthProfile({
+    ? resolveRunAuthProfile(
+        {
+          provider: configuredAuthProvider,
+          authProfileId: params.liveSelection.authProfileId,
+          authProfileIdSource: params.liveSelection.authProfileIdSource,
+          config: params.cfgWithAgentDefaults,
+          workspaceDir: params.workspaceDir,
+        },
         provider,
-        primaryProvider: configuredAuthProvider,
-        authProfileId: params.liveSelection.authProfileId,
-        authProfileIdSource: params.liveSelection.authProfileIdSource,
-        config: params.cfgWithAgentDefaults,
-        workspaceDir: params.workspaceDir,
-      })
+      )
     : params.liveSelection;
   return () => {
     const selection = readConfiguredModelAuthProfileProvider(

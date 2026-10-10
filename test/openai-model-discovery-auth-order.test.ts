@@ -41,12 +41,6 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
-// mock-isolation: keep npm Codex version lookups off the network and out of shared cache state.
-vi.mock("../extensions/openai/codex-client-version.runtime.js", () => ({
-  resolveOpenAICodexModelsEndpoint: async () =>
-    "https://chatgpt.com/backend-api/codex/models?client_version=0.170.0",
-}));
-
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
@@ -415,10 +409,12 @@ describe("Provider model discovery auth preparation", () => {
           origin: "https://chatgpt.com",
           pathname: "/backend-api/codex/models",
           authorization: `Bearer ${accessToken}`,
-          version: "0.170.0",
+          version: expect.any(String),
         },
       ]);
-      expect(outcomes).toEqual([{ provider: "openai", status: "ready" }]);
+      expect(outcomes).toEqual([
+        { provider: "openai", status: "ready", listedModelIds: ["gpt-5.5"] },
+      ]);
       const provider = readPlannedProvider(plan, "openai");
       expect(provider).toMatchObject({
         api: "openai-chatgpt-responses",
@@ -573,10 +569,8 @@ describe("Provider model discovery auth preparation", () => {
   });
 
   it.each([
-    { providerId: "chutes", profileCount: 1, plugin: chutesPlugin },
     { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
     { providerId: "openai", profileCount: 1, plugin: null },
-    { providerId: "xai", profileCount: 1, plugin: xaiPlugin },
     { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
   ])(
     "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",

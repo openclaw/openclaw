@@ -131,16 +131,6 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
           })),
         ),
     ),
-    markValid: prepareSqliteQuerySync<string>(database, (parameter) =>
-      db
-        .updateTable("session_nodes")
-        .set({ entry_valid: 1 })
-        .where(
-          "session_key",
-          "=",
-          parameter((key) => key),
-        ),
-    ),
     claimWindow: window(false),
     retainWindow: window(true),
   };

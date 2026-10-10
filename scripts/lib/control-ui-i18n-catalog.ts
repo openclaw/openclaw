@@ -39,6 +39,7 @@ import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-pl
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
 import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
+import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -98,6 +99,7 @@ const sourceFiles = [
   "en-model-controls.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
+  "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
@@ -136,6 +138,9 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     sessionsView[key] = value;
     if (key === "searchPlaceholder") {
       Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
+    }
+    if (key === "archiveSession") {
+      Object.assign(sessionsView, registerSessionOrganizationEnglish.catalog.sessionsView);
     }
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);

@@ -212,6 +212,9 @@ it.each([
         | undefined;
       let run: ReturnType<typeof runCliFallbackCandidate> | undefined;
       let closeCron: (() => Promise<void>) | undefined;
+      let cronPromptAdmission:
+        | Parameters<Parameters<typeof executeCronRun>[0]["onPromptAdmission"]>[0]
+        | undefined;
       let cronWinner: string | undefined;
       try {
         const api = builder.createApi(record, { config: cfg, registrationMode: "full" });
@@ -554,6 +557,10 @@ it.each([
                       abortReason: () => "Fixture cancelled",
                       isAborted: () => cancel.signal.aborted,
                       lifecycle,
+                      onPromptAdmission: (admission) => {
+                        cronPromptAdmission?.close();
+                        cronPromptAdmission = admission;
+                      },
                       immutableThinkLevel: ctx.thinkingSelection.immutableThinkLevel,
                       thinkingCatalog: ctx.thinkingSelection.catalog,
                       loadThinkingCatalog: ctx.thinkingSelection.loadThinkingCatalog,
@@ -659,6 +666,7 @@ it.each([
       } finally {
         release.resolve();
         await Promise.allSettled([run]);
+        await cronPromptAdmission?.finish();
         await deferredLifecycle?.complete();
         preparedRunAdmission?.close();
         uninstallPlacement?.();

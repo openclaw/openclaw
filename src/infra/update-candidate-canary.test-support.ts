@@ -98,6 +98,11 @@ export function stubHealthyGateway() {
   );
 }
 
+/** The last canary check; verified temporary-copy removal is recorded after it. */
+export function canaryOutcomeStep(steps: UpdateStepResult[]) {
+  return steps.findLast((step) => !(step.name.endsWith("-cleanup") && step.exitCode === 0));
+}
+
 export function renderSteps(steps: UpdateStepResult[]) {
   const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   const presentation = createUpdateProgress(true);

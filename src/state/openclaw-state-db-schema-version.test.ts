@@ -5,7 +5,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import {
   CONTENT_VERSION_KEY,
@@ -62,7 +62,10 @@ describe("shared-state content version facts", () => {
     { marker: undefined, expected: [13, 7, 5] },
     { marker: 11, expected: [13, 11, 11] },
   ])("reuses marker $marker without retaining the caller's floor", ({ marker, expected }) => {
-    const database = openDatabase({ marker });
+    const database = openDatabase({
+      marker,
+      pathname: path.join(tempDirs.make("openclaw-content-version-"), "state.sqlite"),
+    });
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       for (const [index, published] of [13, undefined, 5].entries()) {
@@ -75,14 +78,14 @@ describe("shared-state content version facts", () => {
         observation.queries.filter((sql) =>
           /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql.trim()),
         ),
-      ).toHaveLength(3);
+      ).toHaveLength(0);
     } finally {
       observation.restore();
     }
   });
 
-  it("refreshes after raw mutation, rollback, malformed content, and schema replacement", () => {
-    const database = openDatabase();
+  it("reads untracked mutation, rollback, malformed content, and schema replacement directly", () => {
+    const database = openDatabase({ tracking: "untracked" });
     const write = database.prepare("INSERT OR REPLACE INTO config_machine_state VALUES (?, ?, 1)");
     expect(read(database)).toBe(7);
     write.run(CONTENT_VERSION_KEY, "11");
@@ -108,9 +111,9 @@ describe("shared-state content version facts", () => {
     expect(read(database)).toBe(19);
   });
 
-  it("observes foreign increases after the current pinned snapshot ends", () => {
+  it("observes raw foreign increases after an untracked pinned snapshot ends", () => {
     const pathname = path.join(tempDirs.make("openclaw-content-version-"), "state.sqlite");
-    const database = openDatabase({ pathname, marker: 11 });
+    const database = openDatabase({ pathname, marker: 11, tracking: "untracked" });
     database.exec("PRAGMA journal_mode=WAL");
     const peer = new DatabaseSync(pathname);
     databases.push(peer);
@@ -120,7 +123,7 @@ describe("shared-state content version facts", () => {
     expect(read(database)).toBe(11);
     update.run("12", CONTENT_VERSION_KEY);
     expect(read(database)).toBe(12);
-    runSqlitePinnedReadSnapshotSync(database, () => {
+    runSqliteSchemaReadSnapshotSync(database, () => {
       expect(read(database)).toBe(12);
       update.run("13", CONTENT_VERSION_KEY);
       expect(read(database)).toBe(12);
@@ -146,7 +149,7 @@ describe("shared-state content version facts", () => {
   );
 
   it.each(["untracked", "unadmitted", "outside-operation"] as const)(
-    "materializes every %s read without an admitted revision",
+    "respects physical format admission for %s reads",
     (tracking) => {
       const database = openDatabase({
         marker: 11,
@@ -163,7 +166,7 @@ describe("shared-state content version facts", () => {
         }
         expect(
           observation.queries.filter((sql) => /from "config_machine_state"/iu.test(sql)),
-        ).toHaveLength(3);
+        ).toHaveLength(tracking === "outside-operation" ? 1 : 3);
       } finally {
         observation.restore();
       }

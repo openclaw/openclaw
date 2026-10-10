@@ -39,6 +39,7 @@ import {
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
   resolveDisabledHeartbeatOneShotRetryDecision,
+  holdsFailureNotificationForRetry,
   resolveTransientCronRetryDecision,
   shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
@@ -236,6 +237,9 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
+  // the failure alert/repair until that retry ladder resolves.
+  let pendingTransientRetry = false;
   const applyReplaySchedule = () => {
     const nextRunAtMs = job.state.autoDisabled ? undefined : opts.replaySchedule?.nextRunAtMs;
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
@@ -253,6 +257,7 @@ export function applyJobResult(
       result,
       completionStatus,
       autoDisableNotificationOwnsFailure,
+      pendingTransientRetry,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
@@ -320,6 +325,11 @@ export function applyJobResult(
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
           if (scheduleNextRun(result.endedAt + retryDecision.backoffMs) !== undefined) {
+            pendingTransientRetry = holdsFailureNotificationForRetry(
+              job,
+              result,
+              retryDecision.retryCategory,
+            );
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -388,6 +398,12 @@ export function applyJobResult(
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
       });
+      // Within the quick-retry budget the next run is at most minutes away, whether it is the
+      // retry itself or an earlier natural slot, so a provider outage holds notifications.
+      const holdsForRetry =
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined &&
+        holdsFailureNotificationForRetry(job, result, retryDecision.retryCategory);
       let normalNext: number | undefined;
       let normalNextComputed = false;
       const computeNormalNext = () => {
@@ -408,6 +424,7 @@ export function applyJobResult(
             return finish();
           }
           if (retryNextRunAtMs < normalNext) {
+            pendingTransientRetry = holdsForRetry;
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -451,6 +468,7 @@ export function applyJobResult(
           : normalNext !== undefined
             ? Math.max(normalNext, backoffNext)
             : backoffNext;
+      pendingTransientRetry = holdsForRetry && job.state.nextRunAtMs !== undefined;
       state.deps.log.info(
         {
           jobId: job.id,

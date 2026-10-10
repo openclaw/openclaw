@@ -4,7 +4,7 @@ import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/ru
 import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";
@@ -15,13 +15,13 @@ import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
-import * as coldStorage from "./session-cold-storage.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 
-it("prepares bounded facts on one admitted source and refreshes after foreign and local writes", async () => {
+it("prepares bounded facts on one admitted source and refreshes after sibling and local writes without probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cohort";
@@ -41,6 +41,9 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
     };
     writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 1 });
     writeSessionEntry(database, sessionKey, { ...entry, sessionId: "retained" });
+    replaceTranscriptEventsSync({ ...scope, sessionKey: parentKey, sessionId: "parent" }, [
+      { type: "session", id: "parent", version: 3 },
+    ]);
     writeSessionEntry(database, sessionKey, entry);
     addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
     recordSessionParticipant(scope, {
@@ -74,11 +77,18 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       includeMembers: true,
       includeParticipantRecords: true,
       includeAuthProfileSource: true,
+      includeColdMetadata: true,
       lifecycleSessionKey: sessionKey,
-      transcript: { sessionKey, entryIds: ["question", "missing"], includeHeader: true },
+      transcript: {
+        sessionKey,
+        entryIds: ["question", "missing"],
+        includeHeader: true,
+        includeWatermark: true,
+      },
     };
     const read = (input = request) => operations["session.entry.read"](input, context);
     const first = read();
+    expect(first.coldArchives).toEqual([]);
     expect(first.entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey, parentKey]);
     expect(first.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
     expect(first.participantRecords?.[sessionKey]).toMatchObject([
@@ -95,12 +105,40 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
     expect(first.transcript).toMatchObject({
       header: { id: "cohort" },
       anchors: [{ entryId: "question", sessionId: "cohort" }],
+      watermark: { generation: expect.any(String), maxSeq: 1 },
     });
+    const currentVersion = readTranscriptContextVersionInTransaction(database, scope.sessionId);
+    const replayRequest: SessionEntryCohortRequest = {
+      sessionKeys: [sessionKey],
+      snapshotFields: [],
+      transcript: {
+        sessionKey,
+        entryIds: ["question"],
+        contextValidation: { version: currentVersion },
+        replayValidation: { allowInitial: false, expectedLifecycleRevision: "original" },
+      },
+    };
+    expect(read(replayRequest).transcript).toMatchObject({
+      contextValidated: true,
+      anchors: [{ entryId: "question" }],
+    });
+    expect(
+      read({
+        ...replayRequest,
+        transcript: {
+          ...replayRequest.transcript!,
+          replayValidation: {
+            allowInitial: false,
+            admission: { ...first.transcript!.anchors[0]!, role: "user", logicalTurnId: "cohort" },
+          },
+        },
+      }).transcript,
+    ).toMatchObject({ contextValidated: true, anchors: [] });
     request.expected = {
       incarnation: first.databaseIdentity.incarnation,
       sessions: [{ sessionKey, sessionId: "cohort", lifecycleRevision: "original" }],
     };
-    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
+    const peer = openNodeSqliteDatabase(database.path);
     const nativeRead = entryCache.readExactSessionEntryCandidatesInDatabase;
     const commit = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
@@ -113,6 +151,19 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
         peer
           .prepare("UPDATE session_participants SET contribution_count = 9 WHERE session_key = ?")
           .run(sessionKey);
+        peer
+          .prepare(
+            "UPDATE transcript_rewrite_watermarks SET generation = 'foreign-generation' WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+        peer
+          .prepare(
+            `INSERT INTO session_transcript_cold_archives
+              (session_id, generation, archive_name, archive_sha256, event_count,
+               raw_bytes, archive_bytes, last_seq, archived_at, storage)
+             VALUES ('parent', 'foreign-cold', 'cohort-parent.gz', ?, 1, 40, 20, 0, 1, 'file')`,
+          )
+          .run("0".repeat(64));
         return rows;
       });
     const reopen = vi
@@ -144,19 +195,23 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(standalone.databaseIdentity).toEqual(first.databaseIdentity);
       expect(standalone.lifecycleTimestamps).toEqual({});
       expect(transactionCommands).toEqual([]);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       sql.counts.fresh = 0;
       const pinned = read();
       expect(pinned.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
       expect(pinned.runtimeTarget?.sessionKey).toBe(sessionKey);
-      expect(sql.counts.fresh).toBe(1);
+      expect(pinned.coldArchives).toEqual([]);
+      expect(sql.counts.fresh).toBe(0);
       expect(sql.counts.authSchema).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
-      // A known write cannot hide the foreign change from this connection's next use.
+      // A known write cannot hide a sibling's earlier commit on the next use.
       writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 2 });
       sql.counts.fresh = 0;
       transactionCommands.length = 0;
       const current = read();
+      expect(current.coldArchives).toMatchObject([
+        { session_id: "parent", generation: "foreign-cold", last_seq: 0 },
+      ]);
       expect(current.members?.[sessionKey]).toEqual([]);
       expect(current.runtimeTarget).toEqual({
         agentId: "logical",
@@ -165,10 +220,14 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
         storePath: database.path,
       });
       expect(current.participantRecords?.[sessionKey]).toMatchObject([{ contributionCount: 9 }]);
+      expect(current.transcript?.watermark).toEqual({
+        generation: "foreign-generation",
+        maxSeq: 1,
+      });
       expect(
         current.entries.find(({ sessionKey: key }) => key === parentKey)?.entry.updatedAt,
       ).toBe(2);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
       expect(reopen).not.toHaveBeenCalled();
       expect(
@@ -203,7 +262,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
   });
 });
 
-it("prepares the admitted run target with its entry and refuses source loss after cold preparation", async () => {
+it("prepares the admitted run target with its entry and refuses source loss after target preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:bootstrap:cohort";
     const scope = { agentId: "bootstrap", env: state.env, sessionKey };
@@ -242,6 +301,7 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       workspaceDir: state.workspaceDir,
       timeoutMs: 30_000,
     };
+    const withRead = reader.withRead.bind(reader);
     const reads = vi.spyOn(reader, "withRead");
     const runRequest = projectionLane.pool.run.bind(projectionLane.pool);
     let runtimeTargets = 0;
@@ -269,19 +329,13 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       expect(reads).toHaveBeenCalledTimes(1);
       expect(runtimeTargets).toBe(0);
 
-      const restore = coldStorage.restoreSessionColdTranscript;
-      const interrupted = new Error("bootstrap source ended after cold preparation");
-      const restoring = vi
-        .spyOn(coldStorage, "restoreSessionColdTranscript")
-        .mockImplementationOnce(async (...args) => {
-          await restore(...args);
-          controller.abort(interrupted);
-        });
-      try {
-        await expect(prepareEmbeddedRunSession(input)).rejects.toBe(interrupted);
-      } finally {
-        restoring.mockRestore();
-      }
+      const interrupted = new Error("bootstrap source ended after target preparation");
+      reads.mockImplementationOnce(async (...args) => {
+        const value = await withRead(...args);
+        controller.abort(interrupted);
+        return value;
+      });
+      await expect(prepareEmbeddedRunSession(input)).rejects.toBe(interrupted);
     } finally {
       reads.mockRestore();
       requests.mockRestore();

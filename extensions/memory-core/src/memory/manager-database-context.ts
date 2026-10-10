@@ -15,12 +15,16 @@ import {
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
+  captureOpenClawAgentDatabaseExecution,
   openSqliteWorkerStore,
   openOpenClawAgentSqliteWorkerStore,
   runSqliteWorkerStoreWrite,
   type OpenClawAgentSqliteWorkerStore,
+  type OpenClawAgentDatabaseExecution,
   type SqliteWorkerStore,
   runQueuedStoreWrite,
+  readOpenClawAgentDatabaseIdentity,
+  supportsOpenClawAgentDatabaseExecution,
   withOpenClawAgentDatabaseWrite,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -36,7 +40,6 @@ import {
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
-import { withMemoryPublicationExecution } from "./manager-publication-lifetime.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationConnection,
@@ -47,6 +50,7 @@ import type {
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationHeader,
 } from "./manager-publication-transfer.js";
 import {
   assertMemoryShadowIdentity,
@@ -85,7 +89,6 @@ export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
-  private publicationGenerationActive = false;
   private schemaAdmission?: Promise<void>;
   private shadow?: {
     path: string;
@@ -303,10 +306,7 @@ export class MemoryIndexDatabase {
           store: await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
             this.writeOptions,
             this.db,
-            {
-              ...worker,
-              retainExecutionUntilClose: this.publicationGenerationActive ? true : undefined,
-            },
+            worker,
           ),
           busyTimeoutMs: pragmas.busy_timeout,
         };
@@ -398,7 +398,7 @@ export class MemoryIndexDatabase {
     return undefined;
   }
 
-  read<Key extends "source.hash" | "cache.read" | "session.current">(
+  read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
@@ -507,18 +507,11 @@ export class MemoryIndexDatabase {
       for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
         await scope.execute({ type: "stage.append", input: { operation, fragments } });
       }
-      let needsDiscard = true;
-      const current = await this.retryPublication(async () => {
-        const outcome = await scope.execute({
-          type: "cache.write",
-          input: { operation, expectedRevision },
-        });
-        if (outcome.ok || outcome.entered) {
-          needsDiscard = false;
-        }
-        return outcome;
-      }, prepare);
-      if (needsDiscard) {
+      const current = await this.retryPublication(
+        () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
+        prepare,
+      );
+      if (current === undefined) {
         await scope.execute({ type: "stage.discard", input: { operation } });
       }
       if (current === false) {
@@ -537,31 +530,28 @@ export class MemoryIndexDatabase {
     const run = () =>
       this.runPublication(async (scope) => {
         const operation = randomUUID();
-        const { chunks, embeddings: _embeddings, ...header } = replacement;
+        const { header, rows } = memoryPublicationHeader(replacement);
         await scope.execute({
           type: "stage.start",
-          input: { operation, header, rows: chunks.length },
+          input: { operation, header, rows },
         });
-        let needsDiscard = true;
         for (const fragments of memoryPublicationBatches(replacement)) {
           await scope.execute({ type: "stage.append", input: { operation, fragments } });
         }
-        const result = await this.retryPublication(async () => {
-          const outcome = await scope.execute({
-            type: "source.replace",
-            input: { operation, state: this.publicationState() },
-          });
-          if (outcome.ok || outcome.entered) {
-            needsDiscard = false;
-          }
-          return outcome;
-        }, prepare);
+        const result = await this.retryPublication(
+          () =>
+            scope.execute({
+              type: "source.replace",
+              input: { operation, state: this.publicationState() },
+            }),
+          prepare,
+        );
         if (this.isShadow) {
           assertCurrent();
         }
         // Thrown failures close the Worker through runPublication. A further
         // command on that failed scope could hide the original write outcome.
-        if (needsDiscard) {
+        if (result === undefined) {
           await scope.execute({ type: "stage.discard", input: { operation } });
         }
         return result;
@@ -638,16 +628,41 @@ export class MemoryIndexDatabase {
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
-    try {
-      await withMemoryPublicationExecution(
-        { database: this.db, options: this.writeOptions },
-        () => {
-          this.publicationGenerationActive = true;
-          return run();
+    let execution: OpenClawAgentDatabaseExecution | undefined;
+    if (
+      this.writeOptions &&
+      !this.readOnly &&
+      supportsOpenClawAgentDatabaseExecution(this.writeOptions)
+    ) {
+      const source = readOpenClawAgentDatabaseIdentity({ db: this.db });
+      if (this.closed || !this.db.isOpen || typeof source.identity !== "string") {
+        throw new Error("Memory publication requires its live file owner");
+      }
+      // Retain across fallback preparation; a no-op generation never opens a native worker.
+      execution = captureOpenClawAgentDatabaseExecution(this.writeOptions, {
+        expectedIdentity: {
+          kind: "file",
+          physicalIdentity: source.identity,
+          nativeLocation: source.filename,
+          birthtime: source.birthtime,
         },
-      );
-    } finally {
-      this.publicationGenerationActive = false;
+      });
+    }
+    const failures: unknown[] = [];
+    for (const settle of [run, () => execution?.release()]) {
+      try {
+        await settle();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
+        cause: failures[0],
+      });
     }
   }
 

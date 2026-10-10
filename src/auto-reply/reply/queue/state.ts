@@ -283,6 +283,7 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (shouldRewriteModelSelection) {
         delete run.hasAutoFallbackProvenance;
+        delete run.autoFallbackPrimaryProbe;
       }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
         run.hasSessionModelOverride =

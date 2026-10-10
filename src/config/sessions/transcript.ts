@@ -22,18 +22,13 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "./legacy-sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
-  loadSessionEntryReadOnly,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
-  readLatestTranscriptAssistantText,
-  readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
   waitForSessionTranscriptProjection,
@@ -43,8 +38,15 @@ import {
   type TranscriptEntryAnchor,
   type TranscriptEvent,
 } from "./session-accessor.js";
-import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+import type {
+  LatestTranscriptAssistantText,
+  SessionTranscriptReadScope,
+} from "./session-accessor.types.js";
+import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
+import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type {
   SessionLifecycleRevisionExpectation,
@@ -232,40 +234,44 @@ function extractRecentConversationText(
 }
 
 async function readRecentUserAssistantTextFromSqliteTranscript(
-  scope: SqliteSessionFileMarker,
+  scope: SessionTranscriptReadScope,
+  assertCurrent: () => void,
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
   const limit = normalizeRecentTranscriptLimit(options.limit);
   const pageSize = 250;
   try {
-    const readScope = {
-      agentId: scope.agentId,
-      sessionId: scope.sessionId,
-      storePath: scope.storePath,
-    };
+    const { readSessionTranscriptBoundedMessageTailPageAsync } =
+      await import("../../gateway/session-transcript-readers.js");
     const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return await readRestoredSessionTranscript(readScope, () => {
-      const recent: SessionRecentConversationText[] = [];
-      for (let offset = 0; recent.length < limit; offset += pageSize) {
-        const page = readSessionTranscriptMessageEventPage(readScope, {
-          maxMessages: pageSize,
-          offset,
-        });
-        if (page.events.length === 0) {
-          break;
-        }
-        for (const event of page.events.toReversed()) {
-          const entry = extractRecentConversationText(event.event, options);
-          if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
-            recent.push(entry);
-            if (recent.length >= limit) {
-              break;
+    return await readRestoredSessionTranscript(
+      scope,
+      async () => {
+        const recent: SessionRecentConversationText[] = [];
+        for (let offset = 0; recent.length < limit; offset += pageSize) {
+          const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
+            maxMessages: pageSize,
+            // Preserve the existing message-count-only bound for this text projection.
+            maxBytes: Number.MAX_SAFE_INTEGER,
+            offset,
+          });
+          if (page.events.length === 0) {
+            break;
+          }
+          for (const event of page.events.toReversed()) {
+            const entry = extractRecentConversationText(event.event, options);
+            if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
+              recent.push(entry);
+              if (recent.length >= limit) {
+                break;
+              }
             }
           }
         }
-      }
-      return recent.toReversed();
-    });
+        return recent.toReversed();
+      },
+      { assertCurrent },
+    );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return [];
@@ -274,14 +280,12 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   }
 }
 
-function resolveSessionConversationTranscriptScope(params: {
-  agentId?: string;
-  sessionKey: string;
-  storePath?: string;
-}): SqliteSessionFileMarker | undefined {
+export async function readRecentUserAssistantTextForSession(
+  params: ReadRecentSessionConversationTextParams,
+): Promise<SessionRecentConversationText[]> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
-    return undefined;
+    return [];
   }
   const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -295,22 +299,31 @@ function resolveSessionConversationTranscriptScope(params: {
   const agentId = explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const scopedSessionKey = scopeLegacySessionKeyToAgent({ agentId, sessionKey }) ?? sessionKey;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
-  const entry = loadSessionEntryReadOnly({ agentId, sessionKey: scopedSessionKey, storePath });
-  if (!entry?.sessionId) {
-    return undefined;
-  }
-  return {
-    agentId,
-    sessionId: entry.sessionId,
-    storePath,
-  };
-}
-
-export async function readRecentUserAssistantTextForSession(
-  params: ReadRecentSessionConversationTextParams,
-): Promise<SessionRecentConversationText[]> {
-  const scope = resolveSessionConversationTranscriptScope(params);
-  return scope ? await readRecentUserAssistantTextFromSqliteTranscript(scope, params) : [];
+  return withSessionEntryReadOnlyInWorker(
+    { agentId, sessionKey: scopedSessionKey, storePath },
+    () => {},
+    async (read, owner) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      if (!read.value?.sessionId) {
+        return [];
+      }
+      const result = await readRecentUserAssistantTextFromSqliteTranscript(
+        {
+          agentId,
+          sessionKey: scopedSessionKey,
+          sessionId: read.value.sessionId,
+          storePath: owner.incognito?.actor.path ?? owner.scope?.storePath ?? storePath,
+          env: owner.scope?.env,
+        },
+        owner.assertCurrent,
+        params,
+      );
+      owner.assertCurrent();
+      return result;
+    },
+  );
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
@@ -327,10 +340,7 @@ export async function readLatestAssistantTextFromSessionTranscript(
   const sqliteScope =
     target && typeof target === "object" ? target : parseSqliteSessionFileMarker(target);
   if (sqliteScope) {
-    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return readRestoredSessionTranscript(sqliteScope, () =>
-      readLatestTranscriptAssistantText(sqliteScope),
-    );
+    return readLatestTranscriptAssistantTextAsync(sqliteScope);
   }
   const sessionFile = typeof target === "string" ? target : undefined;
   if (!sessionFile?.trim()) {
@@ -424,6 +434,18 @@ export async function appendExactAssistantMessageToSessionTranscript(
     message: SessionTranscriptAssistantMessage;
   },
 ): Promise<SessionTranscriptAppendResult> {
+  const incognito = captureIncognitoSessionOperation(params);
+  return incognito
+    ? incognito.actor.sessions.withSharedState(() =>
+        appendExactAssistantMessageWithSource(params, incognito),
+      )
+    : appendExactAssistantMessageWithSource(params);
+}
+
+async function appendExactAssistantMessageWithSource(
+  params: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0],
+  incognito?: ReturnType<typeof captureIncognitoSessionOperation>,
+): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return { ok: false, reason: "missing sessionKey" };
@@ -440,13 +462,31 @@ export async function appendExactAssistantMessageToSessionTranscript(
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
+    incognito?.actor.path ??
     params.storePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
-  const resolved = resolveSessionEntrySelection({
-    ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
-    sessionKey,
-    storePath,
-  });
+  const actorKey = incognito
+    ? resolveSqliteSessionKey(sessionKey, incognito.actor.agentId)
+    : undefined;
+  const resolved =
+    incognito && actorKey
+      ? {
+          existing: (
+            await incognito.actor.sessions.read(
+              incognito.authority,
+              { sessionKey: actorKey },
+              incognito.admissionSignal,
+            )
+          ).entry,
+          normalizedKey: actorKey,
+        }
+      : resolveSessionEntrySelection({
+          ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+          sessionKey,
+          storePath,
+        });
+  incognito?.authority.assertCurrent();
+  params.assertCurrent?.();
   const entry = resolved.existing;
   if (
     (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) ||
@@ -601,6 +641,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
               },
       );
     } catch (err) {
+      rethrowIncognitoSessionError(err);
       return {
         ok: false,
         reason: formatErrorMessage(err),
@@ -636,7 +677,8 @@ async function readLatestVisibleTranscriptMessage(scope: {
       ...(typeof record.id === "string" ? { id: record.id } : {}),
       message: record.message,
     };
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     // Mirror deduplication remains best-effort when transcript reads are unavailable.
     return undefined;
   }

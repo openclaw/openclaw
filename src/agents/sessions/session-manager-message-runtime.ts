@@ -33,6 +33,7 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
+import { createSessionManagerPublicationHooks } from "./session-manager-publication.js";
 
 const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionManagerMetadata);
 
@@ -95,6 +96,11 @@ export async function appendSessionTranscriptMessage(
   assertCurrent();
   const admission = captureSessionMessageAdmission(assertCurrent);
   const execution = captureOpenClawAgentDatabaseExecution(options);
+  const publication = createSessionManagerPublicationHooks({
+    agentId: input.target.agentId,
+    storePath: execution.path,
+    databaseIdentity: () => execution.fileIdentity?.physicalIdentity,
+  });
   const { env: _env, ...writeTarget } = input.target;
   let worker:
     | Awaited<
@@ -113,7 +119,13 @@ export async function appendSessionTranscriptMessage(
     worker = await openOpenClawAgentSqliteWorkerStore<SessionMetadataWorkerOperations>(
       options,
       { execution },
-      { moduleUrl, input: undefined, assertAdmission: admission.assertAdmission },
+      {
+        moduleUrl,
+        input: undefined,
+        assertAdmission: (request) => admission.assertAdmission(publication.unwrap(request)),
+        onAdmitted: publication.onAdmitted,
+        observeAdmission: publication.observeAdmission,
+      },
     );
     await worker.run(async (scope) => {
       const reply = await scope.execute({

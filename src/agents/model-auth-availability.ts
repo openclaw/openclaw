@@ -3,11 +3,13 @@ import {
   findNormalizedProviderValue,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
-import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString as hasSecret,
+  normalizeLowercaseStringOrEmpty,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
@@ -15,7 +17,6 @@ import type {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import {
   listExternalCliSyncProviderIds,
   resolveExternalCliAuthProfiles,
@@ -48,6 +49,7 @@ import {
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
+import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
   ModelAuthAvailabilityEvidence,
@@ -123,6 +125,14 @@ type CreateModelAuthAvailabilityResolverParams = {
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
+  /**
+   * Ids the credential's own ready account listing returned, including hidden rows; absent when
+   * that credential has no ready listing. Another account's listing says nothing about this one.
+   */
+  accountListedModelIds?: (
+    provider: string,
+    profileId: string | undefined,
+  ) => ReadonlySet<string> | undefined;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -199,62 +209,11 @@ export function createModelAuthAvailabilityResolver(
     : params.authStore;
   const runtimeStore =
     params.preparedRuntimeAuthStore ?? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
-  const hydratedProfileIds = new Set<string>();
-  const sameSecretRef = (
-    left: ReturnType<typeof parseSecretRef>,
-    right: ReturnType<typeof parseSecretRef>,
-  ) =>
-    left !== null &&
-    right !== null &&
-    left.source === right.source &&
-    left.provider === right.provider &&
-    left.id === right.id;
-  const runtimeCredentialOverlay = (
-    profileId: string,
-    credential: AuthProfileCredential,
-  ): AuthProfileCredential => {
-    const runtime = runtimeStore?.profiles[profileId];
-    if (!runtime || credential.type !== runtime.type || credential.provider !== runtime.provider) {
-      return credential;
-    }
-    // The snapshot key plus profile id and provider/type establish runtime ownership.
-    // Only ref-only stubs bootstrap; inline persisted OAuth remains authoritative.
-    if (
-      credential.type === "oauth" &&
-      runtime.type === "oauth" &&
-      credential.oauthRef &&
-      !hasSecret(credential.access) &&
-      !hasSecret(credential.refresh) &&
-      hasUsableOAuthCredential(runtime, { now })
-    ) {
-      return runtime;
-    }
-    if (
-      credential.type === "api_key" &&
-      runtime.type === "api_key" &&
-      sameSecretRef(
-        parseSecretRef(credential.keyRef ?? credential.key, params.cfg.secrets?.defaults),
-        parseSecretRef(runtime.keyRef, params.cfg.secrets?.defaults),
-      ) &&
-      hasSecret(runtime.key)
-    ) {
-      hydratedProfileIds.add(profileId);
-      return { ...credential, key: runtime.key };
-    }
-    if (
-      credential.type === "token" &&
-      runtime.type === "token" &&
-      sameSecretRef(
-        parseSecretRef(credential.tokenRef ?? credential.token, params.cfg.secrets?.defaults),
-        parseSecretRef(runtime.tokenRef, params.cfg.secrets?.defaults),
-      ) &&
-      hasSecret(runtime.token)
-    ) {
-      hydratedProfileIds.add(profileId);
-      return { ...credential, token: runtime.token };
-    }
-    return credential;
-  };
+  const { overlay: runtimeCredentialOverlay, hydratedProfileIds } = createRuntimeCredentialOverlay({
+    cfg: params.cfg,
+    runtimeStore,
+    now,
+  });
   const orderProfiles = runtimeStore
     ? Object.fromEntries(
         Object.entries(store.profiles).map(([profileId, credential]) => [
@@ -1111,6 +1070,47 @@ export function createModelAuthAvailabilityResolver(
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
+    const subscriptionSelection =
+      routeResolution.routes.length > 1 &&
+      routeAuthDecision.kind === "selected" &&
+      routeAuthDecision.selection.kind === "selected" &&
+      routeAuthDecision.selection.route.authRequirement === "subscription"
+        ? routeAuthDecision.selection
+        : undefined;
+    const accountListedModelIds =
+      subscriptionSelection &&
+      params.accountListedModelIds?.(
+        provider,
+        subscriptionSelection.source.kind === "profile"
+          ? subscriptionSelection.source.profileId
+          : undefined,
+      );
+    if (
+      subscriptionSelection &&
+      accountListedModelIds &&
+      !accountListedModelIds.has(normalizeLowercaseStringOrEmpty(ref.modelId))
+    ) {
+      // The ready account listing did not return this dual-route id, so its subscription route
+      // is not entitled. A usable Platform credential keeps today's selection and preference.
+      const [firstPlatformRoute, ...restPlatformRoutes] = routeResolution.routes.filter(
+        (route) => route.authRequirement !== "subscription",
+      );
+      const platform = firstPlatformRoute
+        ? selectOpenAIModelRouteAuth({
+            resolution: { ...routeResolution, routes: [firstPlatformRoute, ...restPlatformRoutes] },
+            sourcePlan,
+            configuredAuthMode: automaticRouteAuthMode,
+          })
+        : undefined;
+      if (platform?.kind !== "selected" || platform.selection.kind !== "selected") {
+        // No reason code: the account is signed in, so sign-in or API-key guidance would mislead.
+        return {
+          availability: false,
+          routeResolution,
+          selectedRoute: subscriptionSelection.route,
+        };
+      }
+    }
     // Past route success proves readiness; the current selector still owns billing preference.
     const preferredSelection =
       routeAuthDecision.kind === "selected" &&

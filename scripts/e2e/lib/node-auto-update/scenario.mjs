@@ -188,8 +188,11 @@ async function nodes() {
   return (await cli(`nodes-${Date.now()}`, ["nodes", "status"])).nodes;
 }
 
-async function nodeRow(name) {
-  return (await nodes()).find((row) => row.displayName === name && row.connected && row.paired);
+async function nodeRow(name, version) {
+  const row = (await nodes()).find(
+    (entry) => entry.displayName === name && entry.connected && entry.paired,
+  );
+  return version === undefined || row?.version === version ? row : null;
 }
 
 async function invoke(nodeId, action = "ping") {
@@ -508,10 +511,7 @@ try {
   assert(JSON.stringify(completed).includes("NODE_UPDATE_HOLD_COMPLETED"));
   const updated = await waitFor(
     "automatic version activation",
-    async () => {
-      const row = await nodeRow(positive.name);
-      return row?.version === versions[0] ? row : null;
-    },
+    () => nodeRow(positive.name, versions[0]),
     180_000,
     () => readNodeUpdateFailure(positive.logPath),
   );
@@ -677,10 +677,7 @@ try {
   });
   const defaultUpdated = await waitFor(
     "default-plugin node activates while idle",
-    async () => {
-      const row = await nodeRow(defaultPlugins.name);
-      return row?.version === versions[0] ? row : null;
-    },
+    () => nodeRow(defaultPlugins.name, versions[0]),
     900_000,
     () => readNodeUpdateFailure(defaultPlugins.logPath),
   );
@@ -763,10 +760,7 @@ try {
   metadataReleased = true;
   const sharedUpdated = await waitFor(
     "shared-state node activates independently",
-    async () => {
-      const row = await nodeRow(sharedNode.name);
-      return row?.version === versions[0] ? row : null;
-    },
+    () => nodeRow(sharedNode.name, versions[0]),
     900_000,
     () => readNodeUpdateFailure(sharedNode.logPath),
   );

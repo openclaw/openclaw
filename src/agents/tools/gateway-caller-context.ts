@@ -48,7 +48,7 @@ import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type ReceiptAuthority = (() => boolean | void) &
-  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource">;
+  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource" | "opaqueCommitGuard">;
 
 type GatewayToolCallerIdentity = {
   personalToolParticipants?: ReplyTurnParticipants;
@@ -227,6 +227,7 @@ export function captureGatewayToolReceiptAssertion(
   const prepare = receipt.prepareSessionSource?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
+    opaqueCommitGuard: receipt.opaqueCommitGuard,
     ...(prepare
       ? {
           async prepareSessionSource() {
@@ -235,6 +236,7 @@ export function captureGatewayToolReceiptAssertion(
             const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
             return {
               nativeSource: prepared.nativeSource,
+              opaqueCommitGuard: prepared.opaqueCommitGuard,
               checks: prepared.checks,
               assertCurrent: () => assertAllowed(prepared.assertCurrent()),
               ...(assertPrepared

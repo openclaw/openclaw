@@ -3,6 +3,7 @@ import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-en
 import type { IncognitoSessionAuthProfileFacts } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Content-free postimage; full entries remain owned by the requesting read. */
@@ -15,6 +16,7 @@ export type IncognitoSessionFacts = {
   authProfile?: IncognitoSessionAuthProfileFacts;
   chatMetadataRevision?: string;
   entryReadRevision?: string;
+  initializationFingerprint?: string;
   delivery?: Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery">;
   media?: Pick<
     SessionEntry,
@@ -29,13 +31,52 @@ export type IncognitoSessionFacts = {
     | "spawnedWorkspaceDir"
     | "pendingWorktree"
     | "pendingProjectGitUrl"
+    | "projectId"
+    | "worktree"
+    | "pluginOwnerId"
   > & { worktreeId?: string };
+  modelSelection?: Pick<
+    SessionEntry,
+    | "modelOverride"
+    | "modelOverrideSource"
+    | "providerOverride"
+    | "modelOverrideRouteResolution"
+    | "modelOverrideFallbackOriginProvider"
+    | "modelOverrideFallbackOriginModel"
+    | "agentRuntimeOverride"
+    | "agentHarnessId"
+    | "authProfileOverride"
+    | "sandboxMode"
+    | "nativeRuntimeConsent"
+  >;
+  policy?: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "lifecycleRevision"
+    | "skillLibrarySelections"
+    | "sandbox"
+    | "sandboxMode"
+    | "createdActor"
+    | "agentRuntimeOverride"
+    | "nativeRuntimeConsent"
+    | "permissionMode"
+    | "execHost"
+    | "execNode"
+    | "execCwd"
+    | "pluginOwnerId"
+    | "agentHarnessId"
+  >;
+  cliHistory?: {
+    boundary: SessionEntry["cliHistoryBoundary"];
+    watermark: SessionTranscriptWatermark;
+  };
   completionSources?: Array<{ sourceId: string; valid: boolean }>;
   steering?: Pick<
     SessionEntry,
     | "sessionId"
     | "updatedAt"
     | "lifecycleRevision"
+    | "activeWriterRunId"
     | "restartRecoveryHarnessCompletion"
     | "restartRecoveryTerminalDeliveryEvidence"
     | "status"
@@ -44,7 +85,19 @@ export type IncognitoSessionFacts = {
     | "restartRecoveryDeliveryReceiptState"
     | "restartRecoveryDeliveryToolCallId"
     | "restartRecoveryTerminalRunIds"
-  >;
+    | "lifecycleRunId"
+    | "startedAt"
+    | "abortedLastRun"
+    | "spawnDepth"
+    | "subagentRole"
+    | "restartRecoverySourceReplyDeliveryMode"
+    | "restartRecoveryDeliveryContext"
+    | "sendPolicy"
+    | "chatType"
+  > & {
+    hasRecoveryClaim: boolean;
+    pendingFinalDeliveryContext?: NonNullable<SessionEntry["pendingFinalDelivery"]>["context"];
+  };
   expiresAt?: number;
 };
 

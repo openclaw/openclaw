@@ -135,6 +135,10 @@ the handoff, the candidate retains exact file and parent-directory identities;
 later replacement still stops the update. Lease read failures report their
 underlying cause instead of a parent-binding mismatch.
 
+Post-install Doctor also accepts older updaters, including `2026.8.2`, that do not
+provide an update run ID. Its commands retain invocation-specific custody without
+requiring an environment-variable workaround.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
@@ -551,7 +555,42 @@ A newer candidate cannot run before an already-blocked older updater downloads i
 The candidate's dependency inventory can, however, avoid modifying old recovery
 artifacts during an update that has already passed admission.
 
-For an external-helper operation stuck at `publication-complete`, run
+### Recover a completed receipt with an older updater
+
+An installed 2026.9.8 or 2026.9.9 updater can reject a completed `anchor-retired`
+receipt before downloading a fix when saved filesystem device numbers change.
+Use a separately installed OpenClaw version containing the completed-receipt
+recovery fix. Its standalone helper can archive completed history for the original
+installation while that installation's Gateway keeps running:
+
+```bash
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' status
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' retire
+```
+
+Use the anchor and operation ID from the original journal, with a supported
+external Node or Bun runtime. Keep other updaters and package managers stopped.
+`status` must report `complete`; it does not modify the receipt. `retire` acquires
+fresh update ownership, verifies that the inspected completed receipt is still
+current, and moves its control directory into the printed `.superseded-<id>`
+archive. It preserves the journal bytes and saved identities, installed package,
+launchers, and application state. It does not run Doctor or plugin migrations.
+After successful archival, retry `openclaw update` using the original installation.
+
+If archival fails and the active receipt remains, the command exits unsuccessfully
+and names the next step. Preserve both the receipt and any existing archive while
+resolving that error. An unfinished, foreign, or invalid operation still requires
+its original recovery owner; the independent helper cannot authorize publication
+or rollback for it. Do not rewrite identities or delete recovery artifacts.
+
+### Unfinished publication and rollback
+
+For an external-helper operation stuck at `prepared`, `publishing`, or
+`publication-complete` whose live package already serves the candidate, run
 `openclaw update repair` from an independent terminal. Repair verifies the
 installed candidate's dist content inventory, manifest, launchers,
 and current update ownership before settling the operation. It archives the

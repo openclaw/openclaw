@@ -6,6 +6,10 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
+import {
+  buildReleaseStateArtifact,
+  releaseExecutionPlanSha256,
+} from "../../scripts/full-release-validation-policy.mjs";
 import { validateParentManifest } from "../../scripts/release-ci-summary.mjs";
 import {
   SHA,
@@ -19,6 +23,7 @@ import {
   runFor,
   rootRun,
 } from "./frv.test-support.js";
+import { sourceFact } from "./full-release-validation-state.test-support.js";
 
 describe("FRV protected gh evidence reads", () => {
   const jobLogArgs = [
@@ -44,12 +49,31 @@ describe("FRV protected gh evidence reads", () => {
       [{ id: 1 }, { id: 2 }],
     ],
     ["getJobLog", [1], "actions/jobs/1/logs", "job evidence"],
-  ])("revalidates %s through the default protected route", (method, args, endpoint, expected) => {
-    const result = runProtectedFrv(method, args as Array<string | number>, endpoint);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual(expected);
-    expect(result.calls).toHaveLength(1);
-  });
+    ["getParentJobs", ["77"], "actions/runs/77/jobs?filter=all&per_page=100", [], "empty"],
+  ] as const)(
+    "revalidates %s through the default protected route",
+    (method, args, endpoint, expected, failure?: "empty") => {
+      const result = runProtectedFrv(method, [...args], endpoint, failure);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(expected);
+      expect(result.calls).toHaveLength(1);
+    },
+  );
+
+  it.each(["403", "429"] as const)(
+    "retains a later-page %s throttle deadline without fast transport retries",
+    (status) => {
+      const result = runProtectedFrv(
+        "getParentJobs",
+        ["77"],
+        "actions/runs/77/jobs?filter=all&per_page=100",
+        status,
+      );
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stderr)).toEqual({ retryAt: 130_000, classification: "transient" });
+      expect(result.calls).toHaveLength(1);
+    },
+  );
 
   it.each(["getRun", "getAttemptJobs"])(
     "bounds the protected %s transport retries by the read deadline",
@@ -100,7 +124,15 @@ function runProtectedFrv(
   method: string,
   args: Array<string | number | Record<string, unknown>>,
   endpoint: string,
-  failure: "none" | "legacy-flag" | "protected" | "unrelated" | "transient-deadline" = "none",
+  failure:
+    | "none"
+    | "legacy-flag"
+    | "protected"
+    | "unrelated"
+    | "transient-deadline"
+    | "empty"
+    | "403"
+    | "429" = "none",
 ) {
   const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
   const gh = join(root, "gh");
@@ -119,9 +151,17 @@ if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Ca
 if (${endpoint.endsWith("/logs")} && failure === "legacy-flag" && args.includes("--allow-escape-sequences")) fail("unknown flag: --allow-escape-sequences", 1);
 if (${endpoint.endsWith("/logs")} && failure === "unrelated") fail("unrelated log failure", 23);
 if (${endpoint.endsWith("/logs")} && failure === "none" && !args.includes("--allow-escape-sequences")) fail("missing escape-sequence flag", 20);
+if (!${endpoint.endsWith("/logs")}) {
+  if (!args.includes("--include")) fail("missing included headers", 17);
+  process.stdout.write("HTTP/2.0 200 OK\\nContent-Type: application/json\\r\\n\\r\\n");
+}
+if (failure === "403" || failure === "429") {
+  process.stdout.write('{"id":1}\\n\\nHTTP/2.0 ' + failure + ' Rate limited\\nRetry-After: 120\\r\\n\\r\\n{"message":"API rate limit exceeded"}');
+  fail("gh: API rate limit exceeded (HTTP " + failure + ")", 1);
+}
 if (${endpoint.includes("/jobs?")}) {
   if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) fail("missing pagination", 17);
-  console.log('{"id":1}\\n{"id":2}');
+  if (failure !== "empty") console.log('{"id":1}\\n{"id":2}');
 } else console.log(${endpoint.endsWith("/logs") ? JSON.stringify("job evidence") : JSON.stringify('{"run_attempt":2}')});
 `,
   );
@@ -136,6 +176,9 @@ if (${endpoint.includes("/jobs?")}) {
         `
       import {createClient} from ${JSON.stringify(moduleUrl)};
       import {existsSync} from "node:fs";
+      import {releaseGhRateLimitRetryAt, classifyReleaseGhTransportError} from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts/full-release-validation-policy.mjs")).href)};
+      const throttled = ["403", "429"].includes(${JSON.stringify(failure)});
+      if (throttled) Date.now = () => 10_000;
       if (${JSON.stringify(failure)} === "transient-deadline") {
         Date.now = () => existsSync("calls.jsonl") ? 20_000 : 10_000;
         const nativeSetTimeout = globalThis.setTimeout;
@@ -146,7 +189,10 @@ if (${endpoint.includes("/jobs?")}) {
       }
       try {
         console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)})[${JSON.stringify(method)}](...${JSON.stringify(args)})));
-      } catch (error) { console.error(error.message); process.exitCode = typeof error.code === "number" ? error.code : 1; }
+      } catch (error) {
+        console.error(throttled ? JSON.stringify({ retryAt: releaseGhRateLimitRetryAt(error), classification: classifyReleaseGhTransportError(error) }) : error.message);
+        process.exitCode = typeof error.code === "number" ? error.code : 1;
+      }
     `,
       ],
       {
@@ -328,9 +374,22 @@ async function runPublicationCli(
   ) => void | Promise<void> = () => {},
   explicitBinary = false,
   clockStep = 0,
+  seal: "accepted" | "needs-refresh" | "unavailable" = "accepted",
+  decisionState: "passed" | "blocked_diagnostics_running" = "passed",
 ) {
   const directory = mkdtempSync(join(tmpdir(), "frv-publication-"));
   const legacy = !args.includes("--publication-run");
+  if (legacy) {
+    const source = sourceFact();
+    Object.assign(fixture.executionPlan, {
+      sourceAdmissionContract: "1",
+      sourceAdmission: sourceFact({
+        workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
+        coverage: { ...source.coverage, release_profile: "beta" },
+      }),
+    });
+    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+  }
   const responses: Record<string, unknown> = {};
   const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
   const artifactLists = new Map<number, unknown[]>();
@@ -421,13 +480,55 @@ async function runPublicationCli(
       jobs: [{ ...job("test"), id: Number(entry.runId) * 10, run_id: run.id, run_attempt: 1 }],
     };
   }
+  responses[endpoint("actions/runs/77/jobs?filter=all&per_page=100")] = {
+    jobs: [{ ...job("Diagnostic Drain"), run_attempt: fixture.root.run_attempt }],
+  };
+  responses[endpoint("git/ref/heads/release/2026.9.9")] = { object: { sha: TARGET_SHA } };
   await amend(responses, artifact);
   writeFileSync(join(directory, "responses.json"), JSON.stringify(responses));
   writeFileSync(join(directory, "legacy-plan.json"), JSON.stringify(fixture.executionPlan));
+  const decision = buildReleaseStateArtifact({
+    children: fixture.executionPlan.children.map((child) => ({
+      ...child,
+      jobs: [],
+      errors: [],
+      status: "completed",
+      conclusion: "success",
+    })),
+    executionPlan: fixture.executionPlan,
+    expected: {
+      parentRunAttempt: fixture.root.run_attempt,
+      parentRunId: "77",
+      workflowRef: SOURCE_REF,
+      workflowSha: SHA,
+      targetSha: TARGET_SHA,
+    },
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    mode: "decision",
+    decision: {
+      state: decisionState,
+      blockers:
+        decisionState === "passed"
+          ? []
+          : [
+              {
+                child: "normalCi",
+                kind: "job_failed",
+                job: "actual test blocker",
+                message: "workload boundary failed",
+              },
+            ],
+      errors: [],
+    },
+  });
+  writeFileSync(join(directory, "legacy-decision.json"), JSON.stringify(decision));
   writeFileSync(
     join(directory, "no-network.mjs"),
     `import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { appendFileSync } from "node:fs";
+const fsAppend = (value) => appendFileSync("verifier-calls.jsonl", value + "\\n");
 globalThis.fetch = () => { throw new Error('unplanned Node fetch'); };
 for (const name of ["execFileSync", "execFile", "spawn", "spawnSync"]) {
   const original = childProcess[name];
@@ -437,7 +538,14 @@ for (const name of ["execFileSync", "execFile", "spawn", "spawnSync"]) {
   };
   childProcess[name] = guarded(original);
   const custom = Symbol.for("nodejs.util.promisify.custom");
-  if (original[custom]) childProcess[name][custom] = guarded(original[custom]);
+  if (original[custom]) childProcess[name][custom] = (...args) => {
+    if (name === "execFile" && args[0] === ${JSON.stringify(process.execPath)} && args[1]?.[0] === "scripts/release-ci-summary.mjs") {
+      fsAppend(JSON.stringify(args[1]));
+      if (${JSON.stringify(seal)} === "accepted") return Promise.resolve({ stdout: '{"valid":true}', stderr: "" });
+      return Promise.reject(Object.assign(new Error("verification fixture"), { stdout: JSON.stringify({ valid: false, refreshable: ${seal === "needs-refresh"} }) }));
+    }
+    return guarded(original[custom])(...args);
+  };
 }
 syncBuiltinESMExports();
 ${clockStep ? `let ticks = 0; const now = Date.now(); Date.now = () => now + ticks++ * ${clockStep};` : ""}
@@ -452,12 +560,15 @@ const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const reject = () => { console.error("unplanned or mutating request"); process.exit(23); };
 const legacy = ${legacy};
-if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77" && args[args.indexOf("--name") + 1] === "full-release-execution-plan-77") {
-  fs.copyFileSync("legacy-plan.json", require("node:path").join(args[args.indexOf("--dir") + 1], "full-release-execution-plan.json"));
+if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77") {
+  const name = args[args.indexOf("--name") + 1];
+  if (name !== "full-release-execution-plan-77" && !name.startsWith("full-release-decision-77-")) reject();
+  const decision = name.startsWith("full-release-decision-");
+  fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", require("node:path").join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
   process.exit(0);
 }
 if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || !args.includes("Cache-Control: max-age=0")) reject();
-if (args.includes("--include") || (!legacy && args.includes("--paginate"))) reject();
+if (!legacy && (args.includes("--include") || args.includes("--paginate"))) reject();
 let path = args.find(a => a.startsWith("repos/"));
 if (legacy && path.endsWith("/jobs?per_page=100")) path += "&page=1";
 const table = JSON.parse(fs.readFileSync("responses.json", "utf8"));
@@ -468,6 +579,7 @@ if (value.sequence) {
   value = value.sequence[Math.min(reads - 1, value.sequence.length - 1)];
 }
 if (value.failure) { console.error(value.failure); process.exit(1); }
+if (legacy && args.includes("--include")) process.stdout.write("HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n");
 if (legacy && value.jobs) process.stdout.write(value.jobs.map(job => JSON.stringify(job)).join("\\n"));
 else if (value.binary) process.stdout.write(Buffer.from(value.binary, "base64"));
 else if (value.raw) process.stdout.write(value.raw);
@@ -1394,14 +1506,140 @@ describe("publication status real CLI", () => {
     ]);
     expect(result.status, result.stderr).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(Object.keys(value)).toEqual(["children", "failed", "active", "missing", "passed"]);
+    expect(value.qualification).toMatchObject({ state: "passed", evidence: "accepted" });
     expect(value.children).toHaveLength(4);
     expect(value.passed).toHaveLength(4);
-    expect(result.calls).toHaveLength(9);
+    expect(value.candidate).toMatchObject({ state: "current", tipSha: TARGET_SHA });
     expect(result.calls.flat().join(" ")).not.toMatch(
       /publication|runs\/88|workflows\/|artifacts\//u,
     );
   });
+
+  it.each(["needs-refresh", "unavailable"] as const)(
+    "labels green workloads with %s seal evidence separately",
+    async (seal) => {
+      const result = await runPublicationCli(
+        publicationFixture(),
+        ["status", "--run", "77", "--json"],
+        undefined,
+        false,
+        0,
+        seal,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const value = JSON.parse(result.stdout);
+      expect(value.passed).toHaveLength(4);
+      expect(value.collectionComplete).toBe(seal !== "unavailable");
+      expect(value.qualification).toMatchObject({
+        state: seal === "needs-refresh" ? "blocked" : "observation-unavailable",
+        evidence: seal,
+      });
+      expect(value.nextCommand).toContain(
+        seal === "needs-refresh" ? "continue --failed --dry-run" : "verify",
+      );
+    },
+  );
+
+  it("keeps blocked Decision and active Diagnostic Drain distinct", async () => {
+    const fixture = publicationFixture();
+    fixture.root.status = "in_progress";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77"],
+      (responses) => {
+        responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+          jobs: [
+            { ...job("Diagnostic Drain"), status: "in_progress", conclusion: null, run_attempt: 2 },
+          ],
+        };
+      },
+      false,
+      0,
+      "accepted",
+      "blocked_diagnostics_running",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("qualification: blocked; evidence: pending");
+    expect(result.stdout).toContain("drain: in_progress");
+    expect(result.stdout).toContain("actual test blocker");
+    expect(result.stdout).toContain("Diagnostic Drain is still collecting");
+    expect(result.stdout).toContain("next: pnpm frv watch --run 77");
+  });
+
+  it("labels canceled children and never suggests retry while descendants remain active", async () => {
+    const fixture = publicationFixture();
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(fixture, ["status", "--run", "77"], (responses) => {
+      const canceled = `repos/${REPOSITORY}/actions/runs/101`;
+      responses[canceled] = {
+        ...(responses[canceled] as Record<string, unknown>),
+        conclusion: "cancelled",
+      };
+      responses[`${canceled}/attempts/1/jobs?per_page=100&page=1`] = {
+        jobs: [{ ...job("test"), conclusion: "cancelled" }],
+      };
+      const active = `repos/${REPOSITORY}/actions/runs/202`;
+      responses[active] = {
+        ...(responses[active] as Record<string, unknown>),
+        status: "in_progress",
+        conclusion: null,
+      };
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("normalCi: failed (cancelled)");
+    expect(result.stdout).toContain("next: pnpm frv watch --run 77");
+    expect(result.calls.flat()).not.toContain("POST");
+  });
+
+  it.each(["superseded", "unavailable"] as const)(
+    "labels a sealed candidate tip %s without claiming current-tip qualification",
+    async (tipState) => {
+      const result = await runPublicationCli(
+        publicationFixture(),
+        ["status", "--run", "77", "--json"],
+        (responses) => {
+          responses[`repos/${REPOSITORY}/git/ref/heads/release/2026.9.9`] =
+            tipState === "superseded"
+              ? { object: { sha: "d".repeat(40) } }
+              : { failure: "HTTP 403 Resource not accessible by integration" };
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const value = JSON.parse(result.stdout);
+      expect(value.qualification.state).toBe("passed");
+      expect(value.collectionComplete).toBe(tipState !== "unavailable");
+      expect(value.candidate).toMatchObject({
+        sha: TARGET_SHA,
+        state: tipState === "superseded" ? "superseded" : "unknown",
+        tipSha: tipState === "superseded" ? "d".repeat(40) : null,
+      });
+      expect(result.calls.flat()).not.toContain("POST");
+    },
+  );
+
+  it.each(["transport", "missing drain"] as const)(
+    "retains collected child facts when parent job observation has %s",
+    async (failure) => {
+      const result = await runPublicationCli(
+        publicationFixture(),
+        ["status", "--run", "77", "--json"],
+        (responses) => {
+          responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] =
+            failure === "transport"
+              ? { failure: "HTTP 403 Resource not accessible by integration" }
+              : { jobs: [] };
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const value = JSON.parse(result.stdout);
+      expect(value.qualification.state).toBe(
+        failure === "transport" ? "observation-unavailable" : "passed",
+      );
+      expect(value.collectionComplete).toBe(false);
+      expect(value.passed).toHaveLength(4);
+      expect(result.calls.flat()).not.toContain("POST");
+    },
+  );
 
   it.each(["rerun", "continue", "verify"])(
     "preserves legacy %s refusal before publication reads or mutation",

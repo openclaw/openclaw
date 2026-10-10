@@ -36,6 +36,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
@@ -469,6 +470,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
+    communication: entry?.communication,
+    effectiveCommunication: resolveSessionCommunicationPolicy({ config: input.cfg, entry }),
     sandboxMode: entry?.sandboxMode,
     nativeRuntimeConsent: entry?.nativeRuntimeConsent,
     permissionModePending: input.permissionModePending,
@@ -518,6 +521,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     archivedAt: entry?.archivedAt,
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
+    sidebarRoot: entry?.sidebarRoot === true,
     pinnedAt,
     snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
     snoozedAt: pinnable ? entry?.snoozedAt : undefined,
