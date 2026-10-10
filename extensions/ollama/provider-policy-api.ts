@@ -132,7 +132,7 @@ export function resolveThinkingProfile({
   if (!supportsThinking) {
     return OLLAMA_NON_REASONING_THINKING_PROFILE;
   }
-  if (api === "ollama" && thinkingLevelMap) {
+  if ((!api || api === "ollama") && thinkingLevelMap) {
     return {
       ...OLLAMA_REASONING_THINKING_PROFILE,
       levels: [
