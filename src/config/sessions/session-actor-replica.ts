@@ -76,7 +76,22 @@ const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"),
           ? readPreparedSessionEntryChange(change, sessionKey)
           : undefined;
       const source = readPreparedSessionEntryPublicationSource(change);
+      const unchangedEntry =
+        !prepared &&
+        !("all" in change) &&
+        !change.factsInvalidated &&
+        (!change.facts || change.facts.kind === "unchanged")
+          ? cell.entry
+          : undefined;
       discard(cell);
+      if (unchangedEntry) {
+        // Transcript/metadata markers do not revoke an installed entry receipt.
+        // Its original scoped token still rejects any unaccounted storage write.
+        cell.entry = unchangedEntry;
+        cell.bytes = JSON.stringify(unchangedEntry).length * 2;
+        pool.snapshots += 1;
+        pool.bytes += cell.bytes;
+      }
       if (
         prepared?.fullEntry &&
         source.identity === database.physicalIdentity &&

@@ -18,6 +18,7 @@ import {
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
@@ -94,7 +95,7 @@ describe("transcript turn physical identity", () => {
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "first",
     });
-    replaceSessionEntrySync(selected, { sessionId, updatedAt: 2, lifecycleRevision: "second" });
+    await replaceSessionEntry(selected, { sessionId, updatedAt: 2, lifecycleRevision: "second" });
     expect(
       await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
         keyFormat: "agent-qualified",
@@ -259,6 +260,8 @@ describe("transcript turn physical identity", () => {
       const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
       const shared = openOpenClawStateDatabase();
       const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      const selected = createDeferred();
+      const resume = createDeferred();
       let reads = 0;
       vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
@@ -274,8 +277,8 @@ describe("transcript turn physical identity", () => {
             agentId: change === "different owner" ? "other" : "main",
           });
           if (change === "state retirement") {
-            await closeOpenClawStateDatabaseByPathAsync(shared.path);
-            openOpenClawStateDatabase();
+            selected.resolve();
+            await resume.promise;
           }
         }
         return reply;
@@ -286,6 +289,18 @@ describe("transcript turn physical identity", () => {
       } else if (change === "different owner") {
         await expect(pending).rejects.toThrow("registry changed");
       } else {
+        try {
+          await awaitGateBeforeSettlement(
+            selected.promise,
+            pending,
+            "Transcript target read settled before its first registration",
+          );
+          // Lifecycle retirement runs outside the cold reader's writer reservation.
+          await closeOpenClawStateDatabaseByPathAsync(shared.path);
+          openOpenClawStateDatabase();
+        } finally {
+          resume.resolve();
+        }
         await expect(pending).rejects.toMatchObject({
           code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
         });
