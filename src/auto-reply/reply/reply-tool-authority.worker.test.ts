@@ -156,7 +156,8 @@ it.each(["main", "policy", "borrowed"] as const)(
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          expect(initialEntries).toBe(1);
+          // The borrowed admission read already warmed the entry facts.
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
           for (const read of initialReads) {
             read.mockRestore();
