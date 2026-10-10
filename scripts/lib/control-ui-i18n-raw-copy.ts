@@ -236,30 +236,27 @@ export function collectControlUiRawCopyFromSource(sourceFile: ts.SourceFile): Ra
   const literalFindings: RawCopyFinding[] = [];
   const staticAttrPattern =
     /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(staticAttrPattern)) {
-    const rawText = match[2];
-    // JSX owns its attributes, including excluding metadata and callback strings.
-    if (rawText && !jsxRanges.some(({ start, end }) => match.index >= start && match.index < end)) {
-      pushRawCopyFinding(literalFindings, {
-        kind: "html-attribute",
-        name: match[1] ?? "attribute",
-        path: repoPath,
-        text: parseDoubleQuotedString(rawText),
-      });
-    }
-  }
-
   const propertyPattern =
     /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(propertyPattern)) {
-    const rawText = match[2];
-    if (rawText) {
-      pushRawCopyFinding(literalFindings, {
-        kind: "object-property",
-        name: match[1] ?? "property",
-        path: repoPath,
-        text: parseDoubleQuotedString(rawText),
-      });
+  for (const [pattern, kind, fallbackName] of [
+    [staticAttrPattern, "html-attribute", "attribute"],
+    [propertyPattern, "object-property", "property"],
+  ] as const) {
+    for (const match of source.matchAll(pattern)) {
+      const rawText = match[2];
+      // JSX owns its attributes, including excluding metadata and callback strings.
+      if (
+        rawText &&
+        (kind !== "html-attribute" ||
+          !jsxRanges.some(({ start, end }) => match.index >= start && match.index < end))
+      ) {
+        pushRawCopyFinding(literalFindings, {
+          kind,
+          name: match[1] ?? fallbackName,
+          path: repoPath,
+          text: parseDoubleQuotedString(rawText),
+        });
+      }
     }
   }
   return [...literalFindings, ...findings];
@@ -316,31 +313,30 @@ function formatBaseline(entries: RawCopyBaselineEntry[]): string {
 function formatDiff(current: RawCopyBaselineEntry[], expected: RawCopyBaselineEntry[]): string {
   const keyFor = (entry: RawCopyBaselineEntry) =>
     [entry.path, entry.kind, entry.name, entry.text].join("\u0000");
-  const currentByKey = new Map(current.map((entry) => [keyFor(entry), entry]));
-  const expectedByKey = new Map(expected.map((entry) => [keyFor(entry), entry]));
-  const added = current.filter((entry) => {
-    const expectedEntry = expectedByKey.get(keyFor(entry));
-    return !expectedEntry || expectedEntry.count !== entry.count;
-  });
-  const removed = expected.filter((entry) => {
-    const currentEntry = currentByKey.get(keyFor(entry));
-    return !currentEntry || currentEntry.count !== entry.count;
-  });
-  const lines = [
-    ...added
-      .slice(0, 20)
-      .map(
-        (entry) =>
-          `+ ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
-      ),
-    ...removed
-      .slice(0, 20)
-      .map(
-        (entry) =>
-          `- ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
-      ),
-  ];
-  const extra = added.length + removed.length - lines.length;
+  const difference = (
+    entries: RawCopyBaselineEntry[],
+    other: RawCopyBaselineEntry[],
+    prefix: string,
+  ) => {
+    const otherByKey = new Map(other.map((entry) => [keyFor(entry), entry]));
+    const changed = entries.filter((entry) => {
+      const previous = otherByKey.get(keyFor(entry));
+      return !previous || previous.count !== entry.count;
+    });
+    return {
+      count: changed.length,
+      lines: changed
+        .slice(0, 20)
+        .map(
+          (entry) =>
+            `${prefix} ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
+        ),
+    };
+  };
+  const added = difference(current, expected, "+");
+  const removed = difference(expected, current, "-");
+  const lines = [...added.lines, ...removed.lines];
+  const extra = added.count + removed.count - lines.length;
   if (extra > 0) {
     lines.push(`... ${extra} more baseline delta(s)`);
   }

@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Codex on a paired device, either harness on a cloud profile, and per-session operating system and machine class"
 title: "Placement and machine selection"
 read_when: "You are choosing where a session runs, or overriding its operating system or machine size."
@@ -120,7 +121,14 @@ The bundled Crabbox provider advertises Linux, Windows (WSL2), native Windows, a
 
 Select `windows/normal` for native Windows and `windows/wsl2` for the Linux environment inside Windows. Native Windows runs `settings.setup` as PowerShell and requires supported Node.js and npm on the guest. Headless Windows workers additionally require Crabbox's detached-process launcher. A Bash setup recipe cannot be reused unchanged for that target; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 
-The provider reads `classCatalog.profiles` from `crabbox providers --json` when `classCatalog.disposition` is `mapped`. For each target it prefers amd64 entries when available; targets with only mixed or arm64 entries retain those entries. It marks the configured class as the default separately for each operating system. The catalog includes at most 64 machine options, ordered by enrollable operating system and then by catalog order. A classless profile has no invented default. Reported vCPU and RAM appear independently. RAM follows Crabbox's summary contract: positive integer GB/GiB values are shown; other units, fractional values, and missing dimensions stay unknown. macOS entries with `mixed` architecture and missing dimensions remain selectable. Native type names are never used to guess dimensions. Unmapped, missing, unknown, failed, empty, or unusable catalog metadata produces no machine selector, even if legacy `classes` are present. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
+The picker offers provider-reported classes plus the configured default, even
+when that default is absent from the catalog. It shows reported vCPU and RAM
+independently; missing or unsupported dimensions stay unknown, including on
+selectable macOS classes. It never guesses hardware from native type names.
+Unavailable or unusable catalog metadata hides the machine selector, but the
+profile remains selectable: dispatch or Move without an override preserves its
+configuration. See [Crabbox machine catalog](/gateway/config-cloud-workers#crabbox-machine-catalog)
+for catalog filtering, limits, and dimension formats.
 
 Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed checks are retried by the next discovery request; a Gateway restart is not needed to recover.
 

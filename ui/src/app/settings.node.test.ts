@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import {
@@ -16,6 +17,7 @@ import {
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
+import { backgroundPreferenceStorageKey, saveBackgroundPreference } from "./settings-background.ts";
 import {
   loadGatewaySessionSelection,
   loadLocalUserIdentity,
@@ -399,6 +401,26 @@ describe("gateway settings and layout persistence", () => {
     expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
   });
 
+  it("publishes profile readiness on request without inventing a theme selection", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const initial = loadSettings();
+    const { gateway } = createGatewayStoreTestStore({ settings: initial });
+    const theme = createApplicationTheme(initial, gateway);
+    theme.refresh();
+    const listener = vi.fn();
+    theme.subscribe(listener);
+    try {
+      theme.refresh();
+      expect(listener).not.toHaveBeenCalled();
+      theme.refresh({ notify: true });
+      expect(listener).toHaveBeenCalledOnce();
+      expect(theme.serverSelection).toBeNull();
+    } finally {
+      theme.dispose();
+      gateway.stop();
+    }
+  });
+
   it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", async () => {
     setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
     const events = new EventTarget();
@@ -432,6 +454,23 @@ describe("gateway settings and layout persistence", () => {
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("cross-tab-mic");
       expect(credentialReads).not.toHaveBeenCalled();
       expect(theme.settings).not.toHaveProperty("token");
+
+      const background = selectBackgroundSource({ kind: "none" });
+      saveBackgroundPreference(first.gatewayUrl, background);
+      events.dispatchEvent(
+        Object.assign(new Event("storage"), {
+          key: backgroundPreferenceStorageKey(first.gatewayUrl),
+        }),
+      );
+      expect(theme.settings.background).toEqual(background);
+      saveBackgroundPreference(second.gatewayUrl, selectBackgroundSource({ kind: "theme" }));
+      events.dispatchEvent(
+        Object.assign(new Event("storage"), {
+          key: backgroundPreferenceStorageKey(second.gatewayUrl),
+        }),
+      );
+      expect(theme.settings.background).toEqual(background);
+      expect(credentialReads).not.toHaveBeenCalled();
 
       const selectionKey = `openclaw.control.currentGateway.v1:${first.gatewayUrl}`;
       localStorage.setItem(selectionKey, second.gatewayUrl);
