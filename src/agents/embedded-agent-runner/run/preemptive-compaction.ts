@@ -3,9 +3,10 @@ import type { Model } from "@openclaw/llm-core";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction-planning.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { calculateContextTokens, IMAGE_BLOCK_TOKENS } from "../../runtime/index.js";
 import {
+  createFreshLlmBoundaryTokenEstimator,
   ESTIMATED_CHARS_PER_TOKEN,
   estimateStringTokenPressure,
   estimateJsonPayloadTokenPressure,
@@ -13,7 +14,10 @@ import {
   estimateRenderedPromptTokens,
   estimateToolSchemaTokens,
 } from "../../sessions/context-token-pressure.js";
+import { log } from "../logger.js";
+import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
+import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
@@ -248,6 +252,60 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     ...diagnosticDecision,
     ...(transcriptTokenPressure?.hasCompactionReplay ? { compactionReplay: outgoingDecision } : {}),
   };
+}
+
+/** Check the projected foreground request; persisted usage alone cannot bind its prefix. */
+export function checkMidTurnPrecheck(params: {
+  context: Parameters<StreamFn>[1];
+  previousRequest?: Pick<PromptCacheRequestObservation, "promptTokens" | "messageCount">;
+  contextTokenBudget: number;
+  reserveTokens: number;
+  toolResultMaxChars?: number;
+  replay?: CompactionReplayPressureContext;
+  onPrecheck: (request: MidTurnPrecheckRequest) => void;
+}): void {
+  const { context, previousRequest } = params;
+  const promptTokens = previousRequest?.promptTokens;
+  const anchor =
+    previousRequest &&
+    promptTokens !== undefined &&
+    Number.isFinite(promptTokens) &&
+    promptTokens > 0
+      ? { promptTokens, messageCount: previousRequest.messageCount }
+      : undefined;
+  const messages = context.messages;
+  const estimate = createFreshLlmBoundaryTokenEstimator(anchor ? {} : context);
+  const precheck = shouldPreemptivelyCompactBeforePrompt({
+    ...params,
+    messages,
+    systemPrompt: context.systemPrompt,
+    toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+    prompt: "",
+    // A current-run anchor already includes any provider-owned compaction prefix.
+    replay: anchor ? undefined : params.replay,
+    llmBoundaryTokenPressure: {
+      estimatedPromptTokens:
+        (anchor?.promptTokens ?? 0) +
+        estimate({
+          messages: anchor ? messages.slice(anchor.messageCount) : messages,
+          prompt: "",
+        }),
+      source: anchor ? "provider_context_usage" : "transcript_estimate",
+    },
+  });
+  const decision = precheck.compactionReplay ?? precheck;
+  log.debug(
+    `[context-overflow-midturn-precheck] provider-bound check route=${decision.route} ` +
+      `messages=${messages.length} pressureSource=${decision.pressureSource} ` +
+      `estimatedPromptTokens=${decision.estimatedPromptTokens} ` +
+      `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
+      `overflowTokens=${decision.overflowTokens}`,
+  );
+  if (decision.route !== "fits") {
+    const request = { ...decision, route: decision.route };
+    params.onPrecheck(request);
+    throw new MidTurnPrecheckSignal(request);
+  }
 }
 
 function resolveCompactionPressureDecision(

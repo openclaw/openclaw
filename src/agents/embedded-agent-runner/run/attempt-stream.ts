@@ -429,7 +429,23 @@ export function installEmbeddedAttemptStreamGuards(
     installStreamWrapper(wrapStreamFnCodeModeSource, codeModeExecToolNames);
   }
   return {
-    onModelRequest: cacheObserver.onModelRequest,
+    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+      const previous = cacheObserver.getObservation();
+      const request = cacheObserver.onModelRequest(...args);
+      if (request.requestIndex > 1) {
+        contextGuards.checkMidTurnPrecheck({
+          context: args[1],
+          previousRequest:
+            previous?.requestIndex === request.requestIndex - 1 &&
+            request.prefixUnchanged &&
+            (request.changes ?? []).every(
+              ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
+            )
+              ? previous
+              : undefined,
+        });
+      }
+    },
     onModelUsage: (usage: NormalizedUsage | undefined) => {
       // Async-tool fragments also end messages. result() marks the terminal
       // response before core commits its final fragment with normalized usage.

@@ -441,13 +441,26 @@ describe("prompt cache observability", () => {
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
         const sessionId = scopedKey(reason);
         const messages: Message[] = [{ role: "user", content: "before", timestamp: 1 }];
-        beginOpenAIObservation({ sessionId, messages });
+        expect(beginOpenAIObservation({ sessionId, messages }).prefixUnchanged).toBe(false);
+        const appended: Message[] = [
+          ...messages,
+          { role: "user", content: "appended", timestamp: 2 },
+        ];
+        declarePromptHistoryRewrite({ sessionId, reason });
+        expect(beginOpenAIObservation({ sessionId, messages: appended })).toMatchObject({
+          prefixUnchanged: true,
+          changes: [{ code: reason, detail: `${reason} changed provider history` }],
+        });
         declarePromptHistoryRewrite({ sessionId, reason });
         const rewritten: Message[] = [{ role: "user", content: "after", timestamp: 1 }];
-        expect(beginOpenAIObservation({ sessionId, messages: rewritten }).changes).toEqual([
-          { code: reason, detail: `${reason} changed provider history` },
-        ]);
-        expect(beginOpenAIObservation({ sessionId, messages: rewritten }).changes).toBeNull();
+        expect(beginOpenAIObservation({ sessionId, messages: rewritten })).toMatchObject({
+          prefixUnchanged: false,
+          changes: [{ code: reason, detail: `${reason} changed provider history` }],
+        });
+        expect(beginOpenAIObservation({ sessionId, messages: rewritten })).toMatchObject({
+          prefixUnchanged: true,
+          changes: null,
+        });
         expect(() => beginOpenAIObservation({ sessionId, messages })).toThrow("message 0 (user)");
       });
     },

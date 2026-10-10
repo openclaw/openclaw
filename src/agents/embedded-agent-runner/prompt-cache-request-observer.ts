@@ -8,11 +8,15 @@ import {
 } from "./prompt-cache-observability.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
-type PromptCacheObservationStart = ReturnType<typeof beginPromptCacheObservation>;
+type PromptCacheObservationStart = ReturnType<typeof beginPromptCacheObservation> & {
+  requestIndex: number;
+  messageCount: number;
+};
 type PromptCacheSnapshot = PromptCacheObservationStart["snapshot"];
 
 export type PromptCacheRequestObservation = {
   requestIndex: number;
+  messageCount: number;
   broke: boolean;
   input?: number;
   cacheRead?: number;
@@ -34,7 +38,7 @@ export function createPromptCacheRequestObserver(
     observation: PromptCacheRequestObservation,
     snapshot: PromptCacheSnapshot,
   ) => void,
-  onRequest?: (request: PromptCacheObservationStart & { requestIndex: number }) => void,
+  onRequest?: (request: PromptCacheObservationStart) => void,
 ) {
   let requestIndex = 0;
   let request: PromptCacheObservationStart | undefined;
@@ -45,16 +49,21 @@ export function createPromptCacheRequestObserver(
       context: Pick<Parameters<StreamFn>[1], "systemPrompt" | "tools" | "messages">,
     ) => {
       requestIndex += 1;
-      request = beginPromptCacheObservation({
-        ...params,
-        provider: model.provider,
-        modelId: model.id,
-        modelApi: model.api,
-        systemPrompt: context.systemPrompt ?? "",
-        tools: collectPromptCacheTools(context.tools ?? []),
-        messages: context.messages,
-      });
-      onRequest?.({ ...request, requestIndex });
+      request = {
+        ...beginPromptCacheObservation({
+          ...params,
+          provider: model.provider,
+          modelId: model.id,
+          modelApi: model.api,
+          systemPrompt: context.systemPrompt ?? "",
+          tools: collectPromptCacheTools(context.tools ?? []),
+          messages: context.messages,
+        }),
+        requestIndex,
+        messageCount: context.messages.length,
+      };
+      onRequest?.(request);
+      return request;
     },
     onModelUsage: (
       usage: NormalizedUsage | undefined,
@@ -66,7 +75,8 @@ export function createPromptCacheRequestObserver(
       const cacheBreak = completePromptCacheObservation({ ...params, usage, providerPrompt });
       const hasCacheTelemetry = usage?.cacheTelemetry?.state !== "unavailable";
       observation = {
-        requestIndex,
+        requestIndex: request.requestIndex,
+        messageCount: request.messageCount,
         broke: Boolean(cacheBreak),
         previousCacheRead: request.previousCacheRead ?? undefined,
         requestGapMs: request.requestGapMs,
