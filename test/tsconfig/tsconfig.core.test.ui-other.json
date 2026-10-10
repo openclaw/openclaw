@@ -18,7 +18,6 @@
     "../../ui/src/components/**",
     "../../ui/src/pages/**",
     "../../ui/src/api/**",
-    "../../ui/src/e2e/**",
-    "../../ui/src/test-helpers/control-ui-e2e*.test.ts"
+    "../../ui/src/e2e/**"
   ]
 }

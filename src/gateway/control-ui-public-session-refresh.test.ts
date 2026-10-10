@@ -11,11 +11,11 @@ const renderedEntryScript = renderPublicSessionDocument({
   latestUrl: "/share/session",
   cardUrl: "https://example.test/card.png",
   assetBasePath: "/control",
-}).match(/<script>([\s\S]*)<\/script><\/body>/);
-if (!renderedEntryScript) {
+}).match(/<script>([\s\S]*)<\/script><\/body>/)?.[1];
+if (renderedEntryScript === undefined) {
   throw new Error("rendered public session page has no entry script");
 }
-const PUBLIC_SESSION_ENTRY_SCRIPT = renderedEntryScript[1];
+const PUBLIC_SESSION_ENTRY_SCRIPT: string = renderedEntryScript;
 
 afterEach(() => vi.useRealTimers());
 function fixture() {

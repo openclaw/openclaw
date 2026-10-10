@@ -42,6 +42,7 @@ import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
+import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -352,16 +353,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
-            const patch =
-              action.kind === "toggle-unread"
-                ? { unread: !currentSession.unread }
-                : action.kind === "set-icon"
-                  ? { icon: action.icon }
-                  : action.kind === "set-color"
-                    ? { color: action.color }
-                    : action.kind === "set-communication"
-                      ? { communication: action.communication }
-                      : { icon: null, color: null };
+            const patch = headerSessionMetadataPatch(action, currentSession);
             await operations.patchSession(host, currentSession, patch, scope);
           }
           break;

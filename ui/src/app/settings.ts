@@ -48,7 +48,6 @@ import { normalizeTypefaceOverride } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 export {
-  normalizeAccentColor,
   normalizeCatalogOpenTarget,
   normalizeChatFollowUpMode,
   normalizeChatFollowUpModeOverride,
