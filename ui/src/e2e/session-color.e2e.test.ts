@@ -305,6 +305,8 @@ suite.define(() => {
       const committed = await gateway.getSessionRow(key);
       Object.assign(designReview, {
         ...committed,
+        // This replaces stored facts; let the next wire read sample its own clock.
+        snapshotAt: undefined,
         label: "Design review refreshed",
         color: null,
         icon: "book",
