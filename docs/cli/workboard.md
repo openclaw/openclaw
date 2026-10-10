@@ -26,7 +26,7 @@ openclaw workboard move <id> --status <status> [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
-The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
+The command uses the same plugin-owned SQLite database as the dashboard and Workboard agent tools. When a local Gateway owns the state directory, commands route through that Gateway before opening the store. With the Gateway stopped, commands acquire exclusive offline ownership and close the store before releasing it. An unavailable, older, or rejecting live Gateway never triggers a local write fallback; fix its connection or stop it through its service owner and retry. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
 
 Valid `status` values: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`. Valid `priority` values: `low`, `normal`, `high`, `urgent`.
 

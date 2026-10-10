@@ -50,5 +50,4 @@ export {
   createTransportActivityStatusPatch,
 } from "../gateway/channel-status-patches.js";
 
-export { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 export { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
