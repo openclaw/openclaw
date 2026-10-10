@@ -21,19 +21,6 @@ type ObservationQuery = { agentId: string; storePath?: string } & (
 );
 type PhysicalCandidate = { path: string; identity: string; birthtime: string };
 
-function samePhysicalFile(candidate: PhysicalCandidate, pathname = candidate.path): boolean {
-  try {
-    const file = statSync(pathname, { bigint: true, throwIfNoEntry: false });
-    return Boolean(
-      file?.isFile() &&
-      `${file.dev}:${file.ino}` === candidate.identity &&
-      readDatabaseIdentityBirthtime(file) === candidate.birthtime,
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** Pending events observe mutations in the same owner that renews published row generations. */
 export function createSessionRowGenerationObservations(owner: {
   config: () => OpenClawConfig;
@@ -166,10 +153,7 @@ export function createSessionRowGenerationObservations(owner: {
             source &&
             [...candidates.values()].some(
               (candidate) =>
-                source.identity === candidate.identity &&
-                source.birthtime === candidate.birthtime &&
-                samePhysicalFile(candidate) &&
-                samePhysicalFile(candidate, row.storeTarget.storePath),
+                source.identity === candidate.identity && source.birthtime === candidate.birthtime,
             ),
           );
         },
