@@ -249,45 +249,48 @@ it.each(["dead", "reused", "nested"] as const)(
   },
 );
 
-it.each(["live", "uninspectable", "EPERM", "surviving group"] as const)(
-  "repair preserves a %s child-lineage owner with actionable guidance",
-  async (identity) => {
-    const key = seedLegacyLineage(false, identity === "surviving group");
-    if (identity !== "surviving group") {
-      fixture.births.set(
-        fixture.helper.pid,
-        identity === "live" ? Number(fixture.helper.startIdentity) : null,
+for (const identity of ["live", "uninspectable", "EPERM", "surviving group"] as const) {
+  // Only POSIX detached children have a process group that can outlive its leader.
+  it.skipIf(identity === "surviving group" && process.platform === "win32")(
+    `repair preserves a ${identity} child-lineage owner with actionable guidance`,
+    async () => {
+      const key = seedLegacyLineage(false, identity === "surviving group");
+      if (identity !== "surviving group") {
+        fixture.births.set(
+          fixture.helper.pid,
+          identity === "live" ? Number(fixture.helper.startIdentity) : null,
+        );
+      }
+      if (identity === "EPERM") {
+        vi.mocked(pidAlive.isPidDefinitelyDead).mockRestore();
+        const kill = process.kill.bind(process);
+        vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (pid === fixture.helper.pid) {
+            throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+          }
+          return kill(pid, signal);
+        });
+      }
+      const retained = fixture.store.read(key);
+      await withCliProcessScope(() =>
+        runRegisteredCli({
+          register: registerUpdateCli,
+          argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
+        }),
       );
-    }
-    if (identity === "EPERM") {
-      vi.mocked(pidAlive.isPidDefinitelyDead).mockRestore();
-      const kill = process.kill.bind(process);
-      vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-        if (pid === fixture.helper.pid) {
-          throw Object.assign(new Error("permission denied"), { code: "EPERM" });
-        }
-        return kill(pid, signal);
-      });
-    }
-    const retained = fixture.store.read(key);
-    await withCliProcessScope(() =>
-      runRegisteredCli({
-        register: registerUpdateCli,
-        argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-      }),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringMatching(
-        identity === "surviving group"
-          ? /descendants remain live or unverified.*update repair/
-          : /live or unverified.*PID.*process-inspection permissions.*update repair/,
-      ),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(fixture.store.read(key)).toEqual(retained);
-    expect(mocks.doctor).not.toHaveBeenCalled();
-  },
-);
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          identity === "surviving group"
+            ? /descendants remain live or unverified.*update repair/
+            : /live or unverified.*PID.*process-inspection permissions.*update repair/,
+        ),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(fixture.store.read(key)).toEqual(retained);
+      expect(mocks.doctor).not.toHaveBeenCalled();
+    },
+  );
+}
 
 it.each([false, true])(
   "checks every retained child's recovery history (pending rollback: %s)",

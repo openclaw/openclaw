@@ -10,9 +10,9 @@ import { stageScheduledTask } from "./schtasks-install.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const originalArgv1 = process.argv[1];
+const originalArgv = [...process.argv];
 afterEach(() => {
-  process.argv[1] = originalArgv1;
+  process.argv = originalArgv;
   vi.restoreAllMocks();
 });
 

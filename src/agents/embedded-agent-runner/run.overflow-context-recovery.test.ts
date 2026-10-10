@@ -14,6 +14,7 @@ import {
   streamMocks,
   testModel,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "../sessions/agent-session-loop-resource-loader.test-support.js";
 import { createCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
@@ -621,7 +622,7 @@ describe("recoverEmbeddedRunOverflow", () => {
     const { session } = await createTestSession({
       model: { ...testModel, contextWindow },
       sessionManager: manager,
-      systemPrompt,
+      resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
       settingsManager: SettingsManager.inMemory({
         compaction: { enabled: false, keepRecentTokens: 20_000, reserveTokens: 10_000 },
         retry: { enabled: false },

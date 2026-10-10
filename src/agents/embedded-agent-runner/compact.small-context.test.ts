@@ -9,6 +9,7 @@ import {
   streamMocks,
   testModel,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "../sessions/agent-session-loop-resource-loader.test-support.js";
 import { createCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
@@ -90,7 +91,12 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   limitHistoryTurnsMock.mockImplementation((messages) => messages);
   vi.mocked(guardSessionManager).mockReturnValue(manager);
   vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(() =>
-    createTestSession({ model, systemPrompt, sessionManager: manager, settingsManager }),
+    createTestSession({
+      model,
+      resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+      sessionManager: manager,
+      settingsManager,
+    }),
   );
   attemptServerEndpointCompactionMock.mockImplementation(attemptServerEndpointCompaction);
   compactEndpoint.mockImplementation(async (_stream, endpointModel: Model, context, options) => {
@@ -204,7 +210,7 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   });
   const { session } = await createTestSession({
     model,
-    systemPrompt,
+    resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
     sessionManager: manager,
     settingsManager,
   });

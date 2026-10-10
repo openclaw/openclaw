@@ -748,7 +748,6 @@ it.each<{
   continuation?: Continuation;
   message: string | RegExp;
 }>([
-  { catalog: "exact", continuation: "own", message: "schema migration required" },
   {
     scenario: "lifecycle-contended",
     message: "is undergoing offline maintenance; retry when it finishes.",
@@ -788,12 +787,17 @@ it.each<{
   },
 );
 
-it.each(["own", "unrecorded-parked"] as const)(
-  "continues owning-run Doctor maintenance with service %s",
-  async (continuation) => {
+it.each<{ continuation: "own" | "unrecorded-parked"; catalog?: LegacyCatalog }>([
+  { continuation: "own" },
+  { continuation: "own", catalog: "exact" },
+  { continuation: "unrecorded-parked" },
+])(
+  "continues owning-run Doctor maintenance with service $continuation (catalog: $catalog)",
+  async ({ continuation, catalog }) => {
     const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(
       "retained",
       continuation,
+      catalog,
     );
     expect(finishError).toBeUndefined();
     expect(mocks.stops).toBe(continuation === "own" ? 1 : 0);
