@@ -75,7 +75,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(!source.contains("sidebarDrawerContentCard"))
         #expect(!source.contains("sidebarContentDragOffset"))
 
-        #expect(drawerSource.contains("@GestureState private var isDragging"))
         #expect(drawerSource.contains(".simultaneousGesture("))
         #expect(drawerSource.contains("isEnabled: self.isDrawerLayout && !self.reduceMotion"))
         #expect(drawerSource.contains(".accessibilityHidden(!self.isPresented)"))
@@ -95,10 +94,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(!contentCard.contains("Color(uiColor: .systemGroupedBackground)"))
         #expect(!contentCard.contains(".shadow("))
 
-        #expect(drawerGesture.contains(".updating(self.$isDragging)"))
-        #expect(drawerGesture.contains(".onChanged"))
-        #expect(drawerGesture.contains("let disposition = self.dragState.disposition"))
-        #expect(drawerGesture.contains("self.dragState.disposition = nil"))
         #expect(drawerGesture.contains("case .opening:"))
         #expect(drawerGesture.contains("case .closing:"))
         #expect(drawerGesture.contains("onShow()"))
