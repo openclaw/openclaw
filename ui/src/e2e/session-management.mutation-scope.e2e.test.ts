@@ -126,17 +126,10 @@ suite.define(() => {
         const method = operation === "rename" ? "sessions.patch" : "sessions.patchMany";
         await gateway.deferNext(method);
         if (operation === "rename") {
-          if (filter === "All") {
-            await rowFor(original.key).click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
-          } else {
-            await page.locator(".chat-pane__session-title-button").click();
-          }
-          const input = page.locator(
-            filter === "All"
-              ? 'openclaw-modal-dialog[label="Rename session"] input'
-              : ".chat-pane__session-title-input",
-          );
+          // The inline editor permits navigation while the mutation is pending;
+          // the sidebar rename dialog intentionally holds focus until it settles.
+          await page.locator(".chat-pane__session-title-button").click();
+          const input = page.locator(".chat-pane__session-title-input");
           await input.fill("Renamed original");
           await input.press("Enter");
           const request = await waitForPatch(
