@@ -9,6 +9,12 @@ export type TypingCallbacks = {
   onIdle?: () => void;
   /** Called when the typing controller is cleaned up (e.g. on NO_REPLY). */
   onCleanup?: () => void;
+  /**
+   * Opens another start/stop generation after this one has closed.
+   * The returned function stops only that generation, so a sealed
+   * predecessor cannot clear the successor's indicator.
+   */
+  beginNextLifecycle?: () => () => void;
 };
 
 export type CreateTypingCallbacksParams = {
@@ -39,6 +45,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   );
   const maxDurationMs = resolveTimerTimeoutMs(params.maxDurationMs, 60_000, 0);
   let closed = false;
+  let epoch = 0;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
   let consecutiveFailures = 0;
@@ -79,15 +86,39 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     onTick: fireStart,
   });
 
+  const stopEpoch = (target: number) => {
+    if (epoch !== target || closed) {
+      return;
+    }
+    closed = true;
+    keepaliveLoop.stop();
+    clearTtlTimer();
+    if (!stop) {
+      return;
+    }
+    const stopIfCurrent = () => {
+      if (epoch !== target) {
+        return;
+      }
+      return stop();
+    };
+    // An admitted start may publish activity after cleanup. Its terminal stop
+    // must follow that work so late acknowledgments cannot leave typing visible.
+    void Promise.resolve(startInFlight ? startInFlight.then(stopIfCurrent) : stopIfCurrent()).catch(
+      (err: unknown) => (params.onStopError ?? params.onStartError)(err),
+    );
+  };
+
   const startTtlTimer = () => {
     if (maxDurationMs <= 0) {
       return;
     }
+    const target = epoch;
     clearTtlTimer();
     ttlTimer = setTimeout(() => {
-      if (!closed) {
+      if (epoch === target && !closed) {
         console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
-        fireStop();
+        stopEpoch(target);
       }
     }, maxDurationMs);
     ttlTimer.unref?.();
@@ -104,12 +135,13 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (closed) {
       return;
     }
+    const startEpoch = epoch;
     consecutiveFailures = 0;
     tripped = false;
     clearTtlTimer();
     const startPromise = fireStart();
     void startPromise.then(() => {
-      if (closed || tripped) {
+      if (closed || tripped || epoch !== startEpoch) {
         return;
       }
       // Core can refresh an active reply independently of this channel loop.
@@ -121,22 +153,21 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     await Promise.resolve();
   };
 
+  // The initial dispatch owns epoch 0. Later stops must not target a successor.
   const fireStop = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    keepaliveLoop.stop();
-    clearTtlTimer();
-    if (!stop) {
-      return;
-    }
-    // An admitted start may publish activity after cleanup. Its terminal stop
-    // must follow that work so late acknowledgments cannot leave typing visible.
-    void (startInFlight ? startInFlight.then(stop) : stop()).catch((err: unknown) =>
-      (params.onStopError ?? params.onStartError)(err),
-    );
+    stopEpoch(0);
   };
 
-  return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };
+  const beginNextLifecycle = () => {
+    epoch += 1;
+    closed = false;
+    tripped = false;
+    consecutiveFailures = 0;
+    const target = epoch;
+    return () => {
+      stopEpoch(target);
+    };
+  };
+
+  return { onReplyStart, onIdle: fireStop, onCleanup: fireStop, beginNextLifecycle };
 }

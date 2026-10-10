@@ -288,6 +288,7 @@ export async function getReplyFromConfig(
     const controller = createTypingController({
       onReplyStart: opts?.onReplyStart,
       onCleanup: opts?.onTypingCleanup,
+      onOpenSuccessor: opts?.onTypingRevive,
       typingIntervalSeconds,
       keepalive: opts?.typingKeepalive ?? true,
       silentToken: SILENT_REPLY_TOKEN,

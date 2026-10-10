@@ -204,6 +204,8 @@ export type GetReplyOptions = {
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
+  /** Opens the channel typing generation used by a queued successor turn. */
+  onTypingRevive?: () => void | (() => void);
   onTypingController?: (typing: TypingController) => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
