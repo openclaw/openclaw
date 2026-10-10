@@ -247,6 +247,7 @@ async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts
   });
   const retry = account.config.dmChannelRetry;
   const dmRetryOptions = retry && {
+    // Snapshot before the user lookup can yield.
     maxRetries: retry.maxRetries,
     initialDelayMs: retry.initialDelayMs,
     maxDelayMs: retry.maxDelayMs,

@@ -228,28 +228,23 @@ class CustodianSurface extends OpenClawLightDomElement {
               ? html`<div class="custodian__plugin-intro">
                   <h2>${t("custodian.pluginIntroTitle", { plugin: plugin.name })}</h2>
                   <div class="custodian__plugin-starters">
-                    ${[
-                      {
-                        label: t("custodian.pluginStarterPurpose"),
-                        prompt: t("custodian.pluginPromptPurpose", { plugin: plugin.name }),
-                      },
-                      {
-                        label: t("custodian.pluginStarterTools"),
-                        prompt: t("custodian.pluginPromptTools", { plugin: plugin.name }),
-                      },
-                      {
-                        label: t("custodian.pluginStarterSetup"),
-                        prompt: t("custodian.pluginPromptSetup", { plugin: plugin.name }),
-                      },
-                    ].map(
-                      ({ label, prompt }) => html`<button
+                    ${(
+                      [
+                        ["custodian.pluginStarterPurpose", "custodian.pluginPromptPurpose"],
+                        ["custodian.pluginStarterTools", "custodian.pluginPromptTools"],
+                        ["custodian.pluginStarterSetup", "custodian.pluginPromptSetup"],
+                      ] as const
+                    ).map(([labelKey, promptKey]) => {
+                      const label = t(labelKey);
+                      const prompt = t(promptKey, { plugin: plugin.name });
+                      return html`<button
                         class="btn"
                         type="button"
                         @click=${() => void askPlugin?.({ question: prompt })}
                       >
                         ${label}
-                      </button>`,
-                    )}
+                      </button>`;
+                    })}
                   </div>
                 </div>`
               : nothing

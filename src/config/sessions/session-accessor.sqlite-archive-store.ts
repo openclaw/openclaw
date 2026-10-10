@@ -36,6 +36,7 @@ import {
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 
 type SessionArchivePublicationStorage = {
+  assertCurrent?(): void;
   prepare(
     requested: readonly SessionLifecycleArchivedTranscript[],
   ): Promise<TranscriptArchivePublishPlan[]>;
@@ -47,15 +48,22 @@ export async function publishSessionStateArchives(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
   storage?: SessionArchivePublicationStorage,
+  assertSourceCurrent?: () => void,
 ): Promise<SessionLifecycleArchivedTranscript[]> {
+  assertSourceCurrent?.();
   if (storage) {
     return publishPreparedSessionStateArchives(requested, storage);
   }
   const databaseOptions = resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope));
   const forceInProcess =
     hasPreparedNativeSessionDeletion() || !supportsOpenClawAgentDatabaseExecution(databaseOptions);
-  return withSqliteMutationWorkerLifetime(databaseOptions, ({ assertCurrent, signal }) =>
-    withSqliteTranscriptArchiveSession(databaseOptions, async () => {
+  return withSqliteMutationWorkerLifetime(databaseOptions, (lifetime) => {
+    const { signal } = lifetime;
+    const assertCurrent = () => {
+      lifetime.assertCurrent();
+      assertSourceCurrent?.();
+    };
+    return withSqliteTranscriptArchiveSession(databaseOptions, async () => {
       if (!forceInProcess && requested.length === 0) {
         try {
           const pending = await readPendingSqliteTranscriptArchivesInWorker(
@@ -175,8 +183,8 @@ export async function publishSessionStateArchives(
       }
       claim.release();
       return result;
-    }),
-  );
+    });
+  });
 }
 
 async function publishPreparedSessionStateArchives(
@@ -192,15 +200,19 @@ async function publishPreparedSessionStateArchives(
   );
   let includeRequested = true;
   while (true) {
+    storage.assertCurrent?.();
     const requestedForPass = includeRequested ? requestedArchives : [];
     const plans = await storage.prepare(requestedForPass);
+    storage.assertCurrent?.();
     includeRequested = false;
     if (plans.length === 0) {
       break;
     }
 
     const results = await runSqliteTranscriptArchivePublishWorker(plans, signal);
+    storage.assertCurrent?.();
     await storage.record(results);
+    storage.assertCurrent?.();
 
     const planByIdentity = new Map(
       plans.map((plan) => [transcriptArchiveIdentityKey(plan.sessionId, plan.generation), plan]),

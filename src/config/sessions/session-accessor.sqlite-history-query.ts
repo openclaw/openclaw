@@ -5,7 +5,7 @@ import type {
 } from "../../gateway/session-transcript-read.types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
@@ -57,6 +57,7 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 const recentHistoryWindows = new Map<
   string,
@@ -78,7 +79,7 @@ function readBoundaryEvents(
   return new Map(
     readSnapshotEventRows(projection, eventSeqs).map((row) => [
       row.seq,
-      parseStoredTranscriptEvent(row.event_json),
+      parseStoredTranscriptEvent(readTranscriptPayload(row)),
     ]),
   );
 }
@@ -358,7 +359,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
     );
   if (
     !projection.generation ||
-    hasSqlitePostCommitScope(projection.database.db) ||
+    hasUncommittedSqliteWrites(projection.database.db) ||
     projection.database.db.location() === null ||
     options.expectedReadWindow ||
     resolveSessionTranscriptReadFence(projection.resolved)

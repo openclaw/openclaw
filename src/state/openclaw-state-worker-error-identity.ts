@@ -21,7 +21,10 @@ import {
 } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
-import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/session-transcript-writer-claim-error.js";
+import {
+  parseTranscriptAppendRefusal,
+  SessionTranscriptWriterClaimReboundError,
+} from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -147,7 +150,11 @@ export function identifyError(error: Error): ErrorIdentity {
     return { type: "session-lifecycle-upsert-conflict", sessionKey: error.sessionKey };
   }
   if (error instanceof SessionTranscriptWriterClaimReboundError) {
-    return { type: "session-transcript-writer-claim-rebound" };
+    const refusal = parseTranscriptAppendRefusal(error.cause);
+    return {
+      type: "session-transcript-writer-claim-rebound",
+      ...(refusal ? { refusal } : {}),
+    };
   }
   if (error instanceof SqliteSessionMutationConflictError) {
     return { type: "session-mutation-conflict", operationLabel: error.operationLabel };
@@ -359,8 +366,13 @@ export function parseIdentity(node: Record<string, unknown>) {
     case "error":
     case "aggregate":
     case "mcp-oauth-corruption":
-    case "session-transcript-writer-claim-rebound":
       return { type: node.type };
+    case "session-transcript-writer-claim-rebound": {
+      const refusal = parseTranscriptAppendRefusal(node.refusal);
+      return node.refusal === undefined || refusal
+        ? { type: node.type, ...(refusal ? { refusal } : {}) }
+        : undefined;
+    }
     case "session-goal-operation": {
       const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
       return goalCode && node.code === goalCode ? { type: node.type, goalCode } : undefined;
@@ -480,7 +492,7 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
     case "session-transcript-mutation-conflict":
       return new SqliteTranscriptMutationConflictError(node.sessionId);
     case "session-transcript-writer-claim-rebound":
-      return new SessionTranscriptWriterClaimReboundError();
+      return new SessionTranscriptWriterClaimReboundError(node.refusal);
     case "session-metadata":
       return new SessionMetadataUnavailableError(node.reason, undefined, node.missingTables);
     case "error":

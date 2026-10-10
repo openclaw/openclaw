@@ -19,6 +19,7 @@ export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
 export const NODE_WORKER_NATIVE_INFERENCE_VERSION = 1;
+export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
 export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
@@ -87,6 +88,7 @@ const WorkerHost = z
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),
       nativeInference: z.literal(NODE_WORKER_NATIVE_INFERENCE_VERSION).optional(),
+      promptContext: z.literal(NODE_WORKER_PROMPT_CONTEXT_VERSION).optional(),
     }).refine(
       (host) =>
         (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
@@ -158,11 +160,13 @@ export function createNodeRunnerInventoryIssueError(
     : new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
 }
 
-/** Worker execution requires the node to preserve the Gateway's captured exec policy. */
+/** Worker execution requires captured policy and the current assignment prompt context. */
 export function resolveNodeWorkerExecutionIssue(
   workerHost: NodeWorkerHostDeclaration,
 ): NodeRunnerInventoryIssue | undefined {
-  return workerHost.enabled && workerHost.capturedExecPolicy !== true
+  return workerHost.enabled &&
+    (workerHost.capturedExecPolicy !== true ||
+      workerHost.promptContext !== NODE_WORKER_PROMPT_CONTEXT_VERSION)
     ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
     : undefined;
 }

@@ -40,45 +40,19 @@ enum GatewaySettingsStore {
     private static let nodeService = "ai.openclawfoundation.app.node"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
-    private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
-    private static let lastDiscoveredGatewayStableIDDefaultsKey = "gateway.lastDiscoveredStableID"
     private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
 
     private static let instanceIdAccount = "instanceId"
-    private static let preferredGatewayStableIDAccount = "preferredStableID"
-    private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
     private static let gatewayRegistryAccount = "gateway-registry"
     private static let lastGatewayConnectionAccount = "lastConnection"
     private static let gatewayCustomHeadersService = "ai.openclawfoundation.app.gateway.custom-headers"
 
-    struct GatewayRegistryEntry: Codable, Equatable, Identifiable, Sendable {
-        enum Kind: String, Codable, Sendable {
-            case manual
-            case discovered
-        }
+    private enum GatewaySelector: String, CaseIterable {
+        case preferredStableID
+        case lastDiscoveredStableID
 
-        var stableID: String
-        var kind: Kind
-        var name: String
-        var host: String?
-        var port: Int?
-        var useTLS: Bool
-        var contextPath: String?
-        var lastConnectedAtMs: Int?
-
-        var id: GatewayStableIdentifier.Key {
-            GatewayStableIdentifier.Key(self.stableID)
-        }
-
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            GatewayStableIdentifier.matches(lhs.stableID, rhs.stableID) &&
-                lhs.kind == rhs.kind &&
-                lhs.name == rhs.name &&
-                lhs.host == rhs.host &&
-                lhs.port == rhs.port &&
-                lhs.useTLS == rhs.useTLS &&
-                lhs.contextPath == rhs.contextPath &&
-                lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
+        var defaultsKey: String {
+            "gateway.\(self.rawValue)"
         }
     }
 
@@ -91,10 +65,10 @@ enum GatewaySettingsStore {
     /// entries can survive a partial update and bind one gateway's secret to another.
     private struct GatewayCredentialBundle: Codable {
         let gatewayStableID: String
-        let suppressStoredDeviceAuth: Bool
-        let token: String?
-        let bootstrapToken: String?
-        let password: String?
+        var suppressStoredDeviceAuth: Bool
+        var token: String?
+        var bootstrapToken: String?
+        var password: String?
 
         var hasCredentials: Bool {
             self.token != nil || self.bootstrapToken != nil || self.password != nil
@@ -120,12 +94,9 @@ enum GatewaySettingsStore {
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
-        self.ensureGatewayStableID(
-            defaultsKey: self.preferredGatewayStableIDDefaultsKey,
-            account: self.preferredGatewayStableIDAccount)
-        self.ensureGatewayStableID(
-            defaultsKey: self.lastDiscoveredGatewayStableIDDefaultsKey,
-            account: self.lastDiscoveredGatewayStableIDAccount)
+        for selector in GatewaySelector.allCases {
+            self.ensureGatewayStableID(defaultsKey: selector.defaultsKey, account: selector.rawValue)
+        }
         self.migrateGatewayRegistryIfNeeded()
         if let instanceID = self.loadStableInstanceID() {
             self.migrateGatewayCredentialBundleIfNeeded(instanceId: instanceID)
@@ -151,34 +122,19 @@ enum GatewaySettingsStore {
             account: self.instanceIdAccount)
     }
 
-    static func savePreferredGatewayStableID(_ stableID: String) {
+    static func saveDiscoveredGatewayStableID(_ stableID: String, preferred: Bool = false) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        _ = GenericPasswordKeychainStore.saveString(
-            stableID,
-            service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount)
+        for selector in GatewaySelector.allCases where preferred || selector == .lastDiscoveredStableID {
+            _ = GenericPasswordKeychainStore.saveString(
+                stableID, service: self.gatewayService, account: selector.rawValue)
+        }
     }
 
-    static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = GenericPasswordKeychainStore.delete(
-            service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount)
-        defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
-    }
-
-    static func saveLastDiscoveredGatewayStableID(_ stableID: String) {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        _ = GenericPasswordKeychainStore.saveString(
-            stableID,
-            service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount)
-    }
-
-    static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = GenericPasswordKeychainStore.delete(
-            service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount)
-        defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+    static func clearGatewaySelectors(defaults: UserDefaults = .standard) {
+        for selector in GatewaySelector.allCases {
+            _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: selector.rawValue)
+            defaults.removeObject(forKey: selector.defaultsKey)
+        }
     }
 
     static func loadGatewayCredentialMetadata(
@@ -435,6 +391,9 @@ enum GatewaySettingsStore {
             GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
         }) {
             var replacement = normalized
+            // Connection/Bonjour updates do not own ingress identity. Retain the
+            // last admitted origin until its owner retires or replaces the grant.
+            replacement.accessOrigin = replacement.accessOrigin ?? registry.entries[index].accessOrigin
             if replacement.lastConnectedAtMs == nil {
                 replacement.lastConnectedAtMs = registry.entries[index].lastConnectedAtMs
             }
@@ -443,13 +402,18 @@ enum GatewaySettingsStore {
             registry.entries.append(normalized)
         }
         if activate {
-            registry.activeStableID = normalized.stableID
-            if !registry.connectedStableIDs.contains(where: {
-                GatewayStableIdentifier.matches($0, normalized.stableID)
-            }) {
-                registry.connectedStableIDs.append(normalized.stableID)
-            }
+            registry.activate(stableID: normalized.stableID)
         }
+        return self.saveGatewayRegistry(registry)
+    }
+
+    @discardableResult
+    static func saveGatewayAccessOrigin(stableID: String, origin: CloudflareAccessOrigin?) -> Bool {
+        var registry = self.loadGatewayRegistry()
+        guard let index = registry.entries.firstIndex(where: {
+            GatewayStableIdentifier.matches($0.stableID, stableID)
+        }) else { return false }
+        registry.entries[index].accessOrigin = origin
         return self.saveGatewayRegistry(registry)
     }
 
@@ -483,10 +447,9 @@ enum GatewaySettingsStore {
     static func clearLegacyGatewaySelectors(stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
         let defaults = UserDefaults.standard
-        for (defaultsKey, account) in [
-            (self.preferredGatewayStableIDDefaultsKey, self.preferredGatewayStableIDAccount),
-            (self.lastDiscoveredGatewayStableIDDefaultsKey, self.lastDiscoveredGatewayStableIDAccount),
-        ] {
+        for selector in GatewaySelector.allCases {
+            let defaultsKey = selector.defaultsKey
+            let account = selector.rawValue
             let defaultsValue = defaults.string(forKey: defaultsKey)
             if GatewayStableIdentifier.matches(defaultsValue, stableID) {
                 defaults.removeObject(forKey: defaultsKey)
@@ -517,16 +480,14 @@ enum GatewaySettingsStore {
                 if lhs.name != rhs.name { return lhs.name < rhs.name }
                 return GatewayStableIdentifier.sortsBefore(lhs.stableID, rhs.stableID)
             }
-        let activeStableID = registry.activeStableID.flatMap { activeID in
-            entries.first(where: {
-                GatewayStableIdentifier.matches($0.stableID, activeID)
-            })?.stableID
+        let entriesByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        let activeStableID = registry.activeStableID.flatMap {
+            entriesByID[GatewayStableIdentifier.Key($0)]?.stableID
         }
         var seenConnected = Set<GatewayStableIdentifier.Key>()
         let connectedStableIDs: [String] = registry.connectedStableIDs.compactMap { connectedID in
-            guard let entry = entries.first(where: {
-                GatewayStableIdentifier.matches($0.stableID, connectedID)
-            }), seenConnected.insert(entry.id).inserted
+            guard let entry = entriesByID[GatewayStableIdentifier.Key(connectedID)],
+                  seenConnected.insert(entry.id).inserted
             else { return nil }
             return entry.stableID
         }
@@ -737,17 +698,14 @@ enum GatewaySettingsStore {
         guard let json = canonicalJSON ?? GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: legacyAccount),
-            let decoded = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: Data(json.utf8))
+            var bundle = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: Data(json.utf8))
         else { return nil }
-        guard let decodedStableID = GatewayStableIdentifier.exact(decoded.gatewayStableID),
+        guard let decodedStableID = GatewayStableIdentifier.exact(bundle.gatewayStableID),
               GatewayStableIdentifier.matches(decodedStableID, stableID)
         else { return nil }
-        let bundle = GatewayCredentialBundle(
-            gatewayStableID: decodedStableID,
-            suppressStoredDeviceAuth: decoded.suppressStoredDeviceAuth,
-            token: decoded.token?.trimmedNonEmpty,
-            bootstrapToken: decoded.bootstrapToken?.trimmedNonEmpty,
-            password: decoded.password?.trimmedNonEmpty)
+        bundle.token = bundle.token?.trimmedNonEmpty
+        bundle.bootstrapToken = bundle.bootstrapToken?.trimmedNonEmpty
+        bundle.password = bundle.password?.trimmedNonEmpty
         if canonicalJSON == nil,
            let migratedData = try? JSONEncoder().encode(bundle),
            let migratedJSON = String(data: migratedData, encoding: .utf8),
@@ -887,6 +845,61 @@ extension GatewaySettingsStore {
 }
 
 extension GatewaySettingsStore {
+    struct GatewayRegistryEntry: Codable, Equatable, Identifiable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case manual
+            case discovered
+        }
+
+        var stableID: String
+        var kind: Kind
+        var name: String
+        var host: String?
+        var port: Int?
+        var useTLS: Bool
+        var contextPath: String?
+        var accessOrigin: CloudflareAccessOrigin?
+        var lastConnectedAtMs: Int?
+
+        init(
+            stableID: String,
+            kind: Kind,
+            name: String,
+            host: String?,
+            port: Int?,
+            useTLS: Bool,
+            contextPath: String? = nil,
+            accessOrigin: CloudflareAccessOrigin? = nil,
+            lastConnectedAtMs: Int?)
+        {
+            self.stableID = stableID
+            self.kind = kind
+            self.name = name
+            self.host = host
+            self.port = port
+            self.useTLS = useTLS
+            self.contextPath = contextPath
+            self.accessOrigin = accessOrigin
+            self.lastConnectedAtMs = lastConnectedAtMs
+        }
+
+        var id: GatewayStableIdentifier.Key {
+            GatewayStableIdentifier.Key(self.stableID)
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            GatewayStableIdentifier.matches(lhs.stableID, rhs.stableID) &&
+                lhs.kind == rhs.kind &&
+                lhs.name == rhs.name &&
+                lhs.host == rhs.host &&
+                lhs.port == rhs.port &&
+                lhs.useTLS == rhs.useTLS &&
+                lhs.contextPath == rhs.contextPath &&
+                lhs.accessOrigin == rhs.accessOrigin &&
+                lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
+        }
+    }
+
     @discardableResult
     static func completeGatewayCredentialHandoff(
         instanceId: String,
@@ -906,12 +919,9 @@ extension GatewaySettingsStore {
         else { return false }
         // Device-token issuance and bootstrap consumption are one durable handoff. A relaunch
         // must never observe a spent bootstrap token while stored device auth remains disabled.
-        let completedBundle = GatewayCredentialBundle(
-            gatewayStableID: stableID,
-            suppressStoredDeviceAuth: false,
-            token: bundle.token,
-            bootstrapToken: nil,
-            password: bundle.password)
+        var completedBundle = bundle
+        completedBundle.suppressStoredDeviceAuth = false
+        completedBundle.bootstrapToken = nil
         let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         let account = self.gatewayCredentialBundleAccount(
             instanceId: trimmedInstanceID,

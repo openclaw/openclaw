@@ -1,12 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
 import type {
   ErrorShape,
   SessionsCatalogContinueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { getModelRefStatus } from "../../agents/model-selection-shared.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
@@ -24,65 +21,14 @@ import { recordSessionStateEventAsync } from "../../sessions/session-state-event
 import { createGatewaySession } from "../session-create-service.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { buildModelsListResult } from "./models-list-result.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const GATEWAY_COPY_MODEL_LABEL_MAX_CHARS = 384;
-const GATEWAY_COPY_CATALOG_TIMEOUT_MS = (DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2) / 3;
-
-type GatewayCopyCatalogWait = {
-  unavailable: Error;
-  run: <T>(operation: () => Promise<T>) => Promise<T>;
-};
-
-function createGatewayCopyCatalogWait(
-  signals: Array<AbortSignal | undefined>,
-): GatewayCopyCatalogWait {
-  const activeSignals = signals.filter((value): value is AbortSignal => value !== undefined);
-  const signal = activeSignals.length > 1 ? AbortSignal.any(activeSignals) : activeSignals.at(0);
-  let deadline: number | undefined;
-  const unavailable = new Error(
-    "The model catalog is still loading. The session was not created; retry shortly.",
-  );
-  const stop = (): never => {
-    throw unavailable;
-  };
-  return {
-    unavailable,
-    run: async <T>(operation: () => Promise<T>): Promise<T> => {
-      if (signal?.aborted) {
-        stop();
-      }
-      deadline ??= performance.now() + GATEWAY_COPY_CATALOG_TIMEOUT_MS;
-      return await raceWithTimeout(operation, Math.max(0, deadline - performance.now()), stop, {
-        signal,
-        onAbort: stop,
-      });
-    },
-  };
-}
-
-async function settleGatewayCopyCatalogWait<T>(
-  operation: Promise<T>,
-  catalogWait: GatewayCopyCatalogWait,
-): Promise<{ ok: true; value: T } | { ok: false; error: ErrorShape }> {
-  try {
-    return { ok: true, value: await operation };
-  } catch (error) {
-    if (error !== catalogWait.unavailable) {
-      throw error;
-    }
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, catalogWait.unavailable.message, {
-        retryable: true,
-      }),
-    };
-  }
-}
 
 async function resolveGatewayCopyModel(params: {
   agentId: string;
-  catalogWait: GatewayCopyCatalogWait;
+  catalogWait: ReturnType<typeof createSessionModelCatalogWait>;
   context: GatewayRequestContext;
   preferredModel?: string;
 }): Promise<{ preferredModel?: string; sourceModel?: string }> {
@@ -171,18 +117,19 @@ export async function copySessionCatalogToGateway(params: {
   }
   const gatewayCopy = await copyToGatewaySession(params.providerContinueParams);
   const cfg = params.context.getRuntimeConfig();
-  const catalogWait = createGatewayCopyCatalogWait([
+  const catalogWait = createSessionModelCatalogWait([
     params.signal,
     params.client?.connectionSignal,
+    params.client?.internal?.operatorRunAuthority?.signal,
+    params.client?.internal?.operatorAccessAuthority?.signal,
   ]);
-  const modelResult = await settleGatewayCopyCatalogWait(
+  const modelResult = await catalogWait.settle(
     resolveGatewayCopyModel({
       agentId: params.agentId,
       catalogWait,
       context: params.context,
       preferredModel: gatewayCopy.preferredModel,
     }),
-    catalogWait,
   );
   if (!modelResult.ok) {
     return modelResult;
@@ -251,7 +198,7 @@ export async function copySessionCatalogToGateway(params: {
       });
     },
   });
-  const createdResult = await settleGatewayCopyCatalogWait(createdPromise, catalogWait);
+  const createdResult = await catalogWait.settle(createdPromise);
   if (!createdResult.ok) {
     return createdResult;
   }

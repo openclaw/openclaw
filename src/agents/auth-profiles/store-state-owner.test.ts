@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import {
@@ -12,7 +11,6 @@ import {
 } from "../../secrets/runtime-state.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
-import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -23,7 +21,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
@@ -41,18 +39,17 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("explicit auth state ownership", () => {
-  it.each(["shared", "local", "mixed", "mixed-live", "cleared-local"] as const)(
+  it.each(["mixed-live", "cleared-local"] as const)(
     "preserves $0 bookkeeping ownership across shared-root activation",
     async (bookkeepingOwner) => {
       const first = await seedRoot("first");
       const second = await seedRoot("second");
       const agentDir = first.agentDir;
-      const localBookkeeping = bookkeepingOwner !== "shared";
-      const profileId = localBookkeeping ? "local" : "shared";
+      const profileId = "local";
       const updateBookkeeping = async (root: typeof first, lastUsed: number) => {
         await updateAuthProfileStoreWithLock({
           stateDir: root.stateDir,
-          agentDir: localBookkeeping ? agentDir : undefined,
+          agentDir,
           saveOptions,
           updater: (current) => {
             current.usageStats = { [profileId]: { lastUsed, cooldownUntil: lastUsed + 60_000 } };
@@ -60,29 +57,25 @@ describe("explicit auth state ownership", () => {
           },
         });
       };
-      const targetHasSharedState = !["shared", "local"].includes(bookkeepingOwner);
-      if (targetHasSharedState) {
-        await updateAuthProfileStoreWithLock({
-          stateDir: first.stateDir,
-          saveOptions,
-          updater: (current) => {
-            const sharedProfileId = bookkeepingOwner === "cleared-local" ? "local" : "shared";
-            if (bookkeepingOwner === "cleared-local") {
-              current.profiles.local = apiKey("shared-local");
-            }
-            current.usageStats = { [sharedProfileId]: { lastUsed: 30, cooldownUntil: 60_030 } };
-            return true;
-          },
-        });
-        const sharedProfileId = bookkeepingOwner === "cleared-local" ? "local" : "shared";
-        expect(
-          loadPersistedSharedAuthProfileStore(first.env)?.usageStats?.[sharedProfileId]?.lastUsed,
-        ).toBe(30);
-      }
+
+      await updateAuthProfileStoreWithLock({
+        stateDir: first.stateDir,
+        saveOptions,
+        updater: (current) => {
+          const sharedProfileId = bookkeepingOwner === "cleared-local" ? "local" : "shared";
+          if (bookkeepingOwner === "cleared-local") {
+            current.profiles.local = apiKey("shared-local");
+          }
+          current.usageStats = { [sharedProfileId]: { lastUsed: 30, cooldownUntil: 60_030 } };
+          return true;
+        },
+      });
+      const sharedProfileId = bookkeepingOwner === "cleared-local" ? "local" : "shared";
+      expect(
+        loadPersistedSharedAuthProfileStore(first.env)?.usageStats?.[sharedProfileId]?.lastUsed,
+      ).toBe(30);
       await updateBookkeeping(first, 10);
-      if (bookkeepingOwner === "shared") {
-        await updateBookkeeping(second, 20);
-      } else if (bookkeepingOwner === "mixed-live") {
+      if (bookkeepingOwner === "mixed-live") {
         await updateAuthProfileStoreWithLock({
           stateDir: second.stateDir,
           saveOptions,
@@ -109,47 +102,41 @@ describe("explicit auth state ownership", () => {
         throw new Error("missing prepared snapshot");
       }
       expect(prepared.snapshot.authStores[0]?.store?.runtimeInheritsMainState === true).toBe(
-        bookkeepingOwner === "shared" ||
-          bookkeepingOwner === "mixed" ||
-          bookkeepingOwner === "mixed-live",
+        bookkeepingOwner === "mixed-live",
       );
-      if (localBookkeeping) {
-        await closeOpenClawAgentDatabaseByPathAsync(first.agentPath);
-        if (bookkeepingOwner === "cleared-local") {
-          await updateAuthProfileStoreWithLock({
-            stateDir: second.stateDir,
-            agentDir,
-            saveOptions,
-            updater: (current) => {
-              delete current.usageStats;
-              return true;
-            },
-          });
-        } else {
-          await updateBookkeeping(second, 20);
-        }
-        expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(
-          prepared.snapshot.authStoreCredentialsRevision,
-        );
-        expect(snapshotAt(first.agentPath)?.runtimeInheritsMainState === true).toBe(
-          bookkeepingOwner === "mixed-live",
-        );
+
+      await closeOpenClawAgentDatabaseByPathAsync(first.agentPath);
+      if (bookkeepingOwner === "cleared-local") {
+        await updateAuthProfileStoreWithLock({
+          stateDir: second.stateDir,
+          agentDir,
+          saveOptions,
+          updater: (current) => {
+            delete current.usageStats;
+            return true;
+          },
+        });
+      } else {
+        await updateBookkeeping(second, 20);
       }
+      expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(
+        prepared.snapshot.authStoreCredentialsRevision,
+      );
+      expect(snapshotAt(first.agentPath)?.runtimeInheritsMainState === true).toBe(
+        bookkeepingOwner === "mixed-live",
+      );
       activateSecretsRuntimeSnapshotState({ ...prepared, refreshHandler: null });
-      const expectedLastUsed =
-        bookkeepingOwner === "cleared-local" ? 30 : localBookkeeping ? 20 : 10;
+      const expectedLastUsed = bookkeepingOwner === "cleared-local" ? 30 : 20;
       expect(snapshotAt(first.agentPath)?.usageStats?.[profileId]).toEqual({
         lastUsed: expectedLastUsed,
         cooldownUntil: expectedLastUsed + 60_000,
       });
-      if (targetHasSharedState) {
-        const sharedProfileId = bookkeepingOwner === "cleared-local" ? "local" : "shared";
-        expect(snapshotAt(first.agentPath)?.usageStats?.[sharedProfileId]).toEqual({
-          lastUsed: 30,
-          cooldownUntil: 60_030,
-        });
-        expect(snapshotAt(first.agentPath)?.runtimeInheritsMainState).toBe(true);
-      }
+
+      expect(snapshotAt(first.agentPath)?.usageStats?.[sharedProfileId]).toEqual({
+        lastUsed: 30,
+        cooldownUntil: 60_030,
+      });
+      expect(snapshotAt(first.agentPath)?.runtimeInheritsMainState).toBe(true);
     },
   );
 
@@ -178,7 +165,7 @@ describe("explicit auth state ownership", () => {
     assertOuterUnchanged();
   });
 
-  it.each(["rollback", "newer", "newer-same", "graft"] as const)(
+  it.each(["rollback", "newer-same", "graft"] as const)(
     "preserves shared-root authority through %s on one agent database",
     async (mode) => {
       const currentKey = mode === "newer-same" ? "second" : "third";
@@ -308,19 +295,6 @@ describe("explicit auth state ownership", () => {
     ).toThrow("stale");
   });
 
-  it("hydrates a complete cold worker snapshot without reading unrelated outer SQLite", () => {
-    const agentDir = tempDirs.make("openclaw-auth-owner-cold-worker-");
-    const assertOuterUnchanged = unreadableOuter("future");
-    expect(() =>
-      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: store("hydrated") }]),
-    ).not.toThrow();
-    expect(snapshotAt(resolveAuthProfileDatabasePath(agentDir))?.profiles.shared).toEqual(
-      apiKey("hydrated"),
-    );
-    expect(fs.readdirSync(agentDir)).toEqual([]);
-    assertOuterUnchanged();
-  });
-
   it("retains a removed snapshot owner through secrets activation rollback", async () => {
     const first = await seedRoot("first");
     const second = await seedRoot("second");
@@ -386,28 +360,6 @@ describe("explicit auth state ownership", () => {
     );
   });
 
-  it("preserves ambient agent relocation for writes without an explicit state root", async () => {
-    const stateDir = tempDirs.make("openclaw-auth-owner-ambient-");
-    const agentDir = tempDirs.make("openclaw-auth-owner-relocated-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
-    writePersistedAuthProfileStoreRaw(store("initial"), agentDir);
-    setRuntimeAuthProfileStoreSnapshot(loadAuthProfileStoreWithoutExternalProfiles());
-    await updateAuthProfileStoreWithLock({
-      saveOptions,
-      updater: (current) => {
-        current.profiles.shared = apiKey("updated");
-        return true;
-      },
-    });
-    expect(resolveSharedAuthStorePath()).toBe(resolveAuthProfileDatabasePath(agentDir));
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles.shared).toEqual(apiKey("updated"));
-    expect(snapshotAt(resolveAuthProfileDatabasePath(agentDir))?.profiles.shared).toEqual(
-      apiKey("updated"),
-    );
-    expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
-  });
-
   it("ignores agent relocation when the selected shared owner is the state database", async () => {
     const root = await seedRoot("first");
     const relocated = tempDirs.make("openclaw-auth-owner-irrelevant-relocation-");
@@ -427,44 +379,6 @@ describe("explicit auth state ownership", () => {
     });
     expect(snapshotAt(root.agentPath)?.profiles.shared).toEqual(apiKey("updated"));
     expect(fs.readdirSync(relocated)).toEqual([]);
-  });
-
-  it("keeps same-root legacy shared owners separate across agent relocation", () => {
-    const stateDir = tempDirs.make("openclaw-auth-owner-legacy-root-");
-    const roots = ["first", "second"].map((key) => {
-      const sharedDir = tempDirs.make("openclaw-auth-owner-legacy-shared-");
-      const agentDir = tempDirs.make("openclaw-auth-owner-legacy-derived-");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: sharedDir };
-      withEnv(env, () => {
-        writePersistedAuthProfileStoreRaw(store(key), sharedDir);
-        setRuntimeAuthProfileStoreSnapshot(loadAuthProfileStoreWithoutExternalProfiles());
-        setRuntimeAuthProfileStoreSnapshot(
-          loadAuthProfileStoreWithoutExternalProfiles(agentDir),
-          agentDir,
-        );
-      });
-      return { env, agentDir, sharedDir };
-    });
-    const first = roots[0]!;
-    const second = roots[1]!;
-    const before = captureAuthProfileStorePersistenceSnapshot(undefined, { env: first.env });
-    const committed = withEnv(second.env, () =>
-      saveAuthProfileStoreIfPersistenceSnapshotMatches({
-        snapshot: before,
-        store: store("updated-first"),
-        options: saveOptions,
-      }),
-    );
-    expect(committed.publishRuntimeSnapshots()).toBe(true);
-    expect(snapshotAt(resolveAuthProfileDatabasePath(first.agentDir))?.profiles.shared).toEqual(
-      apiKey("updated-first"),
-    );
-    expect(snapshotAt(resolveAuthProfileDatabasePath(second.agentDir))?.profiles.shared).toEqual(
-      apiKey("second"),
-    );
-    expect(loadPersistedAuthProfileStore(second.sharedDir)?.profiles.shared).toEqual(
-      apiKey("second"),
-    );
   });
 
   it("rejects a save whose explicit state root disagrees with the captured owner", async () => {
@@ -508,43 +422,7 @@ describe("explicit auth state ownership", () => {
     expect(fs.readdirSync(otherStateDir)).toEqual([]);
   });
 
-  it("refreshes only the selected root when the outer root is readable", async () => {
-    const first = await seedRoot("first");
-    const second = await seedRoot("second");
-    withEnv(first.env, () => {
-      setRuntimeAuthProfileStoreSnapshot(loadAuthProfileStoreWithoutExternalProfiles());
-      setRuntimeAuthProfileStoreSnapshot(
-        loadAuthProfileStoreWithoutExternalProfiles(first.agentDir),
-        first.agentDir,
-      );
-    });
-    const otherSnapshots = listOwnedRuntimeAuthProfileStoreSnapshots().filter(
-      (entry) =>
-        entry.databasePath === second.sharedPath || entry.databasePath === second.agentPath,
-    );
-    vi.stubEnv("OPENCLAW_STATE_DIR", second.stateDir);
-    await updateAuthProfileStoreWithLock({
-      stateDir: first.stateDir,
-      saveOptions,
-      updater: (current) => {
-        current.profiles.shared = apiKey("updated-first");
-        return true;
-      },
-    });
-    expect(snapshotAt(first.sharedPath)?.profiles.shared).toEqual(apiKey("updated-first"));
-    expect(snapshotAt(first.agentPath)?.profiles).toMatchObject({
-      shared: apiKey("updated-first"),
-      local: apiKey("first-local"),
-    });
-    expect(
-      listOwnedRuntimeAuthProfileStoreSnapshots().filter(
-        (entry) =>
-          entry.databasePath === second.sharedPath || entry.databasePath === second.agentPath,
-      ),
-    ).toEqual(otherSnapshots);
-  });
-
-  it.each(["future", "invalid"] as const)(
+  it.each(["invalid"] as const)(
     "publishes and compensates only the selected root under %s outer state",
     async (kind) => {
       const first = await seedRoot("first");

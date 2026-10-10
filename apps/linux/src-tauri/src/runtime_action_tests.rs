@@ -435,7 +435,7 @@ fn read_only_inspection_offers_current_runtime_without_installing() {
     let cli = fixture.cli();
     let before = inspect(&cli).unwrap();
     assert!(before.current_runtime().contains("/operator/node"));
-    assert!(!before.is_current(&fixture.runtime()));
+    assert!(!before.uses_runtime_path(&fixture.runtime().bun));
     fixture.write_state(&fixture.healthy());
     assert!(inspect(&cli)
         .unwrap()

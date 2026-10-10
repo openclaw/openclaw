@@ -297,11 +297,7 @@ export class SidebarPeopleRuntime {
       return;
     }
     this.lastOpenAt = performance.now();
-    card.addEventListener("pointerleave", () => {
-      this.portal.pointerOverCard = false;
-      this.portal.scheduleClose();
-    });
-    card.addEventListener("keydown", this.portal.handleCardKeyDown);
+    card.addEventListener("pointerleave", this.portal.handleCardPointerLeave);
     this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
   }
 

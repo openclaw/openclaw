@@ -32,7 +32,6 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "probe",
   "health",
   "discover",
-  "call",
   "install",
   "uninstall",
   "start",
@@ -108,8 +107,6 @@ export async function ensureConfigReady(params: {
     commandName !== "health" &&
     commandName !== "logs" &&
     commandName !== "sessions" &&
-    // Remote RPC clients validate without preparing state owned by the running Gateway.
-    !(commandName === "gateway" && subcommandName === "call") &&
     // A newer restart client may be controlling an older live Gateway. Validate
     // config without advancing the persistent schema owned by that process.
     !isRestartController &&
@@ -165,10 +162,7 @@ export async function ensureConfigReady(params: {
   const configSnapshotOptions =
     params.validateConfigOnly || commandName === "logs"
       ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : isManagedNodeRuntime ||
-          commandName === "status" ||
-          (commandName === "gateway" && subcommandName === "call") ||
-          isRestartController
+      : isManagedNodeRuntime || commandName === "status" || isRestartController
         ? ({ observe: false } as const)
         : undefined;
   const snapshot =

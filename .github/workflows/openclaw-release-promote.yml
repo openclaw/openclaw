@@ -303,9 +303,20 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.21.0"
+      - name: Create Linux release request token
+        id: linux_request_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-actions: write
+          permission-contents: read
+
       - name: Dispatch detached Linux release request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.linux_request_token.outputs.token }}
           RELEASE_REQUEST: ${{ needs.publish.outputs.request }}
         run: |
           set -euo pipefail

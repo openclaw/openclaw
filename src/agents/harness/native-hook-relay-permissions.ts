@@ -469,17 +469,9 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     hash.update("null");
     return;
   }
-  if (typeof value === "string") {
-    hash.update("string:");
-    hash.update(JSON.stringify(value));
-    return;
-  }
-  if (typeof value === "number") {
-    hash.update(`number:${String(value)}`);
-    return;
-  }
-  if (typeof value === "boolean") {
-    hash.update(`boolean:${String(value)}`);
+  if (typeof value !== "object") {
+    hash.update(`${typeof value}:`);
+    hash.update(typeof value === "string" ? JSON.stringify(value) : String(value));
     return;
   }
   if (Array.isArray(value)) {
@@ -493,7 +485,7 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
   }
   hash.update("{");
   const { keys, truncated } = readBoundedOwnKeys(value, MAX_PERMISSION_FINGERPRINT_SORT_KEYS);
-  for (const key of keys) {
+  const appendEntry = (key: string) => {
     hash.update(JSON.stringify(key));
     hash.update(":");
     const item = value[key];
@@ -501,6 +493,9 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       updateJsonHash(hash, item);
     }
     hash.update(",");
+  };
+  for (const key of keys) {
+    appendEntry(key);
   }
   if (truncated) {
     // Keep ordinary objects order-independent without sorting a broad native
@@ -511,13 +506,7 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       if (!Object.hasOwn(value, key) || sortedKeySet.has(key)) {
         continue;
       }
-      hash.update(JSON.stringify(key));
-      hash.update(":");
-      const item = value[key];
-      if (item !== undefined) {
-        updateJsonHash(hash, item);
-      }
-      hash.update(",");
+      appendEntry(key);
     }
   }
   hash.update("}");

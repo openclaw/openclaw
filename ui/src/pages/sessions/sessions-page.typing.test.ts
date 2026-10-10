@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
@@ -12,6 +12,7 @@ import {
   sessionChangedEvent,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
 
 function result(key: string): SessionsListResult {
@@ -211,6 +212,60 @@ describe("sessions page managed roster", () => {
 });
 
 describe("Sessions page typing ownership", () => {
+  it.each(["click", "Escape"])(
+    "retires selected rows and stale requests when clearing via %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const { page, requests, pending, input, edit, cleanup } = await mountTypingPage();
+      try {
+        const limit = page.querySelector<HTMLInputElement>(".session-filter-input--limit")!;
+        limit.value = "25";
+        limit.dispatchEvent(new Event("input", { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(0);
+        pending.at(-1)!.resolve(result("agent:main:limited"));
+        await vi.advanceTimersByTimeAsync(0);
+        await edit("older");
+        await vi.advanceTimersByTimeAsync(200);
+        const oldRequest = pending.at(-1)!;
+        page.selectedSessions = new Map([["agent:main:limited", { key: "agent:main:limited" }]]);
+        await page.updateComplete;
+        input().focus();
+        if (action === "click") {
+          const clear = page.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
+          expect(clear).not.toBeNull();
+          clear!.click();
+        } else {
+          input().dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+          );
+        }
+        await page.updateComplete;
+        expect(input().value).toBe("");
+        expect(document.activeElement).toBe(input());
+        expect(page.selectedSessions.size).toBe(0);
+        expect(page.result).toBeNull();
+        const count = requests.length;
+        await vi.advanceTimersByTimeAsync(200);
+        expect(requests).toHaveLength(count);
+        oldRequest.resolve(result("agent:main:retired"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(page.textContent).not.toContain("agent:main:retired");
+        expect(requests).toHaveLength(count + 1);
+        expect(requests.at(-1)).not.toHaveProperty("search");
+        pending.at(-1)!.resolve(result("agent:main:cleared"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(input().value).toBe("");
+        expect(page.querySelector<HTMLInputElement>(".session-filter-input--limit")?.value).toBe(
+          "25",
+        );
+        expect(requests.at(-1)).toMatchObject({ limit: 25 });
+        expect(page.result?.sessions[0]?.key).toBe("agent:main:cleared");
+      } finally {
+        await cleanup();
+      }
+    },
+  );
+
   it.each([
     { timing: "queued", resubscribe: true, hidden: false },
     { timing: "timer", resubscribe: false, hidden: false },
@@ -532,4 +587,129 @@ describe("Sessions page typing ownership", () => {
       await harness.cleanup();
     }
   });
+});
+
+describe("Sessions page details", () => {
+  beforeEach(() => vi.useFakeTimers());
+
+  it.each([
+    { entry: "interactive", closeBeforeReply: false },
+    { entry: "deep-link", closeBeforeReply: false },
+    { entry: "interactive", closeBeforeReply: true },
+  ])(
+    "loads full settings for the expanded compact row ($entry, closed: $closeBeforeReply)",
+    async ({ entry, closeBeforeReply }) => {
+      const row: GatewaySessionRow = {
+        key: "agent:main:details",
+        sessionId: "details-session",
+        kind: "direct",
+        updatedAt: 1,
+        rowMode: "compact",
+      };
+      const descriptor = createDeferred<{ session: GatewaySessionRow }>();
+      let description = descriptor.promise;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.list") {
+          return sessionsResult([row], 1);
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.groups.list") {
+          return { names: [], sectionOrder: [] };
+        }
+        if (method === "sessions.describe") {
+          return description;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const connection = createGateway(createTestGatewayClient(request));
+      const sessions = createTestSessionCapability(connection.gateway);
+      const page = await createRenderedPage(
+        createContext(connection.gateway, sessions),
+        sessionsResult([row], 1),
+        "active",
+        entry === "deep-link" ? row.key : null,
+      );
+      const listReads = request.mock.calls.filter(([method]) => method === "sessions.list").length;
+      if (entry === "interactive") {
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.describe"),
+        ).toHaveLength(0);
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
+        1,
+      );
+      expect(page.querySelector<HTMLSelectElement>(".session-details-panel select")?.disabled).toBe(
+        true,
+      );
+      const held = page.result;
+      if (closeBeforeReply) {
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+      }
+
+      const full: GatewaySessionRow = {
+        ...row,
+        rowMode: undefined,
+        agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "high", label: "high" },
+        ],
+        thinkingDefault: "high",
+      };
+      descriptor.resolve({ session: full });
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
+        listReads,
+      );
+      if (closeBeforeReply) {
+        expect(page.querySelector(".session-details-panel")).toBeNull();
+        expect(page.result).toBe(held);
+        return;
+      }
+      const thinking = page.querySelector<HTMLSelectElement>(".session-details-panel select")!;
+      expect(thinking.disabled).toBe(false);
+      expect([...thinking.options].map((option) => option.textContent?.trim())).toEqual([
+        "Inherited: High",
+        "Off",
+        "High",
+      ]);
+      expect(page.querySelector(".session-details-panel")?.textContent).toContain(
+        "claude-cli (fallback none)",
+      );
+      if (entry === "interactive") {
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.describe"),
+        ).toHaveLength(1);
+        description = Promise.resolve({
+          session: { ...full, updatedAt: 2, thinkingDefault: "off" },
+        });
+        connection.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { key: row.key, agentId: "main", reason: "patch" },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await page.updateComplete;
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.describe"),
+        ).toHaveLength(2);
+        expect(
+          page
+            .querySelector<HTMLSelectElement>(".session-details-panel select")
+            ?.options[0]?.textContent?.trim(),
+        ).toBe("Inherited: Off");
+      }
+    },
+  );
 });

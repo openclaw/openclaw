@@ -28,13 +28,9 @@ function renderSessionFilterSummary(host: SessionListHost) {
   const parts = [
     ...(ownerId ? [owner?.label ?? ownerId] : []),
     ...(host.sessionInvolvingMeFilterActive ? [t("sessionsView.involvingMe")] : []),
-    ...(host.sessionsStatusFilter === "snoozed"
-      ? [t("sessionsView.snoozed")]
-      : host.sessionsStatusFilter === "archived"
-        ? [t("sessionsView.archived")]
-        : host.sessionsStatusFilter === "all"
-          ? [t("sessionsView.all")]
-          : []),
+    ...(host.sessionsStatusFilter === "active"
+      ? []
+      : [t(`sessionsView.${host.sessionsStatusFilter}`)]),
   ];
   const summaryText = parts.join(" · ");
   const showAll = t("chat.sidebar.showAllSessions");
@@ -97,7 +93,7 @@ export function renderSidebarSessionFilter(
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {
-        host.sidebarMenus.toggleSessionSortMenu(event.currentTarget);
+        host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
       }
     }}
   >
@@ -107,14 +103,10 @@ export function renderSidebarSessionFilter(
 
 export function renderSessionListToolbar(host: SessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
-  const filtered =
-    host.sessionOwnerFilterActive ||
-    host.sessionInvolvingMeFilterActive ||
-    host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
-      ${filtered ? renderSessionFilterSummary(host) : nothing}
+      ${countSidebarSessionFilters(host) > 0 ? renderSessionFilterSummary(host) : nothing}
       ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
       ${renderNewSessionLink({
         basePath: host.basePath,

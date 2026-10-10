@@ -11,6 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   PluginStateStoreError,
   type PluginStateEntry,
@@ -29,7 +30,7 @@ export const PLUGIN_STATE_EXPIRY_BATCH_ROWS = 1_024;
 
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 
-type PluginStateRow = Selectable<PluginStateStoreDatabase["plugin_state_entries"]>;
+export type PluginStateRow = Selectable<PluginStateStoreDatabase["plugin_state_entries"]>;
 export type PluginStateReadRow = Omit<PluginStateRow, "plugin_id" | "namespace">;
 
 export type PluginStateDatabase = {
@@ -137,7 +138,7 @@ export function bindPluginStateEntry(params: {
 }
 
 const pluginStateUpsertQuery = createSqliteQueryCache((db) =>
-  prepareSqliteQuerySync<PluginStateRow>(db, (parameter) =>
+  prepareSqliteQuerySync<PluginStateRow, PluginStateRow>(db, (parameter) =>
     getPluginStateKysely(db)
       .insertInto("plugin_state_entries")
       .values({
@@ -154,16 +155,20 @@ const pluginStateUpsertQuery = createSqliteQueryCache((db) =>
           created_at: (eb) => eb.ref("excluded.created_at"),
           expires_at: (eb) => eb.ref("excluded.expires_at"),
         }),
-      ),
+      )
+      .returningAll(),
   ),
 );
 
 export function upsertPluginStateEntry(db: DatabaseSync, row: PluginStateRow): void {
-  pluginStateUpsertQuery(db)(row);
+  const result = pluginStateUpsertQuery(db)(row);
+  for (const current of result.rows) {
+    pluginStatePublication.stagePostimage(db, current);
+  }
 }
 
 const pluginStateInsertIfAbsentQuery = createSqliteQueryCache((db) =>
-  prepareSqliteQuerySync<PluginStateRow>(db, (parameter) =>
+  prepareSqliteQuerySync<PluginStateRow, PluginStateRow>(db, (parameter) =>
     getPluginStateKysely(db)
       .insertInto("plugin_state_entries")
       .orIgnore()
@@ -174,13 +179,17 @@ const pluginStateInsertIfAbsentQuery = createSqliteQueryCache((db) =>
         value_json: parameter((value) => value.value_json),
         created_at: parameter((value) => value.created_at),
         expires_at: parameter((value) => value.expires_at),
-      }),
+      })
+      .returningAll(),
   ),
 );
 
 export function insertPluginStateEntryIfAbsent(db: DatabaseSync, row: PluginStateRow): boolean {
   const result = pluginStateInsertIfAbsentQuery(db)(row);
-  return Number(result.numAffectedRows ?? 0) > 0;
+  for (const current of result.rows) {
+    pluginStatePublication.stagePostimage(db, current);
+  }
+  return result.rows.length > 0;
 }
 
 type PluginStateEntryLookup = { pluginId: string; namespace: string; key: string; now: number };
@@ -282,9 +291,11 @@ export function deletePluginStateEntry(
       .deleteFrom("plugin_state_entries")
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
-      .where("entry_key", "=", params.key),
+      .where("entry_key", "=", params.key)
+      .returning(["plugin_id", "namespace", "entry_key"]),
   );
-  return Number(result.numAffectedRows ?? 0);
+  pluginStatePublication.stageDeletions(db, result.rows);
+  return result.rows.length;
 }
 
 const pluginStateExpiryQuery = createSqliteQueryCache((db) =>
@@ -342,9 +353,11 @@ export function deleteExpiredPluginStateEntries(
             .limit(PLUGIN_STATE_EXPIRY_BATCH_ROWS)
             .$asTuple("plugin_id", "namespace", "entry_key"),
         ),
-      ),
+      )
+      .returning(["plugin_id", "namespace", "entry_key"]),
   );
-  return Number(result.numAffectedRows ?? 0);
+  pluginStatePublication.stageDeletions(db, result.rows);
+  return result.rows.length;
 }
 
 type PluginStateNamespaceCountParams = { pluginId: string; namespace: string; now: number };

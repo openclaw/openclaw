@@ -1506,6 +1506,167 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     }
   });
 
+  it("installs bundled dependencies whose shared node npm reloads under another override set", async () => {
+    // Mirrors amazon-bedrock-mantle: `core` is reachable through `parent`'s scoped `types`
+    // pin and through the globally pinned `format`. pnpm locks `core` in two peer contexts,
+    // so no `core>types` rule exists, and npm's first lock pass and its reload of that lock
+    // give the shared `core` node different override sets; `npm ci` then rejects the lock.
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-override-reload-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    const manifests: Record<string, Record<string, string>> = {
+      "leaf@1.0.0": {},
+      "types@1.0.0": { leaf: "1.0.0" },
+      "types@1.1.0": { leaf: "1.0.0" },
+      "core@1.0.0": { types: "^1.1.0" },
+      "core@1.1.0": { types: "^1.1.0" },
+      "env@1.0.0": { core: "1.0.0" },
+      "env@1.1.0": { core: "1.1.0" },
+      "creds@1.0.0": { env: "1.0.0" },
+      "creds@1.1.0": { env: "1.1.0" },
+      "format@1.0.0": { core: "1.0.0" },
+      "parent@1.0.0": { creds: "1.0.0", format: "1.0.0", types: ">=1.0.0" },
+      "modern@1.0.0": { creds: "1.1.0" },
+    };
+    // pnpm snapshots carry exact resolutions; registry manifests above carry npm ranges.
+    const snapshots: Record<string, Record<string, string>> = {
+      "leaf@1.0.0": {},
+      "types@1.0.0": { leaf: "1.0.0" },
+      "types@1.1.0": { leaf: "1.0.0" },
+      "core@1.0.0(types@1.0.0)": { types: "1.0.0" },
+      "core@1.0.0(types@1.1.0)": { types: "1.1.0" },
+      "core@1.1.0": { types: "1.1.0" },
+      "env@1.0.0": { core: "1.0.0(types@1.1.0)" },
+      "env@1.1.0": { core: "1.1.0" },
+      "creds@1.0.0": { env: "1.0.0" },
+      "creds@1.1.0": { env: "1.1.0" },
+      "format@1.0.0": { core: "1.0.0(types@1.1.0)" },
+      "parent@1.0.0": { creds: "1.0.0", format: "1.0.0", types: "1.0.0" },
+      "modern@1.0.0": { creds: "1.1.0" },
+    };
+    const tarballDir = join(repoDir, "tarballs");
+    mkdirSync(tarballDir, { recursive: true });
+    const registryVersions = Object.entries(manifests).map(([key, dependencies]) => {
+      const [name = "", version = ""] = key.split("@");
+      const manifest = { name, version, main: "index.js", dependencies };
+      const sourceDir = join(repoDir, "registry-src", key);
+      writeJsonFile(join(sourceDir, "package.json"), manifest);
+      writeFileText(join(sourceDir, "index.js"), "module.exports = true;\n");
+      const npm = resolveNpmRunner({
+        npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", tarballDir],
+      });
+      const pack = spawnSync(npm.command, npm.args, { ...npm, cwd: sourceDir, encoding: "utf8" });
+      expect(pack.status, pack.stderr).toBe(0);
+      const tarball = readFileSync(join(tarballDir, parseNpmPackResult(pack.stdout).filename));
+      const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
+      return { manifest, tarball, integrity };
+    });
+    writeJsonFile(join(packageDir, "package.json"), {
+      ...JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")),
+      dependencies: { parent: "1.0.0", modern: "1.0.0" },
+    });
+    writeJsonFile(join(repoDir, "pnpm-workspace.yaml"), {});
+    writeJsonFile(join(repoDir, "pnpm-lock.yaml"), {
+      lockfileVersion: "9.0",
+      importers: {
+        "extensions/diffs": {
+          dependencies: {
+            parent: { specifier: "1.0.0", version: "1.0.0" },
+            modern: { specifier: "1.0.0", version: "1.0.0" },
+          },
+        },
+      },
+      packages: Object.fromEntries(
+        registryVersions.map(({ manifest, integrity }) => [
+          `${manifest.name}@${manifest.version}`,
+          { resolution: { integrity } },
+        ]),
+      ),
+      snapshots: Object.fromEntries(
+        Object.entries(snapshots).map(([key, dependencies]) => [key, { dependencies }]),
+      ),
+    });
+    const server = createServer((request, response) => {
+      const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const versions = registryVersions.filter(
+        ({ manifest }) => request.url === `/${manifest.name}`,
+      );
+      const tarball = registryVersions.find(
+        ({ manifest }) => request.url === `/${manifest.name}-${manifest.version}.tgz`,
+      );
+      if (versions.length > 0) {
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            name: versions[0]?.manifest.name,
+            "dist-tags": { latest: versions.at(-1)?.manifest.version },
+            versions: Object.fromEntries(
+              versions.map(({ manifest, integrity }) => [
+                manifest.version,
+                {
+                  ...manifest,
+                  dist: {
+                    tarball: `${endpoint}/${manifest.name}-${manifest.version}.tgz`,
+                    integrity,
+                  },
+                },
+              ]),
+            ),
+          }),
+        );
+      } else if (tarball) {
+        response.end(tarball.tarball);
+      } else {
+        response.writeHead(404);
+        response.end();
+      }
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const packed = await execFileAsync(
+        process.execPath,
+        [
+          "--import",
+          tsxImport,
+          fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url)),
+          "--run",
+          packageDir,
+          "--",
+          "npm",
+          "pack",
+          "--json",
+          "--ignore-scripts",
+          "--pack-destination",
+          repoDir,
+        ],
+        {
+          cwd: repoDir,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            npm_config_registry: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+            npm_config_cache: join(repoDir, "npm-cache"),
+            OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: repoDir,
+            OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1",
+          },
+        },
+      );
+      const files = parseNpmPackResult(packed.stdout).files.map((entry) => entry.path);
+      // `parent` keeps its pinned types@1.0.0 while `core` gets the types@1.1.0 it requires.
+      expect(files).toContain("node_modules/parent/node_modules/types/package.json");
+      expect(files).toContain(
+        "node_modules/parent/node_modules/core/node_modules/types/package.json",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it.each(["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"])(
     "rejects a patched artifact when its packaging precondition fails (%s)",
     (scenario) => {

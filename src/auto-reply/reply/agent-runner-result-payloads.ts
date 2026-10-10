@@ -63,6 +63,7 @@ import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -271,18 +272,15 @@ export async function prepareReplyAgentPayloads(state: {
   const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const isGeneratedToolWarning = (payload: ReplyPayload) =>
     getReplyPayloadMetadata(payload)?.toolErrorWarning !== undefined;
+  const isPayloadLaneEnabled = (payload: ReplyPayload) =>
+    (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+    (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true);
   const applyFinalReplyToMode = (payload: ReplyPayload) => {
-    const isDisabledReasoningLane =
-      payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
-    const isDisabledCommentaryLane =
-      payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+    const laneEnabled = isPayloadLaneEnabled(payload);
     const isFilteredPayload =
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
     const shouldDeferToolWarning = waitingStatusPayload && isGeneratedToolWarning(payload);
-    return isDisabledReasoningLane ||
-      isDisabledCommentaryLane ||
-      isFilteredPayload ||
-      shouldDeferToolWarning
+    return !laneEnabled || isFilteredPayload || shouldDeferToolWarning
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
@@ -317,16 +315,6 @@ export async function prepareReplyAgentPayloads(state: {
     didLogHeartbeatStrip = result.didLogHeartbeatStrip;
     return result.replyPayloads;
   };
-  const returnPreparedFallbackPayload = async (
-    payload: ReplyPayload,
-  ): Promise<ReplyPayload | undefined> => {
-    const [preparedPayload] = await buildFinalPayloads([payload]);
-    if (!preparedPayload) {
-      return undefined;
-    }
-    await signalTypingIfNeeded([preparedPayload], typingSignals);
-    return returnWithQueuedFollowupDrain(preparedPayload);
-  };
   const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
@@ -345,7 +333,12 @@ export async function prepareReplyAgentPayloads(state: {
       ),
     );
     opts?.onAgentRunTerminalOutcome?.("failed");
-    return returnPreparedFallbackPayload(silentFallbackFailurePayload);
+    const [preparedPayload] = await buildFinalPayloads([silentFallbackFailurePayload]);
+    if (!preparedPayload) {
+      return undefined;
+    }
+    await signalTypingIfNeeded([preparedPayload], typingSignals);
+    return returnWithQueuedFollowupDrain(preparedPayload);
   };
   const finishEmptyReply = async () => {
     if (completion.outcome === "silent" || completion.outcome === "blocked") {
@@ -388,6 +381,12 @@ export async function prepareReplyAgentPayloads(state: {
         cfg,
       })
     : null;
+  const fallbackModels = {
+    selectedProvider,
+    selectedModel,
+    activeProvider: sessionModel.provider,
+    activeModel: sessionModel.model,
+  };
   if (fallbackNoticeChanged && fallbackTransition.fallbackTransitioned) {
     emitAgentEvent({
       runId,
@@ -395,10 +394,7 @@ export async function prepareReplyAgentPayloads(state: {
       stream: "lifecycle",
       data: {
         phase: "fallback",
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         reasonSummary: fallbackTransition.reasonSummary,
         attemptSummaries: fallbackTransition.attemptSummaries,
         attempts: fallbackAttempts,
@@ -406,10 +402,7 @@ export async function prepareReplyAgentPayloads(state: {
     });
     if (shouldDeliverFallbackNotice && !providerPolicyRetrySucceeded) {
       fallbackNoticeText = buildFallbackNotice({
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         attempts: fallbackAttempts,
         cfg,
       });
@@ -422,10 +415,7 @@ export async function prepareReplyAgentPayloads(state: {
       stream: "lifecycle",
       data: {
         phase: "fallback_cleared",
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         previousActiveModel: fallbackTransition.previousState.activeModel,
       },
     });
@@ -498,11 +488,7 @@ export async function prepareReplyAgentPayloads(state: {
 
   const payloadCandidates = (
     fallbackNoticePayloads.length > 0 ? [...fallbackNoticePayloads, ...payloadArray] : payloadArray
-  ).filter(
-    (payload) =>
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
-  );
+  ).filter(isPayloadLaneEnabled);
   let replyPayloads = await buildFinalPayloads(payloadCandidates);
   if (sourceReplyDelivery !== "delivered" && completion.outcome === "delivered") {
     await opts?.onObservedReplyDelivery?.();
@@ -568,8 +554,7 @@ export async function prepareReplyAgentPayloads(state: {
   const hasVisibleReplyPayload = replyPayloads.some(
     (payload) =>
       !isReplyPayloadStatusNotice(payload) &&
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
+      isPayloadLaneEnabled(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
@@ -604,10 +589,18 @@ export async function prepareReplyAgentPayloads(state: {
   const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
+  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
   if (statusPayload) {
     await attachWaitingStatusProgressContinuation({
       payload: statusPayload,
       acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
       operation: replyOperation,
     });
   }
@@ -697,6 +690,7 @@ export async function prepareReplyAgentPayloads(state: {
       fallbackEntry: activeSessionEntry,
       activeSessionStore,
       expectedGeneration: accounting.expectedSession,
+      reader: getReplyOperationSessionReader(replyOperation),
     });
   }
 

@@ -65,13 +65,12 @@ function isVitestWorker(
 }
 
 function requestExitAfterSystemCaCliCompletion(
-  runtime: RuntimeEnv = defaultRuntime,
+  runtime: RuntimeEnv,
   params: {
     env?: NodeJS.ProcessEnv;
     execArgv?: readonly string[];
     platform?: NodeJS.Platform;
-    exitCode?: number;
-  } = {},
+  },
 ): boolean {
   const env = params.env ?? process.env;
   const execArgv = params.execArgv ?? process.execArgv;
@@ -84,7 +83,7 @@ function requestExitAfterSystemCaCliCompletion(
   if (requestedExitCode !== undefined) {
     return false;
   }
-  requestedExitCode = params.exitCode ?? "process";
+  requestedExitCode = "process";
   return true;
 }
 
@@ -114,11 +113,7 @@ export async function runCliWithExitFinalization(params: {
     }
   } finally {
     await waitForCliSignalExit();
-    const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, {
-      env: params.env,
-      execArgv: params.execArgv,
-      platform: params.platform,
-    });
+    const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, params);
     if (
       params.finalize ||
       (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers))

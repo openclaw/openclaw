@@ -27,6 +27,26 @@ export function renderChatSendStatus(
     !action
       ? actions.onDiscardQueuedMessage
       : undefined;
+  const renderAction = (kind: "retry" | "discard", callback: typeof retry) =>
+    callback
+      ? html`<span class="chat-send-status__part">
+          <span aria-hidden="true">·</span>
+          <button
+            class="chat-send-status__action chat-send-status__${kind}"
+            type="button"
+            aria-label=${kind === "retry" ? (action?.label ?? t("chat.queue.retryQueuedMessage")) : nothing}
+            title=${kind === "discard" ? t("chat.queue.discardPendingMessage") : nothing}
+            @click=${(event: MouseEvent) => {
+              // Chromium may retarget click 2 to the next row after removal.
+              if (kind === "retry" || event.detail <= 1) {
+                callback(status.id);
+              }
+            }}
+          >
+            ${kind === "retry" ? (action?.label ?? t("chat.queue.retry")) : t("chat.queue.discard")}
+          </button>
+        </span>`
+      : nothing;
   return html`<span
     class="chat-send-status"
     title=${status.error ?? nothing}
@@ -46,44 +66,6 @@ export function renderChatSendStatus(
         )}</span
       >
     </span>
-    ${
-      retry
-        ? html`
-            <span class="chat-send-status__part">
-              <span aria-hidden="true">·</span>
-              <button
-                class="chat-send-status__action chat-send-status__retry"
-                type="button"
-                aria-label=${action?.label ?? t("chat.queue.retryQueuedMessage")}
-                @click=${() => retry(status.id)}
-              >
-                ${action?.label ?? t("chat.queue.retry")}
-              </button>
-            </span>
-          `
-        : nothing
-    }
-    ${
-      discard
-        ? html`
-            <span class="chat-send-status__part">
-              <span aria-hidden="true">·</span>
-              <button
-                class="chat-send-status__action chat-send-status__discard"
-                type="button"
-                title=${t("chat.queue.discardPendingMessage")}
-                @click=${(event: MouseEvent) => {
-                  // Chromium may retarget click 2 to the next row after removal.
-                  if (event.detail <= 1) {
-                    discard(status.id);
-                  }
-                }}
-              >
-                ${t("chat.queue.discard")}
-              </button>
-            </span>
-          `
-        : nothing
-    }
+    ${renderAction("retry", retry)} ${renderAction("discard", discard)}
   </span>`;
 }

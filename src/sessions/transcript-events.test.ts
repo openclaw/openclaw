@@ -109,6 +109,7 @@ describe("transcript events", () => {
       },
       lifecycleRevision: "  committed-revision  ",
       messageId: "msg-1",
+      assistantItemIds: ["native-item"],
     });
 
     expect(internalListener).toHaveBeenCalledWith({
@@ -123,6 +124,7 @@ describe("transcript events", () => {
       sessionKey: "agent:main:main",
       lifecycleRevision: "committed-revision",
       messageId: "msg-1",
+      assistantItemIds: ["native-item"],
     });
     expect(publicListener).toHaveBeenCalledWith({
       target: {

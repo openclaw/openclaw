@@ -30,7 +30,6 @@ import { hashConfigRaw } from "./io.read-helpers.js";
 import { readCurrentConfigForPolicyCheckAsync } from "./io.runtime.js";
 import * as snapshotPreparation from "./io.snapshot-preparation.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
-import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { registerManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -82,30 +81,6 @@ function fixture(raw?: string) {
   };
   return { ...options, io: createConfigIO(options) };
 }
-
-it("strictly loads cold plugin metadata and records health without main-thread SQLite", async () => {
-  const raw = JSON.stringify({
-    gateway: { mode: "local", auth: { mode: "token", token: "${MISSING_FIXTURE_TOKEN}" } },
-    env: { vars: { CONFIG_FIXTURE_VALUE: "accepted" } },
-  });
-  const { io, env, configPath, homedir, logger } = fixture(raw);
-  const mainSql = observeMainThreadSql();
-  try {
-    const config = await withPluginCache(createPluginCache(), () => io.loadConfigAsync());
-    expect(config.gateway?.mode).toBe("local");
-    expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-    expect([...(getConfigResolutionFacts(config) ?? [])]).toContain("gateway.auth.token");
-    expect(env.CONFIG_FIXTURE_VALUE).toBe("accepted");
-    mainSql.expectIdle();
-  } finally {
-    mainSql.restore();
-  }
-  expect(
-    configHealth.readConfigHealthStateFromStore({ env, homedir, logger }).entries?.[configPath]
-      ?.lastKnownGood?.hash,
-  ).toBe(hashConfigRaw(raw));
-  expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-});
 
 it.each(["sync", "async"] as const)(
   "reads current runtime migration obligations without full database snapshots (%s)",

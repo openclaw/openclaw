@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
@@ -33,7 +33,7 @@ vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));
 
-const { effects, factories, resetMocks } = await vi.hoisted(async () => {
+const { effects, factories, placementMocks, resetMocks } = await vi.hoisted(async () => {
   const { createModelSelectionMocks } =
     await import("./apply-session-model-selection.test-support.js");
   return createModelSelectionMocks();
@@ -516,24 +516,44 @@ describe("applySessionModelSelection", () => {
     expectNoSelectionEffects();
   });
 
-  it.each([
-    {
-      name: "locked",
-      concurrent: createEntry({ modelSelectionLocked: true }),
-      outcome: { status: "rejected", reason: "locked" },
-    },
-    {
-      name: "replaced",
-      concurrent: createEntry({ sessionId: "session-2" }),
-      outcome: { status: "conflict" },
-    },
-  ])(
-    "preserves an in-memory session $name during metadata preparation",
-    async ({ concurrent, outcome }) => {
+  it.each(
+    [
+      {
+        name: "locked",
+        concurrent: createEntry({ modelSelectionLocked: true }),
+        outcome: { status: "rejected", reason: "locked" },
+      },
+      {
+        name: "replaced",
+        concurrent: createEntry({ sessionId: "session-2" }),
+        outcome: { status: "conflict" },
+      },
+    ].flatMap(({ name, concurrent, outcome }) =>
+      ["metadata", "placement"].map((phase) => ({ name, concurrent, outcome, phase })),
+    ),
+  )(
+    "preserves an in-memory session $name during $phase preparation",
+    async ({ concurrent, outcome, phase }) => {
+      const entered = createDeferred();
       const metadata = createDeferred<ModelCatalogEntry[]>();
-      vi.mocked(loadProviderScopedThinkingCatalog).mockReturnValueOnce(metadata.promise);
-      const params = createParams();
+      if (phase === "metadata") {
+        vi.mocked(loadProviderScopedThinkingCatalog).mockImplementationOnce(() => {
+          entered.resolve();
+          return metadata.promise;
+        });
+      } else {
+        placementMocks.getMany.mockImplementationOnce(() => {
+          entered.resolve();
+          return new Map();
+        });
+      }
+      const params = createParams({ thinkingCatalog: [] });
       const pending = applySessionModelSelection(params);
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        `Model selection did not enter ${phase} preparation`,
+      );
       params.sessionStore[params.sessionKey] = concurrent;
       metadata.resolve([]);
 

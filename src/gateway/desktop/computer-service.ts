@@ -3,7 +3,10 @@ import type { ComputerInvokeParams } from "../../../packages/gateway-protocol/sr
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
+import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../../plugins/computer-use-contract.js";
 import type {
   PluginNodeHostCommandRegistration,
   PluginRegistry,
@@ -39,6 +42,7 @@ type HostRuntime = {
   provider: PluginNodeHostCommandRegistration;
   desktopTarget: "native" | "managed";
   prepared: Promise<ComputerUseCapabilityDescriptor>;
+  computerUse?: ComputerUseCapabilityDescriptor;
   process?: ComputerHostProcess;
   desktop?: DesktopComputerLease;
   closed: boolean;
@@ -63,6 +67,13 @@ export function createGatewayComputerService(options: {
   let current: HostRuntime | undefined;
   let stopped = false;
   let paused = false;
+  let declaration:
+    | {
+        command: PluginNodeHostCommandRegistration["command"];
+        config: OpenClawConfig;
+        computerUse: ComputerUseCapabilityDescriptor;
+      }
+    | undefined;
 
   const configuredProvider = () => {
     const config = options.getConfig();
@@ -158,13 +169,15 @@ export function createGatewayComputerService(options: {
     );
     runtime.idleTimer.unref?.();
   };
+  const assertAvailable = () => {
+    if (stopped || paused) {
+      throw new Error(
+        stopped ? "Gateway computer service is stopped" : "Gateway computer provider is reloading",
+      );
+    }
+  };
   const prepare = async (): Promise<HostRuntime | undefined> => {
-    if (stopped) {
-      throw new Error("Gateway computer service is stopped");
-    }
-    if (paused) {
-      throw new Error("Gateway computer provider is reloading");
-    }
+    assertAvailable();
     const provider = configuredProvider();
     if (current) {
       if (
@@ -212,6 +225,7 @@ export function createGatewayComputerService(options: {
       });
       const computerUse = await runtime.process.ready;
       assertRuntime(runtime);
+      runtime.computerUse = computerUse;
       return computerUse;
     })();
     void preparation.then(prepared.resolve, prepared.reject);
@@ -256,20 +270,44 @@ export function createGatewayComputerService(options: {
         },
       };
     },
-    async status(): Promise<GatewayComputerStatus> {
-      const configured = configuredProvider() !== undefined;
+    async status({ probe = true }: { probe?: boolean } = {}): Promise<GatewayComputerStatus> {
+      const result: GatewayComputerStatus = { configured: false, available: false };
       try {
-        const runtime = await prepare();
-        return runtime?.process
-          ? { configured: true, available: true, computerUse: await runtime.prepared }
-          : { configured: false, available: false };
+        assertAvailable();
+        const runtime = probe ? await prepare() : current;
+        if (runtime) {
+          assertRuntime(runtime);
+          if (runtime.computerUse) {
+            return { configured: true, available: true, computerUse: runtime.computerUse };
+          }
+        }
       } catch (error) {
-        return {
-          configured,
-          available: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
+        result.error = error instanceof Error ? error.message : String(error);
       }
+      const provider = configuredProvider();
+      result.configured = provider !== undefined;
+      try {
+        if (provider) {
+          const config = options.getConfig();
+          // Declarations describe the action surface, not a prepared native generation.
+          // Plugin reload/config publication replaces their owning command/config identity.
+          if (declaration?.command !== provider.command || declaration.config !== config) {
+            declaration = {
+              command: provider.command,
+              config,
+              computerUse: parseComputerUseCapabilityDescriptor(
+                provider.command.computerUse!({ config, env: process.env }),
+              ),
+            };
+          }
+          result.computerUse = declaration.computerUse;
+        } else {
+          declaration = undefined;
+        }
+      } catch (error) {
+        result.error ??= error instanceof Error ? error.message : String(error);
+      }
+      return result;
     },
     async invoke(request: ComputerInvokeRequest): Promise<unknown> {
       const isClose =

@@ -14,6 +14,7 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
+  openSessionMenuSubmenu,
   requireRecord,
   sessionsListResponse,
   submitInputDialog,
@@ -198,13 +199,17 @@ suite.define(() => {
         expect((await archive.getAttribute("disabled")) === null).toBe(canOrganize);
         expect(await fork.getAttribute("disabled")).not.toBeNull();
         for (const action of [
-          menu.getByRole("menuitem", { name: "Icon & color" }),
           menu.locator('wa-dropdown-item[value="toggle-unread"]'),
           menu.getByRole("menuitem", { name: "Move to group" }),
         ]) {
           expect(await action.getAttribute("disabled")).not.toBeNull();
           await action.click({ force: true });
         }
+        await openSessionMenuSubmenu(page, "Session settings");
+        const appearance = menu.getByRole("menuitem", { name: "Icon & color", exact: true });
+        expect(await appearance.getAttribute("disabled")).not.toBeNull();
+        await appearance.click({ force: true });
+        await page.keyboard.press("ArrowLeft");
         if (canOrganize) {
           await rename.click();
           await submitInputDialog(page, "Organized workspace");

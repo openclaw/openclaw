@@ -126,21 +126,6 @@ function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number
     : GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS;
 }
 
-function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig {
-  return {
-    ...target.config,
-    gateway: {
-      ...target.config.gateway,
-      mode: "remote",
-      remote: {
-        ...target.config.gateway?.remote,
-        url: target.gatewayUrl,
-        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
-      },
-    },
-  };
-}
-
 function toVerifiedActivationResult(params: {
   activation: NonNullable<WizardNextResult["modelActivation"]>;
   requestedModelRef?: string;
@@ -186,7 +171,18 @@ export async function runRemoteGatewayInferenceOnboarding(
 ): Promise<void> {
   const { callGatewayCli } = await import("../gateway/call.js");
   const { runGuidedOnboarding } = await import("./onboard-guided.js");
-  const boundConfig = bindGatewayConfig(target);
+  const boundConfig: OpenClawConfig = {
+    ...target.config,
+    gateway: {
+      ...target.config.gateway,
+      mode: "remote",
+      remote: {
+        ...target.config.gateway?.remote,
+        url: target.gatewayUrl,
+        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
+      },
+    },
+  };
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
 
@@ -224,11 +220,9 @@ export async function runRemoteGatewayInferenceOnboarding(
   ): Promise<ActivateSetupInferenceResult> => {
     let activationBootId: string | undefined;
     const sessionId = randomUUID();
-    let started = false;
-    let terminal = false;
     const prompter: WizardPrompter =
       params.prompter ?? (await import("../wizard/clack-prompter.js")).createClackPrompter();
-    let result: WizardNextResult;
+    let result: WizardNextResult | undefined;
     try {
       result = await request<WizardStartResult>({
         method: "openclaw.setup.activate.start",
@@ -247,11 +241,9 @@ export async function runRemoteGatewayInferenceOnboarding(
           activationBootId = hello.server.bootId?.trim();
         },
       });
-      started = true;
-      terminal = result.done;
       while (!result.done) {
         params.signal?.throwIfAborted();
-        const step = result.step;
+        const step: WizardNextResult["step"] = result.step;
         let answer: { stepId: string; value: unknown } | undefined;
         if (step) {
           if (result.error) {
@@ -268,10 +260,9 @@ export async function runRemoteGatewayInferenceOnboarding(
           signal: params.signal,
           timeoutMs: activationTimeoutMs(params.kind),
         });
-        terminal = result.done;
       }
     } catch (error) {
-      if (!terminal && (started || !isGatewayClientRequestError(error))) {
+      if (!result?.done && (result !== undefined || !isGatewayClientRequestError(error))) {
         try {
           await request({
             method: "wizard.cancel",
@@ -378,7 +369,7 @@ export async function runRemoteGatewayInferenceOnboarding(
       await prompter.intro("OpenClaw");
       // One-shot RPCs have different connections. Preserve a signed device
       // owner across chat replies even when loopback shared auth needs no device.
-      const deviceIdentity = resolveDeviceIdentityForGatewayCall();
+      const deviceIdentity = await resolveDeviceIdentityForGatewayCall();
       const sessionId = randomUUID();
       let reply = await request<SystemAgentChatResult>({
         method: "openclaw.chat",

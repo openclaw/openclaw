@@ -474,19 +474,13 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
         continue;
       }
       const outcome = current.outcome!;
-      if (!outcome.ok) {
-        const failure = formatGuestFailure(current, outcome.json);
-        return failed(
-          failure.code,
-          boundCodeModeError(failure.error, config.maxOutputBytes),
-          captureCodeModeOutput(output, config.maxOutputBytes),
-          failure.failurePhase,
-        );
-      }
-      if (current.rejections.size > 0) {
+      let failureJson = outcome.ok ? undefined : outcome.json;
+      if (outcome.ok && current.rejections.size > 0) {
         current.context["__openclawNodeRejection"] = current.rejections.values().next().value;
-        const encoded = evaluate(current, rejectionScript);
-        const failure = formatGuestFailure(current, String(encoded));
+        failureJson = String(evaluate(current, rejectionScript));
+      }
+      if (failureJson !== undefined) {
+        const failure = formatGuestFailure(current, failureJson);
         return failed(
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),

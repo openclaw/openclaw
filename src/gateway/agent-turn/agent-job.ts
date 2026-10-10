@@ -11,7 +11,6 @@ import {
   hasExecutionSettlement,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
-  type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
 import {
@@ -32,7 +31,10 @@ const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 
 type AgentJobSource = "agent" | "chat" | "lifecycle";
-type AgentRunObservation = AgentJobTerminalSnapshot & {
+type StoredAgentJobSnapshot = Omit<AgentJobTerminalSnapshot, "pendingError"> & {
+  pendingError?: never;
+};
+type AgentRunObservation = StoredAgentJobSnapshot & {
   session?: AgentJobSession;
   runId: string;
   source: AgentJobSource;
@@ -51,7 +53,7 @@ type AgentJobRecord = {
 type AgentJobWaiter = (lifecycleReset?: boolean) => void;
 type DedupeObservation =
   | { state: "active" }
-  | { state: "terminal"; snapshot: AgentJobTerminalSnapshot }
+  | { state: "terminal"; snapshot: StoredAgentJobSnapshot }
   | { state: "untracked" };
 
 type AgentJobState = {
@@ -171,24 +173,12 @@ function enforceAgentRunCacheMaxEntries() {
   }
 }
 
-function terminalOutcomeFromSnapshot(
-  snapshot: AgentJobTerminalSnapshot,
-): AgentRunTerminalOutcome | undefined {
-  if (snapshot.pendingError) {
-    return undefined;
-  }
-  return buildAgentRunTerminalOutcome(snapshot);
-}
-
 function shouldPreserveTerminalSnapshot(
-  existing: AgentJobTerminalSnapshot,
-  incoming: AgentJobTerminalSnapshot,
+  existing: StoredAgentJobSnapshot,
+  incoming: StoredAgentJobSnapshot,
 ): boolean {
-  const existingOutcome = terminalOutcomeFromSnapshot(existing);
-  const incomingOutcome = terminalOutcomeFromSnapshot(incoming);
-  if (!existingOutcome || !incomingOutcome) {
-    return false;
-  }
+  const existingOutcome = buildAgentRunTerminalOutcome(existing);
+  const incomingOutcome = buildAgentRunTerminalOutcome(incoming);
   return mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome;
 }
 
@@ -306,7 +296,7 @@ function schedulePendingAgentRunTerminal(
     if (
       pendingRuns === pendingAgentRunErrors &&
       !replacesPendingTimeout &&
-      terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
+      buildAgentRunTerminalOutcome(pending.snapshot).reason === "failed" &&
       agentRunWaiters.has(snapshot.runId)
     ) {
       pending.timer = undefined;
@@ -535,11 +525,11 @@ export function setGatewayDedupeEntry(params: {
   const incomingObservation = parseDedupeObservation(params.entry, executionTiming);
   const existingOutcome =
     existingObservation?.state === "terminal"
-      ? terminalOutcomeFromSnapshot(existingObservation.snapshot)
+      ? buildAgentRunTerminalOutcome(existingObservation.snapshot)
       : undefined;
   const incomingOutcome =
     incomingObservation.state === "terminal"
-      ? terminalOutcomeFromSnapshot(incomingObservation.snapshot)
+      ? buildAgentRunTerminalOutcome(incomingObservation.snapshot)
       : undefined;
   if (
     existingOutcome &&
@@ -723,7 +713,7 @@ export async function waitForAgentJob(params: {
         if (pendingError) {
           finish(
             !pending.timer ||
-              isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
+              isStickyAgentRunTerminalOutcome(buildAgentRunTerminalOutcome(pendingError))
               ? projectAgentJobObservation(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );
@@ -732,7 +722,7 @@ export async function waitForAgentJob(params: {
         const pendingTimeout = pendingAgentRunTimeouts.get(params.runId)?.snapshot;
         if (
           pendingTimeout &&
-          terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
+          buildAgentRunTerminalOutcome(pendingTimeout).reason === "hard_timeout"
         ) {
           finish(projectAgentJobObservation(pendingTimeout));
           return;

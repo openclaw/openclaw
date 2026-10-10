@@ -18,6 +18,9 @@ describe("database-worker test routing registry", () => {
     "src/auto-reply/reply/commands-config.owner.test.ts",
     "src/auto-reply/reply/commands-plugins.owner.test.ts",
     "src/auto-reply/reply/commands-session-restart.test.ts",
+    "src/auto-reply/reply/directive-handling.mixed-inline.test.ts",
+    "src/auto-reply/reply/directive-handling.model.test.ts",
+    "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
   ])("keeps %s on the forked database-worker route exactly once", (file) => {
     expect(databaseWorkerCoreTestFiles.filter((entry) => entry === file)).toEqual([file]);
     expect(isDatabaseWorkerCoreTestFile(file)).toBe(true);

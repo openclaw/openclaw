@@ -106,15 +106,12 @@ export function registerSubagentCollectorPublicationCases(params: {
     const received = vi.fn();
     const unsubscribe = onSessionLifecycleEvent(received);
     try {
-      const deferred: Array<() => void> = [];
       params.mockRestoredRows(new Map());
       await restoreSubagentRunsFromDisk({ runs: new Map() });
-      publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId], deferred);
+      const publish = publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId]);
       expect(received).not.toHaveBeenCalled();
       expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.groupId).toBe("batch");
-      for (const publish of deferred) {
-        publish();
-      }
+      publish();
       expect(received).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:ops:parent",
         agentId: "ops",

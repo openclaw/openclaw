@@ -1,8 +1,11 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   formatTransportErrorCopy,
   parseApiErrorInfo,
@@ -13,6 +16,7 @@ import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
   isServerErrorMessage,
   isSessionTranscriptValidationErrorMessage,
+  isUnsupportedReasoningEffortParameterError,
   resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
@@ -22,8 +26,6 @@ export const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
-const GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT =
-  "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.";
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
   /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 const PROVIDER_CACHE_CONTROL_LIMIT_RE =
@@ -77,8 +79,7 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
-  context_overflow:
-    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.",
+  context_overflow: CONTEXT_OVERFLOW_ERROR_MESSAGE,
   model_not_found:
     "This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
   session_expired:
@@ -144,10 +145,18 @@ export function renderFormatErrorCopy(raw: string): string {
     candidate = parsedMessage;
   }
   if (isSessionTranscriptValidationErrorMessage(candidate)) {
-    return GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT;
+    return "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.";
+  }
+  const embeddingModel = candidate.match(/^"([\w./:-]{1,200})" does not support chat$/u)?.[1];
+  if (embeddingModel) {
+    const model = escapeMarkdownText(redactSensitiveText(embeddingModel, { mode: "tools" }));
+    return `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
   }
   if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
     return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
+  }
+  if (isUnsupportedReasoningEffortParameterError(candidate)) {
+    return "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
   }
   if (candidate.length > 300 || !PROVIDER_OUTPUT_TOKEN_LIMIT_RE.test(candidate)) {
     if (!candidate || /^[{<]/u.test(candidate)) {
@@ -214,13 +223,44 @@ export function renderAssistantFormatFailureCopy(
   return undefined;
 }
 
+/** Render loading facts without trusting provider diagnostics or recovery instructions. */
+export function renderModelLoadFailureCopy(message: {
+  model?: unknown;
+  errorCode?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  if (
+    message.errorCode !== "model_load_failed" ||
+    typeof message.errorBody !== "string" ||
+    typeof message.model !== "string"
+  ) {
+    return undefined;
+  }
+  const contextLength = asPositiveSafeInteger(
+    safeParseJsonRecord(message.errorBody)?.requestedContextLength,
+  );
+  const model = redactSensitiveText(message.model, { mode: "tools" })
+    .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+    .trim();
+  if (!contextLength || !model) {
+    return undefined;
+  }
+  const label = escapeMarkdownText(truncateUtf16Safe(model, 200));
+  return `Could not load model "${label}" with ${contextLength} context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
+}
+
 /** Classify saved error facts without loading providers or publishing their raw diagnostics. */
 export function renderRecordedAssistantFailureCopy(message: {
+  model?: unknown;
   errorMessage?: unknown;
   errorBody?: unknown;
   errorCode?: unknown;
   errorType?: unknown;
 }): string | undefined {
+  const modelLoadCopy = renderModelLoadFailureCopy(message);
+  if (modelLoadCopy) {
+    return modelLoadCopy;
+  }
   const approvalMessage = resolveExecutionApprovalFailureMessage(
     typeof message.errorMessage === "string" ? message.errorMessage : undefined,
   );
@@ -256,7 +296,7 @@ export function renderRecordedAssistantFailureCopy(message: {
           isContextOverflowErrorFromTables(value)),
     )
   ) {
-    return "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   const formatCopy =
     !classification?.reason || classification.reason === "format"

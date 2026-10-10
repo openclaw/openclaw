@@ -46,9 +46,6 @@ export function mergeAgentRunTerminalOutcome(
       ? incoming
       : current;
   }
-  if (incoming.reason === "superseded" || incoming.reason === "cancelled") {
-    return incoming;
-  }
   if (incoming.reason === "hard_timeout") {
     return completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
       ? current

@@ -1,35 +1,26 @@
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
-  stat as fsStat,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
-import { Container, Text } from "@earendil-works/pi-tui";
 import { isMissingPathError } from "../../../infra/errors.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
-import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
-import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
+import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
-import type { ToolRenderResultOptions } from "../extensions/types.js";
 import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { planFileWriteDiff } from "./file-tool-planning.js";
-import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
-  invalidArgText,
-  normalizeDisplayText,
-  replaceTabs,
-  reuseTextComponent,
-  shortenPath,
-  str,
-  trimTrailingEmptyLines,
-} from "./render-utils.js";
+  type PersistedFileStat,
+  readPersistedFileStat,
+  verifyPersistedUtf8File,
+} from "./file-write-verification.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
@@ -54,21 +45,7 @@ const defaultWriteOperations: WriteOperations = {
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
   readFile: (path) => fsReadFile(path),
-  statFile: async (path) => {
-    try {
-      const stat = await fsStat(path);
-      return {
-        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      } as const;
-    } catch (error) {
-      if (isMissingPathError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  },
+  statFile: (path) => readPersistedFileStat(path, isMissingPathError),
 };
 
 export interface WriteToolOptions {
@@ -82,153 +59,6 @@ type WriteToolPrecheck = {
   beforeText?: string;
   readAttempted?: boolean;
 };
-
-type WriteHighlightCache = {
-  rawPath: string | null;
-  lang: string;
-  rawContent: string;
-  normalizedLines: string[];
-  highlightedLines: string[];
-};
-
-class WriteCallRenderComponent extends Text {
-  cache?: WriteHighlightCache;
-
-  constructor() {
-    super("", 0, 0);
-  }
-}
-
-const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
-
-function highlightSingleLine(line: string, lang: string): string {
-  const highlighted = highlightCode(line, lang);
-  return highlighted[0] ?? "";
-}
-
-function refreshWriteHighlightPrefix(cache: WriteHighlightCache): void {
-  const prefixCount = Math.min(WRITE_PARTIAL_FULL_HIGHLIGHT_LINES, cache.normalizedLines.length);
-  if (prefixCount === 0) {
-    return;
-  }
-  const prefixSource = cache.normalizedLines.slice(0, prefixCount).join("\n");
-  const prefixHighlighted = highlightCode(prefixSource, cache.lang);
-  for (let i = 0; i < prefixCount; i++) {
-    cache.highlightedLines[i] =
-      prefixHighlighted[i] ?? highlightSingleLine(cache.normalizedLines[i] ?? "", cache.lang);
-  }
-}
-
-function rebuildWriteHighlightCacheFull(
-  rawPath: string | null,
-  fileContent: string,
-): WriteHighlightCache | undefined {
-  const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-  if (!lang) {
-    return undefined;
-  }
-  const displayContent = normalizeDisplayText(fileContent);
-  const normalized = replaceTabs(displayContent);
-  return {
-    rawPath,
-    lang,
-    rawContent: fileContent,
-    normalizedLines: normalized.split("\n"),
-    highlightedLines: highlightCode(normalized, lang),
-  };
-}
-
-function updateWriteHighlightCacheIncremental(
-  cache: WriteHighlightCache | undefined,
-  rawPath: string | null,
-  fileContent: string,
-): WriteHighlightCache | undefined {
-  const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-  if (!lang) {
-    return undefined;
-  }
-  if (
-    !cache ||
-    cache.lang !== lang ||
-    cache.rawPath !== rawPath ||
-    !fileContent.startsWith(cache.rawContent)
-  ) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  if (fileContent.length === cache.rawContent.length) {
-    return cache;
-  }
-
-  const deltaRaw = fileContent.slice(cache.rawContent.length);
-  const deltaDisplay = normalizeDisplayText(deltaRaw);
-  const deltaNormalized = replaceTabs(deltaDisplay);
-  cache.rawContent = fileContent;
-  const segments = deltaNormalized.split("\n");
-  const lastIndex = cache.normalizedLines.length - 1;
-  cache.normalizedLines[lastIndex] = cache.normalizedLines[lastIndex]! + segments[0]!;
-  cache.highlightedLines[lastIndex] = highlightSingleLine(
-    cache.normalizedLines[lastIndex],
-    cache.lang,
-  );
-  for (const segment of segments.slice(1)) {
-    cache.normalizedLines.push(segment);
-    cache.highlightedLines.push(highlightSingleLine(segment, cache.lang));
-  }
-  refreshWriteHighlightPrefix(cache);
-  return cache;
-}
-
-function formatWriteCall(
-  args: { path?: string; file_path?: string; content?: string } | undefined,
-  options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
-  cache: WriteHighlightCache | undefined,
-): string {
-  const rawPath = str(args?.file_path ?? args?.path);
-  const fileContent = str(args?.content);
-  const path = rawPath !== null ? shortenPath(rawPath) : null;
-  const invalidArg = invalidArgText(theme);
-  let text = `${theme.fg("toolTitle", theme.bold("write"))} ${path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...")}`;
-
-  if (fileContent === null) {
-    text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
-  } else if (fileContent) {
-    const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-    const renderedLines = lang
-      ? (cache?.highlightedLines ??
-        highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
-      : normalizeDisplayText(fileContent).split("\n");
-    const lines = trimTrailingEmptyLines(renderedLines);
-    const totalLines = lines.length;
-    const maxLines = options.expanded ? lines.length : 10;
-    const displayLines = lines.slice(0, maxLines);
-    const remaining = lines.length - maxLines;
-    text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
-    if (remaining > 0) {
-      text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
-    }
-  }
-
-  return text;
-}
-
-function formatWriteResult(
-  result: AgentToolResult<WriteToolDetails>,
-  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
-  isError: boolean,
-): string | undefined {
-  if (!isError) {
-    return undefined;
-  }
-  const output = result.content
-    .filter((c) => c.type === "text")
-    .map((c) => c.text || "")
-    .join("\n");
-  if (!output) {
-    return undefined;
-  }
-  return `\n${theme.fg("error", output)}`;
-}
 
 function isMissingFileError(error: unknown): boolean {
   if (isMissingPathError(error)) {
@@ -372,8 +202,6 @@ export function createWriteTool(
     name: "write",
     label: "write",
     description: "Write/overwrite file; creates parent directories.",
-    promptSnippet: "Create/overwrite files",
-    promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
     async execute(_toolCallId, { path, content }, signal, _onUpdate, _ctx) {
@@ -383,9 +211,7 @@ export function createWriteTool(
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
       return withFileMutationQueueKeyResolution(queueKey, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
+        assertFileToolNotAborted(signal);
         assertCurrent();
         // No-op: file already has identical content. Not terminal — the model
         // may still be mid-task and needs a continuation, not an ended turn.
@@ -403,20 +229,14 @@ export function createWriteTool(
           signal,
         });
         assertCurrent();
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
+        assertFileToolNotAborted(signal);
         try {
           assertCurrent();
           await ops.mkdir(dir);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
           await ops.writeFile(absolutePath, content);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
           if (!(await verifyPersistedUtf8File(absolutePath, content, ops))) {
             throw new Error(
@@ -441,35 +261,6 @@ export function createWriteTool(
           throw error;
         }
       });
-    },
-    renderCall(args, theme, context) {
-      const renderArgs = args as
-        | { path?: string; file_path?: string; content?: string }
-        | undefined;
-      const rawPath = str(renderArgs?.file_path ?? renderArgs?.path);
-      const fileContent = str(renderArgs?.content);
-      const component =
-        (context.lastComponent as WriteCallRenderComponent | undefined) ??
-        new WriteCallRenderComponent();
-      if (fileContent !== null) {
-        component.cache = context.argsComplete
-          ? rebuildWriteHighlightCacheFull(rawPath, fileContent)
-          : updateWriteHighlightCacheIncremental(component.cache, rawPath, fileContent);
-      } else {
-        component.cache = undefined;
-      }
-      component.setText(formatWriteCall(renderArgs, context, theme, component.cache));
-      return component;
-    },
-    renderResult(result, optionsLocal, theme, context) {
-      void optionsLocal;
-      const output = formatWriteResult(result, theme, context.isError);
-      if (!output) {
-        const component = (context.lastComponent as Container | undefined) ?? new Container();
-        component.clear();
-        return component;
-      }
-      return reuseTextComponent(context.lastComponent, output);
     },
   });
 }

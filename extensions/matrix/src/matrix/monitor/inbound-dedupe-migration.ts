@@ -299,7 +299,6 @@ export async function importNewestInboundDedupeMarkers(params: {
   io: MatrixInboundDedupeMigrationIo;
   markers: Iterable<LegacyInboundDedupeMarker>;
   now?: number;
-  stateMaxEntries?: number;
 }): Promise<{ imported: number; total: number }> {
   const { createPersistentDedupeImportEntry } =
     await import("openclaw/plugin-sdk/persistent-dedupe");
@@ -312,7 +311,7 @@ export async function importNewestInboundDedupeMarkers(params: {
     resolveMatrixInboundDedupeStateNamespace,
   } = await import("./inbound-dedupe.js");
   const now = params.now ?? Date.now();
-  const stateMaxEntries = params.stateMaxEntries ?? MATRIX_INBOUND_DEDUPE_STATE_MAX_ENTRIES;
+  const stateMaxEntries = MATRIX_INBOUND_DEDUPE_STATE_MAX_ENTRIES;
   const newestByKey = new Map<string, LegacyInboundDedupeMarker & { key: string }>();
   for (const marker of params.markers) {
     const key = buildMatrixInboundDedupeEventKey(marker);

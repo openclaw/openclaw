@@ -35,6 +35,16 @@ scenario:
         qaImpact: P1
         action: execute native search/command behavior separately from OpenClaw dynamic tool parity
         reason: Codex has no dedicated grep tool; its native command contract owns grep-style searches without requiring OpenClaw dynamic exec exposure.
+      happyPrompt: >-
+        tool search qa check target=exec. Use the shell command tool exec to run
+        `grep -n 'before edit' runtime-tool-fixture-edit.txt` exactly once.
+        If discovery is needed, discover exec and then execute the shell
+        command; discovery alone does not complete this task. Report the match.
+      failurePrompt: >-
+        tool search qa failure target=exec. Use the shell command tool exec to
+        run `grep -n 'missing fixture text' runtime-tool-fixture-edit.txt`
+        exactly once. Report the nonzero no-match exit status; do not change
+        the pattern, use another tool, or retry.
       promptSnippet: "target=exec"
       failurePromptSnippet: "failure target=exec"
 

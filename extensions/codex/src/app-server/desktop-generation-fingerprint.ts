@@ -87,11 +87,7 @@ export function resolveMacOSDesktopGenerationWatchPaths(
     "darwin",
   ),
 ): string[] {
-  const watched = new Set<string>(["/Applications"]);
-  for (const candidate of candidates) {
-    watched.add(candidate.appBundlePath);
-  }
-  return [...watched];
+  return [...new Set(["/Applications", ...candidates.map((candidate) => candidate.appBundlePath)])];
 }
 
 export async function readCodexDesktopArtifactTreeFingerprint(root: string): Promise<string> {
@@ -99,11 +95,7 @@ export async function readCodexDesktopArtifactTreeFingerprint(root: string): Pro
   try {
     rootStat = await fs.lstat(root, { bigint: true });
   } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return "missing";
-    }
-    throw error;
+    return missingFingerprint(error);
   }
   if (!rootStat.isDirectory()) {
     return statFingerprint(root);
@@ -163,11 +155,7 @@ async function statFingerprint(filePath: string): Promise<string> {
     const content = target.isFile() ? await readFileFingerprint(filePath, target, true) : "";
     return `${type}:${own}:${link}:${realPath}:${statTuple(target)}:${content}`;
   } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return "missing";
-    }
-    throw error;
+    return missingFingerprint(error);
   }
 }
 
@@ -202,4 +190,12 @@ function sameStat(left: BigIntStats, right: BigIntStats): boolean {
 
 function statTuple(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function missingFingerprint(error: unknown): "missing" {
+  const code = extractErrorCode(error);
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return "missing";
+  }
+  throw error;
 }

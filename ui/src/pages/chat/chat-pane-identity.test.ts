@@ -33,6 +33,46 @@ import {
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
+  it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
+    installTranscriptDomMocks();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(createInitializationContext());
+    state.sessionKey = "agent:main:dashboard:first-paint";
+    const container = document.createElement("div");
+    const draw = () => {
+      pane.render();
+      render(renderChat(pane.chatProps!), container);
+    };
+    try {
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
+      draw();
+      expect(container.textContent).toContain("Cached mission briefing.");
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+
+      state.chatMessages = [];
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+
+      state.currentSessionId = null;
+      state.connected = true;
+      state.chatLoading = true;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+
+      state.chatLoading = false;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+    } finally {
+      render(html``, container);
+      resetTranscriptTestDom();
+    }
+  });
+
   it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({

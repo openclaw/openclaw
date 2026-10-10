@@ -53,6 +53,13 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     await params.interaction.update(payload);
   };
+  const replyWithText = async (
+    method: "reply" | "followUp",
+    { text, ephemeral = true }: { text: string; ephemeral?: boolean },
+  ) => {
+    responded = true;
+    await params.interaction[method]({ content: text, ephemeral });
+  };
   const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
       if (responded) {
@@ -62,24 +69,10 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       acknowledged = true;
       responded = true;
     },
-    reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
-      responded = true;
-      const payload = { content: text, ephemeral };
-      // Deferred component replies edit the public source; follow-ups preserve reply visibility.
-      await (acknowledged
-        ? params.interaction.followUp(payload)
-        : params.interaction.reply(payload));
-    },
-    followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
-      responded = true;
-      await params.interaction.followUp({
-        content: text,
-        ephemeral,
-      });
-    },
-    editMessage: async (
-      input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
-    ) => {
+    // Deferred component replies edit the public source; follow-ups preserve reply visibility.
+    reply: (payload) => replyWithText(acknowledged ? "followUp" : "reply", payload),
+    followUp: (payload) => replyWithText("followUp", payload),
+    editMessage: async (input) => {
       const { text, components } = input;
       responded = true;
       await updateOriginalMessage({
@@ -165,10 +158,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     respond,
     onMatched: acknowledgeSilently,
   });
-  if (!dispatched.matched) {
-    return "unmatched";
-  }
-  if (dispatched.handled) {
+  if (dispatched.matched && dispatched.handled) {
     if (!responded) {
       await acknowledgeSilently();
     }

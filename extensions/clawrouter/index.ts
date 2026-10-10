@@ -1,4 +1,3 @@
-// ClawRouter plugin entrypoint registers credential-scoped model routing and quota reporting.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,

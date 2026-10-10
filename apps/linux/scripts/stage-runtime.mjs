@@ -21,12 +21,11 @@ export function runtimeTarget(triple) {
   ) {
     return null; // Bundled Gateway runtimes belong to the Linux companion only.
   }
-  const platform = triple.endsWith("-unknown-linux-gnu") ? "linux" : null;
   const arch = triple.startsWith("aarch64-") ? "arm64" : triple.startsWith("x86_64-") ? "x64" : null;
-  if (!platform || !arch) {
+  if (!triple.endsWith("-unknown-linux-gnu") || !arch) {
     throw new Error(`Unsupported embedded runtime target: ${triple}`);
   }
-  return { platform, arch };
+  return { platform: "linux", arch };
 }
 
 export function stageRuntime(triple) {

@@ -46,16 +46,9 @@ function executeWithConfiguredShell(command: string): {
       env: getBashShellEnv(shellConfig.shell),
     });
 
-    if (result.error) {
-      const error = result.error as NodeJS.ErrnoException;
-      if (error.code === "ENOENT") {
-        return { executed: false, value: undefined };
-      }
-      return { executed: true, value: undefined };
-    }
-
-    if (result.status !== 0) {
-      return { executed: true, value: undefined };
+    if (result.error || result.status !== 0) {
+      const error = result.error as NodeJS.ErrnoException | undefined;
+      return { executed: error?.code !== "ENOENT", value: undefined };
     }
 
     const value = (result.stdout ?? "").trim();

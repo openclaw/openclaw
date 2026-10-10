@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type * as VerifierImplementation from "./openclaw-database-verify.impl.js";
 import {
@@ -34,6 +35,110 @@ describe("database verifier shutdown", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it("cancels proof publication waiting for startup admission before releasing its writer", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/preparation-shutdown" };
+    const pathname = path.resolve("/synthetic/preparing.sqlite");
+    const preparation = createDeferredCore();
+    const entered = createDeferredCore();
+    const release = vi.fn(async () => {});
+    let publication: Promise<boolean> | undefined;
+    mocks.runDatabaseVerifyWorker.mockResolvedValue([{ path: pathname, ok: true }]);
+    mocks.applyOpenClawDatabaseVerificationResults.mockImplementation(async (options) => {
+      await options.onVerified?.(pathname);
+    });
+    requestOpenClawAgentDatabaseIntegrityCheck({
+      check: "full",
+      env,
+      path: pathname,
+      release,
+      proof: {
+        identity: "synthetic",
+        complete: (_assertCurrent, signal) => {
+          publication = racePromiseWithAbortSignal(preparation.promise, signal).then(() => true);
+          entered.resolve();
+          return publication;
+        },
+      },
+    });
+    const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await entered.promise;
+      expect(release).not.toHaveBeenCalled();
+      await verifier.stop();
+      await expect(publication).rejects.toMatchObject({ name: "AbortError" });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      preparation.resolve();
+      await verifier.stop();
+    }
+  });
+
+  it("releases superseded checks and joins final queued cleanup", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/queued-cleanup" };
+    const cleanup = createDeferredCore();
+    const previous = vi.fn(async () => {});
+    const current = vi.fn(() => cleanup.promise);
+    const ignored = vi.fn(async () => {});
+    const request = { check: "full" as const, env, path: "/synthetic/retained.sqlite" };
+    requestOpenClawAgentDatabaseIntegrityCheck({ ...request, release: previous });
+    requestOpenClawAgentDatabaseIntegrityCheck({ ...request, release: current });
+    requestOpenClawAgentDatabaseIntegrityCheck({ ...request, check: "quick", release: ignored });
+    expect(previous).toHaveBeenCalledOnce();
+    expect(ignored).toHaveBeenCalledOnce();
+    expect(current).not.toHaveBeenCalled();
+    const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+    let stopped = false;
+    const stopping = verifier.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(current).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    cleanup.resolve();
+    await stopping;
+    expect(mocks.runDatabaseVerifyWorker).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure", "stop", "handoff"] as const)(
+    "holds active verification custody through %s settlement",
+    async (outcome) => {
+      const env = { OPENCLAW_STATE_DIR: `/synthetic/active-cleanup-${outcome}` };
+      const results = createDeferredCore<OpenClawDatabaseVerifyResult[]>();
+      const cleanup = createDeferredCore();
+      const release = vi.fn(() => cleanup.promise);
+      mocks.runDatabaseVerifyWorker.mockReturnValueOnce(results.promise).mockResolvedValue([]);
+      requestOpenClawAgentDatabaseIntegrityCheck({
+        check: "full",
+        env,
+        path: "/synthetic/retained.sqlite",
+        release,
+      });
+      const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+      const peer =
+        outcome === "handoff" ? startOpenClawDatabaseIntegrityVerifier({ env }) : undefined;
+      await vi.advanceTimersByTimeAsync(0);
+      const stopping = outcome === "stop" || peer ? verifier.stop() : undefined;
+      expect(release).not.toHaveBeenCalled();
+      if (outcome === "failure") {
+        results.reject(new Error("synthetic scan failed"));
+      } else {
+        results.resolve([]);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(release).toHaveBeenCalledOnce();
+      if (peer) {
+        expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
+      }
+      cleanup.resolve();
+      await stopping;
+      await verifier.stop();
+      await peer?.stop();
+      expect(release).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("waits for listening startup, then checks both queued and late cached opens", async () => {
     const env = { OPENCLAW_STATE_DIR: "/synthetic/queued" };

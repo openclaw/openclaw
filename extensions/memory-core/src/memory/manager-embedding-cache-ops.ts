@@ -74,14 +74,14 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
   ) {
-    const chunks = candidates.map((candidate) => candidate.chunk);
+    const hashes = candidates.map((candidate) => candidate.chunk.hash);
     const cached = this.cache.enabled
       ? await generation.database.read(
           {
             type: "cache.read",
             input: {
               providerIdentities: generation.identities,
-              hashes: chunks.map((chunk) => chunk.hash),
+              hashes,
             },
           },
           () => this.assertEmbeddingCacheGenerationCurrent(generation),
@@ -96,11 +96,11 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         generation.embeddingDimensions ??= embedding.length;
       }
     }
-    const result = collectMemoryCachedEmbeddings({ chunks, cached });
+    const result = collectMemoryCachedEmbeddings({ hashes, cached });
     return {
       ...result,
-      missingCandidates: result.missing.map((item) =>
-        expectDefined(candidates[item.index], "missing memory embedding candidate"),
+      missingCandidates: result.missing.map((index) =>
+        expectDefined(candidates[index], "missing memory embedding candidate"),
       ),
     };
   }
@@ -137,8 +137,8 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       for (let i = 0; i < batchChunks.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
-        if (item) {
-          embeddings[item.index] = embedding;
+        if (item !== undefined) {
+          embeddings[item] = embedding;
         }
       }
       cursor += batchChunks.length;
@@ -151,12 +151,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     mutation: MemoryEmbeddingCacheMutation,
   ): Promise<void> {
     await this.withPublishedDatabase(async () => {
-      if (
-        this.syncProviderGeneration !== generation ||
-        generation.cacheWritesInvalidated ||
-        generation.database.closed ||
-        this.database !== generation.database
-      ) {
+      if (!this.canWriteEmbeddingCache(generation) || this.database !== generation.database) {
         return;
       }
       const assertCurrent = () => {
@@ -175,14 +170,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         assertCurrent,
         () => {
           assertCurrent();
-          if (
-            this.syncProviderGeneration !== generation ||
-            generation.cacheWritesInvalidated ||
-            generation.database.closed
-          ) {
-            return undefined;
-          }
-          return generation.databaseRevision;
+          return this.canWriteEmbeddingCache(generation) ? generation.databaseRevision : undefined;
         },
         () => {
           generation.cacheWritesInvalidated = true;
@@ -191,18 +179,20 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     });
   }
 
+  private canWriteEmbeddingCache(generation: MemorySemanticProviderGeneration): boolean {
+    return (
+      this.syncProviderGeneration === generation &&
+      !generation.cacheWritesInvalidated &&
+      !generation.database.closed
+    );
+  }
+
   protected async persistGeneratedEmbeddings(
     candidates: MemoryEmbeddingCacheCandidate[],
     embeddings: number[][],
     generation: MemorySemanticProviderGeneration,
   ): Promise<void> {
-    if (
-      !this.cache.enabled ||
-      candidates.length === 0 ||
-      this.syncProviderGeneration !== generation ||
-      generation.cacheWritesInvalidated ||
-      generation.database.closed
-    ) {
+    if (candidates.length === 0 || !this.canWriteEmbeddingCache(generation)) {
       return;
     }
     // Validate the whole provider response before retaining any vectors. Index
@@ -213,6 +203,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       !embeddings.every((embedding) => isValidMemoryEmbedding(embedding, dimensions))
     ) {
       if (
+        this.cache.enabled &&
         generation.embeddingDimensions !== undefined &&
         embeddings.some(
           (embedding) =>
@@ -234,17 +225,32 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           }
         });
       }
+      const position = embeddings.findIndex(
+        (embedding) => !isValidMemoryEmbedding(embedding, dimensions),
+      );
+      const embedding = embeddings[position];
+      let condition = `expected ${candidates.length} vectors, got ${embeddings.length}`;
+      if (embeddings.length === candidates.length) {
+        if (!Array.isArray(embedding)) {
+          condition = `missing embedding array at position ${position}`;
+        } else if (embedding.length === 0) {
+          condition = `empty embedding at position ${position}`;
+        } else if (embedding.length !== dimensions) {
+          condition = `expected ${dimensions} dimensions, got ${embedding.length} at position ${position}`;
+        } else {
+          condition = `non-finite or non-numeric coordinate at position ${position}`;
+        }
+      }
       throw new Error(
-        "memory embeddings: malformed vector response (count, dimensions, or coordinates)",
+        `${generation.provider.id} embeddings failed (model: ${generation.provider.model}, batch size: ${candidates.length}): ${condition}`,
       );
     }
     generation.embeddingDimensions = dimensions;
+    if (!this.cache.enabled) {
+      return;
+    }
     await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-      if (
-        this.syncProviderGeneration !== generation ||
-        generation.cacheWritesInvalidated ||
-        generation.database.closed
-      ) {
+      if (!this.canWriteEmbeddingCache(generation)) {
         return;
       }
       const entryValidity = new Map<MemoryIndexEntry, boolean>();

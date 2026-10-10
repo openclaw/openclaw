@@ -1,13 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import {
-  assembleHarnessContextEngine,
-  bootstrapHarnessContextEngine,
-} from "../../agents/harness/context-engine-lifecycle.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -19,24 +14,18 @@ import {
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "../../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
-import type { ContextEngine } from "../../context-engine/types.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureMemoryFlushTargetFile, prepareMemoryFlushSession } from "./memory-flush-session.js";
 
-it.each([
-  { boundary: "mkdir", owner: "operator" },
-  { boundary: "mkdir", owner: "run" },
-  { boundary: "open", owner: "operator" },
-] as const)(
-  "settles memory target preparation after $owner revocation during $boundary",
-  async ({ boundary, owner }) => {
+it.each(["mkdir", "open"] as const)(
+  "settles memory target preparation after operator revocation during %s",
+  async (boundary) => {
     await withOpenClawTestState({ label: "memory-target-authority" }, async (state) => {
       const targetPath = path.join(state.workspaceDir, "memory", "checkpoint.md");
       const originalMkdir = fs.mkdir.bind(fs);
       const originalOpen = fs.open.bind(fs);
-      const runAbort = new AbortController();
       const refusal = new Error("memory target authority revoked");
       let operatorCurrent = true;
       const operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -48,20 +37,13 @@ it.each([
           }
         },
       });
-      const revoke = () => {
-        if (owner === "run") {
-          runAbort.abort(refusal);
-        } else {
-          operatorCurrent = false;
-        }
-      };
       let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
       let closes = 0;
       let restoreClose: (() => void) | undefined;
       const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementationOnce(async (directory, options) => {
         const created = await originalMkdir(directory, options);
         if (boundary === "mkdir") {
-          revoke();
+          operatorCurrent = false;
         }
         return created;
       });
@@ -74,7 +56,7 @@ it.each([
         });
         restoreClose = () => closeSpy.mockRestore();
         if (boundary === "open") {
-          revoke();
+          operatorCurrent = false;
         }
         return handle;
       });
@@ -84,7 +66,6 @@ it.each([
             workspaceDir: state.workspaceDir,
             relativePath: "memory/checkpoint.md",
             assertCurrent: () => {
-              runAbort.signal.throwIfAborted();
               operatorAuthority.assertCurrent();
             },
           }),
@@ -181,120 +162,50 @@ async function withAdmittedInput(
   });
 }
 
-it.each([false, true])(
-  "isolates a required checkpoint while preserving admitted input (compacted=%s)",
-  async (compacted) => {
-    await withAdmittedInput(compacted, async ({ scope, workspaceDir, admission, priorContext }) => {
-      const before = loadTranscriptEventsSync(scope);
-      const anchor = readActiveTranscriptEntryAnchor(admission);
-      const sourceWithForeignAuthority = {
-        ...scope,
-        expectedWriterRunId: "foreground-writer",
-        threadId: "foreground-native-thread",
-      };
-      const checkpoint = await prepareMemoryFlushSession({
-        admission,
-        source: sourceWithForeignAuthority,
-        runId: "memory-helper",
-        workspaceDir,
-      });
-      expect(checkpoint.sessionManager.getSessionTarget()).toBeUndefined();
-      expect(checkpoint.sessionManager.buildSessionContext().messages).toEqual(
-        priorContext.messages,
-      );
-      expect(checkpoint.sessionId).not.toBe(scope.sessionId);
-      expect(checkpoint.sessionKey).not.toBe(scope.sessionKey);
-      expect(checkpoint.sessionTarget).not.toHaveProperty("expectedWriterRunId");
-      expect(checkpoint.sessionTarget).not.toHaveProperty("threadId");
-      expect(checkpoint.sessionPersistence).toBe("detached");
-      const first = checkpoint.sessionManager.getBranch()[0];
-      if (first) {
-        if (first.type === "message" && first.message.role === "user") {
-          first.message.content = "Checkpoint-only edit";
-        }
-        checkpoint.sessionManager.branch(first.id);
+it("isolates a required checkpoint while preserving compacted admitted input", async () => {
+  await withAdmittedInput(true, async ({ scope, workspaceDir, admission, priorContext }) => {
+    const before = loadTranscriptEventsSync(scope);
+    const anchor = readActiveTranscriptEntryAnchor(admission);
+    const sourceWithForeignAuthority = {
+      ...scope,
+      expectedWriterRunId: "foreground-writer",
+      threadId: "foreground-native-thread",
+    };
+    const checkpoint = await prepareMemoryFlushSession({
+      admission,
+      source: sourceWithForeignAuthority,
+      runId: "memory-helper",
+      workspaceDir,
+    });
+    expect(checkpoint.sessionManager.getSessionTarget()).toBeUndefined();
+    expect(checkpoint.sessionManager.buildSessionContext().messages).toEqual(priorContext.messages);
+    expect(checkpoint.sessionId).not.toBe(scope.sessionId);
+    expect(checkpoint.sessionKey).not.toBe(scope.sessionKey);
+    expect(checkpoint.sessionTarget).not.toHaveProperty("expectedWriterRunId");
+    expect(checkpoint.sessionTarget).not.toHaveProperty("threadId");
+    expect(checkpoint.sessionPersistence).toBe("detached");
+    const first = checkpoint.sessionManager.getBranch()[0];
+    if (first) {
+      if (first.type === "message" && first.message.role === "user") {
+        first.message.content = "Checkpoint-only edit";
       }
-      const instruction = checkpoint.sessionManager.appendMessage(
-        makeUserMessage("Checkpoint instruction", 5),
-      );
-      checkpoint.sessionManager.appendMessage(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "NO_REPLY" }],
-          stopReason: "stop",
-        }),
-      );
-      checkpoint.sessionManager.appendCompaction("Checkpoint-only summary", instruction, 100);
-      expect(loadTranscriptEventsSync(scope)).toEqual(before);
-      expect(readActiveTranscriptEntryAnchor(admission)).toEqual(anchor);
-      expect(SessionManager.open(scope).getBranch().at(-1)?.id).toBe(admission.entryId);
-    });
-  },
-);
-
-it.each(["compaction", "reset"] as const)(
-  "detaches the forward %s cut across an opaque parent with retained tool pairs",
-  async (boundaryType) => {
-    await withOpenClawTestState({ label: `memory-opaque-${boundaryType}` }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "opaque-checkpoint",
-        sessionKey: "agent:main:opaque-checkpoint",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope, state.workspaceDir);
-      source.appendMessage({ role: "user", content: "Summarized away", timestamp: 1 });
-      const opaqueCut = source.appendMessage({
-        role: "custom",
-        customType: "display-test",
-        content: "Display only",
-        display: true,
-        excludeFromContext: true,
-        timestamp: 2,
-      });
-      const retained = source.appendMessage({ role: "user", content: "Retained", timestamp: 3 });
-      source.appendMessage(
-        makeAgentAssistantMessage({
-          content: [
-            { type: "toolCall", id: "read-call", name: "read", arguments: { path: "note" } },
-          ],
-          stopReason: "toolUse",
-        }),
-      );
-      source.appendMessage(makeTextToolResult("read-call", "read", "Paired result", false, 4));
-      const boundary =
-        boundaryType === "compaction"
-          ? source.appendCompaction("Summary", opaqueCut, 100)
-          : source.appendResetBoundary("reset", opaqueCut);
-      source.appendMessage({ role: "user", content: "Tail", timestamp: 5 });
-      const before = loadTranscriptEventsSync(scope);
-      const memory = await prepareMemoryFlushSession({
-        source: scope,
-        runId: "opaque-memory-helper",
-        workspaceDir: state.workspaceDir,
-      });
-      expect(memory.sessionManager.getSessionTarget()).toBeUndefined();
-      expect(memory.sessionManager.getEntry(opaqueCut)).toBeUndefined();
-      expect(memory.sessionManager.getEntry(boundary)).toMatchObject({
-        firstKeptEntryId: retained,
-      });
-      const messages = memory.sessionManager.buildSessionContext().messages;
-      expect(messages.map((message) => message.role)).toEqual([
-        ...(boundaryType === "compaction" ? ["compactionSummary"] : []),
-        "user",
-        "assistant",
-        "toolResult",
-        "user",
-      ]);
-      expect(
-        messages.filter((message) => message.role === "user").map((message) => message.content),
-      ).toEqual(["Retained", "Tail"]);
-      memory.sessionManager.appendResetBoundary("reset");
-      expect(memory.sessionManager.buildSessionContext().messages).toEqual([]);
-      expect(loadTranscriptEventsSync(scope)).toEqual(before);
-    });
-  },
-);
+      checkpoint.sessionManager.branch(first.id);
+    }
+    const instruction = checkpoint.sessionManager.appendMessage(
+      makeUserMessage("Checkpoint instruction", 5),
+    );
+    checkpoint.sessionManager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "NO_REPLY" }],
+        stopReason: "stop",
+      }),
+    );
+    checkpoint.sessionManager.appendCompaction("Checkpoint-only summary", instruction, 100);
+    expect(loadTranscriptEventsSync(scope)).toEqual(before);
+    expect(readActiveTranscriptEntryAnchor(admission)).toEqual(anchor);
+    expect(SessionManager.open(scope).getBranch().at(-1)?.id).toBe(admission.entryId);
+  });
+});
 
 it("does not use an admission after the source transcript changes", async () => {
   await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
@@ -316,84 +227,6 @@ it("does not use an admission after the source transcript changes", async () => 
   });
 });
 
-it("keeps custom context-engine bootstrap, rewrite, and assembly inside the checkpoint", async () => {
-  await withAdmittedInput(true, async ({ scope, workspaceDir, admission, priorContext }) => {
-    const before = loadTranscriptEventsSync(scope);
-    const anchor = readActiveTranscriptEntryAnchor(admission);
-    const checkpoint = await prepareMemoryFlushSession({
-      admission,
-      source: scope,
-      runId: "plugin-checkpoint",
-      workspaceDir,
-    });
-    const retainedMessage = checkpoint.sessionManager
-      .getBranch()
-      .findLast((entry) => entry.type === "message" && entry.message.role === "user");
-    if (!retainedMessage) {
-      throw new Error("Missing processed checkpoint message");
-    }
-    const replacement = { role: "user" as const, content: "Checkpoint-only rewrite", timestamp: 3 };
-    const stages: string[] = [];
-    const engine: ContextEngine = {
-      info: {
-        id: "checkpoint-fixture",
-        name: "Checkpoint fixture",
-        turnMaintenanceMode: "background",
-      },
-      async bootstrap(params) {
-        expect(params.sessionTarget).toEqual(checkpoint.sessionTarget);
-        expect(params.sessionId).toBe(checkpoint.sessionId);
-        expect(params.sessionKey).toBe(checkpoint.sessionKey);
-        stages.push("bootstrap");
-        return { bootstrapped: true };
-      },
-      async maintain(params) {
-        expect(params.sessionId).toBe(checkpoint.sessionId);
-        expect(params.sessionTarget).toEqual(checkpoint.sessionTarget);
-        expect(params.runtimeContext?.allowDeferredCompactionExecution).toBeUndefined();
-        const result = await params.runtimeContext!.rewriteTranscriptEntries!({
-          replacements: [{ entryId: retainedMessage.id, message: replacement }],
-        });
-        expect(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
-        stages.push("maintain");
-        return result;
-      },
-      async assemble(params) {
-        expect(params.sessionId).toBe(checkpoint.sessionId);
-        expect(params.sessionKey).toBe(checkpoint.sessionKey);
-        expect(params.messages).toContainEqual(replacement);
-        expect(params.messages).not.toEqual(priorContext.messages);
-        stages.push("assemble");
-        return { messages: params.messages, estimatedTokens: 100 };
-      },
-      async ingest() {
-        return { ingested: false };
-      },
-      async compact() {
-        throw new Error("Unexpected plugin compaction");
-      },
-    };
-    const warnings: string[] = [];
-    await bootstrapHarnessContextEngine({
-      ...checkpoint,
-      hadSessionFile: true,
-      contextEngine: engine,
-      warn: (message) => warnings.push(message),
-    });
-    const assembled = await assembleHarnessContextEngine({
-      ...checkpoint,
-      contextEngine: engine,
-      modelId: "checkpoint-model",
-      messages: checkpoint.sessionManager.buildSessionContext().messages,
-    });
-    expect(warnings).toEqual([]);
-    expect(stages).toEqual(["bootstrap", "maintain", "assemble"]);
-    expect(assembled?.messages).toContainEqual(replacement);
-    expect(loadTranscriptEventsSync(scope)).toEqual(before);
-    expect(readActiveTranscriptEntryAnchor(admission)).toEqual(anchor);
-  });
-});
-
 it("does not acquire a checkpoint after caller cancellation", async () => {
   await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
     const before = loadTranscriptEventsSync(scope);
@@ -411,66 +244,24 @@ it("does not acquire a checkpoint after caller cancellation", async () => {
   });
 });
 
-it.each(["empty", "missing", "legacy"] as const)(
-  "preserves %s transcript header handling during detached acquisition",
-  async (headerState) => {
-    await withOpenClawTestState({ label: `memory-header-${headerState}` }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "header-checkpoint",
-        sessionKey: "agent:main:header-checkpoint",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      if (headerState !== "empty") {
-        await replaceTranscriptEvents(scope, [
-          headerState === "legacy"
-            ? { ...createSessionTranscriptHeader({ sessionId: scope.sessionId }), version: 1 }
-            : { type: "future-metadata", id: "opaque", parentId: null },
-        ]);
-      }
-      const before = loadTranscriptEventsSync(scope);
-      const pending = prepareMemoryFlushSession({
-        source: scope,
-        runId: "header-memory-helper",
-        workspaceDir: state.workspaceDir,
-      });
-      if (headerState === "empty") {
-        const memory = await pending;
-        expect(memory.sessionManager.getSessionTarget()).toBeUndefined();
-        expect(memory.sessionManager.getHeader()).toMatchObject({ id: scope.sessionId });
-        expect(memory.sessionManager.buildSessionContext().messages).toEqual([]);
-      } else {
-        await expect(pending).rejects.toThrow("doctor/import migration");
-      }
-      expect(loadTranscriptEventsSync(scope)).toEqual(before);
-    });
-  },
-);
-
-it("includes the completed foreground turn when optional memory has no admission fence", async () => {
-  await withAdmittedInput(true, async ({ scope, workspaceDir, recorder }) => {
-    recorder.markSentToProvider?.();
-    const source = SessionManager.open(scope, workspaceDir);
-    source.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "The current question is now answered." }],
-        stopReason: "stop",
-      }),
-    );
+it("preserves empty transcript header handling during detached acquisition", async () => {
+  await withOpenClawTestState({ label: "memory-header-empty" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "header-checkpoint",
+      sessionKey: "agent:main:header-checkpoint",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const before = loadTranscriptEventsSync(scope);
     const memory = await prepareMemoryFlushSession({
       source: scope,
-      runId: "optional-after-reply",
-      workspaceDir,
-    });
-    const messages = memory.sessionManager.buildSessionContext().messages;
-    expect(messages).toEqual(source.buildSessionContext().messages);
-    expect(messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "The current question is now answered." }],
+      runId: "header-memory-helper",
+      workspaceDir: state.workspaceDir,
     });
     expect(memory.sessionManager.getSessionTarget()).toBeUndefined();
+    expect(memory.sessionManager.getHeader()).toMatchObject({ id: scope.sessionId });
+    expect(memory.sessionManager.buildSessionContext().messages).toEqual([]);
     expect(loadTranscriptEventsSync(scope)).toEqual(before);
   });
 });

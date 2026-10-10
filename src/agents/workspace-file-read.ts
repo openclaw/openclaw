@@ -146,14 +146,9 @@ export async function readWorkspaceFileWithGuards(params: {
         const sourceIdentity = [opened.path, opened.stat, identity] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-        if (cached !== undefined) {
-          syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached, sourceIdentity };
-        }
-
         try {
-          const content = await readWorkspaceBootstrapFile(opened.fd);
-          if (params.useCache !== false) {
+          const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
+          if (cached === undefined && params.useCache !== false) {
             writeWorkspaceFileCache({ filePath: opened.path, content, identity });
           }
           return { ok: true, content, sourceIdentity };

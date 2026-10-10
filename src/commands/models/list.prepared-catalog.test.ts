@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { modelsListCommand } from "./list.list-command.js";
 import { printModelTable } from "./list.table.js";
@@ -57,7 +58,9 @@ const cfg: OpenClawConfig = {
     },
   },
 };
-function createOwner(): PreparedModelRuntimeSnapshot {
+function createOwner(
+  overrides: Partial<PreparedModelRuntimeSnapshot> = {},
+): PreparedModelRuntimeSnapshot {
   const entry = {
     ...model,
     api: "anthropic-messages" as const,
@@ -83,6 +86,7 @@ function createOwner(): PreparedModelRuntimeSnapshot {
     createStores() {
       throw new Error("Inventory must not start model execution");
     },
+    ...overrides,
   };
   bindPreparedModelRuntimeAuth(owner, {
     store: createAuthProfileStoreFixture({
@@ -241,12 +245,15 @@ describe("models list published transport", () => {
         providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
       });
       await list({ refresh, json: true });
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Model discovery authentication was rejected for signed-out. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+      );
       if (refreshFailed) {
-        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect(runtime.error).toHaveBeenCalledWith(
           "Model discovery could not refresh all providers. Showing the available published model list.",
         );
       } else {
-        expect(runtime.error).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledTimes(1);
       }
       expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
       expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
@@ -256,6 +263,82 @@ describe("models list published transport", () => {
       );
     },
   );
+
+  it.each([
+    { json: true, plain: false },
+    { json: false, plain: true },
+    { json: false, plain: false },
+  ])("reports rejected discovery with empty provider inventory for %j", async (output) => {
+    const outcome = { provider: "xai", profileId: "xai:work", status: "auth-rejected" };
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [],
+      providerOutcomes: [outcome],
+    });
+
+    await list({ provider: "xai", agent: "work", ...output });
+
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    if (output.json) {
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        { count: 0, models: [], providerOutcomes: [outcome] },
+        2,
+      );
+    } else if (output.plain) {
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.writeStdout).not.toHaveBeenCalled();
+    } else {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith("No models found.");
+    }
+  });
+
+  it("preserves model rows and public discovery facts without printing raw provider errors", async () => {
+    const providerOutcomes = [
+      { provider: "catalog-provider", status: "ready" },
+      { provider: "xai", status: "auth-rejected", profileId: "xai:work" },
+      { provider: "offline", status: "unavailable" },
+    ];
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      providerOutcomes: providerOutcomes.map((outcome) => ({
+        ...outcome,
+        message: "synthetic-private-provider-response",
+      })),
+    });
+
+    await list({ json: true });
+
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        count: 1,
+        models: [expect.objectContaining({ key: "catalog-provider/Reader", available: true })],
+        providerOutcomes,
+      }),
+      2,
+    );
+    expect(runtime.error).toHaveBeenCalledTimes(2);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Model discovery is unavailable for offline. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.",
+    );
+    expect(JSON.stringify(runtime.error.mock.calls)).not.toContain("synthetic-private");
+  });
+
+  it("sanitizes provider and profile labels in discovery warnings", async () => {
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      providerOutcomes: [
+        { provider: "\u001b[31mxai\u001b[0m", profileId: "work\nnext", status: "auth-rejected" },
+      ],
+    });
+
+    await list({ plain: true });
+
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile work\\nnext). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
+  });
 
   it.each([false, true])(
     "uses the standalone owner only with no selected Gateway, refresh=%s",
@@ -287,6 +370,106 @@ describe("models list published transport", () => {
       );
     },
   );
+
+  // Only the standalone owner registers Claude CLI; the command process has no active registry.
+  async function listStandaloneClaudeOwner(
+    claudeCfg: OpenClawConfig,
+    entries: Array<{ provider: string; id: string; name: string }>,
+  ) {
+    vi.mocked(configLoader.loadModelsConfigWithSource).mockResolvedValue({
+      sourceConfig: claudeCfg,
+      resolvedConfig: claudeCfg,
+      diagnostics: [],
+    });
+    vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.cliBackends.push({
+      pluginId: "anthropic",
+      source: "test",
+      backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
+    });
+    vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(
+      async (_params, read) =>
+        await read(
+          createOwner({
+            config: claudeCfg,
+            observationConfig: claudeCfg,
+            authModes: { "claude-cli": "oauth" },
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
+              plugins: [
+                {
+                  id: "anthropic",
+                  providers: ["anthropic"],
+                  cliBackends: ["claude-cli"],
+                  syntheticAuthRefs: ["claude-cli"],
+                  providerAuthAliases: { "claude-cli": "anthropic" },
+                },
+              ],
+            }),
+            modelCatalog: markPreparedModelCatalogFull({ entries, routeVariants: entries }),
+            pluginRegistry,
+          }),
+        ),
+    );
+    await list({ agent: "work", json: true });
+  }
+
+  it("projects a standalone owner's Claude CLI route with that owner's plugin registry", async () => {
+    await listStandaloneClaudeOwner(
+      {
+        agents: {
+          ownership: "explicit",
+          entries: { work: { workspace: "/tmp/published-cli-work" } },
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      },
+      [
+        { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+        { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
+      ],
+    );
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        models: [expect.objectContaining({ key: "anthropic/claude-opus-5", available: true })],
+      }),
+      2,
+    );
+  });
+
+  it("lists a Claude CLI model once when only the standalone owner's registry has Claude CLI", async () => {
+    await listStandaloneClaudeOwner(
+      {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            work: {
+              workspace: "/tmp/published-cli-work",
+              models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+            },
+          },
+          defaults: { model: { primary: "anthropic/claude-opus-5" } },
+        },
+      },
+      [
+        { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+        { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
+        { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+      ],
+    );
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        models: [
+          expect.objectContaining({ key: "anthropic/claude-opus-5" }),
+          expect.objectContaining({ key: "claude-cli/claude-haiku-4-5" }),
+        ],
+      }),
+      2,
+    );
+  });
+
   it("rejects conflicting output flags before reading any catalog", async () => {
     await expect(list({ json: true, plain: true })).rejects.toThrow(
       "Choose either --json or --plain",

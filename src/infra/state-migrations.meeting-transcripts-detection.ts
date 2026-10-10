@@ -8,7 +8,7 @@ import {
   TRANSCRIPT_EXPORT_FILE_NAMES,
   TRANSCRIPT_PATH_SEGMENT_MAX_BYTES,
 } from "../transcripts/store-artifacts.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import {
   hasMatchingRecordedTranscriptArtifact,
   isRecordedCanonicalTranscriptExport,
@@ -253,7 +253,7 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
   if (!fs.existsSync(databasePath)) {
     return empty();
   }
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  const database = openSqliteReadOnlyDatabase(databasePath, { readOnly: true });
   try {
     return read({ db: database });
   } finally {

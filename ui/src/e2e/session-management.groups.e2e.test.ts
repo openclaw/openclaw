@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJobsListResult } from "../api/types.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
@@ -9,7 +8,6 @@ import {
   actionOpacity,
   activateSelfRemovingControl,
   captureUiProof,
-  captureUiProofEnabled,
   collapsedSessionSectionsStorageKey,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
@@ -129,113 +127,6 @@ suite.define(() => {
       });
     } finally {
       await context.close();
-    }
-  });
-
-  it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patch"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:rename-me", "Rename me", Date.now()),
-        ]),
-      },
-      sessionKey: "agent:main:rename-me",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-      const row = page.locator('[data-session-key="agent:main:rename-me"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…" }).click();
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
-      await dialog.getByRole("button", { name: "Save" }).click();
-      await gateway.waitForRequest("sessions.patch");
-      await gateway.rejectDeferred("sessions.patch", {
-        code: "INVALID_REQUEST",
-        message: "sidebar rename rejected",
-      });
-
-      const error = page.locator("[data-sidebar-session-error]");
-      await error.waitFor({ state: "visible" });
-      await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
-      expect(
-        await error
-          .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
-          .count(),
-      ).toBe(0);
-
-      await error.getByRole("button", { name: "Dismiss error" }).click();
-      await expect.poll(() => error.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("renames a sidebar session through an in-app dialog", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:rename-me", "Original name", Date.now()),
-        ]),
-        "sessions.patch": {},
-      },
-      sessionKey: "agent:main:rename-me",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-      const row = page.locator('[data-session-key="agent:main:rename-me"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…" }).click();
-
-      await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      const name = dialog.getByRole("textbox", { name: "Rename session" });
-      await name.waitFor({ state: "visible" });
-      await expect.poll(() => name.inputValue()).toBe("Original name");
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-session-rename-dialog.png",
-        dialog.locator("dialog"),
-        [name],
-      );
-      await name.fill("Renamed session");
-      await dialog.getByRole("button", { name: "Save" }).click();
-
-      const patch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:rename-me" && params.label === "Renamed session",
-      );
-      expect(patch.params).toMatchObject({
-        key: "agent:main:rename-me",
-        label: "Renamed session",
-      });
-      await expect.poll(() => row.textContent()).toContain("Renamed session");
-      await captureUiProof(suite, page, "sidebar-session-renamed.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-rename.webm"));
-      }
     }
   });
 

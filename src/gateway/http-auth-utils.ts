@@ -22,8 +22,8 @@ import {
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
 import {
-  authorizeControlUiPluginCookieRequest,
   bindControlUiPluginCookieRequestAuthority,
+  prepareControlUiPluginCookieRequest,
   resolveControlUiPluginAuthCookieGeneration,
 } from "./http-auth-plugin-cookie.js";
 import {
@@ -290,7 +290,7 @@ async function checkHttpOperatorCredentials(
 export async function authorizeControlUiReadRequestOrReply(
   params: ControlUiReadAuthParams,
 ): Promise<(AuthorizedControlUiReadRequest & GatewayHttpResponseAuthority) | null> {
-  const auth = params.auth;
+  const auth = params.getResolvedAuth?.() ?? params.auth;
   const cfg = params.cfg ?? getRuntimeConfig();
   const hasCurrentClientAuthority = captureHttpRequestAuthority({
     ...params,
@@ -357,11 +357,30 @@ export async function authorizeControlUiReadRequestOrReply(
     sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
     return null;
   }
-  return bindHttpResponseAuthority(
+  const requestAuth = bindHttpResponseAuthority(
     { authMethod, operatorScopes, ...authenticatedProfile },
     params.res,
     hasCurrentClientAuthority,
   );
+  if (authMethod === "device-token" && token) {
+    const assertCurrent = requestAuth.assertCurrent;
+    requestAuth.revalidate = async () => {
+      assertCurrent();
+      const scopes = await verifyHttpOperatorDeviceToken(
+        token,
+        authGeneration,
+        deviceOperatorScopes,
+      );
+      assertCurrent();
+      if (!scopes) {
+        sendUnauthorized(params.res);
+        throw new GatewayHttpRequestAuthorityError("Unauthorized");
+      }
+    };
+    // Profile attribution can yield after the original credential verification.
+    await requestAuth.revalidate();
+  }
+  return requestAuth;
 }
 
 /**
@@ -438,12 +457,16 @@ export async function authorizePluginGatewayHttpRequestOrReply(
 } | null> {
   const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
   const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
-  const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
+  const cookieAuth = await prepareControlUiPluginCookieRequest(params.req, {
     requestPath: params.requestPath,
     authGeneration,
     res: params.res,
   });
   if (cookieAuth) {
+    if (!hasCurrentClientAuthority()) {
+      sendUnauthorized(params.res);
+      return null;
+    }
     return bindControlUiPluginCookieRequestAuthority(cookieAuth, {
       ...params,
       hasCurrentClientAuthority,

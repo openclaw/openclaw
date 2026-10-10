@@ -123,18 +123,11 @@ async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
   };
   try {
     const response = await dispatchGatewayMethod(request.method, request.params);
-    if (response.ok) {
-      return {
-        id: request.id,
-        ok: true,
-        payload: response.payload,
-        ...(response.meta ? { meta: response.meta } : {}),
-      };
-    }
     return {
       id: request.id,
-      ok: false,
-      error: response.error ?? unavailable,
+      ...(response.ok
+        ? { ok: true as const, payload: response.payload }
+        : { ok: false as const, error: response.error ?? unavailable }),
       ...(response.meta ? { meta: response.meta } : {}),
     };
   } catch {

@@ -404,89 +404,46 @@ describe("gateway-status local target scheme", () => {
 });
 
 describe("resolveProbeBudgetMs", () => {
-  it("lets active local loopback probes use the full caller budget", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "localLoopback",
-        active: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveProbeBudgetMs(3_000, {
-        kind: "localLoopback",
-        active: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(3_000);
-  });
-
-  it("keeps inactive local loopback probes on the short cap", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "localLoopback",
-        active: false,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(800);
-    expect(
-      resolveProbeBudgetMs(500, {
-        kind: "localLoopback",
-        active: false,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(500);
-  });
-
-  it("lets explicit loopback URLs use the full caller budget", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "explicit",
-        active: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveProbeBudgetMs(2_500, {
-        kind: "explicit",
-        active: true,
-        url: "wss://localhost:18789/ws",
-      }),
-    ).toBe(2_500);
-  });
-
-  it("lets active remote probes use the full caller budget", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "configRemote",
-        active: true,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "explicit",
-        active: true,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(15_000);
-  });
-
-  it("keeps inactive remote and SSH tunnel probes on the short cap", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "configRemote",
-        active: false,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(1500);
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "sshTunnel",
-        active: true,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(2000);
+  it.each([
+    [
+      "lets active local loopback probes use the full caller budget",
+      [
+        [15_000, "localLoopback", true, "ws://127.0.0.1:18789", 15_000],
+        [3_000, "localLoopback", true, "ws://127.0.0.1:18789", 3_000],
+      ],
+    ],
+    [
+      "keeps inactive local loopback probes on the short cap",
+      [
+        [15_000, "localLoopback", false, "ws://127.0.0.1:18789", 800],
+        [500, "localLoopback", false, "ws://127.0.0.1:18789", 500],
+      ],
+    ],
+    [
+      "lets explicit loopback URLs use the full caller budget",
+      [
+        [15_000, "explicit", true, "ws://127.0.0.1:18789", 15_000],
+        [2_500, "explicit", true, "wss://localhost:18789/ws", 2_500],
+      ],
+    ],
+    [
+      "lets active remote probes use the full caller budget",
+      [
+        [15_000, "configRemote", true, "wss://gateway.example/ws", 15_000],
+        [15_000, "explicit", true, "wss://gateway.example/ws", 15_000],
+      ],
+    ],
+    [
+      "keeps inactive remote and SSH tunnel probes on the short cap",
+      [
+        [15_000, "configRemote", false, "wss://gateway.example/ws", 1500],
+        [15_000, "sshTunnel", true, "wss://gateway.example/ws", 2000],
+      ],
+    ],
+  ] as const)("%s", (_name, cases) => {
+    for (const [overallMs, kind, active, url, expected] of cases) {
+      expect(resolveProbeBudgetMs(overallMs, { kind, active, url })).toBe(expected);
+    }
   });
 });
 

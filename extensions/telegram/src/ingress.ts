@@ -152,12 +152,11 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
     ? ownerAccess.isAuthorizedSender
     : ownerAccess.senderIsOwner;
   if (commandsAllowFromConfigured || authorizedByConfig) {
-    const authorized = authorizedByConfig;
     const shouldBlockControlCommand =
-      params.allowTextCommands === true && params.hasControlCommand === true && !authorized;
+      params.allowTextCommands === true && params.hasControlCommand === true && !authorizedByConfig;
     return {
       requested: true,
-      authorized,
+      authorized: authorizedByConfig,
       authorizedByConfig,
       senderIsOwner: ownerAccess.senderIsOwner,
       assertOwnerCurrent: ownerAccess.assertOwnerCurrent,
@@ -209,10 +208,10 @@ export async function resolveTelegramNativeCommandAdmission(
       "accountId" | "cfg" | "dmPolicy" | "isGroup" | "chatId" | "senderId"
     >,
 ): Promise<boolean> {
-  if (resolveTelegramNativeCommandBody(params) === undefined) {
-    return false;
-  }
-  return (await resolveTelegramCommandIngressAuthorization(params)).authorizedByConfig;
+  return (
+    resolveTelegramNativeCommandBody(params) !== undefined &&
+    (await resolveTelegramCommandIngressAuthorization(params)).authorizedByConfig
+  );
 }
 
 export async function resolveTelegramEventIngressAuthorization(params: {

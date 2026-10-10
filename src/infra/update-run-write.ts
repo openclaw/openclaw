@@ -184,6 +184,25 @@ function applyUpdateRunDiagnostics(
   } = typeof diagnostics === "function" ? diagnostics(record.verification) : diagnostics;
   if (failure && record.status === "running") {
     upsertStep(record, { ...failure, status: "failed" });
+  } else if (failure && record.status === "failed") {
+    // A helper can finish before its parent observes the failure. Enrich only
+    // the already-failed step; terminal outcomes and prior facts stay authoritative.
+    const previous = record.steps.find((step) => step.step === updateRunStepKey(failure.step));
+    if (previous?.status === "failed") {
+      upsertStep(record, {
+        ...previous,
+        detail: previous.detail ?? failure.detail,
+        exitCode: previous.exitCode ?? failure.exitCode,
+        failureFacts: [
+          ...new Map(
+            [...(previous.failureFacts ?? []), ...(failure.failureFacts ?? [])].map((fact) => [
+              JSON.stringify(fact),
+              fact,
+            ]),
+          ).values(),
+        ].slice(0, 5),
+      });
+    }
   }
   if (verification) {
     const { recovery, rollbackOutcome, booted, noticeDelivered, doctorHint } = record.verification;

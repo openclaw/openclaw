@@ -59,11 +59,9 @@ export function renderUsageQueryFilter(
     >
       <button slot="trigger" type="button" class="usage-filter-trigger">
         <span>${label}</span>
-        ${
-          selectedCount > 0
-            ? html`<span class="settings-count">${selectedCount}</span>`
-            : html` <span class="settings-count">${t("usage.filters.all")}</span> `
-        }
+        <span class="settings-count"
+          >${selectedCount > 0 ? selectedCount : t("usage.filters.all")}</span
+        >
       </button>
       <wa-dropdown-item value="command:select-all" ?disabled=${allSelected}>
         ${t("usage.filters.selectAll")}

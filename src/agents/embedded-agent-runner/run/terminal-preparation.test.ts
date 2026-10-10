@@ -13,6 +13,11 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
+import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
+
+type OuterContextTokenMeta = Parameters<
+  typeof prepareEmbeddedRunTerminal
+>[0]["outerContextTokenMeta"];
 
 const payloadMocks = vi.hoisted(() => ({
   buildEmbeddedRunPayloads: vi.fn<typeof buildEmbeddedRunPayloads>(),
@@ -215,7 +220,8 @@ describe("prepareEmbeddedRunTerminal", () => {
   it.each([
     { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
     { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
-    { assistantTexts: ["Earlier", " \u200b "], expected: "\u200b" },
+    { assistantTexts: ["Earlier", " \u200b "], expected: "Earlier" },
+    { assistantTexts: [" \u200b\u200d\u2060 "], expected: undefined },
     { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
     { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
     { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
@@ -647,7 +653,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     assistantProvider?: string;
     provider?: string;
     model?: string;
-    outerContextTokenMeta?: { contextTokens?: number };
+    outerContextTokenMeta?: OuterContextTokenMeta;
     responseModel?: string;
     usage?: Parameters<typeof mergeUsageIntoAccumulator>[1];
     attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
@@ -753,6 +759,52 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(resolved.agentMeta).toMatchObject({
       contextTokens: 272_000,
       contextTokensSource: "resolved",
+    });
+
+    const verified = await prepareStats({
+      outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
+    });
+    expect(verified.agentMeta).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    });
+  });
+
+  it("keeps a prepared trusted window legacy when another model identity is reported", async () => {
+    const outerContextTokenMeta: OuterContextTokenMeta = {
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    };
+    const routed = await prepareStats({
+      assistantProvider: "routed-provider",
+      outerContextTokenMeta,
+    });
+    expect(routed.agentMeta).toMatchObject({
+      provider: "routed-provider",
+      model: "cost-model",
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved",
+    });
+
+    const selected = await prepareStats({
+      attempt: { runtimeModelSelection: { provider: "native-provider", model: "native-model" } },
+      assistantProvider: "openclaw",
+      outerContextTokenMeta,
+    });
+    expect(selected.agentMeta).toMatchObject({
+      provider: "native-provider",
+      model: "native-model",
+      contextTokensSource: "resolved",
+    });
+
+    const attemptOwned = await prepareStats({
+      assistantProvider: "routed-provider",
+      attempt: { contextTokens: 400_000, contextTokensSource: "runtime" },
+      outerContextTokenMeta,
+    });
+    expect(attemptOwned.agentMeta).toMatchObject({
+      contextTokens: 400_000,
+      contextTokensSource: "runtime",
     });
   });
 

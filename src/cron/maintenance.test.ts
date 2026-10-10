@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -123,7 +124,6 @@ it("rolls back an admitted sweep when backing or caller authority changes before
       resetCronActiveJobs();
       insertHistory("race");
       insertHistory("expired", "succeeded");
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       for (const change of ["backing", "caller"] as const) {
         let current = true;
         const assertion = () => {
@@ -131,20 +131,16 @@ it("rolls back an admitted sweep when backing or caller authority changes before
             throw new Error("sweep retired");
           }
         };
-        const spy = vi
-          .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "commit") {
-                if (change === "backing") {
-                  markCronJobActive("race");
-                } else {
-                  current = false;
-                }
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+          if (request.stage === "commit") {
+            if (change === "backing") {
+              markCronJobActive("race");
+            } else {
+              current = false;
+            }
+          }
+          admit(request, grant);
+        });
         try {
           await expect(
             maintainCronRunHistory(captureOpenClawStateWorkerContext(), assertion),

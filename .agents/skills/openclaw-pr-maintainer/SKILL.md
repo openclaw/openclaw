@@ -83,6 +83,9 @@ or isolation reason. Unavailable optional live proof may use meaningful boundary
 proof with the limitation stated. Explicit live requests, external API contracts,
 and changes whose risk requires authenticated execution keep their required proof.
 Never describe mocks, skipped checks, or an older head as live evidence.
+For behavioral changes, apply the [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary)
+and `$test-audit`. Check requested behavior separately from repository standards;
+meeting one does not establish the other.
 
 ## CODEOWNERS review
 
@@ -124,6 +127,10 @@ do not manufacture another task after a bounded request is complete.
 
 ## Finalize and clean up
 
+Never remove the worktree containing a live
+session's cwd, including your own. A child command's `cd` or `cwd` override does
+not move the parent session. Defer that worktree's removal until the session
+exits or releases its cwd; report the retained path in the final handoff.
 Once the requested outcome and required verification are complete, remove the
 task's disposable proof and scratch. This includes test logs, receipts, local
 proof archives, and `.crabbox` outputs. Do not retain, archive, export, or hand off

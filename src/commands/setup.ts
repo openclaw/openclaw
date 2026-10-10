@@ -175,7 +175,6 @@ export async function setupCommand(
     shouldWriteWorkspace ||
     shouldWriteGatewayMode ||
     shouldWriteSkipBootstrap;
-  let configStatus: "created" | "updated" | "unchanged";
   if (configChanged) {
     const explicitSetPaths: string[][] = [];
     if (snapshot.exists && shouldPersistRoster) {
@@ -213,7 +212,6 @@ export async function setupCommand(
           writeInheritedWorkspaceOverride || shouldWriteSkipBootstrap || shouldWriteGatewayMode,
       },
     });
-    configStatus = snapshot.exists ? "updated" : "created";
     if (!opts?.json && !snapshot.exists) {
       runtime.log(
         `Wrote ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
@@ -235,13 +233,10 @@ export async function setupCommand(
         suffix,
       });
     }
-  } else {
-    configStatus = "unchanged";
-    if (!opts?.json) {
-      runtime.log(
-        `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
-      );
-    }
+  } else if (!opts?.json) {
+    runtime.log(
+      `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
+    );
   }
 
   const ws = await (
@@ -262,7 +257,7 @@ export async function setupCommand(
     writeRuntimeJson(runtime, {
       ok: true,
       configPath,
-      configStatus,
+      configStatus: configChanged ? (snapshot.exists ? "updated" : "created") : "unchanged",
       workspaceDir: ws.dir,
       sessionsDir,
     });

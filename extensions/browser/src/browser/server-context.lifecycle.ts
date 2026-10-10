@@ -503,12 +503,14 @@ export function beginProfileTransition(
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;
-  if (params.closeRelay) {
-    const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
+  const captureRelay = () => {
+    const relay =
+      params.closeRelay && params.state.extensionRelays?.get(params.runtime.profile.name);
     if (relay) {
       actor.cleanupRelays.add(relay);
     }
-  }
+  };
+  captureRelay();
 
   // Start closing MCP before waiting for a start, lease, or older transition.
   const eagerMcpClose =
@@ -526,12 +528,7 @@ export function beginProfileTransition(
       if (shouldClosePlaywright && hadPendingWork) {
         capturePlaywrightRetirement(actor, ownerProfile.cdpUrl);
       }
-      if (params.closeRelay) {
-        const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
-        if (relay) {
-          actor.cleanupRelays.add(relay);
-        }
-      }
+      captureRelay();
       const result = await cleanupProfileResources({
         state: params.state,
         runtime: params.runtime,

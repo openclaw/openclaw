@@ -25,13 +25,11 @@ type SessionRegistryMaintenanceStoreIdentity = {
 
 type SessionRegistryMaintenanceStoreSummary =
   | (SessionRegistryMaintenanceStoreIdentity & {
-      beforeCount: number;
-      afterCount: number;
       pruned: number;
       preservedRunning: number;
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
-      skippedReason: "agent-deletion-complete";
+      skippedReason: "agent-deletion-pending" | "agent-deletion-complete";
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
       skippedReason: "agent-store-held";
@@ -142,17 +140,14 @@ export async function runSessionRegistryMaintenance(params: {
               }).path;
         const retained =
           deletion === "absent" ? isRetained(databasePath, target.agentId) : undefined;
-        if (deletion === "complete" || typeof retained === "object") {
-          // Completed tombstones intentionally keep retired stores unavailable.
-          // Record that lifecycle outcome instead of reopening the fenced database.
-          stores.push({ ...target, skippedReason: "agent-deletion-complete" });
+        if (deletion !== "absent" || typeof retained === "object") {
+          // Deletion owns these stores until cleanup settles and retains its tombstone afterward.
+          stores.push({
+            ...target,
+            skippedReason:
+              deletion === "pending" ? "agent-deletion-pending" : "agent-deletion-complete",
+          });
           continue;
-        }
-        if (deletion === "pending") {
-          // The former writable listing refused incomplete deletion; read-only workers must too.
-          throw new Error(
-            `OpenClaw agent database is unavailable while agent ${target.agentId} is deleted.`,
-          );
         }
         if (retained) {
           const reason =
@@ -175,8 +170,6 @@ export async function runSessionRegistryMaintenance(params: {
         stores.push({
           agentId: target.agentId,
           storePath: target.storePath,
-          beforeCount: result.beforeCount,
-          afterCount: result.afterCount,
           pruned: result.pruned,
           preservedRunning: result.preservedRunning,
         });

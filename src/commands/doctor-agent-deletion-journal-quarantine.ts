@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
-import { listSqliteTargetCandidatePathsInDirectory } from "../config/sessions/session-sqlite-target-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
+import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { hasSqliteFileFamily } from "../state/agent-deletion-discovery.js";
 import {
   reconstructAgentDeletionJournal,
   recordAgentDeletionRecoveryHolds,
@@ -20,6 +21,7 @@ import {
 } from "../state/agent-deletion-journal.js";
 import { parseAgentDeletionDatabasePaths } from "../state/agent-deletion-journal.read.js";
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
+import { resolveOpenClawAgentDatabaseDiscoveryPaths } from "../state/openclaw-agent-db-discovery-paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -32,6 +34,8 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 type JournalDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
 
 function readRecoverySource(database: JournalDatabase) {
+  // Recovery must inspect the damaged catalog instead of the runtime's admitted shape.
+  invalidateSqliteSchemaFacts(database.db);
   const held = tableExists(database.db, "migration_sources")
     ? readAgentDeletionRecoveryHolds(database)
     : [];
@@ -81,8 +85,11 @@ export async function quarantineAgentDeletionJournal(params: {
   const held = source.missing ? [...params.inventory] : [...source.held];
   for (const row of source.invalid) {
     const paths = new Set([
-      path.join(row.agent_dir, "openclaw-agent.sqlite"),
-      ...listSqliteTargetCandidatePathsInDirectory(row.agent_dir),
+      ...resolveOpenClawAgentDatabaseDiscoveryPaths({
+        agentDir: row.agent_dir,
+        agentId: row.agent_id,
+        env,
+      }).filter(hasSqliteFileFamily),
       ...params.inventory
         .filter((target) => normalizeAgentId(target.agentId) === normalizeAgentId(row.agent_id))
         .map((target) => target.path),

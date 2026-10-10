@@ -427,21 +427,41 @@ describe("live update executor", () => {
 
 describe("candidate executor delegation", () => {
   const moduleUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
-  it.each([
-    { mismatched: false, becomesReadable: false, revoked: false },
-    { mismatched: true, becomesReadable: false, revoked: false },
-    { mismatched: false, becomesReadable: true, revoked: false },
-    { mismatched: false, becomesReadable: false, revoked: true },
-  ])(
-    "consumes the parent's bound creation identity when the Windows receiver cannot read its own (mismatch=$mismatched, fallback becomes readable=$becomesReadable, revoked=$revoked)",
-    async ({ mismatched, becomesReadable, revoked }) => {
+  it.each(
+    [
+      { mismatched: false, becomesReadable: false, revoked: false },
+      { mismatched: true, becomesReadable: false, revoked: false },
+      { mismatched: false, becomesReadable: true, revoked: false },
+      { mismatched: false, becomesReadable: false, revoked: true },
+      { reparented: true, readable: true },
+      { reparented: true, readable: true, mismatched: true },
+      { reparented: true, readable: true, foreign: true },
+      { reparented: true, readable: true, revoked: true },
+      { reparented: true },
+    ].map((scenario) =>
+      Object.assign(
+        {
+          mismatched: false,
+          becomesReadable: false,
+          revoked: false,
+          reparented: false,
+          readable: false,
+          foreign: false,
+        },
+        scenario,
+      ),
+    ),
+  )(
+    "checks the Windows receiver's live handoff identity (reparented=$reparented, readable=$readable, mismatch=$mismatched, foreign=$foreign, fallback becomes readable=$becomesReadable, revoked=$revoked)",
+    async ({ mismatched, becomesReadable, revoked, reparented, readable, foreign }) => {
       const hostPlatform = process.platform;
       const existingUri = sqliteLocation.resolveExistingSqliteFileUri;
       vi.spyOn(sqliteLocation, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
         existingUri(pathname, hostPlatform),
       );
       const readStart = pidAlive.getFileLockProcessStartTime;
-      const parentStart = readStart(process.ppid);
+      const parentPid = reparented ? 424242 : process.ppid;
+      const parentStart = reparented ? 1791331200123 : readStart(parentPid);
       const receiverStart = readStart(process.pid);
       assert(parentStart !== null);
       assert(receiverStart !== null);
@@ -451,12 +471,16 @@ describe("candidate executor delegation", () => {
       assert(store.acquire(root, randomUUID(), { kind: "update" }).kind === "acquired");
       assert(store.acquire(childKey, runId, { kind: "update" }).kind === "acquired");
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      let currentReceiverStart = mismatched ? receiverStart + 1 : null;
+      const isDead = pidAlive.isPidDefinitelyDead;
+      vi.spyOn(pidAlive, "isPidDefinitelyDead").mockImplementation((pid) =>
+        pid === parentPid ? false : isDead(pid),
+      );
+      let currentReceiverStart = mismatched ? receiverStart + 1 : readable ? receiverStart : null;
       vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) => {
         if (pid === process.pid) {
           return currentReceiverStart;
         }
-        if (pid === process.ppid) {
+        if (pid === parentPid) {
           return parentStart;
         }
         platform.mockReturnValue(hostPlatform);
@@ -466,11 +490,11 @@ describe("candidate executor delegation", () => {
           platform.mockReturnValue("win32");
         }
       });
-      const parentIdentity = { pid: process.ppid, startIdentity: String(parentStart) };
+      const parentIdentity = { pid: parentPid, startIdentity: String(parentStart) };
       const receiverIdentity =
-        becomesReadable || revoked
+        (becomesReadable || revoked) && !readable
           ? createManagedHandoffLeaseStore().processIdentity()
-          : { pid: process.pid, startIdentity: String(receiverStart) };
+          : { pid: foreign ? 424243 : process.pid, startIdentity: String(receiverStart) };
       const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
       const db = new DatabaseSync(databasePath);
       try {
@@ -544,7 +568,8 @@ describe("candidate executor delegation", () => {
         root,
         operation,
       );
-      if (mismatched) {
+      const refused = mismatched || foreign || (reparented && !readable);
+      if (refused) {
         await expect(result).rejects.toBeInstanceOf(UpdateCommandRecoveryPendingError);
       } else if (revoked) {
         await expect(result).rejects.toThrow(
@@ -553,10 +578,10 @@ describe("candidate executor delegation", () => {
       } else {
         await expect(result).resolves.toBe("completed");
       }
-      expect(operation).toHaveBeenCalledTimes(mismatched ? 0 : 1);
-      expect(nestedStarted).toBe(!mismatched && !revoked);
-      expect(fs.existsSync(effectPath)).toBe(!mismatched && !revoked);
-      if (!mismatched && !becomesReadable && !revoked) {
+      expect(operation).toHaveBeenCalledTimes(refused ? 0 : 1);
+      expect(nestedStarted).toBe(!refused && !revoked);
+      expect(fs.existsSync(effectPath)).toBe(!refused && !revoked);
+      if (!refused && !readable && !becomesReadable && !revoked) {
         expect(warning).toHaveBeenCalledWith(
           expect.stringContaining("established by the live parent"),
         );

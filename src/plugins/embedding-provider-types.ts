@@ -14,10 +14,18 @@ export type EmbeddingInput =
       >;
     };
 
+/** Provider-reported token counts for one embedding request. */
+export type EmbeddingUsage = {
+  promptTokens: number;
+  totalTokens: number;
+};
+
 /** Per-call options passed to embedding provider calls. */
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
+  /** Report each successful upstream request before resolving; undefined means usage unavailable. */
+  onUsage?: (usage: EmbeddingUsage | undefined) => void;
 } & MemorySearchDeadlineControlOptions;
 
 /** Runtime metadata returned with a created embedding provider. */

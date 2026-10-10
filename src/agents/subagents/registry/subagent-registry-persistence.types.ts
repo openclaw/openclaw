@@ -1,5 +1,6 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -29,3 +30,17 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
     authority: SubagentRegistryWriteAuthority,
   ) => Promise<SubagentRunMutation<P["value"]>>;
 };
+
+export type SubagentRegistryWorkerWrite<T> = {
+  writeId: string;
+  assertCurrent: () => void;
+  execute: (scope: DomainScope) => Promise<unknown>;
+  decode: (value: unknown) => T;
+} & (
+  | {
+      kind: "registry";
+      terminalEvents: SubagentRunMutation<unknown>["terminalEvents"];
+      acknowledged: () => boolean;
+    }
+  | { kind: "completion" }
+);

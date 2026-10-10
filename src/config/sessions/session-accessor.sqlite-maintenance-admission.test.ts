@@ -147,7 +147,7 @@ test("maintenance preparation yields to foreground writes and retains commit adm
        } else if (message.type === "settle") {
          parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
            result: { kind: "maintenance-finalize", value: {
-             archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
+             archivedTranscripts: [], committedEntryIndices: [] } } });
          parentPort.close();
        }
      });`,

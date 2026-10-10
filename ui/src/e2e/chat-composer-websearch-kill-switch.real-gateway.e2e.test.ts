@@ -478,7 +478,6 @@ for (const globallyEnabled of [false, true]) {
             await chat.goto(
               controlUiSessionUrl(suite.server.baseUrl, "agent:main:websearch-omitted", "chat"),
             );
-            await enterControlUiSession(chat);
             await waitForControlUiGatewayReady(chat);
             const chatMenu = await openMenu(chat);
             await expect.poll(() => checked(chatMenu.webSearch)).toBe(true);

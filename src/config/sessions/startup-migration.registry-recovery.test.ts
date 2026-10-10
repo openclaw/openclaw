@@ -10,10 +10,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
@@ -35,6 +32,7 @@ import {
   prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
@@ -282,8 +280,8 @@ it("observes committed deletion before startup handoff after canonical database 
           deleteFiles: false,
         });
         await prepareAgentDeleteDatabases(cfg, "alpha", agentDir, { env });
-        deletion.assertCurrent();
-        deletion.finish();
+        await deletion.assertCurrentAsync();
+        await deletion.finish();
       },
       { env },
     );

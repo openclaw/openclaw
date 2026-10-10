@@ -89,6 +89,15 @@ is determined when a turn starts.
 Provider setup and search testing require Gateway administrator access. Changes
 use the existing configuration owner; there is no separate search credential store.
 
+When no managed provider is configured, OpenClaw omits `web_search` from the
+agent tool list, including Tool Search and Code Mode catalogs. On turns without
+native search, the agent receives a short setup hint instead. Explicitly disabled
+or policy-denied search does not produce a missing-configuration hint. Configured
+providers with invalid or unavailable credentials keep their normal diagnostics;
+configuration presence is not a health check. Native search and explicitly selected
+key-free providers are unchanged. New tool contexts pick up completed setup; existing
+configured tools continue to read current credentials at execution time.
+
 ## Choosing a provider
 
 <CardGroup cols={2}>

@@ -391,9 +391,9 @@ async function runSetupHandoff(
       if (isSystemAgentInferenceUnavailableError(error)) {
         throw error;
       }
-      throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+      throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
     }
-    throw new SystemAgentInferenceUnavailableError("conversation");
+    throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
   };
   if (handoff.target === "gateway" || handoff.target === "search") {
     const run =
@@ -534,7 +534,7 @@ async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {
       };
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }

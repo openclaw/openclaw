@@ -51,16 +51,15 @@ export async function listPluginOpenClawHostLinkIssues(
 ) {
   const packageReadFailures: PluginPackageReadFailure[] = [];
   const registeredPackageReadFailures: PluginPackageReadFailure[] = [];
+  const recordReadFailure =
+    (failures: PluginPackageReadFailure[]) => (error: unknown, packageDir: string) => {
+      failures.push({ packageDir, reason: formatPackageReadFailure(error) });
+    };
   const audits = await Promise.all(
     resolveDoctorPluginNpmRoots(params).map((npmRoot) =>
       auditOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
-        onPackageReadError: (error, packageDir) => {
-          packageReadFailures.push({
-            packageDir,
-            reason: formatPackageReadFailure(error),
-          });
-        },
+        onPackageReadError: recordReadFailure(packageReadFailures),
       }),
     ),
   );
@@ -69,12 +68,7 @@ export async function listPluginOpenClawHostLinkIssues(
     extensionsDir: resolveRegisteredPluginExtensionsRoot(params),
     env: params.env,
     mode: "audit",
-    onPackageReadError: (error, packageDir) => {
-      registeredPackageReadFailures.push({
-        packageDir,
-        reason: formatPackageReadFailure(error),
-      });
-    },
+    onPackageReadError: recordReadFailure(registeredPackageReadFailures),
   });
   return {
     peerLinkIssues: audits.flatMap((audit) => audit.issues),
@@ -90,16 +84,23 @@ export async function maybeRepairPluginOpenClawHostLinks(
   const npmRoots = resolveDoctorPluginNpmRoots(params);
   if (!params.prompter.shouldRepair) {
     const audit = await listPluginOpenClawHostLinkIssues(params);
-    if (audit.peerLinkIssues.length > 0) {
-      note(
-        [
-          "Managed npm OpenClaw host peer links need repair:",
-          ...audit.peerLinkIssues.map((issue) => `- ${issue.packageName}: ${issue.reason}`),
-          `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink managed npm plugin packages.`,
-        ].join("\n"),
-        "Plugin registry",
-      );
-    }
+    const reportLinks = (
+      issues: readonly { packageName: string; reason: string }[],
+      label: string,
+      packages: string,
+    ) => {
+      if (issues.length > 0) {
+        note(
+          [
+            `${label} need repair:`,
+            ...issues.map((issue) => `- ${issue.packageName}: ${issue.reason}`),
+            `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink ${packages} plugin packages.`,
+          ].join("\n"),
+          "Plugin registry",
+        );
+      }
+    };
+    reportLinks(audit.peerLinkIssues, "Managed npm OpenClaw host peer links", "managed npm");
     for (const [label, failures] of [
       ["Managed npm plugin", audit.packageReadFailures],
       ["Registered plugin", audit.registeredPackageReadFailures],
@@ -116,18 +117,11 @@ export async function maybeRepairPluginOpenClawHostLinks(
         );
       }
     }
-    if (audit.registeredPeerLinkIssues.length > 0) {
-      note(
-        [
-          "Registered plugin OpenClaw host links need repair:",
-          ...audit.registeredPeerLinkIssues.map(
-            (issue) => `- ${issue.packageName}: ${issue.reason}`,
-          ),
-          `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink registered plugin packages.`,
-        ].join("\n"),
-        "Plugin registry",
-      );
-    }
+    reportLinks(
+      audit.registeredPeerLinkIssues,
+      "Registered plugin OpenClaw host links",
+      "registered",
+    );
     return false;
   }
 
@@ -136,16 +130,17 @@ export async function maybeRepairPluginOpenClawHostLinks(
     info() {},
     warn: (message: string) => warnings.push(`- ${message}`),
   };
+  const warnReadFailure = (kind: string) => (error: unknown, packageDir: string) => {
+    logger.warn(
+      `Could not inspect ${kind} package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
+    );
+  };
   const results = await Promise.all(
     npmRoots.map((npmRoot) =>
       relinkOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
         logger,
-        onPackageReadError: (error, packageDir) => {
-          logger.warn(
-            `Could not inspect managed npm package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
-          );
-        },
+        onPackageReadError: warnReadFailure("managed npm"),
       }),
     ),
   );
@@ -156,24 +151,19 @@ export async function maybeRepairPluginOpenClawHostLinks(
     env: params.env,
     mode: "repair",
     logger,
-    onPackageReadError: (error, packageDir) => {
-      logger.warn(
-        `Could not inspect registered package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
-      );
-    },
+    onPackageReadError: warnReadFailure("registered"),
   });
 
-  if (repaired > 0) {
-    note(
-      `Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`,
-      "Plugin registry",
-    );
-  }
-  if (registeredRepair.repaired > 0) {
-    note(
-      `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered plugin package(s).`,
-      "Plugin registry",
-    );
+  for (const [count, kind] of [
+    [repaired, "managed npm"],
+    [registeredRepair.repaired, "registered"],
+  ] as const) {
+    if (count > 0) {
+      note(
+        `Repaired OpenClaw host peer link(s) for ${count} ${kind} plugin package(s).`,
+        "Plugin registry",
+      );
+    }
   }
   if (warnings.length > 0) {
     note(

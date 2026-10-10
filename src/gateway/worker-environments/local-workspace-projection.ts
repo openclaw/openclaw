@@ -1,7 +1,10 @@
 import {
-  getRegistryWorktree,
-  findLiveRegistryWorktreeByPath,
-} from "../../agents/worktrees/registry.js";
+  captureWorktreeRegistryReadGuard,
+  prepareWorktreeRegistryGuard,
+  readRegistryWorktree,
+  readLiveRegistryWorktreeByPath,
+} from "../../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeWorkerAuthority,
@@ -34,8 +37,10 @@ export async function withSettledLocalWorkspace<T>(
   },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
+  const context = captureWorktreeRunEndContext(params.env ?? process.env);
+  const env = { ...(params.env ?? process.env), ...context.environment };
   return await withLocalWorkspaceStore(
-    { ...params, worktreeId: params.worktree.id },
+    { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
       const row = store.get();
       if (!row) {
@@ -45,41 +50,34 @@ export async function withSettledLocalWorkspace<T>(
         });
       }
       const worktree = params.worktree;
+      const workerAuthority: WorktreeWorkerAuthority = {
+        ...params.workerAuthority,
+        assertCurrent: params.workerAuthority
+          ? params.workerAuthority.assertCurrent
+          : params.assertCurrent,
+        predicates: [
+          ...(params.workerAuthority?.predicates ?? []),
+          {
+            kind: "projection",
+            id: worktree.id,
+            ownerId: row.session_key,
+            path: worktree.path,
+            repoRoot: worktree.repoRoot,
+          },
+        ],
+      };
+      const assertWorktreeCurrent = await prepareWorktreeRegistryGuard(context, workerAuthority);
       const owner: LocalWorkspaceOwner = {
         worktree,
-        env: params.env,
+        env,
         agentId: row.agent_id,
         sessionKey: row.session_key,
         sessionId: row.session_id,
         lifecycleRevision: row.lifecycle_revision,
-        workerAuthority: {
-          ...params.workerAuthority,
-          assertCurrent: params.workerAuthority
-            ? params.workerAuthority.assertCurrent
-            : params.assertCurrent,
-          predicates: [
-            ...(params.workerAuthority?.predicates ?? []),
-            {
-              kind: "projection",
-              id: worktree.id,
-              ownerId: row.session_key,
-              path: worktree.path,
-              repoRoot: worktree.repoRoot,
-            },
-          ],
-        },
+        workerAuthority,
         assertCurrent: () => {
           params.assertCurrent?.();
-          const current = getRegistryWorktree(params.env ?? process.env, worktree.id);
-          if (
-            !current ||
-            current.ownerKind !== "session" ||
-            current.ownerId !== row.session_key ||
-            current.path !== worktree.path ||
-            current.repoRoot !== worktree.repoRoot
-          ) {
-            throw new Error("Managed projection owner changed during settlement");
-          }
+          assertWorktreeCurrent();
         },
       };
       return await runLocalWorkspaceProjection(owner, store, async (state, quiescence) => {
@@ -117,10 +115,13 @@ export async function withSettledLocalWorkspacePath<T>(
   params: { cwd: string; assertCurrent?: () => void },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
-  const record = findLiveRegistryWorktreeByPath(process.env, params.cwd);
+  const context = captureWorktreeRunEndContext(process.env);
+  const env = { ...process.env, ...context.environment };
+  const record = await readLiveRegistryWorktreeByPath(context, params.cwd);
+  params.assertCurrent?.();
   return record
     ? await withSettledLocalWorkspace(
-        { worktree: record, assertCurrent: params.assertCurrent },
+        { worktree: record, env, assertCurrent: params.assertCurrent },
         operation,
       )
     : await operation();
@@ -214,8 +215,10 @@ export async function expireLocalWorkspaceProjection(params: {
   retireSnapshot?: (assertCurrent: () => void) => Promise<void>;
   workerAuthority?: WorktreeWorkerAuthority;
 }) {
+  const context = captureWorktreeRunEndContext(params.env);
+  const env = { ...params.env, ...context.environment };
   return await withLocalWorkspaceStore(
-    { ...params, worktreeId: params.worktree.id },
+    { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
       const row = store.get();
       if (!row) {
@@ -225,9 +228,16 @@ export async function expireLocalWorkspaceProjection(params: {
       if (params.worktree.removedAt === undefined) {
         throw new Error("Cannot expire a live sandbox workspace");
       }
+      const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+      const record = await readRegistryWorktree(context, params.worktree.id);
+      const assertWorktreeCurrent = accept(record);
+      params.assertCurrent();
+      if (record?.removedAt !== params.worktree.removedAt || record?.ownerId !== row.session_key) {
+        throw new Error("Workspace retention owner changed");
+      }
       const owner: LocalWorkspaceOwner = {
         worktree: params.worktree,
-        env: params.env,
+        env,
         agentId: row.agent_id,
         sessionKey: row.session_key,
         sessionId: row.session_id,
@@ -235,13 +245,7 @@ export async function expireLocalWorkspaceProjection(params: {
         workerAuthority: params.workerAuthority,
         assertCurrent: () => {
           params.assertCurrent();
-          const record = getRegistryWorktree(params.env, params.worktree.id);
-          if (
-            record?.removedAt !== params.worktree.removedAt ||
-            record?.ownerId !== row.session_key
-          ) {
-            throw new Error("Workspace retention owner changed");
-          }
+          assertWorktreeCurrent();
         },
       };
       await runLocalWorkspaceProjection(owner, store, (state) =>
@@ -252,15 +256,16 @@ export async function expireLocalWorkspaceProjection(params: {
 }
 
 /** Bind only a live session-owned managed checkout, never an arbitrary host path. */
-export function resolveLocalWorkspaceOwner(params: {
+export async function resolveLocalWorkspaceOwner(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-}): LocalWorkspaceOwner | undefined {
-  const env = params.env ?? process.env;
+}): Promise<LocalWorkspaceOwner | undefined> {
+  const context = captureWorktreeRunEndContext(params.env ?? process.env);
+  const env = { ...(params.env ?? process.env), ...context.environment };
   const scope = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -274,7 +279,9 @@ export function resolveLocalWorkspaceOwner(params: {
   if (!entry?.worktree?.id) {
     return undefined;
   }
-  const worktree = getRegistryWorktree(env, entry.worktree.id);
+  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+  const worktree = await readRegistryWorktree(context, entry.worktree.id);
+  const assertWorktreeCurrent = accept(worktree);
   if (
     !worktree ||
     worktree.removedAt !== undefined ||
@@ -286,22 +293,21 @@ export function resolveLocalWorkspaceOwner(params: {
   ) {
     throw new Error("Local sandbox managed workspace owner changed");
   }
-  const assertCurrent = () => {
+  const assertSessionCurrent = () => {
     params.assertCurrent?.();
     const now = loadSessionEntry(scope);
-    const current = getRegistryWorktree(env, worktree.id);
     if (
       now?.sessionId !== entry.sessionId ||
       now?.lifecycleRevision !== entry.lifecycleRevision ||
       now?.archivedAt !== undefined ||
-      now?.worktree?.id !== worktree.id ||
-      current?.removedAt !== undefined ||
-      current?.ownerId !== params.sessionKey ||
-      current?.path !== worktree.path ||
-      current?.repoRoot !== worktree.repoRoot
+      now?.worktree?.id !== worktree.id
     ) {
       throw new Error("Local sandbox workspace authority changed");
     }
+  };
+  const assertCurrent = () => {
+    assertSessionCurrent();
+    assertWorktreeCurrent();
   };
   assertCurrent();
   return {
@@ -311,6 +317,10 @@ export function resolveLocalWorkspaceOwner(params: {
     lifecycleRevision: entry.lifecycleRevision ?? null,
     worktree,
     assertCurrent,
+    workerAuthority: {
+      assertCurrent: assertSessionCurrent,
+      predicates: [{ kind: "live-binding", record: worktree }],
+    },
     env,
   };
 }

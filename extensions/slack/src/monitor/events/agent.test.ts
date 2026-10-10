@@ -764,42 +764,85 @@ describe("registerSlackAgentEvents", () => {
     }
   });
 
-  it("keeps a proven DM parent when its live publisher finishes before the title write", async () => {
-    const harness = createSessionEventHarness();
-    harness.ctx.isSlackAgentView = async () => false;
-    const route = resolveAgentRoute({
-      cfg: harness.ctx.cfg,
-      channel: "slack",
-      accountId: "default",
-      peer: { kind: "direct", id: "U123" },
-    });
-    const threadTs = "1712345678.000001";
-    await harness.recordSession({ sessionKey: route.sessionKey, peerId: "U123" });
-    const release = registerSlackSessionRun(harness.ctx, { channelId: "D123", threadTs }, route);
-    patchSessionEntry.mockImplementation((params) => {
-      release();
-      return patchStoredSessionEntry(params);
-    });
-    await harness.getHandler("agent_session_title_changed")?.({
-      event: {
-        type: "agent_session_title_changed",
-        channel: "D123",
-        thread_ts: threadTs,
-        user: "U123",
-        event_ts: "1712345679.000001",
-        title: "Finished DM",
-      },
-      body: {},
-    });
-    expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
-    expect(
-      getSessionEntry({
+  it.each([
+    { state: "finished", phase: "before preparation" },
+    { state: "replacement", phase: "before preparation" },
+    { state: "recorded", phase: "before preparation" },
+    { state: "finished", phase: "after preparation" },
+    { state: "replacement", phase: "after preparation" },
+  ] as const)(
+    "revalidates a proven DM parent after its publisher is $state $phase",
+    async ({ state, phase }) => {
+      const harness = createSessionEventHarness();
+      harness.ctx.isSlackAgentView = async () => false;
+      const route = resolveAgentRoute({
+        cfg: harness.ctx.cfg,
+        channel: "slack",
+        accountId: "default",
+        peer: { kind: "direct", id: "U123" },
+      });
+      const threadTs = "1712345678.000001";
+      await harness.recordSession({ sessionKey: route.sessionKey, peerId: "U123" });
+      const release = registerSlackSessionRun(harness.ctx, { channelId: "D123", threadTs }, route);
+      let releaseReplacement: (() => void) | undefined;
+      const finishPublisher = () => {
+        release();
+        if (state !== "finished") {
+          releaseReplacement = registerSlackSessionRun(
+            harness.ctx,
+            { channelId: "D123", threadTs },
+            { ...route, sessionKey: "replacement-session" },
+          );
+        }
+      };
+      patchSessionEntry.mockImplementation(async (params) => {
+        if (phase === "after preparation") {
+          return patchStoredSessionEntry({
+            ...params,
+            update: (entry, context) => {
+              finishPublisher();
+              return params.update(entry, context);
+            },
+          });
+        }
+        finishPublisher();
+        if (state === "recorded") {
+          await harness.recordSession({
+            sessionKey: route.sessionKey,
+            peerId: "U123",
+            threadId: threadTs,
+          });
+        }
+        return patchStoredSessionEntry(params);
+      });
+      await harness.getHandler("agent_session_title_changed")?.({
+        event: {
+          type: "agent_session_title_changed",
+          channel: "D123",
+          thread_ts: threadTs,
+          user: "U123",
+          event_ts: "1712345679.000001",
+          title: "Finished DM",
+        },
+        body: {},
+      });
+      releaseReplacement?.();
+      const entry = getSessionEntry({
         agentId: "main",
         sessionKey: route.sessionKey,
         storePath: harness.storePath,
-      }),
-    ).toMatchObject({ displayName: "Finished DM" });
-  });
+      });
+      if (state === "replacement") {
+        expect(harness.ctx.runtime.error).toHaveBeenCalled();
+        expect(entry).not.toHaveProperty("displayName");
+        expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
+      } else {
+        expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
+        expect(entry).toMatchObject({ displayName: "Finished DM" });
+        expect(harness.recordSlackSessionTitle).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("stops pending MPIM publishers with no stored entries before delivering confirmations", async () => {
     const harness = createSessionEventHarness("mpim");

@@ -780,38 +780,20 @@ function buildEffectivePolicyReport(params: {
         : "Host approvals policy unavailable.",
     };
   }
-  if (params.source === "node") {
-    if (!cfg) {
-      return {
-        scopes: [],
-        note:
-          timeoutNote ??
-          "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
-      };
-    }
-    if (!params.resolvedDefaults) {
-      return {
-        scopes: [],
-        note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
-      };
-    }
-    return {
-      scopes: collectExecPolicyScopeSnapshots({
-        cfg,
-        approvals: params.approvals,
-        hostPath: params.hostPath,
-        hostDefaults: params.resolvedDefaults,
-        hostDefaultSource: "node-reported resolved defaults",
-      }),
-      note:
-        "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. " +
-        SESSION_EXEC_OVERRIDES_NOTE,
-    };
-  }
   if (!cfg) {
     return {
       scopes: [],
-      note: timeoutNote ?? "Config unavailable.",
+      note:
+        timeoutNote ??
+        (params.source === "node"
+          ? "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec."
+          : "Config unavailable."),
+    };
+  }
+  if (params.source === "node" && !params.resolvedDefaults) {
+    return {
+      scopes: [],
+      note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
     };
   }
   return {
@@ -819,9 +801,17 @@ function buildEffectivePolicyReport(params: {
       cfg,
       approvals: params.approvals,
       hostPath: params.hostPath,
+      ...(params.source === "node"
+        ? {
+            hostDefaults: params.resolvedDefaults,
+            hostDefaultSource: "node-reported resolved defaults",
+          }
+        : {}),
     }),
     note:
-      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. " +
+      (params.source === "node"
+        ? "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. "
+        : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. ") +
       SESSION_EXEC_OVERRIDES_NOTE,
   };
 }

@@ -230,9 +230,9 @@ vi.mock("../../config/io.runtime.js", () => ({
   },
 }));
 
+// mock-isolation: Status collection must not read the operator service logs.
 vi.mock("../../daemon/diagnostics.js", () => ({
-  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv, options?: { requirePatternMatch?: boolean }) =>
-    readLastGatewayErrorLine(env, options),
+  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -1308,6 +1308,45 @@ describe("gatherDaemonStatus", () => {
     }
   });
 
+  it("reports an unreadable state database instead of a config read failure", async () => {
+    const stateDir = tempDirs.make("openclaw-status-unreadable-state-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, "not a sqlite database ".repeat(256));
+    const before = await fs.readFile(databasePath);
+    const originalPreflight = await vi.importActual<
+      typeof import("../../state/openclaw-database-preflight.js")
+    >("../../state/openclaw-database-preflight.js");
+    preflightOpenClawDatabaseSchemas.mockImplementation(
+      originalPreflight.preflightOpenClawDatabaseSchemas,
+    );
+    serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
+    const program = new Command().enablePositionalOptions().exitOverride();
+    registerGatewayCli(program);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+      throw new Error("status-exit");
+    });
+    try {
+      await expect(
+        program
+          .parseAsync(["gateway", "status", "--deep", "--no-probe", "--json"], { from: "user" })
+          .then(() => undefined),
+      ).rejects.toThrow("status-exit");
+      const output = JSON.stringify(writeJson.mock.calls);
+      expect(output).toContain(`shared state database is unreadable at ${databasePath}`);
+      expect(output).toContain("restore this file from a verified backup");
+      expect(output).not.toContain("CONFIG_READ_FAILED");
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(createConfigIOCalls).not.toHaveBeenCalled();
+      expect(await fs.readFile(databasePath)).toEqual(before);
+    } finally {
+      writeJson.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
   it("keeps readable shutdown history when a registered agent database has a newer schema", async () => {
     const stateDir = tempDirs.make("openclaw-status-readable-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -1728,7 +1767,8 @@ describe("gatherDaemonStatus", () => {
     const output = capturePrintedDaemonStatus(status, { json: false });
     expect(output.errors).toContain("Gateway runtime PID does not own the listening port");
     expect(output.errors).toContain("openclaw gateway restart");
-    expect(output.logs).toContain("Warm-up: launch agents can take a few seconds");
+    expect(output.logs).toContain("Readiness is not confirmed");
+    expect(output.logs).not.toContain("Warm-up:");
     expect(output.logs).not.toContain("Gateway process is running and owns the gateway port");
   });
 
@@ -1761,7 +1801,6 @@ describe("gatherDaemonStatus", () => {
       expect.objectContaining({
         ...daemonEnvironment,
       }),
-      { requirePatternMatch: true },
     );
     expect(status.port?.status).toBe("busy");
     expect(status.rpc?.ok).toBe(false);
@@ -1772,7 +1811,7 @@ describe("gatherDaemonStatus", () => {
     expect(output).toContain("Connectivity check: failed");
     expect(output).toContain("gateway closed (1000):");
     expect(output).toContain(
-      "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",
+      "Recent Gateway log error (may be from an earlier run): parse/handle error: Error: ENOSPC: no space left on device, write",
     );
   });
 

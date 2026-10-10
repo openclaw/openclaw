@@ -65,7 +65,6 @@ describe("Codex participant native admission", () => {
   setupRunAttemptTestHooks({ sessionOwner: null });
   it.each([
     { hooks: "optional", lifecycle: "fresh", participants: "solo", policy: "normal" },
-    { hooks: "disabled", lifecycle: "fresh", participants: "solo", policy: "normal" },
     { hooks: "managed-only", lifecycle: "resumed", participants: "solo", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
@@ -183,7 +182,10 @@ describe("Codex participant native admission", () => {
               ]) {
                 spawnFailure = new Error(message);
                 await expect(
-                  resources.buildNativeHookRelayFinalConfigPatch({ action: "start" }),
+                  resources.buildNativeHookRelayFinalConfigPatch(
+                    { action: "start" },
+                    harness.client,
+                  ),
                 ).rejects.toBe(spawnFailure);
               }
               spawnFailure = ambiguity;
@@ -203,12 +205,7 @@ describe("Codex participant native admission", () => {
             resources.state.thread = binding;
             expect(preflight).toHaveBeenCalledWith(
               expect.objectContaining({
-                nativeModelAdmission:
-                  policy === "token-sharing"
-                    ? undefined
-                    : hooks === "disabled"
-                      ? "disabled"
-                      : "optional",
+                nativeModelAdmission: policy === "token-sharing" ? undefined : "optional",
               }),
             );
             const admission = await preflight.mock.results[0]?.value;

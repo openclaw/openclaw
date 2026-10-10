@@ -171,7 +171,27 @@ export function createPluginReloadCleanup({
         const errors = await withPluginHostCleanupTimeout(
           `plugin ${record.id} resources`,
           async () => {
-            const result = await getPluginInstance(record)?.dispose();
+            const instance = getPluginInstance(record);
+            const result = await instance?.dispose(
+              instance.disposing
+                ? undefined
+                : async () => {
+                    const { runPluginHostLifecycleCleanup } =
+                      await import("../plugins/host-hook-cleanup.js");
+                    const host = await runPluginHostLifecycleCleanup({
+                      registry,
+                      pluginId: record.id,
+                      reason: "restart",
+                    });
+                    recordCleanup(host);
+                    if (host.failures.length) {
+                      throw new AggregateError(
+                        host.failures.map(({ error }) => error),
+                        `Plugin ${record.id} lifecycle cleanup failed`,
+                      );
+                    }
+                  },
+            );
             return collectResourceFailures(result?.errors ?? []);
           },
         );
@@ -326,12 +346,16 @@ export function createPluginReloadCleanup({
   return {
     attempt,
     drainRetainedWork,
-    stopPreviousServices: async (services: PluginServicesHandle | null, strict: boolean) => {
+    stopPreviousServices: async (
+      services: PluginServicesHandle | null,
+      strict: boolean,
+      pluginIds: ReadonlySet<string> = changedPluginIds,
+    ) => {
       try {
         await services?.stop({
           strict: true,
           deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
-          pluginIds: changedPluginIds,
+          pluginIds,
         });
       } catch (error) {
         pendingServiceCleanup = strict ? getPluginServiceCleanupSettlement(error) : undefined;
@@ -425,14 +449,14 @@ export function createPluginReloadCleanup({
       pluginIds: ReadonlySet<string>,
       signal: AbortSignal,
       reportStatus: (status: GatewayPluginReloadStatus) => void,
-      assertCurrent: () => void,
+      checkpoint: () => Promise<void>,
     ) => {
       // Sidecars release their capability consumers before finite work and callbacks drain.
       await drainRetainedWork(pluginIds, signal, reportStatus, {
         includeConsumers: true,
         includeCalls: true,
       });
-      assertCurrent();
+      await checkpoint();
       if (retainedWorkQueued) {
         recordWarning("Plugin replacement waited for retained work to finish.");
       }

@@ -1,8 +1,4 @@
-import {
-  resolveScopeToolsPolicy,
-  scopeKey,
-  type ScopeTree,
-} from "openclaw/plugin-sdk/channel-policy";
+import { resolveScopeToolsPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type {
   ChannelGroupContext,
   GroupToolPolicyConfig,
@@ -18,90 +14,18 @@ import {
   resolveNestedAllowlistDecision,
 } from "../runtime-api.js";
 
-// Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
-const teamScopeKey = (teamKey: string) => scopeKey(["team", teamKey]);
-const channelScopeKey = (teamKey: string, channelKey: string) =>
-  scopeKey(["team", teamKey], ["channel", channelKey]);
-
-function buildMSTeamsToolPolicyTree(teams: MSTeamsConfig["teams"]): ScopeTree {
-  const scopes: ScopeTree["scopes"] = {};
-  for (const [teamKey, team] of Object.entries(teams ?? {})) {
-    scopes[teamScopeKey(teamKey)] = {
-      tools: team.tools,
-      toolsBySender: team.toolsBySender,
-    };
-    for (const [channelKey, channel] of Object.entries(team.channels ?? {})) {
-      scopes[channelScopeKey(teamKey, channelKey)] = {
-        tools: channel.tools,
-        toolsBySender: channel.toolsBySender,
-      };
-    }
-  }
-  return { scopes };
-}
-
-function resolveMSTeamsToolPolicyScope(params: {
-  cfg: MSTeamsConfig;
-  groupSpace?: string | null;
-  groupId?: string | null;
-}) {
-  const teams = params.cfg.teams ?? {};
-  const tree = buildMSTeamsToolPolicyTree(teams);
-  // Each level selects one whole entry, so exact matches hide that level's wildcard.
-  // Selected channel fields then cascade into selected team fields through the path.
-  const teamMatch = resolveChannelEntryMatchWithFallback({
-    entries: teams,
-    keys: buildChannelKeyCandidates(params.groupSpace?.trim()),
+function matchMSTeamsPolicyEntry<T>(entries: Record<string, T>, ...keys: (string | undefined)[]) {
+  return resolveChannelEntryMatchWithFallback({
+    entries,
+    keys: buildChannelKeyCandidates(...keys),
     wildcardKey: "*",
     normalizeKey: normalizeChannelSlug,
   });
-  const matchedTeamKey = teamMatch.matchKey ?? teamMatch.key;
-  if (teamMatch.entry && matchedTeamKey) {
-    const channelMatch = resolveChannelEntryMatchWithFallback({
-      entries: teamMatch.entry.channels ?? {},
-      keys: buildChannelKeyCandidates(params.groupId?.trim()),
-      wildcardKey: "*",
-      normalizeKey: normalizeChannelSlug,
-    });
-    const matchedChannelKey = channelMatch.matchKey ?? channelMatch.key;
-    return {
-      tree,
-      path: [
-        teamScopeKey(matchedTeamKey),
-        ...(channelMatch.entry && matchedChannelKey
-          ? [channelScopeKey(matchedTeamKey, matchedChannelKey)]
-          : []),
-      ],
-    };
-  }
-  return { tree, path: [] };
 }
 
-function resolveMSTeamsCrossTeamScanScope(params: { cfg: MSTeamsConfig; groupId?: string | null }) {
-  const teams = params.cfg.teams ?? {};
-  const tree = buildMSTeamsToolPolicyTree(teams);
-  const groupId = params.groupId?.trim();
-  if (!groupId) {
-    return { tree, path: [] };
-  }
-  const channelCandidates = buildChannelKeyCandidates(groupId);
-  // The first channel match in team insertion order owns the path.
-  for (const [teamKey, team] of Object.entries(teams)) {
-    const channelMatch = resolveChannelEntryMatchWithFallback({
-      entries: team.channels ?? {},
-      keys: channelCandidates,
-      wildcardKey: "*",
-      normalizeKey: normalizeChannelSlug,
-    });
-    const matchedChannelKey = channelMatch.matchKey ?? channelMatch.key;
-    if (channelMatch.entry && matchedChannelKey) {
-      return {
-        tree,
-        path: [teamScopeKey(teamKey), channelScopeKey(teamKey, matchedChannelKey)],
-      };
-    }
-  }
-  return { tree, path: [] };
+function selectMSTeamsPolicyEntry<T>(entries: Record<string, T>, key?: string | null) {
+  const match = matchMSTeamsPolicyEntry(entries, key?.trim());
+  return (match.matchKey ?? match.key) ? match.entry : undefined;
 }
 
 export function resolveMSTeamsRouteConfig(params: {
@@ -118,31 +42,21 @@ export function resolveMSTeamsRouteConfig(params: {
   const channelName = params.channelName?.trim();
   const teams = params.cfg?.teams ?? {};
   const allowlistConfigured = Object.keys(teams).length > 0;
-  const teamCandidates = buildChannelKeyCandidates(
+  const teamMatch = matchMSTeamsPolicyEntry(
+    teams,
     teamId,
     params.allowNameMatching ? teamName : undefined,
     params.allowNameMatching && teamName ? normalizeChannelSlug(teamName) : undefined,
   );
-  const teamMatch = resolveChannelEntryMatchWithFallback({
-    entries: teams,
-    keys: teamCandidates,
-    wildcardKey: "*",
-    normalizeKey: normalizeChannelSlug,
-  });
   const teamConfig = teamMatch.entry;
   const channels = teamConfig?.channels ?? {};
   const channelAllowlistConfigured = Object.keys(channels).length > 0;
-  const channelCandidates = buildChannelKeyCandidates(
+  const channelMatch = matchMSTeamsPolicyEntry(
+    channels,
     conversationId,
     params.allowNameMatching ? channelName : undefined,
     params.allowNameMatching && channelName ? normalizeChannelSlug(channelName) : undefined,
   );
-  const channelMatch = resolveChannelEntryMatchWithFallback({
-    entries: channels,
-    keys: channelCandidates,
-    wildcardKey: "*",
-    normalizeKey: normalizeChannelSlug,
-  });
   const channelConfig = channelMatch.entry;
 
   const allowed = resolveNestedAllowlistDecision({
@@ -174,30 +88,37 @@ export function resolveMSTeamsGroupToolPolicy(
   if (!cfg) {
     return undefined;
   }
-  const scope = resolveMSTeamsToolPolicyScope({
-    cfg,
-    groupSpace: params.groupSpace,
-    groupId: params.groupId,
-  });
-  // No messageProvider: channel-prefixed sender keys were historically dead here.
-  const senderScope = {
-    senderPolicyMode: params.senderPolicyMode,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  };
-  const resolved = resolveScopeToolsPolicy({ ...scope, ...senderScope });
-  if (resolved !== undefined) {
+  const teams = cfg.teams ?? {};
+  const team = selectMSTeamsPolicyEntry(teams, params.groupSpace);
+  const channel = team && selectMSTeamsPolicyEntry(team.channels ?? {}, params.groupId);
+  // Only selected nodes participate in policy resolution; fixed local keys avoid
+  // materializing the whole config tree or encoding user-provided scope names.
+  const resolve = (selectedTeam?: MSTeamsTeamConfig, selectedChannel?: MSTeamsChannelConfig) =>
+    resolveScopeToolsPolicy({
+      tree: { scopes: { team: selectedTeam ?? {}, channel: selectedChannel ?? {} } },
+      path: ["team", "channel"],
+      // No messageProvider: channel-prefixed sender keys were historically dead here.
+      senderPolicyMode: params.senderPolicyMode,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+  const resolved = resolve(team, channel);
+  // A policy-less team falls through to the first cross-team channel match;
+  // a matched channel never does, even when neither selected node has policy.
+  if (resolved !== undefined || channel) {
     return resolved;
   }
-  // Parity with the legacy resolver: a matched team that yields no policy falls
-  // through to the cross-team channel scan, but a matched CHANNEL never does.
-  if (scope.path.length > 1) {
-    return undefined;
+  if (params.groupId?.trim()) {
+    for (const candidate of Object.values(teams)) {
+      const matched = selectMSTeamsPolicyEntry(candidate.channels ?? {}, params.groupId);
+      if (matched) {
+        return resolve(candidate, matched);
+      }
+    }
   }
-  const scanScope = resolveMSTeamsCrossTeamScanScope({ cfg, groupId: params.groupId });
-  return resolveScopeToolsPolicy({ ...scanScope, ...senderScope });
+  return undefined;
 }
 
 type MSTeamsReplyPolicy = {

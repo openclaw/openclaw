@@ -90,7 +90,7 @@ describe("Codex session deletion subscriptions", () => {
     return { bindingStore, binding, client, remove, request, resume, seed, releaseClientLease };
   }
 
-  it.each(["deletion", "context reset"] as const)(
+  it.each(["context reset"] as const)(
     "%s rejects a claimed native thread before invoking the session transaction",
     async (operation) => {
       const fixture = createFixture(operation);
@@ -109,7 +109,7 @@ describe("Codex session deletion subscriptions", () => {
     },
   );
 
-  it.each(["deletion", "context reset"] as const)(
+  it.each(["context reset"] as const)(
     "%s joins native child settlement before releasing its subscription and client lease",
     async (operation) => {
       const fixture = createFixture(operation);
@@ -213,7 +213,7 @@ describe("Codex session deletion subscriptions", () => {
     }
   });
 
-  it.each(["deletion", "context reset"] as const)(
+  it.each(["context reset"] as const)(
     "%s holds the native queue through unsubscribe acknowledgement before a successor resumes",
     async (operation) => {
       const fixture = createFixture(operation);

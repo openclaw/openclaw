@@ -10,6 +10,7 @@ import type { AcpSessionReadInput } from "./session-meta-read.types.js";
 
 export type AcpSessionMutationSource =
   | AcpSessionSourceReadInput["source"]
+  | (AcpSessionSourceReadInput["source"] & { kind: "reset" })
   | {
       kind: "ephemeral";
       agentId: string;
@@ -50,7 +51,7 @@ export type AcpSessionMutationPrepareInput = {
   read: AcpSessionReadInput;
   entry?: SessionEntry;
   updatedAt: number;
-  source: AcpSessionMutationSource;
+  source: Exclude<AcpSessionMutationSource, { kind: "reset" }>;
   sessionKey: string;
   agentId: string;
   expectedControlBinding?: AcpSessionControlBinding;

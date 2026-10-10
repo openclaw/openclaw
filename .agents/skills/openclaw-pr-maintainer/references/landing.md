@@ -378,8 +378,10 @@ intent and landing-parent audit retain their original main anchor. Already-selec
 REST completes its final observation and main materialization before one final
 live authority verification. GraphQL retains its post-authority local-only reread,
 including late REST fallback; a newly unavailable main there is a pre-dispatch
-refusal. Neither path fetches after final authority verification. Crabbox admission
-and retained-outcome reconciliation keep their existing strict main binding.
+refusal. Neither path fetches after final authority verification. Crabbox admission also verifies forward main ancestry and the candidate tree. If its final proof observes newer main, it discards that authority decision before materializing or settling the new tip, then repeats full live verification within the same three-round admin limit. The tested proof base remains pinned while the live PR base is checked for forward ancestry; active organization membership is the final live authority read.
+
+`OPENCLAW_PR_STRICT_DRIFT=1` restores strict main stability on every landing
+route. Retained-outcome reconciliation keeps its existing strict main binding.
 A fork run with an empty GitHub PR association must match the current PR's exact
 head, branch, and source repository identity as well as that check-run; an
 explicit association with another PR is rejected. The retained result names
@@ -530,8 +532,14 @@ replaying an accepted or uncertain request.
 A failed or timed-out merge response can still mean GitHub merged it. Reconcile
 remote state and ancestry before retrying. Verify the final merge commit is on
 current main; do not count a draft, pending check, or local summary as landing.
-After `merge-run` removes its worktree, switch command execution back to a
-persistent checkout. Once the requested outcome and required verification are
+Run closeout from a persistent checkout only after the owning session has exited
+or released its cwd. Changing a child command's cwd does not move its parent
+agent or shell; never remove a worktree containing a live process's cwd, including
+any subdirectory. Native cleanup refuses observed cwd holders. Preserve that
+refusal; do not bypass it with raw `git worktree remove`, `rm`, or a custom script.
+If your own session still holds the worktree, finish the report with its retained
+path and defer removal to a later closeout after the session ends.
+Once the requested outcome and required verification are
 complete, remove task-owned test logs, receipts, proof archives, and scratch.
 This includes `.crabbox` outputs and task-owned archives under `.local` or
 temporary directories. Existing published PR evidence needs no local duplicate.

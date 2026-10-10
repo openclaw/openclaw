@@ -95,6 +95,7 @@ describe("registered subagent sweeper lifecycle", () => {
       await register("retained");
       await activateGatewayRuntime();
       await vi.dynamicImportSettled();
+      recoverRow.mockClear();
       if (suspended) {
         expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
       } else {

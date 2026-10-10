@@ -38,9 +38,6 @@ function renderViewerAvatar(view: IdentityAvatarView) {
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
     ><span class="viewer-avatar__initials">${view.fallback.initials}</span></span
   >`;
-  if (!view.imageUrl) {
-    return fallback;
-  }
   return html`${renderIdentityAvatarImage({ view, fallbackSelector: ".viewer-avatar" })}${fallback}`;
 }
 

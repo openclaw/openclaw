@@ -9,6 +9,7 @@ import type {
   DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { assignOptionalNumberAttrs } from "./service-attributes.js";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
@@ -235,14 +236,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.memory.heap_total_bytes": evt.memory.heapTotalBytes,
         "openclaw.memory.external_bytes": evt.memory.externalBytes,
         "openclaw.memory.array_buffers_bytes": evt.memory.arrayBuffersBytes,
-        ...(evt.thresholdBytes !== undefined
-          ? { "openclaw.memory.threshold_bytes": evt.thresholdBytes }
-          : {}),
-        ...(evt.rssGrowthBytes !== undefined
-          ? { "openclaw.memory.rss_growth_bytes": evt.rssGrowthBytes }
-          : {}),
-        ...(evt.windowMs !== undefined ? { "openclaw.memory.window_ms": evt.windowMs } : {}),
       };
+      assignOptionalNumberAttrs(spanAttrs, "openclaw.memory.", {
+        threshold_bytes: evt.thresholdBytes,
+        rss_growth_bytes: evt.rssGrowthBytes,
+        window_ms: evt.windowMs,
+      });
       const span = runtime.spanWithDuration("openclaw.memory.pressure", spanAttrs, 0, {
         endTimeMs: evt.ts,
       });

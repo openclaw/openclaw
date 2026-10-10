@@ -252,7 +252,7 @@ describe("IRC automatic reply outcomes", () => {
       vi.mocked(core.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
         async ({ dispatcherOptions }) => {
           try {
-            await dispatcherOptions.deliver({ text: String.raw`\n` }, { kind: "final" });
+            await dispatcherOptions.deliver({ text: "\u0001" }, { kind: "final" });
           } catch (error) {
             await dispatcherOptions.onError?.(error, { kind: "final" });
           }

@@ -16,7 +16,7 @@ describe("Anthropic plugin manifest", () => {
     expect(models.length).toBeGreaterThan(0);
     for (const model of models) {
       expect(model.compat?.codeMode, model.id).toBe(
-        model.id === "claude-haiku-4-5" ? "capable" : "preferred",
+        model.id.startsWith("claude-haiku-") ? "capable" : "preferred",
       );
     }
   });

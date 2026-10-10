@@ -437,49 +437,46 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
     }
   });
 
-  it.each([false, true])(
-    "refuses retired request authority after pairing awaits (managed skills: %s)",
-    async (managed) => {
-      const pairingStarted = createDeferredCore();
-      const pairing = createDeferredCore<{ identity: string; generation: string }>();
-      const f = await fixture(
-        "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
-        {
-          managed,
-          resolveCurrentPairingState: async () => {
-            pairingStarted.resolve();
-            return await pairing.promise;
-          },
+  it("refuses retired request authority after managed-skill pairing awaits", async () => {
+    const pairingStarted = createDeferredCore();
+    const pairing = createDeferredCore<{ identity: string; generation: string }>();
+    const f = await fixture(
+      "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
+      {
+        managed: true,
+        resolveCurrentPairingState: async () => {
+          pairingStarted.resolve();
+          return await pairing.promise;
         },
-      );
-      const retired = new Error("request authority retired while resolving node pairing");
-      let current = true;
-      f.context.params.assertCurrent = () => {
-        if (!current) {
-          throw retired;
-        }
-      };
-      const running = f.execute();
-      const outcome = Promise.allSettled([running]);
-      try {
-        await Promise.race([
-          pairingStarted.promise,
-          running.then(() => {
-            throw new Error("Node turn completed before pairing resolution");
-          }),
-        ]);
-        current = false;
-        pairing.resolve({ identity: "node-1", generation: "generation-1" });
-
-        expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-        expect(f.requests).toEqual([]);
-      } finally {
-        pairing.resolve({ identity: "node-1", generation: "generation-1" });
-        await outcome;
-        await f.close();
+      },
+    );
+    const retired = new Error("request authority retired while resolving node pairing");
+    let current = true;
+    f.context.params.assertCurrent = () => {
+      if (!current) {
+        throw retired;
       }
-    },
-  );
+    };
+    const running = f.execute();
+    const outcome = Promise.allSettled([running]);
+    try {
+      await Promise.race([
+        pairingStarted.promise,
+        running.then(() => {
+          throw new Error("Node turn completed before pairing resolution");
+        }),
+      ]);
+      current = false;
+      pairing.resolve({ identity: "node-1", generation: "generation-1" });
+
+      expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+      expect(f.requests).toEqual([]);
+    } finally {
+      pairing.resolve({ identity: "node-1", generation: "generation-1" });
+      await outcome;
+      await f.close();
+    }
+  });
 
   it("requires the additive node capability before dispatching a selected bundle", async () => {
     const f = await fixture("process.exit(99)", { managed: true, capability: false });

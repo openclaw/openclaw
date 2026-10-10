@@ -110,32 +110,6 @@ export function observeManagedServiceUpdateHandoffClose(
   });
 }
 
-/** A detached helper still shares the system unit's cgroup until it settles. */
-export function joinSystemServiceUpdateHandoffs(
-  owners: ReadonlyMap<string, ActiveManagedServiceUpdateHandoff>,
-): Promise<void> | undefined {
-  const pending = () =>
-    [...owners.values()].filter((owner) => owner.operatorRestartWarning && !owner.settled);
-  let updates = pending();
-  if (!updates.length) {
-    return undefined;
-  }
-  return (async () => {
-    while (updates.length) {
-      await Promise.all(
-        updates.map(async (owner) => {
-          await owner.flight;
-          await owner.closed;
-          if (!owner.settled) {
-            throw new Error("System-service updater settlement could not be confirmed.");
-          }
-        }),
-      );
-      updates = pending();
-    }
-  })();
-}
-
 type GatewayServiceRecovery =
   | { kind: "systemd"; unit: string }
   | { kind: "launchd"; uid: number; label: string; plistPath: string }

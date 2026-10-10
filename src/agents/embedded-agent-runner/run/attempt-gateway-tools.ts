@@ -1,6 +1,7 @@
 import { prepareGitHubPublicationAvailability } from "../../../gateway/github-publication-availability.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { agentHarnessExposesOpenClawTools } from "../../harness/tool-surface.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -26,6 +27,7 @@ export async function withPreparedEmbeddedGatewayTools<T>(
   > & { agentId: string; sessionKey: string; agentHarnessId: string },
   isAttemptCurrent: () => boolean,
   run: () => Promise<T>,
+  sessionTarget?: AgentRunSessionTarget,
 ): Promise<T> {
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attempt.admittedRunContext,
@@ -34,11 +36,10 @@ export async function withPreparedEmbeddedGatewayTools<T>(
     sessionKey: attempt.sessionKey,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
     turnSourceLocal:
-      !attempt.messageChannel &&
-      !attempt.messageProvider &&
-      attempt.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
-        ? true
-        : undefined,
+      (!attempt.messageChannel &&
+        !attempt.messageProvider &&
+        attempt.cronCreatorAuthorityCapability?.callerOrigin.kind === "local") ||
+      undefined,
     turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,
@@ -60,6 +61,7 @@ export async function withPreparedEmbeddedGatewayTools<T>(
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
         agentId: attempt.agentId,
+        ...(sessionTarget?.storePath ? { sessionTarget } : {}),
         assertCurrent: isCurrent,
       });
       if (!isCurrent()) {

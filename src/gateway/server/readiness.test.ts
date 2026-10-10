@@ -42,7 +42,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
+    recoverAutostartSuppression: vi.fn(() => undefined),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -399,7 +399,12 @@ describe("createReadinessChecker", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
         accounts: {
-          slack: managedAccount({ lifecycle: "blocked" }),
+          slack: stoppedAccount({
+            lifecycle: "blocked",
+            linked: false,
+            ingressUnavailable: true,
+            restartPending: true,
+          }),
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["slack"]));

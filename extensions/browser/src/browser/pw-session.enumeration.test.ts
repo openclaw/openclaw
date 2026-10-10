@@ -26,6 +26,7 @@ function makePageEnumerationBrowser(
     readTargetInfo?: () => Promise<{ targetInfo: { targetId: string; title: string } }>;
     isClosed?: () => boolean;
     detach?: () => Promise<void>;
+    published?: boolean;
   }>,
 ): BrowserMockBundle & {
   pages: import("playwright-core").Page[];
@@ -37,20 +38,22 @@ function makePageEnumerationBrowser(
   const browserClose = vi.fn(async () => {});
   const specByPage = new WeakMap<import("playwright-core").Page, (typeof specs)[number]>();
   const pageEvents: EventEmitter[] = [];
-  const pages = specs.map((spec) => {
-    const events = new EventEmitter();
-    pageEvents.push(events);
-    const page = {
-      on: events.on.bind(events),
-      off: events.off.bind(events),
-      context: () => context,
-      title: vi.fn(spec.readTitle ?? (async () => spec.title)),
-      url: vi.fn(() => spec.url),
-      isClosed: spec.isClosed ?? (() => false),
-    } as unknown as import("playwright-core").Page;
-    specByPage.set(page, spec);
-    return page;
-  });
+  const pages = specs
+    .filter((spec) => spec.published !== false)
+    .map((spec) => {
+      const events = new EventEmitter();
+      pageEvents.push(events);
+      const page = {
+        on: events.on.bind(events),
+        off: events.off.bind(events),
+        context: () => context,
+        title: vi.fn(spec.readTitle ?? (async () => spec.title)),
+        url: vi.fn(() => spec.url),
+        isClosed: spec.isClosed ?? (() => false),
+      } as unknown as import("playwright-core").Page;
+      specByPage.set(page, spec);
+      return page;
+    });
   const newCDPSession = vi.fn(async (page: import("playwright-core").Page) => {
     const spec = specByPage.get(page);
     if (!spec) {
@@ -85,7 +88,7 @@ function makePageEnumerationBrowser(
       send: vi.fn(async () => ({
         targetInfos: specs
           .filter((spec) => !spec.isClosed?.())
-          .map((spec) => ({ targetId: spec.targetId, type: "page" })),
+          .map((spec) => ({ targetId: spec.targetId, type: "page", url: spec.url })),
       })),
       detach: vi.fn(async () => {}),
     })),
@@ -99,6 +102,38 @@ beforeEach(() => {
 });
 
 describe("pw-session page enumeration", () => {
+  it("does not wait for an extension-internal target that Playwright does not publish", async () => {
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "EXTENSION",
+        title: "Other extension",
+        url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html",
+        published: false,
+      },
+      {
+        targetId: "GOODREADS",
+        title: "My Books",
+        url: "https://www.goodreads.com/review/list",
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        requireCompleteTargetList: true,
+      }),
+    ).resolves.toEqual([
+      {
+        targetId: "GOODREADS",
+        title: "My Books",
+        url: "https://www.goodreads.com/review/list",
+        type: "page",
+      },
+    ]);
+  });
+
   it("reconciles a page closed between native discovery and Page enumeration", async () => {
     vi.useFakeTimers();
     let closed = false;

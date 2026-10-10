@@ -169,8 +169,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         .map(([event]) => event)
         .filter((event) => event.stream === "assistant"),
     ).toEqual([
-      { stream: "assistant", data: { itemId: "msg-1", text: "hel", delta: "hel" } },
-      { stream: "assistant", data: { itemId: "msg-1", text: "hello", delta: "lo" } },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-1", text: "hel", delta: "hel", occurrenceId: expect.any(String) },
+      },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-1", text: "hello", delta: "lo", occurrenceId: expect.any(String) },
+      },
     ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
@@ -337,8 +343,19 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         .map((call) => call[0])
         .filter((event) => event.stream === "assistant"),
     ).toEqual([
-      { stream: "assistant", data: { itemId: "answer-1", text: summary, delta: summary } },
-      { stream: "assistant", data: { itemId: "answer-2", text: coda, delta: coda } },
+      {
+        stream: "assistant",
+        data: {
+          itemId: "answer-1",
+          text: summary,
+          delta: summary,
+          occurrenceId: expect.any(String),
+        },
+      },
+      {
+        stream: "assistant",
+        data: { itemId: "answer-2", text: coda, delta: coda, occurrenceId: expect.any(String) },
+      },
     ]);
     expect(result.assistantTexts).toEqual([summary, coda]);
     expect(result.lastAssistant?.content).toEqual([

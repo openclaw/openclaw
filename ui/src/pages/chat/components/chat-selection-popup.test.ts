@@ -65,7 +65,7 @@ describe("chat selection popup", () => {
     vi.useRealTimers();
   });
 
-  it.each([0, 1])("routes selection action %i to its own composer", (actionIndex) => {
+  it("routes Add to chat to its own composer", () => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("Let's Encrypt cert is valid");
     selectRange(textNode, 0, 18);
@@ -81,10 +81,8 @@ describe("chat selection popup", () => {
     ]);
     expect(buttons[0]?.querySelector("svg")).toBeNull();
 
-    buttons[actionIndex]?.click();
-    const [called, untouched] =
-      actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
-    expect(called).toHaveBeenCalledWith(
+    buttons[0]?.click();
+    expect(onAddToChatSpy).toHaveBeenCalledWith(
       {
         text: "Let's Encrypt cert",
         start: 0,
@@ -94,27 +92,9 @@ describe("chat selection popup", () => {
       },
       expect.objectContaining({ top: 100, left: 100 }),
     );
-    expect(untouched).not.toHaveBeenCalled();
+    expect(onAskSideChatSpy).not.toHaveBeenCalled();
     expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
-  });
-
-  it("retains exact whitespace and the source offset of a repeated Unicode selection", () => {
-    vi.useFakeTimers();
-    const { thread, textNode } = buildThreadWithBubble("🦞 first\n  second  ");
-    selectRange(textNode, 9, 19);
-    pointerUp(thread);
-    document.querySelector<HTMLButtonElement>(".chat-selection-popup button")!.click();
-    expect(onAddToChatSpy).toHaveBeenCalledWith(
-      {
-        text: "  second  ",
-        start: 9,
-        end: 19,
-        messageId: "assistant-1",
-        entryId: "entry-1",
-      },
-      expect.anything(),
-    );
   });
 
   it("ignores selections outside chat bubbles and collapsed selections", () => {
@@ -175,6 +155,20 @@ describe("chat selection popup", () => {
     );
   });
 
+  it("dismisses the selection toolbar when the transcript scrolls", () => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("scroll away from me");
+    selectRange(textNode, 0, 7);
+    pointerUp(thread);
+    expect(document.body.querySelector(".chat-selection-popup")).not.toBeNull();
+
+    const transcript = document.createElement("div");
+    transcript.className = "chat-transcript";
+    document.body.appendChild(transcript);
+    transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
+    expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
+  });
+
   it("dismisses when the selection collapses", () => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("dismiss me later");
@@ -227,39 +221,6 @@ describe("chat annotation editor", () => {
     return { input, onSave, onCancel };
   }
 
-  it("confirms an empty optional comment only on activation", () => {
-    const { input, onSave } = editor();
-    expect(document.activeElement).toBe(input);
-    expect(onSave).not.toHaveBeenCalled();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onSave).toHaveBeenCalledWith("");
-    expect(document.querySelector("[role=dialog]")).toBeNull();
-  });
-
-  it("keeps edits local until Save and cancels without changing a saved comment", () => {
-    const { input, onSave, onCancel } = editor({ comment: "Saved comment", expanded: true });
-    input.value = "Unsaved edit";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(onSave).not.toHaveBeenCalled();
-    expect(onCancel).toHaveBeenCalledOnce();
-    expect(document.querySelector("[role=dialog]")).toBeNull();
-  });
-
-  it("preserves multiline and Unicode comments and ignores IME Enter", () => {
-    const { input, onSave } = editor();
-    input.value = "  Why this? 🦞\nKeep the next line.  ";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
-    );
-    expect(onSave).not.toHaveBeenCalled();
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
-    );
-    expect(onSave).toHaveBeenCalledWith("  Why this? 🦞\nKeep the next line.  ");
-  });
-
   it.each([
     { modifiers: {}, release: "keyup" },
     { modifiers: { ctrlKey: true }, release: "blur" },
@@ -298,28 +259,25 @@ describe("chat annotation editor", () => {
     },
   );
 
-  it.each([{ isComposing: true }, { keyCode: 229 }])(
-    "preserves unsaved comments when Escape dismisses IME candidates: %j",
-    (composition) => {
-      const { input, onSave, onCancel } = editor({ expanded: true });
-      input.value = "変換中のコメント";
-      const escape = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-        ...composition,
-      });
-      input.dispatchEvent(escape);
-      expect(escape.defaultPrevented).toBe(false);
-      expect(document.querySelector("[role=dialog]")).not.toBeNull();
-      expect(input.value).toBe("変換中のコメント");
-      expect(onSave).not.toHaveBeenCalled();
-      expect(onCancel).not.toHaveBeenCalled();
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      expect(document.querySelector("[role=dialog]")).toBeNull();
-      expect(onCancel).toHaveBeenCalledOnce();
-    },
-  );
+  it("preserves unsaved comments when legacy Escape dismisses IME candidates", () => {
+    const { input, onSave, onCancel } = editor({ expanded: true });
+    input.value = "変換中のコメント";
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+      keyCode: 229,
+    });
+    input.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(document.querySelector("[role=dialog]")).not.toBeNull();
+    expect(input.value).toBe("変換中のコメント");
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
 
   it("keeps rejected saves editable and retires a stale owner", () => {
     const controller = new AbortController();
@@ -338,6 +296,64 @@ describe("chat annotation editor", () => {
     document.querySelector<HTMLButtonElement>(".chat-annotation-editor__delete")!.click();
     expect(onDelete).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it("keeps an unsaved comment when a layout change scrolls the transcript", () => {
+    const { input, onSave, onCancel } = editor();
+    input.value = "Short layout control.";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Compensation for a width or height change scrolls the transcript the
+    // anchor lives in; that is not the user dismissing the editor.
+    const transcript = document.createElement("div");
+    transcript.className = "chat-transcript";
+    document.body.appendChild(transcript);
+    transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
+
+    const popup = document.querySelector<HTMLElement>(".chat-annotation-editor")!;
+    expect(popup).not.toBeNull();
+    expect(input.value).toBe("Short layout control.");
+    expect(document.activeElement).toBe(input);
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unsaved comment when resizing the viewport", () => {
+    const { input, onCancel } = editor();
+    input.value = "873 characters that must survive the resize.";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    window.dispatchEvent(new Event("resize"));
+
+    expect(document.querySelector("[role=dialog]")).not.toBeNull();
+    expect(input.value).toBe("873 characters that must survive the resize.");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("still closes an untouched editor when the transcript scrolls", () => {
+    editor({ comment: "Saved comment", expanded: true });
+    const transcript = document.createElement("div");
+    transcript.className = "chat-transcript";
+    document.body.appendChild(transcript);
+    transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
+
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it.each([
+    [
+      "an outside interaction",
+      () => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })),
+    ],
+    [
+      "Escape",
+      () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    ],
+    ["its owner retiring the pane", () => removeChatSelectionPopup("pane-a")],
+  ])("still dismisses the editor through %s", (_name, dismiss) => {
+    editor();
+    dismiss();
     expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 });

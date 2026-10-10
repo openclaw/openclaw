@@ -543,20 +543,14 @@ export async function resolveUsageSessionSource(input: {
       return { sessionFile: path.join(sessionsDir, primary.name) };
     }
 
+    const archiveTimestamp = (name: string) =>
+      parseSessionArchiveTimestamp(name, "deleted") ??
+      parseSessionArchiveTimestamp(name, "reset") ??
+      0;
     const latestArchive = entries
       .filter((entry) => isSessionArchiveArtifactName(entry.name))
       .map((entry) => entry.name)
-      .toSorted((a, b) => {
-        const tsA =
-          parseSessionArchiveTimestamp(a, "deleted") ??
-          parseSessionArchiveTimestamp(a, "reset") ??
-          0;
-        const tsB =
-          parseSessionArchiveTimestamp(b, "deleted") ??
-          parseSessionArchiveTimestamp(b, "reset") ??
-          0;
-        return tsB - tsA || b.localeCompare(a);
-      })[0];
+      .toSorted((a, b) => archiveTimestamp(b) - archiveTimestamp(a) || b.localeCompare(a))[0];
 
     const sessionFile = latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
     return sessionFile ? { sessionFile } : undefined;

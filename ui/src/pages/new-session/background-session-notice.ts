@@ -1,7 +1,6 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import type { AgentWaitResult } from "../../../../src/agents/run-wait.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   autoPromptNotificationsOnSend,
@@ -17,7 +16,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
+import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 const RETRY_DELAY_MS = 1_000;
 
@@ -110,21 +109,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
       if (!params.isCurrentOwner()) {
         return;
       }
-      selectApplicationSession({
-        selection: params.context.agentSelection,
-        gateway: params.context.gateway,
-        sessionKey: params.key,
-        agentId: params.agentId,
-      });
-      params.context.navigate(
-        "chat",
-        sessionNavigationTarget({
-          context: params.context,
-          face: "chat",
-          sessionKey: params.key,
-          agentId: params.agentId,
-        }).options,
-      );
+      openSessionNoticeTarget(params.context, params.key, params.agentId);
     },
   });
 }

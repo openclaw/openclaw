@@ -144,14 +144,12 @@ async function resolveDiscordThreadStarterUncached(
       messageChannelId,
       params.channel.id,
     )) as DiscordThreadStarterRestMessage | null;
-    if (!starter) {
-      cacheMiss();
-      return null;
-    }
-    const payload = buildDiscordThreadStarterPayload({
-      starter,
-      resolveTimestampMs: params.resolveTimestampMs,
-    });
+    const payload = starter
+      ? buildDiscordThreadStarterPayload({
+          starter,
+          resolveTimestampMs: params.resolveTimestampMs,
+        })
+      : null;
     if (!payload) {
       cacheMiss();
       return null;

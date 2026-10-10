@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -20,6 +21,64 @@ const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
 
 describe("subagent registry restart recovery", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
+
+  it("pauses startup settlement until the crash-loop breaker releases the periodic sweep", async () => {
+    vi.useFakeTimers();
+    const pausedUntilMs = Date.now() + 2_000;
+    const runtime = {
+      ...gatewayRuntime,
+      prepareRestartRecovery: () =>
+        Date.now() < pausedUntilMs ? Promise.resolve(pausedUntilMs) : undefined,
+    };
+    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+      { current: runtime },
+      run(),
+    );
+    finalizeInterruptedSubagentRun.mockResolvedValue(1);
+    try {
+      await sweeper.recoverInterruptedRuns();
+      await sweeper.sweepOnce();
+      expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+    } finally {
+      await sweeper.reset();
+      vi.useRealTimers();
+    }
+  });
+
+  it("abandons startup settlement if the Gateway changes while the breaker is checked", async () => {
+    const preparation = createDeferred<number | undefined>();
+    const entered = createDeferred();
+    const runtime = {
+      current: {
+        ...gatewayRuntime,
+        prepareRestartRecovery: () => {
+          entered.resolve();
+          return preparation.promise;
+        },
+      },
+    };
+    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+      runtime,
+      run(),
+    );
+    const pending = sweeper.recoverInterruptedRuns();
+    try {
+      await entered.promise;
+      rotateAgentEventLifecycleGeneration();
+    } finally {
+      preparation.resolve(undefined);
+      await pending;
+      await sweeper.reset();
+    }
+    expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+    expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+  });
 
   it.each(["run", "admission"] as const)(
     "recovers as soon as a retained %s releases ownership",

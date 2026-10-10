@@ -6,12 +6,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -50,23 +52,18 @@ function readAgentDatabaseLeaseIds(pathname: string, env: NodeJS.ProcessEnv): st
 
 function observeCanonicalWriterLeases() {
   const leases = new Map<string, string>();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        const facts = request.facts;
-        if (
-          request.stage === "open" &&
-          isRecord(facts) &&
-          typeof facts.databasePath === "string" &&
-          typeof facts.leaseId === "string"
-        ) {
-          leases.set(facts.databasePath, facts.leaseId);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const spy = probe.admission(admission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "open" &&
+      isRecord(facts) &&
+      typeof facts.databasePath === "string" &&
+      typeof facts.leaseId === "string"
+    ) {
+      leases.set(facts.databasePath, facts.leaseId);
+    }
+    admit(request, grant);
+  });
   return { leases, restore: () => spy.mockRestore() };
 }
 
@@ -85,6 +82,8 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
       },
     );
     await waitForSessionTranscriptIndexReconcile(options);
+    // Seeding may retain a worker writer; this fixture starts with only its native handle.
+    await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
     const database = openOpenClawAgentDatabase(options);
     const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
     expect(nativeLeases).toHaveLength(1);
@@ -161,6 +160,7 @@ it.each(["complete", "native-exit"] as const)(
           },
         );
         await waitForSessionTranscriptIndexReconcile(options);
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         const baseline = readAgentDatabaseLeaseIds(database.path, env);
         expect(baseline).toHaveLength(1);
@@ -252,25 +252,24 @@ it.each(["complete", "native-exit"] as const)(
         activeTasks: 0,
         pendingTasks: 0,
       });
-      const retainedCanonicalLeases: string[] = [];
       for (const options of targets.slice(0, 2)) {
         const database = openOpenClawAgentDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
-        const canonicalId = canonical.leases.get(database.path);
+        const canonicalId = expectDefined(canonical.leases.get(database.path), "canonical lease");
         const plannerId = plannerLeases.get(database.path);
         expect(canonicalId).toEqual(expect.any(String));
         expect(plannerId).toEqual(expect.any(String));
         expect(canonicalId).not.toBe(plannerId);
         expect(actual).not.toContain(plannerId);
-        const retained = actual.filter((id) => id === canonicalId);
-        retainedCanonicalLeases.push(...retained);
-        expect(actual).toEqual([...nativeLeases.get(database.path)!, ...retained].toSorted());
+        expect(actual).toEqual(
+          [...nativeLeases.get(database.path)!, canonicalId].toSorted((left, right) =>
+            left.localeCompare(right),
+          ),
+        );
         expect(
           database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
         ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
       }
-      // The canonical executor retains one idle generation across both completed owners.
-      expect(retainedCanonicalLeases).toHaveLength(1);
       const late = vi.fn(async () => undefined);
       for (const captured of [generation, duringClose]) {
         await expect(
@@ -341,6 +340,7 @@ it.each(["complete", "native-exit"] as const)(
         await waitForSessionTranscriptIndexReconcile(options);
       }
       await closeSessionTranscriptReconcileWorkerPool();
+      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
       const database = openOpenClawAgentDatabase(options);
       const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
       expect(nativeLeases).toHaveLength(1);

@@ -74,7 +74,10 @@ describe("Codex catalog refresh deadline", () => {
     await modelRequestStarted.promise;
     await vi.advanceTimersByTimeAsync(5_100);
     expect(await settled).toEqual({
-      value: [expect.objectContaining({ id: model.id, nativeRuntime: "codex" })],
+      value: {
+        entries: [expect.objectContaining({ id: model.id, nativeRuntime: "codex" })],
+        outcomes: [{ provider: "openai", status: "ready" }],
+      },
     });
     expect(owner.read({ ...params, provider: "openai", modelId: model.id }, pluginConfig)).toEqual({
       accountType: "chatgpt",

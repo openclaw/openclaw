@@ -21,6 +21,16 @@ export function createAcpSpawnStoreMocks(mocks: {
     Object.entries(mocks.loadSessionStoreMock(resolveStorePath(scope))).map(
       ([sessionKey, entry]) => ({ sessionKey, entry }),
     );
+  const withSessionEntryReadOnlyInWorker = async <T>(
+    scope: SessionEntryReadScope,
+    assertCurrent: () => void,
+    consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<T>,
+  ): Promise<T> => {
+    assertCurrent();
+    const result = await consume({ ok: true, value: loadEntry(scope) });
+    assertCurrent();
+    return result;
+  };
   return {
     workerLookup: {
       resolveGatewaySessionStoreTargetInWorker: async (
@@ -51,16 +61,9 @@ export function createAcpSpawnStoreMocks(mocks: {
         await mocks.upsertSessionEntryMock(scope, patch),
     },
     readRuntime: {
-      withSessionEntryReadOnlyInWorker: async <T>(
-        scope: SessionEntryReadScope,
-        assertCurrent: () => void,
-        consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<T>,
-      ): Promise<T> => {
-        assertCurrent();
-        const result = await consume({ ok: true, value: loadEntry(scope) });
-        assertCurrent();
-        return result;
-      },
+      withSessionEntryReadOnlyInWorker,
+      readSessionEntryReadOnlyInWorker: (scope: SessionEntryReadScope, assertCurrent: () => void) =>
+        withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => read.value),
     },
   };
 }

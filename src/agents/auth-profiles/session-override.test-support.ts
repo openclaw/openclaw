@@ -84,8 +84,7 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 
-export const { clearSessionAuthProfileOverride, resolveSessionAuthSelection } =
-  await import("./session-override.js");
+export const { resolveSessionAuthSelection } = await import("./session-override.js");
 export { authStoreMocks };
 
 afterEach(() => {

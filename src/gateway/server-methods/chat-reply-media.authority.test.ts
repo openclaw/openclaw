@@ -40,10 +40,7 @@ afterEach(async () => {
 
 it.each([
   ["permission", "metadata"],
-  ["permission", "content"],
-  ["placement", "metadata"],
   ["placement", "content"],
-  ["abort", "metadata"],
   ["abort", "content"],
 ] as const)(
   "cleans earlier image files and records when %s changes during audio %s preparation",

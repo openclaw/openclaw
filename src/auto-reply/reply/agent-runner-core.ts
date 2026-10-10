@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
@@ -35,16 +36,17 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
+import type {
+  ReplyAgentTurnContext,
+  RuntimeFallbackAttempt,
+} from "./agent-runner-execution.types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import {
   type FollowupRun,
@@ -294,24 +296,27 @@ export async function refreshSessionEntryFromStore(params: {
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  reader?: SessionEntryCohortReader;
 }): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
   try {
-    const latestEntry = await readSessionEntryReadOnlyInWorker({
-      storePath,
-      sessionKey,
-    });
-    if (!latestEntry) {
-      return fallbackEntry;
-    }
+    const latestEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        storePath,
+        sessionKey,
+      },
+      undefined,
+      params.reader,
+    );
     // Completion may refresh facts, but only admission can adopt a replacement generation.
     if (
-      params.expectedGeneration &&
-      (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
-        latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision)
+      !latestEntry ||
+      (params.expectedGeneration &&
+        (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
+          latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision))
     ) {
       return fallbackEntry;
     }
@@ -319,16 +324,12 @@ export async function refreshSessionEntryFromStore(params: {
       activeSessionStore[sessionKey] = latestEntry;
     }
     return latestEntry;
-  } catch {
+  } catch (error) {
+    if (params.reader) {
+      throw error;
+    }
     return fallbackEntry;
   }
-}
-
-export function resolveAdmittedRunSessionFile(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(
@@ -474,19 +475,12 @@ export async function cleanupReplyAgentRun(context: {
   }
   blockReplyPipeline?.stop();
   typing.markRunComplete();
-  // Safety net: the dispatcher's onIdle callback normally fires
-  // markDispatchIdle(), but if the dispatcher exits early, errors,
-  // or the reply path doesn't go through it cleanly, the second
-  // signal never fires and the typing keepalive loop runs forever.
-  // Repeated completion signals are harmless: cleanup() is guarded by
-  // the typing controller's sealed flag.
+  // Early exits may never reach dispatcher onIdle, leaving typing's other half open.
+  // The typing controller seals cleanup, so repeated completion is safe.
   typing.markDispatchIdle();
 }
 
-export type RunReplyAgentParams = {
-  commandBody: string;
-  transcriptCommandBody?: string;
-  followupRun: FollowupRun;
+export type RunReplyAgentParams = ReplyAgentTurnContext & {
   queueKey: string;
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
@@ -494,24 +488,13 @@ export type RunReplyAgentParams = {
   hasQueuedFollowups?: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
-  opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  storePath?: string;
   defaultModel: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
-  replyOperation?: ReplyOperation;
 };

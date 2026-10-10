@@ -45,7 +45,7 @@ export function resolveOpenClawCliProcessArgs(
 }
 
 /** Return true for live agents that expose Claude-style MCP tool names. */
-export function isClaudeLikeLiveAgent(raw: string): boolean {
+function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized === "claude" || normalized === "claude-cli";
 }

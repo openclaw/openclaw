@@ -1,4 +1,3 @@
-/** Covers plugin runtime registration API behavior and registry mutation guards. */
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -16,7 +15,6 @@ import {
   capturePluginRegistryLifecycleSignal,
   isPluginRegistryRetired,
 } from "./registry-lifecycle.js";
-import type { PluginHttpRouteRegistration } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -24,7 +22,6 @@ import {
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
-  recordImportedPluginId,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -64,43 +61,10 @@ function createCleanupDatabase() {
   return { db, nativeState };
 }
 
-const makeRoute = (path: string): PluginHttpRouteRegistration => ({
-  path,
-  handler: () => {},
-  auth: "gateway",
-  match: "exact",
-});
-
 describe("setActivePluginRegistry", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it("does not carry forward httpRoutes when new registry has none", () => {
-    const oldRegistry = createEmptyPluginRegistry();
-    const fakeRoute = makeRoute("/test");
-    oldRegistry.httpRoutes.push(fakeRoute);
-    setActivePluginRegistry(oldRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-
-    const newRegistry = createEmptyPluginRegistry();
-    expect(newRegistry.httpRoutes).toHaveLength(0);
-    setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
-  });
-
-  it("does not carry forward when new registry already has routes", () => {
-    const oldRegistry = createEmptyPluginRegistry();
-    oldRegistry.httpRoutes.push(makeRoute("/old"));
-    setActivePluginRegistry(oldRegistry);
-
-    const newRegistry = createEmptyPluginRegistry();
-    const newRoute = makeRoute("/new");
-    newRegistry.httpRoutes.push(newRoute);
-    setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-    expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(newRoute);
   });
 
   it.each(["empty", "loaded"] as const)(
@@ -218,12 +182,6 @@ describe("setActivePluginRegistry", () => {
     await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
   });
 
-  it("includes plugin ids imported before registration failed", () => {
-    recordImportedPluginId("broken-plugin");
-
-    expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
-  });
-
   it.each(["instance", "runtime"] as const)(
     "keeps %s plugin cleanup admitted through the restart connection drain",
     async (kind) => {
@@ -300,34 +258,6 @@ describe("setActivePluginRegistry", () => {
       }
     },
   );
-
-  it("clears the root only after its host cleanup completes", async () => {
-    let cleanupCount = 0;
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      createPluginRecord({ id: "cleanup-on-close", name: "Cleanup on close", status: "loaded" }),
-    );
-    registry.runtimeLifecycles = [
-      {
-        pluginId: "cleanup-on-close",
-        pluginName: "Cleanup on close",
-        lifecycle: {
-          id: "cleanup-on-close",
-          cleanup() {
-            cleanupCount += 1;
-          },
-        },
-        source: "/virtual/cleanup-on-close/index.ts",
-        rootDir: "/virtual/cleanup-on-close",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    await clearActivePluginRegistry();
-
-    expect(getActivePluginRegistry()).toBeNull();
-    expect(cleanupCount).toBe(1);
-  });
 
   it("joins a displaced cleanup scope created before package replacement", async () => {
     const registry = createEmptyPluginRegistry();

@@ -8,7 +8,7 @@ import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { registerSerializedJsonArray } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
-import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import type { VisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { prepareSessionFastModePresentation } from "./session-fast-mode-presentation.js";
 import {
@@ -76,7 +76,7 @@ const publications = new WeakMap<
   SessionRowProjection,
   {
     context: SessionRowReadView["state"]["rowContext"];
-    revision: object | undefined;
+    revision: object;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
@@ -98,14 +98,9 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view: PublicationView = (context) => {
-    const revision = projection.sharingRevision;
+    const revision = projection.state.revision;
     let publication = publications.get(projection);
-    if (
-      !publication ||
-      publication.context !== context ||
-      publication.revision !== revision ||
-      !revision
-    ) {
+    if (!publication || publication.context !== context || publication.revision !== revision) {
       // Row facts own row-view invalidation; list revisions only retire list views.
       publication = {
         context,
@@ -117,10 +112,8 @@ export function prepareSessionRowPublication(
     }
     return publication;
   };
-  return (
-    client?: GatewayClient | null,
-    projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
-  ) => prepareProjectedSessionPresentation(read, client, now, projectRun, view);
+  return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) =>
+    prepareProjectedSessionPresentation(read, client, now, projectRun, view);
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -128,7 +121,7 @@ export function prepareProjectedSessionPresentation(
   projection: SessionRowReadView,
   client?: GatewayClient | null,
   now = Date.now(),
-  projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
+  projectRun?: VisibleActiveSessionRunProjector,
   publication?: PublicationView,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
@@ -427,7 +420,10 @@ export function prepareProjectedSessionPresentation(
       }
     }
     if (signature !== undefined) {
-      const snapshot = freezeJsonSnapshot(structuredClone(row));
+      // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
+      const encoded = JSON.stringify(row);
+      const snapshot: GatewaySessionRow = freezeJsonSnapshot(JSON.parse(encoded));
+      encodings.set(snapshot, encoded);
       views?.set(signature, snapshot);
       return projectModels(snapshot);
     }

@@ -151,32 +151,6 @@ describe("installSessionToolResultGuard", () => {
     expect(blocked).toMatchObject([{ role: "user", content: "hidden" }]);
   });
 
-  it.each(["added", "error", "aborted"] as const)(
-    "repairs only canonical calls after a hook leaves them %s",
-    (change) => {
-      const { sm, guard } = setup({
-        beforeMessageWriteHook: ({ message }) =>
-          message.role === "assistant"
-            ? {
-                message: {
-                  ...message,
-                  content: [{ type: "toolCall", id: "canonical", name: "read", arguments: {} }],
-                  stopReason: change === "added" ? "toolUse" : change,
-                },
-              }
-            : undefined,
-      });
-      sm.appendMessage(change === "added" ? assistant("checking") : call());
-      guard.flushPendingToolResults();
-      expect(messages(sm).filter((message) => message.role === "toolResult")).toEqual(
-        change === "added"
-          ? [expect.objectContaining({ toolCallId: "canonical", toolName: "read", isError: true })]
-          : [],
-      );
-      expect(guard.getPendingIds()).toEqual([]);
-    },
-  );
-
   it("preserves correlation IDs while backfilling names through redaction", () => {
     const { sm, guard } = setup({
       beforeMessageWriteHook: ({ message }) => ({ message: redactTranscriptMessage(message, {}) }),

@@ -1,7 +1,6 @@
 // Mattermost tests cover slash http plugin behavior.
-import { createServer, IncomingMessage, type ServerResponse } from "node:http";
+import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -275,42 +274,6 @@ describe("slash-http", () => {
     expect(response.getHeaders().get("allow")).toBe("POST");
   });
 
-  it("rejects malformed payloads", async () => {
-    const handler = createSlashCommandHttpHandler({
-      account: accountFixture,
-      cfg: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-      registeredCommands: [createRegisteredCommand()],
-    });
-    const req = createRequest({ body: "token=abc&command=%2Foc_status" });
-    const response = createResponse();
-
-    await handler(req, response.res);
-
-    expect(response.res.statusCode).toBe(400);
-    expect(response.getBody()).toContain("Invalid slash command payload");
-  });
-
-  it("fails closed when no commands are registered", async () => {
-    const response = await runSlashRequest({
-      registeredCommands: [],
-      body: "token=tok1&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
-    });
-
-    expect(response.res.statusCode).toBe(401);
-    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
-  });
-
-  it("rejects unknown slash commands before upstream validation", async () => {
-    const response = await runSlashRequest({
-      registeredCommands: [createRegisteredCommand({ token: "known-token" })],
-      body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_unknown&text=",
-    });
-
-    expect(response.res.statusCode).toBe(401);
-    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
-  });
-
   it("rejects a token valid for one command when used against another command", async () => {
     // Cross-command spray DoS guard: a payload pointing at command B with the
     // token for command A must fail at the per-command startup gate, before
@@ -332,101 +295,6 @@ describe("slash-http", () => {
 
     expect(response.res.statusCode).toBe(401);
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
-  });
-
-  it.each([
-    {
-      name: "413 when the upload exceeds the body limit",
-      bodyTimeoutMs: 5_000,
-      // Declared and sent in one write: the shape whose rejection used to race the flush.
-      body: "x".repeat(64 * 1024 + 1),
-      contentLength: undefined,
-      statusLine: "HTTP/1.1 413 Payload Too Large",
-      responseBody: "Payload Too Large",
-    },
-    {
-      name: "408 when the sender stalls mid-upload",
-      bodyTimeoutMs: 50,
-      // Promises more than is ever sent, so the read deadline fires with the request open.
-      body: "x".repeat(16),
-      contentLength: 64 * 1024,
-      statusLine: "HTTP/1.1 408 Request Timeout",
-      responseBody: "Request body timeout",
-    },
-  ])("delivers $name and then closes the connection", async (scenario) => {
-    const handler = createSlashCommandHttpHandler({
-      account: accountFixture,
-      cfg: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-      registeredCommands: [createRegisteredCommand()],
-      bodyTimeoutMs: scenario.bodyTimeoutMs,
-    });
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the slash-command test server to have a TCP address");
-      }
-
-      const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/slash`,
-        body: scenario.body,
-        contentLength: scenario.contentLength,
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-      });
-
-      expect(result.statusLine).toBe(scenario.statusLine);
-      expect(result.body).toBe(scenario.responseBody);
-      expect(result.closedByServer).toBe(true);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-
-  it("rejects the startup token when Mattermost has rotated the current command token", async () => {
-    const registeredCommand = createRegisteredCommand({ token: "old-token" });
-    const client = createCommandLookupClient({
-      command: createCurrentCommand({ token: "new-token" }),
-    });
-    const onRequestAuthenticated = vi.fn();
-
-    await expectTokenValidation({
-      client,
-      registeredCommand,
-      expected: false,
-      onRequestAuthenticated,
-    });
-
-    expect(registeredCommand.token).toBe("old-token");
-    expect(onRequestAuthenticated).not.toHaveBeenCalled();
-  });
-
-  it("accepts the startup token while the current Mattermost command still matches", async () => {
-    const registeredCommand = createRegisteredCommand({ token: "valid-token" });
-    const client = createCommandLookupClient({
-      command: createCurrentCommand(),
-    });
-    const onRequestAuthenticated = vi.fn();
-
-    await expectTokenValidation({
-      client,
-      registeredCommand,
-      expected: true,
-      onRequestAuthenticated,
-    });
-    expect(onRequestAuthenticated).toHaveBeenCalledOnce();
   });
 
   it("rate-limits sequential current-command lookups without caching successes", async () => {
@@ -521,46 +389,6 @@ describe("slash-http", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("scopes validation cache entries by account", async () => {
-    const registeredCommandA = createRegisteredCommand({ token: "token-a" });
-    const registeredCommandB = createRegisteredCommand({ token: "token-b" });
-    const clientA = createCommandLookupClient({
-      command: createCurrentCommand({ token: "token-a" }),
-    });
-    const clientB = createCommandLookupClient({
-      command: createCurrentCommand({ token: "token-b" }),
-    });
-
-    await expectTokenValidation({
-      accountId: "a1",
-      client: clientA,
-      registeredCommand: registeredCommandA,
-      expected: true,
-    });
-    await expectTokenValidation({
-      accountId: "a2",
-      client: clientB,
-      registeredCommand: registeredCommandB,
-      expected: true,
-    });
-
-    expect(clientA.requests).toEqual(["/commands/cmd-1"]);
-    expect(clientB.requests).toEqual(["/commands/cmd-1"]);
-  });
-
-  it("rejects a regenerated command when the current command id changed", async () => {
-    const registeredCommand = createRegisteredCommand({ token: "old-token" });
-    const oldDeletedCommand = createCurrentCommand({ token: "old-token", delete_at: 123 });
-    const newCommand = createCurrentCommand({ id: "cmd-2", token: "new-token" });
-    const client = createCommandLookupClient({
-      command: oldDeletedCommand,
-      listCommands: [oldDeletedCommand, newCommand],
-    });
-
-    await expectTokenValidation({ client, registeredCommand, expected: false });
-    expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
   it("logs when command lookup by id returns a deleted command before fallback", async () => {

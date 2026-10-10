@@ -149,16 +149,14 @@ function normalizeCodexSessionHarness(
     return false;
   }
   let changed = false;
-  if (
-    normalizeOptionalAgentRuntimeId(entry.agentHarnessId) === "codex-cli" ||
-    (legacyCodexHarness && entry.agentHarnessId === undefined)
-  ) {
-    entry.agentHarnessId = "codex";
-    changed = true;
-  }
-  if (normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) === "codex-cli") {
-    entry.agentRuntimeOverride = "codex";
-    changed = true;
+  for (const key of ["agentHarnessId", "agentRuntimeOverride"] as const) {
+    if (
+      normalizeOptionalAgentRuntimeId(entry[key]) === "codex-cli" ||
+      (key === "agentHarnessId" && legacyCodexHarness && entry[key] === undefined)
+    ) {
+      entry[key] = "codex";
+      changed = true;
+    }
   }
   return changed;
 }
@@ -241,27 +239,19 @@ function repairSessionAuthProfileReferences(
   profileIdMap: ReadonlyMap<string, string> | undefined,
 ): boolean {
   let changed = false;
-  const replacement =
-    typeof entry.authProfileOverride === "string"
-      ? profileIdMap?.get(entry.authProfileOverride.trim())
-      : undefined;
-  if (replacement !== undefined && replacement !== entry.authProfileOverride) {
-    entry.authProfileOverride = replacement;
-    changed = true;
-  }
-  const fallback = entry.modelFallback;
-  const previousReplacement =
-    typeof fallback?.prevAuthProfileOverride === "string"
-      ? profileIdMap?.get(fallback.prevAuthProfileOverride.trim())
-      : undefined;
-  if (
-    fallback &&
-    previousReplacement !== undefined &&
-    previousReplacement !== fallback.prevAuthProfileOverride
-  ) {
-    fallback.prevAuthProfileOverride = previousReplacement;
-    changed = true;
-  }
+  const repair = <K extends "authProfileOverride" | "prevAuthProfileOverride">(
+    record: Partial<Record<K, string>> | undefined,
+    key: K,
+  ) => {
+    const value = record?.[key];
+    const replacement = typeof value === "string" ? profileIdMap?.get(value.trim()) : undefined;
+    if (record && replacement !== undefined && replacement !== value) {
+      record[key] = replacement;
+      changed = true;
+    }
+  };
+  repair(entry, "authProfileOverride");
+  repair(entry.modelFallback, "prevAuthProfileOverride");
   return changed;
 }
 
@@ -612,9 +602,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
           };
         },
       });
-      for (const sessionKey of result) {
-        repairedSessionKeys.add(sessionKey);
-      }
+      result.forEach((sessionKey) => repairedSessionKeys.add(sessionKey));
     }
 
     if (target.hasLegacyStore) {
@@ -623,9 +611,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         const result = await updateLegacySessionStore(target.storePath, target.repair, {
           skipMaintenance: true,
         });
-        for (const sessionKey of result) {
-          repairedSessionKeys.add(sessionKey);
-        }
+        result.forEach((sessionKey) => repairedSessionKeys.add(sessionKey));
       }
     }
     if (repairedSessionKeys.size > 0) {

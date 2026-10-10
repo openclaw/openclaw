@@ -6,6 +6,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
   ManagedRunStdin,
@@ -65,6 +66,7 @@ export interface ProcessSession {
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifyFromConversationTurn?: boolean;
+  notifySessionTarget?: SessionEventTarget;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -102,6 +104,8 @@ export interface ProcessSession {
   exitReason?: TerminationReason;
   /** Explicit process/task stop intent; the terminal reason still owns confirmation. */
   cancellationRequested?: boolean;
+  requestCancelled?: boolean;
+  cleanupUncertain?: boolean;
   /** Cleanup failure prevents an intentional stop from being treated as successful observation. */
   finalizationFailed?: boolean;
   /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
@@ -348,7 +352,7 @@ export function recordNotifyOnExitRemoval(
   session: ProcessSession,
   remove: NotifyOnExitRemoval,
 ): void {
-  if (session.terminalPollObserved) {
+  if (session.terminalPollObserved || session.requestCancelled) {
     remove();
     return;
   }
@@ -361,6 +365,11 @@ export function acknowledgeNotifyOnExit(record: {
   terminalPollObserved?: boolean;
 }): void {
   record.terminalPollObserved = true;
+  removeNotifyOnExit(record);
+}
+
+/** Retire notification custody without claiming that retained output was observed. */
+export function removeNotifyOnExit(record: { notifyOnExitRemoval?: NotifyOnExitRemoval }): void {
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
@@ -390,6 +399,24 @@ export async function waitForExecScope(scopeKey: string): Promise<void> {
       return;
     }
     await Promise.all(pending);
+  }
+}
+
+/** Cancellation captures exact records, including startup, hidden work and queued completions. */
+export function listExecSessionsForCancellation(): ProcessSession[] {
+  return [
+    ...new Set(
+      [...activeExecSessions.values()]
+        .map(({ session }) => session)
+        .concat([...finishedSessions.values()]),
+    ),
+  ];
+}
+
+export async function waitForExecSession(session: ProcessSession): Promise<void> {
+  const active = activeExecSessions.get(session.id);
+  if (active?.session === session) {
+    await (active.settled ??= createDeferredCore()).promise;
   }
 }
 

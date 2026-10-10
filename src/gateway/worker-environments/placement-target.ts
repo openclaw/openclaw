@@ -1,3 +1,4 @@
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 
@@ -14,6 +15,34 @@ export function matchesWorkerPlacementTarget(
     current?.generation === expected?.generation &&
     current?.environmentId === expected?.environmentId &&
     current?.activeOwnerEpoch === expected?.activeOwnerEpoch
+  );
+}
+
+export function isExactAttachedEnvironment(
+  environment: WorkerEnvironmentRecord | undefined,
+  placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>,
+): boolean {
+  return Boolean(
+    environment &&
+    environment.environmentId === placement.environmentId &&
+    environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId,
+  );
+}
+
+export function isCurrentActiveWorkerEnvironment(
+  placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>,
+  environment: WorkerEnvironmentRecord | undefined,
+): boolean {
+  return (
+    isExactAttachedEnvironment(environment, placement) &&
+    environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
+    // A persisted bundle hash can still match a worker using an older launch shape.
+    // Recovery may reuse only the currently admitted execution-context dialect.
+    supportsCurrentWorkerLaunch(environment?.bootstrapReceipt)
   );
 }
 

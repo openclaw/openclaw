@@ -41,3 +41,11 @@ export function closeSessionMenus(root: ParentNode) {
     }
   }
 }
+
+export function onOwnPopoverEvent(callback: (event: Event) => void) {
+  return (event: Event) => {
+    if (event.target === event.currentTarget) {
+      callback(event);
+    }
+  };
+}

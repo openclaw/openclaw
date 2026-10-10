@@ -107,16 +107,6 @@ function toggleSelection<T extends string>(selected: T[], value: T, checked: boo
   return Array.from(set);
 }
 
-function summarizeSelection(selectedLabels: string[], allLabel: string) {
-  if (selectedLabels.length === 0) {
-    return allLabel;
-  }
-  if (selectedLabels.length <= 2) {
-    return selectedLabels.join(", ");
-  }
-  return `${selectedLabels[0]} +${selectedLabels.length - 1}`;
-}
-
 const FILTER_OPTION_PREFIX = "option:";
 const FILTER_COMMAND_PREFIX = "command:";
 
@@ -132,7 +122,12 @@ function renderFilterDropdown(params: {
   const selectedLabels = params.options
     .filter((option) => params.selected.includes(option.value))
     .map((option) => option.label);
-  const summary = summarizeSelection(selectedLabels, params.allLabel);
+  const summary =
+    selectedLabels.length === 0
+      ? params.allLabel
+      : selectedLabels.length <= 2
+        ? selectedLabels.join(", ")
+        : `${selectedLabels[0]} +${selectedLabels.length - 1}`;
   const accessibleSummary =
     selectedLabels.length > 2
       ? `${summary} (${new Intl.ListFormat(i18n.getLocale(), {
@@ -367,6 +362,10 @@ export function runStatusLabel(
   return t(RUN_STATUS_LABELS.get(value) ?? "cron.runs.runStatusUnknown");
 }
 
+function renderRunError(error: CronRunLogEntry["error"]) {
+  return html`<div class="muted">${formatUiExternalText(error)}</div>`;
+}
+
 function renderRun(
   entry: CronRunLogEntry,
   formatTimestamp: ReturnType<typeof createMsFormatter>,
@@ -446,16 +445,8 @@ function renderRun(
                 </div>`
               : nothing
           }
-          ${
-            showErrorInMeta
-              ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
-              : nothing
-          }
-          ${
-            entry.deliveryError
-              ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
-              : nothing
-          }
+          ${showErrorInMeta ? renderRunError(entry.error) : nothing}
+          ${entry.deliveryError ? renderRunError(entry.deliveryError) : nothing}
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">

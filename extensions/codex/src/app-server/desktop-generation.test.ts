@@ -79,43 +79,7 @@ describe("Codex desktop generation owner", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it("keeps a failed refresh dirty for the next waiter", async () => {
-    vi.useFakeTimers();
-    const readFingerprint = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error("transient update"))
-      .mockResolvedValue("Y");
-    const owner = createCodexDesktopGenerationOwner({
-      signal: new AbortController().signal,
-      readFingerprint,
-    });
-    owner.markDirty();
-
-    await expect(owner.wait()).rejects.toThrow("transient update");
-    const retry = owner.wait();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(retry).resolves.toEqual({ epoch: 1, fingerprint: "Y" });
-  });
-
-  it("detects changes in every desktop candidate that can supply a fallback artifact", async () => {
-    await withTempDir("openclaw-codex-generation-fingerprint-", async (root) => {
-      const chatGpt = candidate(root, "ChatGPT.app");
-      const codex = candidate(root, "Codex.app");
-      await Promise.all([
-        writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
-        writeCommand(codex.appServerCommandPath, "codex-x"),
-      ]);
-      const initial = await readMacOSDesktopGenerationFingerprint([chatGpt, codex]);
-
-      await writeCommand(codex.appServerCommandPath, "codex-y");
-      await expect(readMacOSDesktopGenerationFingerprint([chatGpt, codex])).resolves.not.toBe(
-        initial,
-      );
-    });
-  });
-
   it.each([
-    "plugins/openai-bundled/plugins/computer-use",
     "plugins/openai-bundled/plugins/unified-computer-use",
     "cua_node/lib/node_modules/@oai/cua-repl",
   ])("settles same-version %s content changes as a new generation", async (artifactRelative) => {

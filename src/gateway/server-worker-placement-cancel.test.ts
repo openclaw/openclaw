@@ -190,11 +190,15 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         store: { [target.sessionKey]: entry },
       };
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
-        placements: { get: () => placement as never, waitForTurnClaimRelease: async () => {} },
+        placements: {
+          get: () => placement as never,
+          getAsync: async () => placement as never,
+          waitForTurnClaimRelease: async () => {},
+        },
         loadSessionRuntime: async () =>
           ({
             managedWorktrees: {
-              findLiveByOwner: () => ({
+              findLiveByOwner: async () => ({
                 id: "terminal-worktree",
                 ownerId: target.sessionKey,
                 path: root,

@@ -89,7 +89,7 @@ test.each([false, true])(
         .mockImplementation((...args) => {
           if (
             !held &&
-            args[1].type === "acpSessions.metadata" &&
+            args[1].type === "sessionRows.sharedFacts" &&
             args[0].env?.OPENCLAW_STATE_DIR === suiteStateDir &&
             getAsyncWorkSignal() !== fixtureSignal
           ) {

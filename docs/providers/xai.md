@@ -105,6 +105,12 @@ subscription quota are separate billing buckets.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/grok-4.7`. OAuth login preserves an existing
   primary model unless you explicitly change it.
+- With OAuth, thinking levels follow the reasoning efforts your account's
+  model listing reports. When a listed model cannot turn reasoning off, `off`
+  is not offered. If a model shows effort levels in the picker but
+  `--thinking` rejects them, the login predates this behavior: rerun
+  `openclaw models auth login --provider xai --method oauth` to refresh the
+  saved model rows.
 - Inspect saved xAI auth profiles:
 
   ```bash

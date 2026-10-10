@@ -152,9 +152,9 @@ vi.mock("./model-discovery-context.js", () => ({
   resolveModelPluginMetadataSnapshot: () => undefined,
 }));
 
-vi.mock("./embedded-agent-runner/model.js", () => ({
+vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embedded-agent-runner/model.js")>()),
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
-  resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
 vi.mock("./model-auth.js", () => ({

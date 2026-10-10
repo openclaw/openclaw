@@ -11,6 +11,19 @@ const context: Context = {
   messages: [{ role: "user", content: "Hello", timestamp: 1 }],
 };
 
+const baseModel: Model = {
+  id: "synthetic-opaque",
+  name: "Synthetic name",
+  provider: "synthetic-proxy",
+  api: "openai-responses",
+  baseUrl: "https://broker.example.test/private/v1",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8192,
+  maxTokens: 1024,
+};
+
 describe("Responses prompt role", () => {
   it.each([
     ["openai-responses", true, undefined, "developer"],
@@ -21,16 +34,9 @@ describe("Responses prompt role", () => {
     "%s with reasoning=%s and developer=%s uses %s",
     (api, reasoning, supportsDeveloperRole, role) => {
       const model: Model = {
-        id: "synthetic-opaque",
-        name: "Synthetic name",
-        provider: "synthetic-proxy",
+        ...baseModel,
         api,
-        baseUrl: "https://broker.example.test/private/v1",
         reasoning,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
         ...(supportsDeveloperRole === undefined ? {} : { compat: { supportsDeveloperRole } }),
       };
       const expected = [
@@ -41,6 +47,76 @@ describe("Responses prompt role", () => {
       expect(convertProviderResponsesMessages(model, context, new Set())).toMatchObject(expected);
       expect(convertResponsesMessages(model, context, new Set())).toMatchObject(expected);
       expect(buildOpenAIResponsesParams(model, context, undefined).input).toMatchObject(expected);
+    },
+  );
+
+  it.each([
+    ["openai-responses", "https://api.openai.com/v1", true, "developer"],
+    ["openai-responses", "https://api.openai.com/v1", false, "system"],
+    ["openai-responses", "https://broker.example.test/v1", true, "user"],
+    ["openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", true, "user"],
+  ] as const)(
+    "%s at %s preserves text-only operator updates in place with developer=%s",
+    (api, baseUrl, supportsDeveloperRole, role) => {
+      const model: Model = {
+        ...baseModel,
+        provider: "openai",
+        api,
+        baseUrl,
+        compat: { supportsDeveloperRole },
+      };
+      const input: Context = {
+        messages: [
+          { role: "user", content: "First turn", timestamp: 1 },
+          {
+            role: "user",
+            content: "Updated skill instructions",
+            timestamp: 2,
+            operatorMessage: { turnScoped: false },
+          },
+          { role: "user", content: "Second turn", timestamp: 3 },
+          {
+            role: "user",
+            content: [{ type: "text", text: "Current runtime facts" }],
+            timestamp: 4,
+            operatorMessage: { turnScoped: true },
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Image content stays a user message" },
+              { type: "image", mimeType: "image/png", data: "aW1n" },
+            ],
+            timestamp: 5,
+            operatorMessage: { turnScoped: false },
+          },
+        ],
+      };
+      const original = structuredClone(input);
+      const request = buildOpenAIResponsesParams(model, input, undefined);
+      expect(request.input).toEqual([
+        { type: "message", role: "user", content: [{ type: "input_text", text: "First turn" }] },
+        {
+          type: "message",
+          role,
+          content: [{ type: "input_text", text: "Updated skill instructions" }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Second turn" }] },
+        {
+          type: "message",
+          role,
+          content: [{ type: "input_text", text: "Current runtime facts" }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Image content stays a user message" },
+            { type: "input_image", detail: "auto", image_url: "data:image/png;base64,aW1n" },
+          ],
+        },
+      ]);
+      expect(input).toEqual(original);
     },
   );
 });

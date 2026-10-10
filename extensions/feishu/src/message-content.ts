@@ -2,6 +2,7 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
+import { normalizeMentions, type FeishuTextMention } from "./mention.js";
 import { renderPostContent } from "./post.js";
 
 export function formatFeishuMediaContent(
@@ -22,12 +23,16 @@ export function formatFeishuMediaContent(
   return "";
 }
 
-function formatSubMessageContent(content: string, contentType: string): string {
+function formatSubMessageContent(
+  content: string,
+  contentType: string,
+  mentions?: ReadonlyArray<FeishuTextMention>,
+): string {
   try {
     const parsed = JSON.parse(content);
     switch (contentType) {
       case "text":
-        return parsed.text || content;
+        return normalizeMentions(parsed.text || content, mentions);
       case "post":
         return renderPostContent(parsed).textContent;
       case "interactive":
@@ -58,6 +63,7 @@ export function parseMergeForwardContent(
     body?: { content?: string };
     upper_message_id?: string;
     create_time?: string;
+    mentions?: ReadonlyArray<FeishuTextMention>;
   }>,
 ): string {
   const maxMessages = 50;
@@ -81,7 +87,9 @@ export function parseMergeForwardContent(
 
   const lines = ["[Merged and Forwarded Messages]"];
   for (const item of subMessages.slice(0, maxMessages)) {
-    lines.push(`- ${formatSubMessageContent(item.body?.content || "", item.msg_type || "text")}`);
+    lines.push(
+      `- ${formatSubMessageContent(item.body?.content || "", item.msg_type || "text", item.mentions)}`,
+    );
   }
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);

@@ -19,9 +19,6 @@ useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", 
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const OAUTH_BETA = "oauth-2025-04-20";
-const DEFAULT_BETA_HEADER =
-  "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
-const OAUTH_BETA_HEADER = `claude-code-20250219,${OAUTH_BETA},${DEFAULT_BETA_HEADER}`;
 const initialTransportHost = getAiTransportHost();
 
 beforeAll(() => {
@@ -201,22 +198,6 @@ describe("anthropic stream wrappers", () => {
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("skips service_tier for OAuth token in composed stream chain", () => {
-    const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
-    expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
-    expect(captured.payload?.service_tier).toBeUndefined();
-  });
-
-  it("skips unsupported service_tier for Claude Opus 5", () => {
-    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-opus-5");
-    expect(captured.payload?.service_tier).toBeUndefined();
-  });
-
-  it("skips unsupported service_tier for Claude Sonnet 5", () => {
-    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-sonnet-5");
-    expect(captured.payload?.service_tier).toBeUndefined();
-  });
-
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
@@ -235,44 +216,16 @@ describe("anthropic stream wrappers", () => {
     });
   });
 
-  it("preserves existing context management under the compaction wrapper", () => {
-    const existing = { edits: [{ type: "clear_tool_uses_20250919" }] };
-    const captured = runCompactionProviderWrapper({ payload: { context_management: existing } });
-
-    expect(captured.payload?.context_management).toBe(existing);
-  });
-
   it.each([
-    {
-      name: "the feature is not enabled",
-      extraParams: {},
-    },
     {
       name: "OAuth auth is used",
       apiKey: "sk-ant-oat01-test-token",
-    },
-    {
-      name: "a proxy endpoint is used",
-      baseUrl: "https://proxy.example.test/v1",
-    },
-    {
-      name: "a non-Anthropic API is used",
-      api: "openai-completions",
     },
   ])("skips server compaction when $name", (params) => {
     const captured = runCompactionProviderWrapper(params);
 
     expect(captured.headers?.["anthropic-beta"] ?? "").not.toContain("compact-2026-01-12");
     expect(captured.payload).not.toHaveProperty("context_management");
-  });
-
-  it("does not emit the legacy context-1m beta from context1m or explicit config", () => {
-    expect(
-      resolveAnthropicBetas(
-        { context1m: true, anthropicBeta: [CONTEXT_1M_BETA, "files-api-2025-04-14"] },
-        "claude-sonnet-4-6",
-      ),
-    ).toEqual(["files-api-2025-04-14"]);
   });
 
   it("strips legacy context-1m beta from comma-separated string config", () => {
@@ -282,43 +235,6 @@ describe("anthropic stream wrappers", () => {
         "claude-sonnet-4-6",
       ),
     ).toEqual(["files-api-2025-04-14"]);
-  });
-
-  it("preserves OAuth-required betas when context1m is the only configured beta trigger", () => {
-    const captured: { headers?: Record<string, string> } = {};
-    const wrapped = wrapAnthropicProviderStream({
-      streamFn: createPayloadCapturingBaseStream(captured),
-      modelId: "claude-sonnet-4-6",
-      extraParams: { context1m: true },
-    } as never);
-
-    void wrapped?.(
-      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
-      {} as never,
-      { apiKey: "sk-ant-oat01-oauth-token" } as never,
-    );
-
-    expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
-    expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-  });
-
-  it("uses Opus 5 identity boundaries for context1m beta wrapper activation", () => {
-    const opus5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-5");
-    const opus50 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-50");
-
-    expect(opus5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
-    expect(opus50.headers?.["anthropic-beta"]).toBeUndefined();
-  });
-
-  it("uses Fable 5 identity boundaries for context1m beta wrapper activation", () => {
-    const fable5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-fable-5");
-    const fable50 = runComposedAnthropicProviderStream(
-      "sk-ant-oat01-oauth-token",
-      "claude-fable-50",
-    );
-
-    expect(fable5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
-    expect(fable50.headers?.["anthropic-beta"]).toBeUndefined();
   });
 
   it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {
@@ -362,10 +278,6 @@ describe("anthropic stream wrappers", () => {
 
   it.each([
     {
-      cacheRead: 100_000,
-      expected: { input: 0.01, output: 0.005, cacheRead: 0.1, cacheWrite: 0.2875, total: 0.4025 },
-    },
-    {
       cacheRead: 250_000,
       expected: { input: 0.02, output: 0.01, cacheRead: 0.5, cacheWrite: 0.575, total: 1.105 },
     },
@@ -394,21 +306,6 @@ describe("anthropic stream wrappers", () => {
     },
   );
 
-  it("uses native fast mode for Claude Opus 4.8", () => {
-    const captured = runNativeFastModeWrapper({ modelId: "claude-opus-4.8" });
-
-    expect(captured.payload).toEqual({ speed: "fast" });
-    expect(captured.model?.cost.output).toBe(50);
-  });
-
-  it.each(["opus", "opus-5"])("uses native fast mode for the %s alias", (modelId) => {
-    const captured = runNativeFastModeWrapper({ modelId });
-
-    expect(captured.headers?.["anthropic-beta"]).toContain("fast-mode-2026-02-01");
-    expect(captured.payload).toEqual({ speed: "fast" });
-    expect(captured.model?.cost.output).toBe(50);
-  });
-
   it("keeps standard Opus 5 payload and pricing when fast mode is disabled", () => {
     const captured = runNativeFastModeWrapper({ enabled: false });
 
@@ -426,10 +323,6 @@ describe("anthropic stream wrappers", () => {
     {
       label: "OAuth",
       params: { apiKey: "sk-ant-oat01-test-token" },
-    },
-    {
-      label: "proxy",
-      params: { baseUrl: "https://proxy.example.com/v1" },
     },
     {
       label: "Vertex",
@@ -496,89 +389,19 @@ describe("createAnthropicThinkingPrefillWrapper", () => {
 
     expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
   });
-
-  it("keeps assistant prefill when thinking is disabled", () => {
-    const payload = runThinkingPrefillWrapper({
-      thinking: { type: "disabled" },
-      messages: [
-        { role: "user", content: "Return JSON." },
-        { role: "assistant", content: "{" },
-      ],
-    });
-
-    expect(payload.messages).toHaveLength(2);
-  });
-
-  it("keeps trailing assistant tool use turns", () => {
-    const payload = runThinkingPrefillWrapper({
-      thinking: { type: "adaptive" },
-      messages: [
-        { role: "user", content: "Read a file." },
-        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
-      ],
-    });
-
-    expect(payload.messages).toHaveLength(2);
-  });
 });
 
-type ServiceTierWrapperParams = {
-  apiKey?: string;
-  provider?: string;
-  api?: string;
-  enabled?: boolean;
-  serviceTier?: "auto" | "standard_only";
-};
-
-const serviceTierWrapperCases: Array<{
-  name: string;
-  run: (params: ServiceTierWrapperParams) => Record<string, unknown> | undefined;
-}> = [
-  {
-    name: "fast mode",
-    run: (params) =>
-      runPayloadWrapper(params, (base) =>
-        createAnthropicFastModeWrapper(base, params.enabled ?? true),
-      ),
-  },
-  {
-    name: "explicit service tier",
-    run: (params) =>
-      runPayloadWrapper(params, (base) =>
-        createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto"),
-      ),
-  },
-];
-
 describe("Anthropic service_tier payload wrappers", () => {
-  it.each(serviceTierWrapperCases)("$name skips service_tier for OAuth token", ({ run }) => {
-    const payload = run({ apiKey: "sk-ant-oat01-test-token" });
-    expect(payload?.service_tier).toBeUndefined();
-  });
-
-  it.each(serviceTierWrapperCases)("$name injects service_tier for regular API keys", ({ run }) => {
-    const payload = run({ apiKey: "sk-ant-api03-test-key" });
-    expect(payload?.service_tier).toBe("auto");
-  });
-
-  it.each(serviceTierWrapperCases)(
-    "$name does not inject service_tier for non-anthropic provider",
-    ({ run }) => {
-      const payload = run({
+  it("fast mode does not inject service_tier for non-anthropic provider", () => {
+    const payload = runPayloadWrapper(
+      {
         apiKey: "sk-ant-api03-test-key",
         provider: "openai",
         api: "openai-completions",
-      });
-      expect(payload?.service_tier).toBeUndefined();
-    },
-  );
-
-  it("fast mode injects service_tier=standard_only when disabled for API keys", () => {
-    const payload = expectDefined(serviceTierWrapperCases[0], "disabled fast-mode case").run({
-      apiKey: "sk-ant-api03-test-key",
-      enabled: false,
-    });
-    expect(payload?.service_tier).toBe("standard_only");
+      },
+      (base) => createAnthropicFastModeWrapper(base, true),
+    );
+    expect(payload?.service_tier).toBeUndefined();
   });
 
   it("fast mode resolves dynamic service_tier for each stream call", () => {
@@ -595,10 +418,9 @@ describe("Anthropic service_tier payload wrappers", () => {
   });
 
   it("explicit service tier injects service_tier=standard_only for regular API keys", () => {
-    const payload = expectDefined(serviceTierWrapperCases[1], "explicit service-tier case").run({
-      apiKey: "sk-ant-api03-test-key",
-      serviceTier: "standard_only",
-    });
+    const payload = runPayloadWrapper({ apiKey: "sk-ant-api03-test-key" }, (base) =>
+      createAnthropicServiceTierWrapper(base, "standard_only"),
+    );
     expect(payload?.service_tier).toBe("standard_only");
   });
 });

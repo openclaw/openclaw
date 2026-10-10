@@ -84,3 +84,18 @@ export function recordOpenClawAgentCanonicalValidation(database: ReceiptDatabase
       .where("id", "=", 1),
   );
 }
+
+/** Offline repair revokes imported-row proof without changing physical integrity admission. */
+export function clearPersistedOpenClawAgentCanonicalValidation(database: ReceiptDatabase): void {
+  if (!hasReceiptColumn(database.db)) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<Pick<DB, "session_key_contract">>(database.db)
+      .updateTable("session_key_contract")
+      .set({ canonical_ready: null })
+      .where("id", "=", 1)
+      .where("canonical_ready", "is not", null),
+  );
+}

@@ -17,6 +17,7 @@ import {
 import { describeBrowserControlUnavailable } from "../../plugin-enabled.js";
 import { resolveFirstExtensionProfileName, resolveProfile } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
+import { trackAuthenticatedRelaySocket } from "./auth-v2-websocket.js";
 import {
   BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
   getBrowserRelayAuthV2Authority,
@@ -222,15 +223,9 @@ export async function handleGatewayExtensionUpgrade(
     ws.pause();
     // Borrowed ingress never passes through the local bridge's socket binding.
     ws.on("error", (err) => log.warn(`relay socket error: ${String(err)}`));
-    if (
-      !authority.registerAuthenticatedConnection(ws, () =>
-        ws.close(4003, "browser relay key rotated"),
-      )
-    ) {
-      ws.terminate();
+    if (!trackAuthenticatedRelaySocket(authority, ws)) {
       return;
     }
-    ws.once("close", () => authority.releaseConnection(ws));
     void prepareGatewayIngress(resolved, ws, assertAuthenticated)
       .then((attach) => {
         if (ws.readyState === 1) {

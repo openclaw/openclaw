@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Subagent task notice" });
@@ -49,20 +50,23 @@ suite.define(() => {
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const shell = pane.locator(".agent-chat__composer-shell");
         const notice = shell.locator(".agent-chat__disabled-banner--replacement");
-        const progress = shell.locator(".session-progress-card--composer");
-        const body = progress.locator(".session-progress-card__body");
+        const progress = pane.locator('[data-progress-card-placement="details"]');
         await notice.getByText("View-only subagent", { exact: true }).waitFor();
+        await progress.waitFor({ state: "attached" });
+        expect(await progress.isVisible()).toBe(false);
+        const details = await openChatDetails(pane);
         await progress.waitFor();
+        expect(await shell.locator(".session-progress-card").count()).toBe(0);
         expect(await shell.locator("textarea").count()).toBe(0);
         if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
           await progress.locator("summary").click();
         }
         await expect
           .poll(() =>
-            body.evaluate((element) => {
+            details.evaluate((element) => {
               const bounds = element.getBoundingClientRect();
               const footer = element
-                .closest(".agent-chat__composer-shell")!
+                .closest(".chat-main__conversation-frame")!
                 .querySelector(".agent-chat__disabled-banner--replacement")!
                 .getBoundingClientRect();
               return (
@@ -71,15 +75,18 @@ suite.define(() => {
             }),
           )
           .toBe(true);
-        expect(await body.evaluate((element) => getComputedStyle(element).overflowY)).toBe("auto");
-        expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
-          true,
+        expect(await details.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
+          "auto",
         );
+        expect(
+          await details.evaluate((element) => element.scrollHeight > element.clientHeight),
+        ).toBe(true);
         const footerTop = await notice.evaluate((element) => element.getBoundingClientRect().top);
-        await body.evaluate((element) => {
-          element.scrollTop = element.scrollHeight;
-        });
-        expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        await details.hover();
+        await page.mouse.wheel(0, 1000);
+        await expect
+          .poll(() => details.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(0);
         expect(await notice.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(
           footerTop,
           0,
@@ -92,16 +99,22 @@ suite.define(() => {
         await notice.getByRole("button", { name: "Open parent session", exact: true }).click();
         const input = shell.locator(".agent-chat__input");
         await input.locator("textarea").fill("Continue the review");
+        await openChatDetails(pane);
         await progress.waitFor();
+        expect(await input.locator("textarea").inputValue()).toBe("Continue the review");
         await expect
           .poll(() =>
             input.evaluate((element) => {
               const inputBounds = element.getBoundingClientRect();
-              const progressBounds = element
-                .closest(".agent-chat__composer-shell")!
-                .querySelector(".session-progress-card--composer")!
+              const detailsBounds = element
+                .closest(".chat-main__conversation-frame")!
+                .querySelector(".chat-details")!
                 .getBoundingClientRect();
-              return progressBounds.bottom <= inputBounds.top && inputBounds.bottom <= innerHeight;
+              return (
+                detailsBounds.height > 0 &&
+                detailsBounds.bottom <= inputBounds.top &&
+                inputBounds.bottom <= innerHeight
+              );
             }),
           )
           .toBe(true);

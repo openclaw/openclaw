@@ -66,7 +66,8 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
 }));
 
-vi.mock("./reply/agent-runner.runtime.js", () => ({
+vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
   runReplyAgent: async (params: {
     commandBody: string;
     followupRun: {

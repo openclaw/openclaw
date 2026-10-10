@@ -1,4 +1,4 @@
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { sqliteLifecycleTargetSnapshotsEqual } from "./session-accessor.sqlite-entry-equality.js";
@@ -33,7 +33,7 @@ export function prepareParentForkEntry(
   const database = open();
   const parentTarget = normalizeLifecycleTarget(params.parentTarget);
   const sessionTarget = normalizeLifecycleTarget(params.sessionTarget);
-  return runSqlitePinnedReadSnapshotSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const parent = readLifecycleTargetSnapshot(database, parentTarget);
     const child = readLifecycleTargetSnapshot(database, sessionTarget);
     return {
@@ -50,11 +50,9 @@ export function readParentForkSource(
   { open }: Pick<AgentWorkerOperationContext, "open">,
 ) {
   const database = open();
-  return runSqlitePinnedReadSnapshotSync(database.db, () =>
-    resolveParentForkSourceTranscript(
-      loadTranscriptEventsFromDatabase(database, input.sessionId),
-      input.forkFrom,
-    ),
+  return resolveParentForkSourceTranscript(
+    loadTranscriptEventsFromDatabase(database, input.sessionId),
+    input.forkFrom,
   );
 }
 

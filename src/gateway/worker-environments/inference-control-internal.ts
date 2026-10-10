@@ -162,7 +162,6 @@ export function createWorkerInferenceSessionControls(params: {
   const { active, operations, unknownSettlements, recovered, settleAbort } = params;
   const drainingSessions = new Map<string, Promise<void>>();
   let stoppingPromise: Promise<void> | undefined;
-  let stopping = false;
 
   const captureCancellationEntries = (predicate: (entry: ActiveInference) => boolean) =>
     [...active.values()].filter(predicate).map((entry) => ({
@@ -245,16 +244,11 @@ export function createWorkerInferenceSessionControls(params: {
   const reserveSessionDrain = (sessionId: string): WorkerInferenceSessionDrainReservation => {
     const captured = captureCancellationEntries((entry) => entry.request.sessionId === sessionId);
     const entries = new Set(captured.map(({ entry }) => entry));
-    const capturedOperations = new Set(
-      [...operations].flatMap(([operation, owner]) =>
-        owner.sessionId === sessionId ? [operation] : [],
-      ),
-    );
+    const sessionOperations = [...operations].filter(([, owner]) => owner.sessionId === sessionId);
+    const capturedOperations = new Set(sessionOperations.map(([operation]) => operation));
     const capturedStoreKeys = new Set([
       ...captured.map(({ entry }) => entry.storeKey),
-      ...[...operations.values()]
-        .filter((owner) => owner.sessionId === sessionId)
-        .map((owner) => owner.storeKey),
+      ...sessionOperations.map(([, owner]) => owner.storeKey),
     ]);
     let reserved = true;
     let accepted: ReturnType<WorkerInferenceSessionDrainReservation["accept"]> | undefined;
@@ -285,14 +279,10 @@ export function createWorkerInferenceSessionControls(params: {
         let started = false;
         let settled = false;
         let releaseRequested = false;
-        let released = false;
         const release = () => {
           releaseRequested = true;
-          if (settled && !released) {
-            released = true;
-            if (drainingSessions.get(sessionId) === drained) {
-              drainingSessions.delete(sessionId);
-            }
+          if (settled && drainingSessions.get(sessionId) === drained) {
+            drainingSessions.delete(sessionId);
           }
         };
         const startedSignal = createDeferredCore();
@@ -359,7 +349,6 @@ export function createWorkerInferenceSessionControls(params: {
     if (stoppingPromise) {
       return stoppingPromise;
     }
-    stopping = true;
     const stopped = createDeferredCore();
     stoppingPromise = stopped.promise;
     const acceptedDrains = new Map(drainingSessions);
@@ -375,7 +364,7 @@ export function createWorkerInferenceSessionControls(params: {
   };
 
   return {
-    isStopping: () => stopping,
+    isStopping: () => stoppingPromise !== undefined,
     isDraining: (sessionId: string) => drainingSessions.has(sessionId),
     getClosing: (sessionId: string) => drainingSessions.get(sessionId) ?? stoppingPromise,
     cancelEnvironment,

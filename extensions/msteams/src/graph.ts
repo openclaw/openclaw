@@ -208,10 +208,6 @@ export type PaginatedResult<T> = {
   found?: T;
 };
 
-/**
- * Fetch all pages of a Graph API collection, following @odata.nextLink.
- * Optionally stop early when `findOne` matches an item.
- */
 export async function fetchAllGraphPages<T>(params: {
   token: string;
   path: string;
@@ -275,7 +271,6 @@ export async function resolveGraphToken(
     );
   }
 
-  // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
     const delegated = await resolveDelegatedAccessToken({
       tenantId: creds.tenantId,
@@ -286,7 +281,6 @@ export async function resolveGraphToken(
     if (delegated) {
       return delegated;
     }
-    // Fall through to app-only token
   }
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));

@@ -30,6 +30,9 @@ export type UserProfileAuthority = {
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
 
+/** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */
+export type CachedGitHubIdentityBinding = { accountId: number; email: string } | { login: string };
+
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
 export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | null>;

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
+import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
 import {
@@ -79,6 +80,7 @@ export function readSessionRowFacts(params: {
       workspaceResultReconciling,
       environment,
       identity,
+      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
       failedRecoveryAction,
       retryOnSend,
     };
@@ -107,10 +109,12 @@ export function readSessionRowFacts(params: {
         workspaceResultReconciling,
         environment,
         identity,
+        sessionModelRevision: revision,
         failedRecoveryAction,
         retryOnSend,
       } = placementFacts;
       return {
+        sessionModelRevision: revision,
         ...(placement
           ? {
               placement: projectWorkerSessionPlacement(

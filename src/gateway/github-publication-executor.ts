@@ -4,10 +4,7 @@ import type { SessionGitHubPublicationResult } from "../../packages/gateway-prot
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
-import {
-  readLocalGitHubPublicationWorktreeOwner,
-  resolveLocalGitHubPublicationWorktreeOwner,
-} from "./github-publication-availability.js";
+import { readLocalGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
 import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import {
   createGitHubPublicationExecutionIdentity,
@@ -84,18 +81,19 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   ) {
     return undefined;
   }
+  let worktreeOwner: Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>;
   const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
     row,
     identity: params.identity,
     validateAuthority: params.validateCustody,
     assertWorkspace: () => {
-      resolveLocalGitHubPublicationWorktreeOwner(row);
+      worktreeOwner.assertCurrent();
     },
   });
   let url: string | undefined;
   try {
-    assertCurrent();
-    const { worktree } = await readLocalGitHubPublicationWorktreeOwner(row);
+    worktreeOwner = await readLocalGitHubPublicationWorktreeOwner(row);
+    const { worktree } = worktreeOwner;
     assertCurrent();
     const target = await prepareGitHubPublicationTarget({
       worktree,
@@ -187,7 +185,17 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   // A confirmed push can still leave its pull-request outcome unknown.
   let effectDispatched = false;
   let row = initial;
-  const currentWorktree = () => resolveLocalGitHubPublicationWorktreeOwner(initial);
+  let worktreeOwner:
+    | Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>
+    | undefined;
+  const currentWorktree = () => {
+    if (!worktreeOwner) {
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication workspace authority could not be verified; retry recovery.",
+      );
+    }
+    return worktreeOwner.assertCurrent();
+  };
   const assertCustody = () => {
     if (!params.validateCustody()) {
       throw new GitHubPublicationAuthorityLostError(
@@ -208,9 +216,15 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     });
   const { step, run, require: command } = createGitHubPublicationCommandRunner(assertAuthority);
   try {
-    const { loaded, worktree } = await readLocalGitHubPublicationWorktreeOwner(initial);
+    worktreeOwner = await readLocalGitHubPublicationWorktreeOwner(initial);
+    const { loaded, worktree } = worktreeOwner;
     await custodyCommands.step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
-    await recoverGitHubPublicationWorkspace(initial, custodyCommands.require, assertCustody);
+    await recoverGitHubPublicationWorkspace(
+      initial,
+      worktree,
+      custodyCommands.require,
+      assertCustody,
+    );
     // Accepted workspace recovery retains custody even when the requester can no longer publish.
     if (params.prepareAuthority) {
       await params.prepareAuthority();

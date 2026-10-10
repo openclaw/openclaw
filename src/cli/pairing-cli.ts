@@ -149,18 +149,9 @@ export function registerPairingCli(program: Command) {
     .option("--notify", "Notify the requester on the same channel", false)
     .action(async (codeOrChannel, code, opts) => {
       const defaultChannel = channels.length === 1 ? channels[0] : "";
-      const usingExplicitChannel = Boolean(opts.channel);
-      const hasPositionalCode = code != null;
-      const channelRaw = usingExplicitChannel
-        ? opts.channel
-        : hasPositionalCode
-          ? codeOrChannel
-          : defaultChannel;
-      const resolvedCode = usingExplicitChannel
-        ? codeOrChannel
-        : hasPositionalCode
-          ? code
-          : codeOrChannel;
+      const usingPositionalChannel = !opts.channel && code != null;
+      const channelRaw = opts.channel || (usingPositionalChannel ? codeOrChannel : defaultChannel);
+      const resolvedCode = usingPositionalChannel ? code : codeOrChannel;
       if (!channelRaw || !resolvedCode) {
         throw new Error(
           `Usage: ${formatCliCommand("openclaw pairing approve <channel> <code>")} (or: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")})`,

@@ -39,7 +39,8 @@ export async function runWithLocalStateOwner<T>(params: {
   target: string;
   recoveryCommand?: string;
   requiredCapabilities?: readonly string[];
-  onForeignOwner?: "refuse";
+  /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
+  onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
@@ -129,6 +130,16 @@ export async function runWithLocalStateOwner<T>(params: {
     return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
   };
   const route = async (owner: GatewayLockIdentity): Promise<T> => {
+    if (typeof params.onForeignOwner === "function") {
+      assertTargetCurrent();
+      const result = await params.onForeignOwner({
+        env,
+        signal: controller.signal,
+        assertCurrent: assertTargetCurrent,
+      });
+      assertTargetCurrent();
+      return result;
+    }
     if (params.onForeignOwner === "refuse") {
       return refuse(new Error("This operation requires exclusive offline state ownership"));
     }

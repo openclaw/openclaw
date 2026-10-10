@@ -170,7 +170,7 @@ describe("native completion final-send custody", () => {
           );
           await appendInput();
           await replaceSessionEntry(target, entry);
-          const opts = bindCommandHarnessCompletionAssertion({
+          const { opts } = await bindCommandHarnessCompletionAssertion({
             claim,
             persisted: entry,
             sessionKey: key,

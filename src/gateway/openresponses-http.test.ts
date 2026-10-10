@@ -31,6 +31,7 @@ import {
 import {
   incompatibleReplacementCases,
   emitIncompatibleAssistantReplacement,
+  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseEvents,
   collectSseEventTypes,
@@ -335,6 +336,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("keeps embedded late commentary append-only while the final answer streams", async () => {
+    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
+    const stream = createStream();
+    const content: string[] = [];
+    const terminals: string[] = [];
+    stream.on("response.output_text.delta", ({ delta }) => content.push(delta));
+    stream.on("response.failed", () => terminals.push("failed"));
+    stream.on("response.completed", () => terminals.push("completed"));
+    const response = await stream.finalResponse();
+    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
+    expect(response.output_text).toBe(content.join(""));
+    expect(terminals).toEqual(["completed"]);
+    expect(response.status).toBe("completed");
+  });
 
   it.each(
     incompatibleReplacementCases.filter(({ name }) =>

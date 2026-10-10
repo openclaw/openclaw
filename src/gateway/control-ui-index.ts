@@ -53,6 +53,7 @@ export async function serveControlUiIndexHtml(
   buildId?: string,
   sessionEntryPath?: string,
   isSessionEntryCurrent?: () => boolean,
+  proxySessionEntry = false,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
@@ -84,7 +85,7 @@ export async function serveControlUiIndexHtml(
       .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
       .replace(
         /<html\b/i,
-        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
+        `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
       ),
   );
   const document = sessionEntryPath

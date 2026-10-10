@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "../../agents/model-catalog-decisions.js";
 import {
@@ -170,17 +171,25 @@ export async function loadModelsProviderData(
     profileProvider: options.sessionEntry?.providerOverride ?? options.sessionEntry?.modelProvider,
     runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
   };
-  const decisions = createModelCatalogDecisions(decisionParams);
+  const decisions = await prepareModelCatalogDecisions(decisionParams);
   // Selecting the default clears the session runtime pin; other model callbacks retain it.
   const defaultDecisions =
     decisionParams.runtimeOverride && resolveModelRuntimeRoute(resolvedDefault.provider)
-      ? createModelCatalogDecisions({ ...decisionParams, runtimeOverride: undefined })
+      ? createModelCatalogDecisions({
+          ...decisionParams,
+          preparedPersonalCatalog: decisions.preparedPersonalCatalog,
+          runtimeOverride: undefined,
+        })
       : decisions;
   const decisionsForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     normalizeProviderId(entry.provider) === resolvedDefault.provider &&
     entry.id === resolvedDefault.model
       ? defaultDecisions
       : decisions;
+  const evaluateEntry = (entry: ModelCatalogEntry, variants?: readonly ModelCatalogEntry[]) => {
+    const selection = decisionsForEntry(entry);
+    return selection.evaluateNative(entry, selection.evaluateEntry(entry, variants));
+  };
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
@@ -213,11 +222,7 @@ export async function loadModelsProviderData(
           if (!entry) {
             return false;
           }
-          const selectionDecisions = decisionsForEntry(entry);
-          return (
-            selectionDecisions.evaluateNative(entry, selectionDecisions.evaluateEntry(entry))
-              .availability === true
-          );
+          return evaluateEntry(entry).availability === true;
         };
   const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,
@@ -233,11 +238,7 @@ export async function loadModelsProviderData(
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
-      const selectionDecisions = decisionsForEntry(entry);
-      const evaluation = selectionDecisions.evaluateNative(
-        entry,
-        selectionDecisions.evaluateEntry(entry, routeVariants),
-      );
+      const evaluation = evaluateEntry(entry, routeVariants);
       recordModelAvailability(entry, evaluation);
       if (evaluation.routeResolution?.kind === "incompatible") {
         incompatibleModelKeys.add(resolveModelCatalogIdentityKey(entry));
@@ -396,30 +397,29 @@ export async function loadModelsProviderData(
     }
   }
 
+  // Selection needs the prepared capabilities, with selected physical routes
+  // ahead of other inventory rows for the same logical model.
+  const selectionCatalog = [...visibleCatalog, ...catalog];
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeChoicesByModel = new Map<string, ModelsRuntimeChoice[]>();
   for (const [provider, models] of byProvider) {
     const providerChoices = new Map<string, ModelsRuntimeChoice>();
     for (const model of models) {
-      const entry = [...visibleCatalog, ...catalog].find(
+      const entry = selectionCatalog.find(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
       );
       const authEntry = entry ?? { provider, id: model, name: model };
-      const selectionDecisions = decisionsForEntry(authEntry);
       const variants = snapshot.routeVariants.filter(
         (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(authEntry),
       );
       if (!modelAvailability.has(`${provider}/${model}`)) {
-        const evaluation = selectionDecisions.evaluateNative(
-          authEntry,
-          selectionDecisions.evaluateEntry(authEntry, variants.length ? variants : [authEntry]),
-        );
+        const evaluation = evaluateEntry(authEntry, variants.length ? variants : [authEntry]);
         recordModelAvailability(authEntry, evaluation, provider);
       }
       if (!entry) {
         continue;
       }
-      const runtimes = selectionDecisions.runtimeChoices(
+      const runtimes = decisionsForEntry(entry).runtimeChoices(
         entry,
         variants.length ? variants : [entry],
       );
@@ -467,9 +467,7 @@ export async function loadModelsProviderData(
     refreshWarning: snapshot.refreshFailed
       ? "Some models could not be refreshed. You can still choose from the available models."
       : undefined,
-    // Selection needs the prepared capabilities, with selected physical routes
-    // ahead of other inventory rows for the same logical model.
-    modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
+    modelCatalog: dedupeModelCatalogEntries(selectionCatalog),
     runtimeChoicesByProvider,
     runtimeChoicesByModel,
     isCurrent: decisions.isCurrent,

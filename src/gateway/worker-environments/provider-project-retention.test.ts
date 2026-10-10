@@ -267,6 +267,16 @@ describe("prepared project retention compatibility", () => {
     },
   );
 
+  it("rejects agent removal during lifecycle preparation before preparing artifacts", async () => {
+    const { record, owner, prepareNodeArtifacts } = await setup();
+    const pending = owner.prepareRetention(record, fixture.abort.signal);
+    fixture.config.agents = { entries: { other: {} } };
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(prepareNodeArtifacts).not.toHaveBeenCalled();
+    expect(sourceAdmission).not.toHaveBeenCalled();
+  });
+
   it("distinguishes unavailable artifact observations from incompatible contents", async () => {
     const { record, owner, prepareNodeArtifacts } = await setup();
     const unavailable = new Error("Artifact archive temporarily unavailable");

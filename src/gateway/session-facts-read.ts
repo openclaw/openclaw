@@ -32,7 +32,8 @@ const PR_RETRY_MS = 60_000;
 const PR_RETRY_MAX_MS = 15 * 60_000;
 export type SelectedFacts = RuntimeSessionFactsSelectionResult["sessions"][number];
 export type SelectedPrFacts = {
-  row: GatewaySessionRow;
+  generation: MaterializedRow["generation"];
+  databaseFactsRevision: number;
   redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
   owner: ResolvedInProcessGatewayDispatch["context"]["controlUiSessionPullRequests"];
   facts: RuntimeSessionFacts;
@@ -165,6 +166,7 @@ export function prepareFactsRead(
       const previous =
         retained &&
         retained.owner === prOwner &&
+        retained.generation === record.generation &&
         retained.facts.sessionId === record.entry.sessionId &&
         retained.facts.lifecycleRevision === record.entry.lifecycleRevision
           ? retained
@@ -172,7 +174,7 @@ export function prepareFactsRead(
       const retryDue =
         !previous?.retry ||
         previous.retry.at <= now ||
-        previous.row !== row ||
+        previous.databaseFactsRevision !== record.databaseFactsRevision ||
         previous.facts.run !== run;
       const admitSelectedLoad = () => retryDue && admitPrLoad();
       const prs =
@@ -276,7 +278,15 @@ export function prepareFactsRead(
                       ),
                 pullRequestsStale: true as const,
               });
-        prFacts.set(record.key, { row, redaction, owner: prOwner, facts, selected, retry });
+        prFacts.set(record.key, {
+          generation: record.generation,
+          databaseFactsRevision: record.databaseFactsRevision,
+          redaction,
+          owner: prOwner,
+          facts,
+          selected,
+          retry,
+        });
         return { ...result, selected };
       }
       return result;

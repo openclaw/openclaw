@@ -13,12 +13,11 @@ export function createCodexDesktopGenerationOwner(params: {
 }) {
   let generation = params.initialGeneration;
   let invalidation = 0;
-  let dirty = false;
+  let settledInvalidation = 0;
   let refresh: Promise<CodexDesktopGeneration> | undefined;
 
   const markDirty = () => {
     invalidation += 1;
-    dirty = true;
   };
   const reconcile = () => {
     if (refresh) {
@@ -42,7 +41,7 @@ export function createCodexDesktopGenerationOwner(params: {
           previous?.fingerprint === second
             ? previous
             : { epoch: (previous?.epoch ?? 0) + 1, fingerprint: second };
-        dirty = false;
+        settledInvalidation = invalidation;
         if (previous && generation !== previous) {
           params.onGenerationChange?.(generation);
         }
@@ -56,7 +55,7 @@ export function createCodexDesktopGenerationOwner(params: {
   return {
     read: () => generation,
     markDirty,
-    wait: () => (dirty ? reconcile() : Promise.resolve(generation)),
+    wait: () => (settledInvalidation !== invalidation ? reconcile() : Promise.resolve(generation)),
     refresh: () => {
       markDirty();
       return reconcile();
@@ -65,7 +64,7 @@ export function createCodexDesktopGenerationOwner(params: {
       Boolean(
         candidate &&
         !params.signal.aborted &&
-        !dirty &&
+        settledInvalidation === invalidation &&
         generation &&
         candidate.epoch === generation.epoch &&
         candidate.fingerprint === generation.fingerprint,

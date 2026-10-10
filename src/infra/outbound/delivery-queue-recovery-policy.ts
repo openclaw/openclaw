@@ -22,13 +22,6 @@ export function resolveMaxRetries(entry: QueuedDelivery): number {
     : DEFAULT_MAX_RETRIES;
 }
 
-export function resolveAttemptCount(entry: QueuedDelivery): number {
-  const persisted = entry.attemptCount;
-  const attemptCount =
-    typeof persisted === "number" && Number.isInteger(persisted) && persisted >= 0 ? persisted : 0;
-  return Math.max(attemptCount, entry.retryCount);
-}
-
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }

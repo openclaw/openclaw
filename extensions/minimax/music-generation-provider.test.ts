@@ -22,13 +22,8 @@ const {
 let buildMinimaxMusicGenerationProvider: Awaited<
   ReturnType<typeof loadMinimaxMusicGenerationProviderModule>
 >["buildMinimaxMusicGenerationProvider"];
-let buildMinimaxPortalMusicGenerationProvider: Awaited<
-  ReturnType<typeof loadMinimaxMusicGenerationProviderModule>
->["buildMinimaxPortalMusicGenerationProvider"];
-
 beforeAll(async () => {
-  ({ buildMinimaxMusicGenerationProvider, buildMinimaxPortalMusicGenerationProvider } =
-    await loadMinimaxMusicGenerationProviderModule());
+  ({ buildMinimaxMusicGenerationProvider } = await loadMinimaxMusicGenerationProviderModule());
 });
 
 installMinimaxProviderHttpMockCleanup();
@@ -153,10 +148,7 @@ describe("minimax music generation provider", () => {
       fetchWithTimeoutMock.mockResolvedValueOnce(
         new Response(body, { headers: { "content-type": contentType } }),
       );
-      const provider =
-        providerId === "minimax-portal"
-          ? buildMinimaxPortalMusicGenerationProvider()
-          : buildMinimaxMusicGenerationProvider();
+      const provider = buildMinimaxMusicGenerationProvider(providerId);
 
       await expect(
         provider.generateMusic(musicRequest({ provider: providerId, prompt: "invalid download" })),
@@ -413,7 +405,7 @@ describe("minimax music generation provider", () => {
         arrayBuffer: async () => Buffer.from("mp3-bytes"),
       });
 
-    const provider = buildMinimaxPortalMusicGenerationProvider();
+    const provider = buildMinimaxMusicGenerationProvider("minimax-portal");
     const result = await provider.generateMusic(
       musicRequest({
         provider: "minimax-portal",
@@ -457,7 +449,7 @@ describe("minimax music generation provider", () => {
       base_resp: { status_code: 0 },
     });
 
-    const provider = buildMinimaxPortalMusicGenerationProvider();
+    const provider = buildMinimaxMusicGenerationProvider("minimax-portal");
     await provider.generateMusic(
       musicRequest({
         provider: "minimax-portal",

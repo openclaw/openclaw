@@ -186,7 +186,7 @@ describe("OpenClawTerminalPanel", () => {
       });
     });
     expect(createOptions?.terminalOptions?.fontSize).toBe(11);
-    expect(createOptions?.terminalOptions?.fontFamily).toContain("MesloLGLDZ Nerd Font Mono");
+    expect(createOptions?.terminalOptions?.fontFamily).toContain("OpenClaw Nerd Symbols");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
     const styleResults = Array.isArray(OpenClawTerminalPanel.styles)
       ? OpenClawTerminalPanel.styles

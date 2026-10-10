@@ -12,16 +12,8 @@ export function extractQaContentText(
   }
   const parts: string[] = [];
   for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readBlockText(block);
+    const text =
+      typeof block === "string" ? block.trim() : isRecord(block) ? readBlockText(block) : undefined;
     if (text) {
       parts.push(text);
     }

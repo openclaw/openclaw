@@ -49,6 +49,7 @@ export function createMockDraftStream() {
     flush: vi.fn(async () => {}),
     messageId: vi.fn(() => messageId),
     lastDeliveredText: vi.fn(() => text),
+    isStopped: vi.fn(() => false),
     clear: vi.fn(async () => {
       messageId = undefined;
     }),

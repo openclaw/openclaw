@@ -1,7 +1,7 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConversations,
   registerConversationAddresses,
@@ -16,21 +16,28 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { runGatewayConversationList } from "./conversation-list.js";
 import * as routeOwnership from "./conversation-route-ownership.js";
 
-afterEach(() => {
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
+  tempDirs.cleanup();
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createDirectory(params: { agentId?: string; physicalAgentId?: string } = {}) {
+function createDirectory(
+  params: { agentId?: string; physicalAgentId?: string; peerIds?: string[] } = {},
+) {
   const agentId = params.agentId ?? "main";
   const stateDir = tempDirs.make("conversation-directory-admission-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -48,18 +55,23 @@ function createDirectory(params: { agentId?: string; physicalAgentId?: string } 
     resolveOutboundChannelPlugin: () => ({
       ...createChannelTestPluginBase({ id: "reef" }),
       directory: {
-        listPeers: async () => [{ kind: "user" as const, id: "peer", name: "Synthetic peer" }],
+        listPeers: async () =>
+          (params.peerIds ?? ["peer"]).map((id) => ({
+            kind: "user" as const,
+            id,
+            name: "Synthetic peer",
+          })),
       },
     }),
-    resolveOutboundSessionRoute: async () => {
+    resolveOutboundSessionRoute: async ({ target }: { target: string }) => {
       routed.resolve();
       return {
-        sessionKey: `agent:${agentId}:reef:direct:peer`,
-        baseSessionKey: `agent:${agentId}:reef:direct:peer`,
-        peer: { kind: "direct" as const, id: "peer" },
+        sessionKey: `agent:${agentId}:reef:direct:${target}`,
+        baseSessionKey: `agent:${agentId}:reef:direct:${target}`,
+        peer: { kind: "direct" as const, id: target },
         chatType: "direct" as const,
-        from: "reef:peer",
-        to: "reef:peer",
+        from: `reef:${target}`,
+        to: `reef:${target}`,
       };
     },
   };
@@ -70,7 +82,8 @@ describe("conversation directory write admission", () => {
   it.each(["eligible", "denied", "unavailable"] as const)(
     "rechecks route ownership after waiting for the writer: %s",
     async (eligibility) => {
-      const fixture = createDirectory();
+      const peerIds = ["peer", "peer-two", "peer-three"];
+      const fixture = createDirectory({ peerIds });
       let currentConfig = fixture.config;
       const release = createDeferredCore();
       const blocker = runOpenClawAgentWriteAdmission(
@@ -109,9 +122,10 @@ describe("conversation directory write admission", () => {
             bindings: [{ type: "route", agentId: "finance", match: { channel: "reef" } }],
           };
         } else if (eligibility === "unavailable") {
-          vi.spyOn(routeOwnership, "resolveConversationRouteEligibilityForAgent").mockReturnValue(
-            "unavailable",
-          );
+          vi.spyOn(
+            routeOwnership,
+            "resolveConversationRouteEligibilitiesForAgent",
+          ).mockImplementation(({ conversations }) => conversations.map(() => "unavailable"));
         }
         release.resolve();
         await blocker;
@@ -124,13 +138,15 @@ describe("conversation directory write admission", () => {
             value: {
               conversations:
                 eligibility === "eligible"
-                  ? [expect.objectContaining({ target: "reef:peer" })]
+                  ? expect.arrayContaining(
+                      peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
+                    )
                   : [],
             },
           });
         }
         expect(await listConversations(fixture.scope)).toHaveLength(
-          eligibility === "eligible" ? 1 : 0,
+          eligibility === "eligible" ? peerIds.length : 0,
         );
         expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
       } finally {
@@ -150,8 +166,8 @@ describe("conversation directory write admission", () => {
       });
       const releaseRoute = createDeferredCore();
       const routed = fixture.deps.resolveOutboundSessionRoute;
-      fixture.deps.resolveOutboundSessionRoute = async () => {
-        const route = await routed();
+      fixture.deps.resolveOutboundSessionRoute = async (params) => {
+        const route = await routed(params);
         await releaseRoute.promise;
         return route;
       };

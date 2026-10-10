@@ -104,9 +104,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   const maxMb =
     typeof params.mediaMaxMb === "number" && params.mediaMaxMb > 0 ? params.mediaMaxMb : 50;
   const maxBytes = maxMb * 1024 * 1024;
-  const saveInboundMedia = async (
-    inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>,
-  ) => {
+  const saveInboundMedia = (inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>) => {
     if (!inboundMedia) {
       return;
     }
@@ -118,7 +116,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   try {
     // Entry zero is exactly the Baileys normalization that downloadInboundMedia performed here
     // previously; later projection entries are extraction-only future-proof payloads.
-    await saveInboundMedia(
+    saveInboundMedia(
       await downloadInboundMedia(
         msg as proto.IWebMessageInfo,
         sock,
@@ -142,7 +140,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   }
   if (!mediaPath && !mediaKind && replyContext?.media) {
     try {
-      await saveInboundMedia(
+      saveInboundMedia(
         await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
       );
       mediaKind = replyContext.media.kind ?? undefined;

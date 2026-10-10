@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import * as readonlyDatabase from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -515,7 +516,9 @@ describe("SQLite transcript archive sessions", () => {
       let nativeExitAtRetirement = false;
       const archiveWorkers = observeArchiveSessionWorkers((message, worker) => {
         if (message.type === boundary && !retirement) {
-          retirement = closeOpenClawAgentDatabaseByPathAsync(database.path).then((closed) => {
+          retirement = runInDetachedAsyncContext(() =>
+            closeOpenClawAgentDatabaseByPathAsync(database.path),
+          ).then((closed) => {
             nativeExitAtRetirement = worker.threadId === -1;
             return closed;
           });

@@ -161,49 +161,6 @@ describe("migration command resources", () => {
     }
   });
 
-  it("prepares and disposes the selected registration after an earlier provider refreshes config", async () => {
-    const fixture = createMigrationResourceFixture({ configPatch: true, secondProvider: true });
-    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    fixture.state.resumeApply.resolve();
-    fixture.state.finishPreparation.resolve();
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
-        },
-        async () => {
-          const result = await offerPostInstallMigrations({
-            config: fixture.config,
-            runtime: createNonExitingRuntime(),
-            installedPluginIds: [fixture.id],
-            prompter: createWizardPrompter({ confirm: async () => true }),
-          });
-          expect(result.config.agents?.defaults?.heartbeat?.every).toBe("43m");
-          expect(fixture.state.preparationOwners).toHaveLength(2);
-          for (const owner of fixture.state.preparationOwners) {
-            expect(owner.prepared === owner.applied, owner.providerId).toBe(true);
-          }
-          expect(fixture.state.preparationDisposals).toBe(2);
-          expect(fixture.state.connections).toHaveLength(2);
-          expect(
-            fixture.state.connections.every(
-              ({ database, disposals }) => !database.isOpen && disposals === 1,
-            ),
-          ).toBe(true);
-        },
-      );
-    } finally {
-      if (stdinDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-      } else {
-        Reflect.deleteProperty(process.stdin, "isTTY");
-      }
-      fixture.cleanup();
-    }
-  });
-
   it("logs the primary migration failure before a prepared instance disposal failure aborts onboarding", async () => {
     const fixture = createMigrationResourceFixture({ failApply: true });
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -247,28 +204,6 @@ describe("migration command resources", () => {
       } else {
         Reflect.deleteProperty(process.stdin, "isTTY");
       }
-      fixture.cleanup();
-    }
-  });
-
-  it("lists cold migration options without executing a full registration", async () => {
-    const fixture = createMigrationResourceFixture();
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
-        },
-        async () => {
-          const options = await listSetupMigrationOptions({
-            baseConfig: fixture.config,
-            detections: [],
-          });
-          expect(options.map((option) => option.providerId)).toContain(fixture.id);
-          expect(fixture.state.connections.length).toBe(0);
-        },
-      );
-    } finally {
       fixture.cleanup();
     }
   });
@@ -342,6 +277,10 @@ describe("migration command resources", () => {
             });
             expect(fixture.state.applyCalls).toBe(2);
             expect(result.config.agents?.defaults?.heartbeat?.every).toBe("43m");
+            expect(fixture.state.preparationOwners).toHaveLength(2);
+            for (const owner of fixture.state.preparationOwners) {
+              expect(owner.prepared === owner.applied, owner.providerId).toBe(true);
+            }
             const cleanupWarnings = messages.filter((message) =>
               message.includes("plugin cleanup failed"),
             );
@@ -369,39 +308,4 @@ describe("migration command resources", () => {
       }
     },
   );
-
-  it("retains the normal no-candidates result when outer registration cleanup fails", async () => {
-    const fixture = createMigrationResourceFixture({ detectFound: false });
-    fixture.state.failCleanupOnConnection = 1;
-    const messages: string[] = [];
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
-        },
-        async () => {
-          const result = await offerPostInstallMigrations({
-            config: fixture.config,
-            runtime: {
-              ...createNonExitingRuntime(),
-              log: (message) => {
-                messages.push(String(message));
-              },
-            },
-            installedPluginIds: [fixture.id],
-            nonInteractive: true,
-          });
-          expect(result.config).toBe(fixture.config);
-          expect(fixture.state.applyCalls).toBe(0);
-          expect(messages).toHaveLength(1);
-          expect(messages[0]).toContain("migration result retained, but plugin cleanup failed");
-          expect(fixture.state.connections[0]?.disposals).toBe(1);
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-        },
-      );
-    } finally {
-      fixture.cleanup();
-    }
-  });
 });

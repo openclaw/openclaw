@@ -93,7 +93,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       if (channelManager.getAutostartSuppression() !== null) {
-        await channelManager.recoverAutostartSuppression();
+        await channelManager.recoverAutostartSuppression(scheduler.signal);
       }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
@@ -235,7 +235,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         }
       }
     } catch (err) {
-      log.error(`health-monitor: check failed: ${String(err)}`);
+      if (!scheduler.signal.aborted) {
+        log.error(`health-monitor: check failed: ${String(err)}`);
+      }
     }
   }
 

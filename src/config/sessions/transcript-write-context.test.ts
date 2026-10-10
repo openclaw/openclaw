@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -10,6 +10,7 @@ import {
   ensureSessionEntrySync,
   loadSessionEntry,
   loadTranscriptEventsSync,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
@@ -17,11 +18,13 @@ import {
 import {
   bindOwnedSessionTranscriptWrites,
   captureOwnedTranscriptWriteAssertion,
+  captureSessionTranscriptSourcePublication,
   getOwnedSessionTranscriptInitialWriter,
   getOwnedSessionTranscriptWriterFence,
   type InitialSessionTranscriptWriter,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
+  withSessionTranscriptSourcePublication,
 } from "./transcript-write-context.js";
 
 async function withWriteTarget(
@@ -66,6 +69,70 @@ const mutations = [
 ];
 
 describe("owned transcript commit boundary", () => {
+  it.each([false, true])(
+    "settles committed transcript publication when source binding throws (native=%s)",
+    async (native) => {
+      await withWriteTarget(async (target) => {
+        replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const committed = vi.fn();
+        const failure = new Error("source binding refused after commit");
+        await expect(
+          withSessionTranscriptSourcePublication(
+            target,
+            () => {
+              throw failure;
+            },
+            () =>
+              persistSessionTranscriptTurn(target, {
+                expectedSessionId: target.sessionId,
+                messages: [
+                  {
+                    message: { role: "user", content: "retained committed input" },
+                    ...(native
+                      ? { prepareMessageAfterIdempotencyCheck: (message: unknown) => message }
+                      : {}),
+                  },
+                ],
+                onMessageCommitted: committed,
+              }),
+          ),
+        ).rejects.toBe(failure);
+        expect(committed).toHaveBeenCalledOnce();
+        expect(loadTranscriptEventsSync(target)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({ content: "retained committed input" }),
+            }),
+          ]),
+        );
+      });
+    },
+  );
+
+  it("revokes the captured source publisher when its initiating write scope settles", async () => {
+    const target = {
+      agentId: "main",
+      sessionId: "source-session",
+      sessionKey: "agent:main:source",
+      storePath: "/isolated/source.sqlite",
+    };
+    const publish = vi.fn();
+    let captured: ReturnType<typeof captureSessionTranscriptSourcePublication>;
+    await withSessionTranscriptSourcePublication(target, publish, async () => {
+      expect(
+        captureSessionTranscriptSourcePublication({ ...target, sessionId: "another-session" }),
+      ).toBeUndefined();
+      captured = captureSessionTranscriptSourcePublication(target);
+      expect(captured).toBeTypeOf("function");
+      expect(captureSessionTranscriptSourcePublication(target)).toBeUndefined();
+    });
+    captured?.(
+      { agentId: "main", path: target.storePath, databaseIdentity: "retired-source" },
+      { sessionId: target.sessionId, updatedAt: 1 },
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
   it.each(
     mutations.flatMap((mutation) =>
       [

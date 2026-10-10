@@ -157,22 +157,6 @@ export function sourceDeliveryTargetsMatch(
   return deliveryThreadId === targetThreadId;
 }
 
-function resolveImplicitMessageToolDeliveryTarget(
-  plan: SourceDeliveryPlan,
-): SourceDeliveryMessageToolTarget | undefined {
-  if (!plan.target.channel || !plan.target.to) {
-    return undefined;
-  }
-  const threadId = stringifyRouteThreadId(plan.target.threadId);
-  return {
-    tool: "message",
-    provider: plan.target.channel,
-    ...(plan.target.accountId ? { accountId: plan.target.accountId } : {}),
-    to: plan.target.to,
-    ...(threadId ? { threadId } : {}),
-  };
-}
-
 /** Evaluates whether observed message-tool sends satisfy the source delivery plan. */
 export function resolveSourceDeliveryOutcome(
   plan: SourceDeliveryPlan,
@@ -182,17 +166,27 @@ export function resolveSourceDeliveryOutcome(
   },
 ): SourceDeliveryOutcome {
   const didSendViaMessageTool = params.didSendViaMessageTool === true;
-  const explicitTargets = params.messageToolSentTargets ?? [];
+  let sentTargets = params.messageToolSentTargets ?? [];
   // Cron completion accounting needs concrete target evidence. Legacy
   // message-tool-owned flows may still use the plan target as the implicit send.
-  const sentTargets =
-    explicitTargets.length > 0
-      ? explicitTargets
-      : didSendViaMessageTool && !plan.messageTool.requireExplicitTargetEvidence
-        ? [resolveImplicitMessageToolDeliveryTarget(plan)].filter(
-            (target): target is SourceDeliveryMessageToolTarget => Boolean(target),
-          )
-        : [];
+  if (
+    sentTargets.length === 0 &&
+    didSendViaMessageTool &&
+    !plan.messageTool.requireExplicitTargetEvidence &&
+    plan.target.channel &&
+    plan.target.to
+  ) {
+    const threadId = stringifyRouteThreadId(plan.target.threadId);
+    sentTargets = [
+      {
+        tool: "message",
+        provider: plan.target.channel,
+        ...(plan.target.accountId ? { accountId: plan.target.accountId } : {}),
+        to: plan.target.to,
+        ...(threadId ? { threadId } : {}),
+      },
+    ];
+  }
   const visibleDeliveries = sentTargets.map((target) => ({
     via: "message_tool" as const,
     target,

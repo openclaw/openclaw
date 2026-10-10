@@ -1,11 +1,10 @@
 import {
   embeddedAgentLog,
-  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -32,7 +31,10 @@ import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
-import { reportCodexBackgroundCleanupFailure } from "./run-attempt-lifecycle.js";
+import {
+  reportCodexBackgroundCleanupFailure,
+  runCodexCleanupStep,
+} from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
@@ -221,14 +223,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await retireSharedCodexClientForOneShotCleanup();
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
-    runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step,
-      log: embeddedAgentLog,
-      cleanup: async () => {
-        await operation();
-      },
+    runCodexCleanupStep(params, step, async () => {
+      await operation();
     });
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
   let nativeSubagentMonitorGeneration = 0;
@@ -243,21 +239,21 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const registerNativeSubagentMonitor = async (parentThreadId: string) => {
     const { client, thread, nativeHookRelay, turnRoute } = state;
+    const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+    const storePath = params.sessionTarget?.storePath;
+    const parent =
+      sessionKey && storePath
+        ? await captureSessionEntryCurrentCheck({
+            agentId: params.sessionTarget?.agentId ?? sessionAgentId,
+            sessionKey,
+            storePath,
+            errorMessage: "Native submission session lifecycle is no longer current.",
+          })
+        : undefined;
     await unregisterNativeSubagentMonitor();
     connection.assertCurrent();
     const generation = ++nativeSubagentMonitorGeneration;
-    const sessionKey = params.sessionKey;
-    const storePath = params.sessionTarget?.storePath;
-    const parentSession =
-      sessionKey && storePath
-        ? getSessionEntry({
-            agentId: sessionAgentId,
-            sessionKey,
-            storePath,
-            readConsistency: "latest",
-            hydrateSkillPromptRefs: false,
-          })
-        : undefined;
+    const parentSession = parent?.entry;
     const historyOwner = createCodexNativeSubagentHistoryOwner({
       parentThreadId,
       sessionId: params.sessionId,
@@ -268,18 +264,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     });
     const { bindingStore, bindingIdentity } = connection;
     const assertParentSessionCurrent = () => {
-      if (historyOwner?.lifecycleRevision && sessionKey && storePath) {
-        const currentSession = getSessionEntry({
-          agentId: sessionAgentId,
-          sessionKey,
-          storePath,
-          readConsistency: "latest",
-          hydrateSkillPromptRefs: false,
-        });
-        if (currentSession?.lifecycleRevision !== historyOwner.lifecycleRevision) {
-          throw new Error("Native submission session lifecycle is no longer current.");
-        }
-      }
+      parent?.assertCurrent();
     };
     const submissionStore: CodexNativeSubagentSubmissionStore | undefined =
       historyOwner && thread.lifecycle.preserveExistingBinding !== true
@@ -559,12 +544,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
+    requestTimeoutMs: appServer.requestTimeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
-  const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
   const buildNativeHookRelayFinalConfigPatch = async (
     decision: CodexThreadFinalConfigPatchDecision,
+    relayClient: CodexAppServerClient,
   ) => {
     state.nativeSpawnAdmissionInstalled = false;
     const previousRelay = state.nativeHookRelay;
@@ -610,7 +596,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       approvalContext: {
         trigger: params.trigger,
         approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-        turnSourceChannel: requesterChannel,
+        turnSourceChannel: params.messageChannel ?? params.messageProvider,
         turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
         turnSourceAccountId: params.agentAccountId,
         turnSourceThreadId: params.currentThreadTs,
@@ -633,7 +619,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
               getCodexInferenceThreadQualification(state.client, threadId),
           }
         : undefined,
-      assertCurrent: connection.assertLegacyCurrent,
+      remoteCallback: appServer.nativeHookRelay && {
+        config: appServer.nativeHookRelay,
+        client: relayClient,
+        timeoutMs: appServer.requestTimeoutMs,
+        onCleanupFailure: (error) => reportCodexBackgroundCleanupFailure(params, error),
+      },
+      assertCurrent: () => {
+        connection.assertLegacyCurrent();
+        runtime.nativeExecutionPolicy.assertCurrent();
+      },
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {
@@ -698,9 +693,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeModelAdmission,
     nativeProcessAuthority,
     releaseNativeProcessAuthority,
-    markTrajectoryEndRecorded: () => {
-      state.trajectoryEndRecorded = true;
-    },
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
     runCleanupStep,

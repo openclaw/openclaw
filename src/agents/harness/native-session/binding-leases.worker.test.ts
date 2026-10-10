@@ -1,6 +1,7 @@
 import { setImmediate as immediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as mutationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -89,21 +90,17 @@ describe("native binding worker admission", () => {
             throw new Error("binding action revoked");
           }
         };
-        const admission = mutationAdmission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (admit, attachment) =>
-            admission((request, grant) => {
-              if (request.stage === "commit" && prepared && !refusedCommit) {
-                refusedCommit = true;
-                if (failure === "revocation") {
-                  current = false;
-                } else {
-                  vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-                }
-              }
-              admit(request, grant);
-            }, attachment),
-        );
+        probe.admission(mutationAdmission, (request, grant, admit) => {
+          if (request.stage === "commit" && prepared && !refusedCommit) {
+            refusedCommit = true;
+            if (failure === "revocation") {
+              current = false;
+            } else {
+              vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
+            }
+          }
+          admit(request, grant);
+        });
         await expect(
           owner.withLease(
             "binding",

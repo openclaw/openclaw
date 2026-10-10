@@ -16,7 +16,11 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
@@ -257,16 +261,18 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     ]) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      const transfer = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        const bytes = JSON.stringify(reply);
-        for (const fixture of fixtures) {
-          if (bytes.includes(fixture.promptMarker)) {
-            transferredPrompts.add(fixture.promptMarker);
+      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          const bytes = JSON.stringify(reply);
+          for (const fixture of fixtures) {
+            if (bytes.includes(fixture.promptMarker)) {
+              transferredPrompts.add(fixture.promptMarker);
+            }
           }
-        }
-        return reply;
+          return reply;
+        });
       });
       try {
         payload = await readUsage({
@@ -277,7 +283,9 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
           creatorKey: scenario.creatorKey,
         });
       } finally {
-        transfer.mockRestore();
+        for (const transfer of transfers) {
+          transfer.mockRestore();
+        }
       }
       const matches = scenario.key
         ? scenario.selected
@@ -329,25 +337,27 @@ it("reads selected reports from the physical owner of shared-store sentinels and
     const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
     let changeRegistryAfterInventory = false;
     let registryChanges = 0;
-    const run = historyLane.pool.run.bind(historyLane.pool);
-    const inventory = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        changeRegistryAfterInventory &&
-        reply.ok &&
-        isRecord(reply.value) &&
-        reply.value.kind === "session-target-inventory"
-      ) {
-        changeRegistryAfterInventory = false;
-        registryChanges++;
-        unregisterOpenClawAgentDatabase({
-          agentId: unrelated.agentId,
-          path: unrelated.path,
-          env: state.env,
-        });
-      }
-      return reply;
-    });
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const inventory = vi
+      .spyOn(targetDiscoveryLane.pool, "run")
+      .mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          changeRegistryAfterInventory &&
+          reply.ok &&
+          isRecord(reply.value) &&
+          reply.value.kind === "session-target-inventory"
+        ) {
+          changeRegistryAfterInventory = false;
+          registryChanges++;
+          unregisterOpenClawAgentDatabase({
+            agentId: unrelated.agentId,
+            path: unrelated.path,
+            env: state.env,
+          });
+        }
+        return reply;
+      });
     onTestFinished(() => inventory.mockRestore());
     for (const [agentId, key] of [
       ["ops", "global"],

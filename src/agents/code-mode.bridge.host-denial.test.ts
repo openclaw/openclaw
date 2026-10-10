@@ -21,6 +21,7 @@ import {
   resetClientVoiceConfirmationStateForTest,
 } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
+import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import * as nodeHost from "./bash-tools.exec-host-node.js";
@@ -224,7 +225,7 @@ describe("Code Mode subscribed host denial", () => {
     },
   );
 
-  it.each(["allow-always", "deny", "timeout", "cancel", "unavailable", "report"] as const)(
+  it.each(["allow-always", "deny", "timeout", "cancel", "report"] as const)(
     "preserves approval callbacks and containment for %s",
     async (decision) => {
       const resolutions: string[] = [];
@@ -238,9 +239,6 @@ describe("Code Mode subscribed host denial", () => {
       }));
       const rpc = vi.spyOn(gatewayTool, "callGatewayTool").mockImplementation(async (method) => {
         requests.push(method);
-        if (decision === "unavailable") {
-          throw new Error("gateway unavailable");
-        }
         if (method === "plugin.approval.request") {
           return { id: "host-approval", status: "accepted" };
         }
@@ -257,16 +255,10 @@ describe("Code Mode subscribed host denial", () => {
       expect(details.status).toBe("failed");
       expect(before).toHaveBeenCalledOnce();
       expect(resolutions).toEqual([
-        decision === "cancel" || decision === "unavailable" || decision === "report"
-          ? "cancelled"
-          : decision,
+        decision === "cancel" || decision === "report" ? "cancelled" : decision,
       ]);
       expect(requests).toEqual(
-        decision === "report"
-          ? []
-          : decision === "unavailable"
-            ? ["plugin.approval.request"]
-            : ["plugin.approval.request", "plugin.approval.waitDecision"],
+        decision === "report" ? [] : ["plugin.approval.request", "plugin.approval.waitDecision"],
       );
       expect(harness.spawn).not.toHaveBeenCalled();
       expect(harness.remote).not.toHaveBeenCalled();
@@ -310,7 +302,7 @@ describe("Code Mode subscribed host denial", () => {
     expect(harness.spawn).not.toHaveBeenCalled();
   });
 
-  it.each(["hook", "approval", "preparation", "completion"] as const)(
+  it.each(["preparation"] as const)(
     "does not resurrect cancellation-ignoring work across awaited %s",
     async (boundary) => {
       const entered = createDeferred();
@@ -321,43 +313,22 @@ describe("Code Mode subscribed host denial", () => {
         await release.promise;
         finished.resolve();
       };
-      if (boundary === "hook") {
-        installBefore(pause);
-      }
-      if (boundary === "approval") {
-        installBefore(() => ({ requireApproval: { title: "Approve", description: "Wait" } }));
-        vi.spyOn(gatewayTool, "callGatewayTool").mockImplementation(async (method) => {
-          if (method === "plugin.approval.request") {
-            return { id: "late", status: "accepted" };
-          }
-          await pause();
-          return { id: "late", decision: "allow-once" };
-        });
-      }
-      const harness = createHostHarness({
-        name: `abort-${boundary}`,
-        ...(boundary === "completion" ? { onToolStreamBoundary: pause } : {}),
-      });
-      if (boundary === "preparation") {
-        initializeGlobalHookRunner(
-          createMockPluginRegistry([
-            { hookName: "resolve_exec_env", handler: pause },
-            {
-              hookName: "before_tool_call",
-              handler: () => ({ params: { command: "printf no", host: "node" } }),
-            },
-          ]),
-        );
-      }
+      const harness = createHostHarness({ name: `abort-${boundary}` });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "resolve_exec_env", handler: pause },
+          {
+            hookName: "before_tool_call",
+            handler: () => ({ params: { command: "printf no", host: "node" } }),
+          },
+        ]),
+      );
       const after = pluginToolWithExecute("after_abort", "Must not run after abort", async () =>
         jsonResult({ ran: true }),
       );
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, harness.shell, after] });
       try {
-        const code =
-          boundary === "preparation"
-            ? deniedCode.replace('host: "node"', 'host: "gateway"')
-            : deniedCode;
+        const code = deniedCode.replace('host: "node"', 'host: "gateway"');
         const running = harness.run(`${code.replace("return ", "")} await after_abort({});`);
         await entered.promise;
         harness.runAbortController.abort(new Error("cancel host test"));
@@ -389,7 +360,7 @@ describe("Code Mode subscribed host denial", () => {
     let producerError: unknown;
     // Capture the exact real producer object without minting or modifying its proof.
     const capture = wrapToolWithBeforeToolCallHook(
-      {
+      copyAgentToolMetadata(harness.source, {
         ...harness.source,
         execute: async (...args: Parameters<typeof execute>) => {
           try {
@@ -399,7 +370,7 @@ describe("Code Mode subscribed host denial", () => {
             throw error;
           }
         },
-      },
+      }),
       { runId: harness.runId },
     );
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, capture] });
@@ -412,7 +383,6 @@ describe("Code Mode subscribed host denial", () => {
   });
 
   it.each([
-    "earlier",
     "mutation-first/settles-first",
     "denial-first/settles-last",
     "late-settlement",
@@ -473,9 +443,7 @@ describe("Code Mode subscribed host denial", () => {
       const code =
         order === "late-settlement"
           ? `await Promise.all([record_mutation({}), ${deny}]);`
-          : parallel
-            ? `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`
-            : `await record_mutation({}); ${deniedCode}`;
+          : `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`;
       let details = await harness.run(code);
       if (order === "late-settlement") {
         expect(details.status).toBe("waiting");

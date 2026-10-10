@@ -54,6 +54,7 @@ import {
 } from "./browser/routes/test-helpers.js";
 import type { BrowserRouteContext } from "./browser/server-context.js";
 import { makeBrowserProfile } from "./browser/server-context.test-harness.js";
+import { browserSessionTabStorageKey } from "./browser/session-tab-identity.js";
 import { readColdNativeActivity } from "./browser/session-tab-process-state.js";
 import {
   closeTrackedBrowserTabsForSessions,
@@ -65,7 +66,6 @@ import {
 import { durableOwnership } from "./browser/session-tab-registry.sqlite.test-helpers.js";
 import {
   dispatchBrowserTabClose,
-  browserSessionTabStorageKey,
   type BrowserSessionTabRecord,
   getBrowserSessionTabStore,
   parseBrowserDashboardStopIntent,

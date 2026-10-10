@@ -14,7 +14,7 @@ import {
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
-import { codexCatalogSourceForClient } from "./session-catalog-source.js";
+import { codexCatalogSourceForClient, setCodexCatalogSource } from "./session-catalog-source.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,10 +61,12 @@ async function fixture(
     const limit = params.limit ?? 64;
     return projectCodexCatalogPage(
       {
-        data: structuredClone(threads.slice(offset, offset + limit)),
+        data: structuredClone(threads.slice(offset, offset + limit)).map((entry) =>
+          setCodexCatalogSource(entry, codexCatalogSourceForClient(harness.client)),
+        ),
         nextCursor: offset + limit < threads.length ? String(offset + limit) : null,
       },
-      { sanitize: sanitizeTerminalText, source: codexCatalogSourceForClient(harness.client) },
+      { sanitize: sanitizeTerminalText },
     );
   });
   const index = new CodexCatalogIndex({
@@ -428,13 +430,16 @@ describe("resident Codex catalog notifications", () => {
     const page = await projectCodexCatalogPage(
       {
         data: [
-          thread({
-            cwd: "/workspace/fresh",
-            status: { type: "active", activeFlags: ["staleStatus"] },
-          }),
+          setCodexCatalogSource(
+            thread({
+              cwd: "/workspace/fresh",
+              status: { type: "active", activeFlags: ["staleStatus"] },
+            }),
+            codexCatalogSourceForClient(harness.client),
+          ),
         ],
       },
-      { sanitize: sanitizeTerminalText, source: codexCatalogSourceForClient(harness.client) },
+      { sanitize: sanitizeTerminalText },
     );
     const response = createDeferred<typeof page>();
     const started = createDeferred<void>();

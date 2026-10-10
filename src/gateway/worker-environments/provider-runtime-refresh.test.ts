@@ -547,7 +547,7 @@ describe("worker environment runtime upgrades", () => {
           state: "attached",
         });
       } else if (race === "move") {
-        h.placements.beginPlacementMove({
+        await h.placements.beginPlacementMove({
           sessionId: REQUEST.sessionId,
           source: {
             generation: h.placement!.generation,

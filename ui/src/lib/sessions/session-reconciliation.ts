@@ -4,6 +4,7 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   projectSessionResultRows,
+  mapSessionResultRows,
   readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionChangedRow,
@@ -52,11 +53,7 @@ type Host = {
   >;
   mutations: Pick<
     ReturnType<typeof createSessionMutations>,
-    | "observeArchiveState"
-    | "confirmArchiveState"
-    | "applyPendingRow"
-    | "observePendingFields"
-    | "applyConfirmedArchiveRow"
+    "observeArchiveState" | "confirmArchiveState" | "applyRow" | "observePendingFields"
   >;
   thinkingClaims: Pick<ReturnType<typeof createSessionThinkingClaims>, "observeEvent">;
   decorate: (result: SessionsListResult | null) => SessionsListResult | null;
@@ -183,15 +180,8 @@ export function createSessionReconciliation(host: Host) {
         );
         return projected;
       };
-      const reconcileResult = (result: SessionsListResult | null, agentId?: string | null) => {
-        if (!result) {
-          return result;
-        }
-        return projectSessionResultRows(
-          result,
-          result.sessions.map((row) => reconcileRow(row, agentId)),
-        );
-      };
+      const reconcileResult = (result: SessionsListResult | null, agentId?: string | null) =>
+        mapSessionResultRows(result, (row) => reconcileRow(row, agentId));
       const state = host.readState();
       const result = reconcileResult(state.result, state.agentId);
       const staged = host.roster.observations.stageManagedResults(
@@ -356,10 +346,8 @@ export function createSessionReconciliation(host: Host) {
       decorate: (row) =>
         deletions.deletionState(row.key, owned.agentId, row.sessionId)
           ? null
-          : host.mutations.applyPendingRow(
-              host.mutations.applyConfirmedArchiveRow(
-                host.permissions.applyRow(row, roster.observations.rowRevision(row), owned.agentId),
-              ),
+          : host.mutations.applyRow(
+              host.permissions.applyRow(row, roster.observations.rowRevision(row), owned.agentId),
               owned.agentId,
             ),
     });

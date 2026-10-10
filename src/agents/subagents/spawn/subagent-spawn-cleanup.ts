@@ -235,11 +235,8 @@ export function bindSubagentSpawnCleanup(params: {
 
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
   const result = asNullableRecord(response);
-  if (!result) {
-    return false;
-  }
   return (
-    result.aborted === true &&
+    result?.aborted === true &&
     Array.isArray(result.runIds) &&
     result.runIds.some((runId) => runId === gatewayRunId)
   );
@@ -247,11 +244,8 @@ function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boole
 
 function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean {
   const result = asNullableRecord(response);
-  if (!result) {
-    return false;
-  }
   return (
-    typeof result.aborted === "boolean" &&
+    typeof result?.aborted === "boolean" &&
     Array.isArray(result.runIds) &&
     result.runIds.every((runId) => typeof runId === "string") &&
     !result.runIds.includes(gatewayRunId)
@@ -395,10 +389,7 @@ export async function terminateFailedRegistrationRun(params: {
     }
   } else {
     await terminateAcceptedCollectorRun({
-      childSessionKey: params.childSessionKey,
-      gatewayRunId: params.gatewayRunId,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      ...params,
       isCurrent: deleteSessionOnMiss ? params.isCleanupCurrent : params.isAbortCurrent,
       sessionCleanup: deleteSessionOnMiss ? "delete-on-abort-miss" : "preserve",
       ...(params.cleanupOwner ? { callGateway: params.cleanupOwner.callGateway } : {}),

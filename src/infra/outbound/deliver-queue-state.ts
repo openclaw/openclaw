@@ -15,7 +15,7 @@ import {
   type PlatformMessageNotDispatchedError,
   type PlatformSendRoute,
 } from "./deliver-types.js";
-import { rejectDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
+import { settleDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
 import { retireUnsentDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -31,7 +31,7 @@ import {
   stageDeliveryFailureSettlement,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement, QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -229,16 +229,16 @@ export async function rejectQueuedDelivery(
     // The exact claim is now durably unsendable. Recovery resumes only this
     // idempotent completion projection if projection or terminal cleanup fails.
     if (entry.deliveryCompletion) {
-      await rejectDurableDelivery(
+      await settleDurableDelivery(
         entry.deliveryCompletion,
-        rejection.message,
+        { rejectionError: rejection.message },
         owner.stateDir,
         params.deliveryQueueStateContext,
         params.conversationDeliveryTarget,
       );
     }
     const spoolPaths = collectEntrySpoolPaths(
-      acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload),
+      preparedOutboundPayloads(entry.preparedBatch),
       owner.stateDir,
     );
     if (!(await owner.finalizeFailure(entry))) {
@@ -265,11 +265,10 @@ export async function persistQueuedPreSendState(
   const { owner } = params;
   owner.signal?.throwIfAborted();
   try {
-    const route = { replyToId: params.route.replyToId ?? null };
     await markDeliveryPlatformSendAttemptStarted(
       owner.queueId,
       owner.stateDir,
-      route,
+      { replyToId: params.route.replyToId ?? null },
       owner.claimId || undefined,
       context,
     );

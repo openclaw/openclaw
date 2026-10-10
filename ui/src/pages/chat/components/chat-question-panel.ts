@@ -250,14 +250,14 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
     if (event.target instanceof HTMLAnchorElement) {
       return;
     }
-    if (event.target instanceof HTMLInputElement) {
-      if (
-        event.key === "Enter" &&
-        (question.allowEmpty || this.answerValues(model, question).length > 0)
-      ) {
+    if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) {
+      if (question.allowEmpty || this.answerValues(model, question).length > 0) {
         event.preventDefault();
         this.advanceOrSubmit(model, question);
       }
+      return;
+    }
+    if (event.target instanceof HTMLInputElement) {
       return;
     }
     if (
@@ -312,15 +312,6 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
       )?.focus({
         preventScroll: true,
       });
-      return;
-    }
-    if (
-      event.key === "Enter" &&
-      !(event.target instanceof HTMLButtonElement) &&
-      (question.allowEmpty || this.answerValues(model, question).length > 0)
-    ) {
-      event.preventDefault();
-      this.advanceOrSubmit(model, question);
     }
   }
 
@@ -357,6 +348,19 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
           </button>
         </div>`
       : nothing;
+    const renderAction = (
+      name: "back" | "skip" | "advance",
+      label: string,
+      onClick: () => void,
+      unavailable = false,
+    ) => html`<button
+      class="btn btn--sm ${name === "advance" ? "primary " : ""}chat-question-panel__${name}"
+      type="button"
+      ?disabled=${disabled || unavailable}
+      @click=${onClick}
+    >
+      ${label}
+    </button>`;
 
     if (this.collapsed) {
       return html`
@@ -372,7 +376,7 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
             aria-expanded="false"
           >
             <span
-              ><strong>${model.title}</strong> ·
+              >${model.nonBlocking ? nothing : html`<strong>${model.title}</strong> ·`}
               ${model.collapsedLabel ? html`${model.collapsedLabel} · ${question.question}` : question.header}</span
             >
             ${model.collapsedLabel ? nothing : html`<span class="chat-question-panel__progress">${progress}</span>`}
@@ -391,8 +395,14 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
         tabindex="0"
         @keydown=${(event: KeyboardEvent) => this.handleKeyDown(event, model, question, disabled)}
       >
-        <div class="chat-question-panel__topline">
-          <div class="chat-question-panel__title">${model.title}</div>
+        <div
+          class="chat-question-panel__topline ${model.nonBlocking ? "chat-question-panel__topline--prompt" : ""}"
+        >
+          ${
+            model.nonBlocking
+              ? html`<span class="chat-question-panel__prompt">${question.question}</span>`
+              : html`<div class="chat-question-panel__title">${model.title}</div>`
+          }
           ${requestNavigation}
           <span class="chat-question-panel__progress">${progress}</span>
           <button
@@ -406,10 +416,13 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
           </button>
         </div>
 
-        <div class="chat-question-panel__heading">
-          <span class="chat-question-panel__prompt">${question.question}</span>
-        </div>
-
+        ${
+          model.nonBlocking
+            ? nothing
+            : html`<div class="chat-question-panel__heading">
+                <span class="chat-question-panel__prompt">${question.question}</span>
+              </div>`
+        }
         ${
           question.url
             ? html`<div class="chat-question-panel__external">
@@ -554,50 +567,34 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
           }
           ${
             this.currentQuestionIndex > 0
-              ? html`<button
-                  class="btn btn--sm chat-question-panel__back"
-                  type="button"
-                  ?disabled=${disabled}
-                  @click=${() => this.goBack()}
-                >
-                  ${t("chat.questions.back")}
-                </button>`
+              ? renderAction("back", t("chat.questions.back"), () => this.goBack())
               : nothing
           }
           ${
             props.onSkip
-              ? html`<button
-                  class="btn btn--sm chat-question-panel__skip"
-                  type="button"
-                  ?disabled=${disabled}
-                  @click=${() => void this.resolve(model, "skip")}
-                >
-                  ${
-                    this.pendingAction?.kind === "skip"
-                      ? t(
-                          model.nonBlocking
-                            ? "chat.asyncQuestions.dismissing"
-                            : "chat.questions.skipping",
-                        )
-                      : t(model.nonBlocking ? "chat.asyncQuestions.dismiss" : "chat.questions.skip")
-                  }
-                </button>`
+              ? renderAction(
+                  "skip",
+                  this.pendingAction?.kind === "skip"
+                    ? t(
+                        model.nonBlocking
+                          ? "chat.asyncQuestions.dismissing"
+                          : "chat.questions.skipping",
+                      )
+                    : t(model.nonBlocking ? "chat.asyncQuestions.dismiss" : "chat.questions.skip"),
+                  () => void this.resolve(model, "skip"),
+                )
               : nothing
           }
-          <button
-            class="btn btn--sm primary chat-question-panel__advance"
-            type="button"
-            ?disabled=${disabled || !canAdvance || !props.onSubmit}
-            @click=${() => this.advanceOrSubmit(model, question)}
-          >
-            ${
-              this.pendingAction?.kind === "submit" || model.submitting
-                ? t("chat.questions.submitting")
-                : isLast
-                  ? t("chat.questions.submit")
-                  : t("chat.questions.next")
-            }
-          </button>
+          ${renderAction(
+            "advance",
+            this.pendingAction?.kind === "submit" || model.submitting
+              ? t("chat.questions.submitting")
+              : isLast
+                ? t("chat.questions.submit")
+                : t("chat.questions.next"),
+            () => this.advanceOrSubmit(model, question),
+            !canAdvance || !props.onSubmit,
+          )}
         </div>
       </section>
     `;

@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
@@ -56,6 +58,33 @@ function preparePolicy(root: string, version: string) {
 const canonicalize = () => canonicalizeProviderModelId("policy-fixture", "authored-id");
 
 describe("provider policy generations", () => {
+  it("does not retain published registries through surviving policy caches", async () => {
+    class RetiredRegistry {
+      readonly fixtureLabel = "RetiredRegistry";
+    }
+    vi.spyOn(
+      publicSurfaceLoader,
+      "loadBundledPluginPublicArtifactModuleFromCandidatesSync",
+    ).mockReturnValue(null);
+    const caches = Array.from({ length: 24 }, () => {
+      const registry = Object.assign(new RetiredRegistry(), createEmptyPluginRegistry());
+      stageActivePluginRegistry(registry, null, "default");
+      const cache = createPluginCache();
+      withPluginCache(cache, () =>
+        expect(resolveDirectBundledProviderPolicySurface("missing-policy")).toBeNull(),
+      );
+      return cache;
+    });
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+    await nextTurn();
+    expect(queryObjects(RetiredRegistry)).toBe(0);
+    for (const cache of caches) {
+      withPluginCache(cache, () =>
+        expect(resolveDirectBundledProviderPolicySurface("missing-policy")).toBeNull(),
+      );
+    }
+  });
+
   it("reuses bundled policy libraries across registry selection and retirement", () => {
     const root = tempDirs.make("openclaw-policy-generation-");
     const firstCache = createPluginCache();

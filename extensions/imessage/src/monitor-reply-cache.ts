@@ -207,28 +207,22 @@ export async function rememberIMessageReplyCache(
 
   const cutoff = Date.now() - IMESSAGE_REPLY_CACHE_TTL_MS;
   const deletedMessageIds: string[] = [];
-  for (const [key, value] of imessageReplyCacheByMessageId) {
-    if (value.timestamp >= cutoff) {
-      break;
+  const pruneUntil = (retain: (key: string, cached: IMessageReplyCacheEntry) => boolean) => {
+    for (const [key, cached] of imessageReplyCacheByMessageId) {
+      if (retain(key, cached)) {
+        break;
+      }
+      imessageReplyCacheByMessageId.delete(key);
+      deletedMessageIds.push(key);
+      if (cached.shortId) {
+        imessageShortIdToUuid.delete(cached.shortId);
+      }
     }
-    imessageReplyCacheByMessageId.delete(key);
-    deletedMessageIds.push(key);
-    if (value.shortId) {
-      imessageShortIdToUuid.delete(value.shortId);
-    }
-  }
-  while (imessageReplyCacheByMessageId.size > IMESSAGE_REPLY_CACHE_MAX_ENTRIES) {
-    const oldest = imessageReplyCacheByMessageId.keys().next().value;
-    if (!oldest) {
-      break;
-    }
-    const oldEntry = imessageReplyCacheByMessageId.get(oldest);
-    imessageReplyCacheByMessageId.delete(oldest);
-    deletedMessageIds.push(oldest);
-    if (oldEntry?.shortId) {
-      imessageShortIdToUuid.delete(oldEntry.shortId);
-    }
-  }
+  };
+  pruneUntil((_key, cached) => cached.timestamp >= cutoff);
+  pruneUntil(
+    (key) => !key || imessageReplyCacheByMessageId.size <= IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+  );
 
   const counter = imessageShortIdCounter;
   // Publish memory without yielding, then persist each admitted mutation in order.

@@ -12,8 +12,7 @@ export function resolveCodexAppServerForModelProvider(params: {
   agentDir?: string;
   codexConfigToml?: string | null;
 }): CodexAppServerRuntimeOptions {
-  if (
-    params.appServer.approvalsReviewer === "user" ||
+  return params.appServer.approvalsReviewer === "user" ||
     canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: params.provider,
       model: params.model,
@@ -25,11 +24,6 @@ export function resolveCodexAppServerForModelProvider(params: {
       homeScope: params.appServer.start.homeScope,
       codexArgs: params.appServer.start.args,
     })
-  ) {
-    return params.appServer;
-  }
-  return {
-    ...params.appServer,
-    approvalsReviewer: "user",
-  };
+    ? params.appServer
+    : { ...params.appServer, approvalsReviewer: "user" };
 }

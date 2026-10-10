@@ -1,5 +1,3 @@
-// Gateway channel runtime snapshot types.
-// Exposes read-only channel/account state to status and server-method surfaces.
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 
 export type ChannelRuntimeSnapshotOptions = {
@@ -8,7 +6,6 @@ export type ChannelRuntimeSnapshotOptions = {
   inspectAccounts?: boolean;
 };
 
-/** Snapshot of channel runtime state keyed by channel and account id. */
 export type ChannelRuntimeSnapshot = {
   /** Host admission is paused; status must use captured facts without invoking plugin callbacks. */
   reloadingChannels?: ReadonlyMap<ChannelId, string | undefined>;

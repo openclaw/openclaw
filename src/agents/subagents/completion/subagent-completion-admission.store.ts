@@ -5,16 +5,10 @@ import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sq
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerOperationAdmission,
-} from "../../../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
@@ -24,7 +18,7 @@ import {
 } from "../registry/subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
-  SubagentRegistryWriteError,
+  runSubagentRegistryWorkerWrite,
   SubagentRegistryMutationRejectedError,
   SubagentRegistryCommitReceiptError,
   SubagentRegistryVersionConflictError,
@@ -32,7 +26,7 @@ import {
 import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
-  captureRequesterSettleRunIdentity,
+  sameRequesterSettleRunIdentity,
   captureRequesterSettleWakeProgress,
 } from "../registry/subagent-requester-settle-identity.js";
 import {
@@ -58,12 +52,6 @@ type AdmissionReceipt = Exclude<
   { conflictRunIds: string[] }
 >;
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
-type CompletionCommand = {
-  [Key in "sessionDelivery.admitSubagentCompletion" | "sessionDelivery.mutateSubagentCompletion"]: {
-    type: Key;
-    input: SessionDeliveryWorkerOperations[Key]["input"];
-  };
-}["sessionDelivery.admitSubagentCompletion" | "sessionDelivery.mutateSubagentCompletion"];
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
   if (
@@ -190,72 +178,6 @@ function hasNewerGeneration(current: SubagentRunRecord): boolean {
   );
 }
 
-async function executeCompletionCommand<T>(
-  context: OpenClawStateWorkerContext,
-  command: CompletionCommand,
-  assertCurrent: () => void,
-  parse: (value: unknown) => T,
-): Promise<T> {
-  let admission: SqliteWorkerOperationAdmission | undefined;
-  let commitGranted = false;
-  try {
-    return await runOpenClawStateWorkerOperation(
-      context,
-      async (scope) => parse(await scope.execute(command)),
-      {
-        assertCurrent,
-        createAdmission: () => {
-          let phase: "waiting" | "transaction" | "commit" = "waiting";
-          admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            if (
-              request.facts !== command.input.writeId ||
-              !(
-                (phase === "waiting" && request.stage === "transaction") ||
-                (phase === "transaction" && request.stage === "commit")
-              )
-            ) {
-              throw new Error("Subagent completion write authority requested out of order");
-            }
-            assertCurrent();
-            if (!grant()) {
-              throw new Error("Subagent completion write authority expired");
-            }
-            phase = request.stage === "transaction" ? "transaction" : "commit";
-            commitGranted = phase === "commit";
-          });
-          return {
-            admission,
-            nativeLocations: [
-              context.admission.databasePath,
-              context.admission.identity.canonicalPath,
-            ],
-          };
-        },
-      },
-    );
-  } catch (error) {
-    const committed = admission?.committed;
-    if (!committed) {
-      if (
-        error instanceof SubagentRegistryVersionConflictError ||
-        error instanceof SubagentRegistryWriteError
-      ) {
-        throw error;
-      }
-      throw new SubagentRegistryWriteError(
-        commitGranted || hasSqliteWorkerOutcomeUnknown(error) ? "unknown" : "not-committed",
-        error,
-      );
-    }
-    // Broker failure joins native settlement; a lost reply cannot revoke committed work.
-    try {
-      return parse(committed.facts);
-    } catch (receiptError) {
-      throw new SubagentRegistryCommitReceiptError(receiptError);
-    }
-  }
-}
-
 export async function admitSubagentCompletionDelivery(params: {
   runId: string;
   plan: (current: SubagentRunRecord) => {
@@ -311,12 +233,14 @@ export async function admitSubagentCompletionDelivery(params: {
           queueEntry: planned.queueEntry,
           versions: [...versions].map(([runId, version]) => ({ runId, version })),
         });
-        const receipt = await executeCompletionCommand(
-          params.context,
-          { type: "sessionDelivery.admitSubagentCompletion", input },
-          authority.assertCurrent,
-          (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
-        );
+        const receipt = await runSubagentRegistryWorkerWrite(params.context, () => ({
+          kind: "completion",
+          writeId: input.writeId,
+          assertCurrent: authority.assertCurrent,
+          execute: (scope) =>
+            scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
+          decode: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
+        }));
         const subagent = {
           ...receipt.record.subagent,
           cleanupHandled: planned.expected.cleanupHandled,
@@ -355,10 +279,7 @@ function currentCompletionOwner(
   if (
     !current ||
     !isSameSubagentRunOwner(current, expected) ||
-    !isDeepStrictEqual(
-      captureRequesterSettleRunIdentity(current),
-      captureRequesterSettleRunIdentity(expected),
-    ) ||
+    !sameRequesterSettleRunIdentity(current, expected) ||
     current.execution.lifecycleGeneration !== expected.execution.lifecycleGeneration ||
     !isDeepStrictEqual(current.childSessionIdentity, expected.childSessionIdentity) ||
     !isDeepStrictEqual(current.killIntent, expected.killIntent) ||
@@ -433,12 +354,14 @@ async function mutateCompletion(
           mutation: planned.mutation,
           versions: [...versions].map(([runId, version]) => ({ runId, version })),
         });
-        const receipt = await executeCompletionCommand(
-          context,
-          { type: "sessionDelivery.mutateSubagentCompletion", input },
-          authority.assertCurrent,
-          (value) => parseMutationReceipt(value, input.writeId, runIds),
-        );
+        const receipt = await runSubagentRegistryWorkerWrite(context, () => ({
+          kind: "completion",
+          writeId: input.writeId,
+          assertCurrent: authority.assertCurrent,
+          execute: (scope) =>
+            scope.execute({ type: "sessionDelivery.mutateSubagentCompletion", input }),
+          decode: (value) => parseMutationReceipt(value, input.writeId, runIds),
+        }));
         const postimages = new Map<string, SubagentRunRecord | null>();
         for (const runId of receipt.retiredRunIds) {
           postimages.set(runId, null);
@@ -610,73 +533,34 @@ type RequesterCompletionMutationOptions = CompletionMutationOptions & {
 };
 
 /** The wake episode retains this receipt until its current host owner can adopt it. */
-async function mutateRequesterBatch(
-  members: readonly SubagentRunRecord[],
-  operation:
-    | { kind: "requesterBatch"; outcome: SubagentAnnounceDeliveryResult }
-    | { kind: "requesterWake"; operation: RequesterWakeMutation },
-  options: RequesterCompletionMutationOptions,
-): Promise<CompletionMutationPublication> {
-  return mutateCompletion(
-    members,
-    (rows) => {
-      const mutation = {
-        ...operation,
-        entries: currentRequesterEntries(rows, members, options.committed),
-        committed: options.committed,
-      };
-      return mutation.kind === "requesterBatch" ? { ...mutation, now: Date.now() } : mutation;
-    },
-    {
-      ...options,
-      onCommitted(result, mutation) {
-        if (
-          !options.committed &&
-          (mutation.kind === "requesterBatch" || mutation.kind === "requesterWake")
-        ) {
-          options.onCommitted?.({ entries: mutation.entries, result });
-        }
-      },
-    },
-  );
-}
-
-export async function settleRequesterCompletionBatch(
-  params: RequesterCompletionMutationOptions & {
-    entries: readonly { subagent: SubagentRunRecord }[];
-    outcome: SubagentAnnounceDeliveryResult;
-    isCurrent(): boolean;
-  },
-): Promise<CompletionMutationPublication> {
-  return mutateRequesterBatch(
-    params.entries.map(({ subagent }) => subagent),
-    { kind: "requesterBatch", outcome: params.outcome },
-    {
-      ...params,
-      assertCurrent: () => {
-        if (!params.isCurrent()) {
-          throw new SubagentCompletionSourceChangedError(
-            "Subagent completion owner changed before settlement",
-          );
-        }
-      },
-    },
-  );
-}
-
-export async function mutateRequesterSettleWakeBatch(
+export async function mutateRequesterCompletionBatch(
   params: RequesterCompletionMutationOptions & {
     entries: readonly SubagentRunRecord[];
-    operation: RequesterWakeMutation;
-    context: OpenClawStateWorkerContext;
     assertCurrent: () => void;
-    onCommitted: (write: RequesterWakeCommittedWrite) => void;
-    onPublished: () => void;
+    operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
-  return mutateRequesterBatch(
+  return mutateCompletion(
     params.entries,
-    { kind: "requesterWake", operation: params.operation },
-    params,
+    (rows) => {
+      const cohort = {
+        entries: currentRequesterEntries(rows, params.entries, params.committed),
+        committed: params.committed,
+      };
+      return params.operation.kind === "settle"
+        ? { ...cohort, kind: "requesterBatch", outcome: params.operation.outcome, now: Date.now() }
+        : { ...cohort, kind: "requesterWake", operation: params.operation };
+    },
+    {
+      ...params,
+      onCommitted(result, mutation) {
+        if (
+          !params.committed &&
+          (mutation.kind === "requesterBatch" || mutation.kind === "requesterWake")
+        ) {
+          params.onCommitted?.({ entries: mutation.entries, result });
+        }
+      },
+    },
   );
 }

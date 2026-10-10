@@ -125,13 +125,13 @@ it("serves actual JSON and tree command output from worker provenance through re
       },
     };
     recordAgentDatabaseAdmissions([], { env: state.env });
-    recordAgentProvenance("Main", { createdVia: "operator" }, { env: state.env, nowMs: 10 });
-    recordAgentProvenance(
+    await recordAgentProvenance("Main", { createdVia: "operator" }, { env: state.env, nowMs: 10 });
+    await recordAgentProvenance(
       "Child",
       { createdVia: "agent", creatorAgentId: "Main" },
       { env: state.env, nowMs: 20 },
     );
-    recordAgentProvenance("retired", { createdVia: "claw" }, { env: state.env, nowMs: 30 });
+    await recordAgentProvenance("retired", { createdVia: "claw" }, { env: state.env, nowMs: 30 });
     await closeOpenClawStateDatabaseAsync();
     const runtime = {
       ...createTestRuntime(),
@@ -191,7 +191,11 @@ it("enriches a growing configured roster with bounded worker requests in configu
       };
       recordAgentDatabaseAdmissions([], { env: state.env });
       for (const [index, id] of ids.entries()) {
-        recordAgentProvenance(id, { createdVia: "operator" }, { env: state.env, nowMs: index });
+        await recordAgentProvenance(
+          id,
+          { createdVia: "operator" },
+          { env: state.env, nowMs: index },
+        );
       }
       await closeOpenClawStateDatabaseAsync();
       const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };

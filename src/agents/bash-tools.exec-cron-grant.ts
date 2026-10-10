@@ -10,7 +10,7 @@ import {
   validateCronStandingGrant,
 } from "../gateway/operator-approval-store.js";
 import { lookupCronRunExecSource, type CronRunExecSource } from "../infra/cron-run-exec-source.js";
-import { prepareCronExecHostPolicyUse } from "../infra/exec-approvals-store.js";
+import { prepareCronExecHostPolicyUse } from "../infra/exec-approvals-cron-policy.js";
 import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 
 /** Consumption accounts once; the receipt owner retains authority through native initiation. */

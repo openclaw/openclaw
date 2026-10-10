@@ -58,23 +58,18 @@ function formatReport(call: CallRecord, summary: string, includeTranscript: bool
     `Duration: ${duration} seconds`,
     `End reason: ${call.endReason ?? call.state}`,
   ];
-  if (typeof call.metadata?.answeredBy === "string") {
-    lines.push(`Answered by: ${call.metadata.answeredBy}`);
-  }
-  if (typeof call.metadata?.callbackOfCallId === "string") {
-    lines.push(`Callback to call: ${call.metadata.callbackOfCallId}`);
-  }
-  if (typeof call.metadata?.voicemailStatus === "string") {
-    lines.push(`Voicemail: ${call.metadata.voicemailStatus}`);
-  }
-  if (typeof call.metadata?.voicemailError === "string") {
-    lines.push(`Voicemail error: ${call.metadata.voicemailError}`);
-  }
-  if (typeof call.metadata?.notifyStatus === "string") {
-    lines.push(`Notification: ${call.metadata.notifyStatus}`);
-  }
-  if (typeof call.metadata?.notifyError === "string") {
-    lines.push(`Notification error: ${call.metadata.notifyError}`);
+  for (const [key, label] of [
+    ["answeredBy", "Answered by"],
+    ["callbackOfCallId", "Callback to call"],
+    ["voicemailStatus", "Voicemail"],
+    ["voicemailError", "Voicemail error"],
+    ["notifyStatus", "Notification"],
+    ["notifyError", "Notification error"],
+  ] as const) {
+    const value = call.metadata?.[key];
+    if (typeof value === "string") {
+      lines.push(`${label}: ${value}`);
+    }
   }
   if (includeTranscript) {
     lines.push(
@@ -150,7 +145,7 @@ export function createCallDelivery(params: {
           // Persist the batch end before sending: after a restart the restored call resumes
           // from this cursor, so a delivered or uncertain batch is never sent twice.
           await saveStatus(snapshot, "liveTranscriptDelivery", {
-            status: "sent",
+            status: "pending",
             cursor,
             at: Date.now(),
           });
@@ -161,6 +156,11 @@ export function createCallDelivery(params: {
             kind: "live",
             text: `Voice call ${snapshot.callId}, live transcript:\n${formatCallTranscript(entries)}`,
             idempotencyKey: `voice-call:${snapshot.callId}:live:${range}`,
+          });
+          await saveStatus(snapshot, "liveTranscriptDelivery", {
+            status: "sent",
+            cursor,
+            at: Date.now(),
           });
         } catch (error) {
           await recordFailure(snapshot, "liveTranscriptDelivery", error, { cursor });

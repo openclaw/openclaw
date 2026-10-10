@@ -179,6 +179,8 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
     // Route projection and credential selection are one decision. Pin even an
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await prepareSimpleCompletionModel({
+      // This session-bound worker owner revalidates the exact live turn after awaited work.
+      workerInferenceAuthority: { assertCurrent: params.assertCurrent },
       cfg: modelConfig,
       transport: "provider-stream",
       agentId: target.agentId,

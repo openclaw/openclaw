@@ -111,15 +111,14 @@ export async function withStableDeliveryPreparation<T>(
     await stopRenewals();
     if (!published) {
       assertCheckpoint();
-    }
-    if (
-      !published &&
-      !(await executeDeliveryQueueOperation(captured, params.stateDir, {
-        type: "deliveryQueue.completePreparation",
-        input: { expectedEntry: entry },
-      }))
-    ) {
-      throw new Error(`Stable outbound preparation could not be settled: ${params.id}`);
+      if (
+        !(await executeDeliveryQueueOperation(captured, params.stateDir, {
+          type: "deliveryQueue.completePreparation",
+          input: { expectedEntry: entry },
+        }))
+      ) {
+        throw new Error(`Stable outbound preparation could not be settled: ${params.id}`);
+      }
     }
     return { status: "claimed", value };
   } catch (error) {
@@ -143,7 +142,5 @@ export async function withStableDeliveryPreparation<T>(
       }
     }
     throw error;
-  } finally {
-    await stopRenewals();
   }
 }

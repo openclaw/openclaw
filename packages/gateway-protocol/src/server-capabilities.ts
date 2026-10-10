@@ -25,6 +25,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_LAUNCH_TOOL_NAMES: "node-worker-launch-tool-names-v1",
   NODE_WORKER_NATIVE_INFERENCE: "node-worker-native-inference-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",
+  NODE_WORKER_PROMPT_CONTEXT: "node-worker-prompt-context-v1",
   NODE_WORKER_STATUS_WAIT: "node-worker-status-wait-v1",
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",
   PROFILE_BINDING: "profile-binding-v1",

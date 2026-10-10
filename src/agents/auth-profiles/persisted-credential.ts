@@ -62,13 +62,11 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   if (copyToAgents !== undefined) {
     normalized.copyToAgents = copyToAgents;
   }
-  const email = readNonBlankString(entry.email);
-  if (email !== undefined) {
-    normalized.email = email;
-  }
-  const displayName = readNonBlankString(entry.displayName);
-  if (displayName !== undefined) {
-    normalized.displayName = displayName;
+  for (const field of ["email", "displayName"] as const) {
+    const value = readNonBlankString(entry[field]);
+    if (value !== undefined) {
+      normalized[field] = value;
+    }
   }
   return normalized;
 }

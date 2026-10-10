@@ -48,6 +48,10 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
   return params.key === params.alias || params.key === params.mainKey ? "main" : params.key;
 }
 
+export function isSessionToolMainAlias(key: string, context: { mainKey: string; alias: string }) {
+  return key === "main" || key === "global" || key === context.mainKey || key === context.alias;
+}
+
 export function resolveInternalSessionKey(params: {
   key: string;
   alias: string;
@@ -379,15 +383,16 @@ export async function resolveVisibleSessionReference(params: {
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
   const requesterOwnedByResolution = params.resolvedSession.requesterOwned;
+  const invisible = (): VisibleSessionReferenceResolution => ({
+    ok: false,
+    status: "forbidden",
+    error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
+    displayKey,
+  });
   // Cross-session tools persist their results into the caller transcript; an
   // incognito target must remain unreachable even from an incognito requester.
   if (isIncognitoSessionKey(resolvedKey)) {
-    return {
-      ok: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
-      displayKey,
-    };
+    return invisible();
   }
   const input = params.visibilitySessionKey.trim();
   const isExplicitKey =
@@ -422,18 +427,11 @@ export async function resolveVisibleSessionReference(params: {
         missing = true;
       }
     } catch (error) {
-      if (params.concealResolutionError) {
-        return {
-          ok: false,
-          status: "forbidden",
-          error: params.concealResolutionError,
-          displayKey,
-        };
-      }
       return {
         ok: false,
-        status: "error",
+        status: params.concealResolutionError ? "forbidden" : "error",
         error:
+          params.concealResolutionError ||
           formatErrorMessage(error) ||
           `Session not found: ${params.visibilitySessionKey} (use the full sessionKey from sessions_list)`,
         displayKey,
@@ -441,12 +439,7 @@ export async function resolveVisibleSessionReference(params: {
     }
   }
   if (isIncognitoSessionKey(resolvedKey)) {
-    return {
-      ok: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
-      displayKey,
-    };
+    return invisible();
   }
   return {
     ok: true,

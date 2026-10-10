@@ -7,20 +7,12 @@ import { resolveModelExtraParamSources } from "../../agents/model-extra-params.j
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-
-export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const parsed = parseNonNegativeByteSize(
-    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
-  );
-  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
-}
 
 export function resolveEffectivePromptTokens(
   basePromptTokens?: number,
@@ -82,30 +74,28 @@ export function resolveResponsesServerCompactionThreshold(params: {
     modelId,
   });
   const extraParams = { ...defaultParams, ...modelParams };
+  const compactionModel = {
+    provider,
+    api: configuredModel?.api ?? providerConfig?.api,
+    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+    contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
+  };
   if (normalizedProvider === "anthropic") {
     return resolveAnthropicServerCompactionPlan(
-      {
-        provider,
-        api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
-        baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
-        contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
-      },
+      { ...compactionModel, api: compactionModel.api ?? "anthropic-messages" },
       extraParams,
     ).threshold;
   }
-  const defaultOpenAIBaseUrl =
-    normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
   return resolveOpenAIResponsesServerCompactionPlan(
     {
-      provider,
+      ...compactionModel,
       api:
-        configuredModel?.api ??
-        providerConfig?.api ??
-        (normalizedProvider === "openai" ? "openai-responses" : undefined),
-      baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
+        compactionModel.api ?? (normalizedProvider === "openai" ? "openai-responses" : undefined),
+      baseUrl:
+        compactionModel.baseUrl ??
+        (normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined),
       compat: configuredModel?.compat,
       contextTokens: configuredModel?.contextTokens ?? params.contextWindowTokens,
-      contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
     },
     extraParams,
   ).threshold;
@@ -157,11 +147,7 @@ export function shouldRunPreflightCompaction(params: {
   );
 }
 
-/**
- * Returns true when a memory flush has already been performed for the current
- * compaction cycle. This prevents repeated flush runs within the same cycle —
- * important for both the token-based and transcript-size–based trigger paths.
- */
+/** One flush per compaction cycle, regardless of token or transcript-size trigger. */
 export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {

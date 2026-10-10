@@ -205,7 +205,7 @@ describe("memory index", () => {
     const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
-      searchVector: () => Promise<unknown[]>;
+      searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
       closing: boolean;
       closed: boolean;
     };
@@ -220,7 +220,7 @@ describe("memory index", () => {
     fields.searchVector = async () => {
       markVectorSearchStarted();
       await vectorSearchGate;
-      return [];
+      return { results: [], candidates: [] };
     };
 
     const generationReleaseStarted = createDeferred<void>();

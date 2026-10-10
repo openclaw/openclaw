@@ -245,11 +245,7 @@ export class MediaStreamHandler {
               this.emitTalkEvent(session, {
                 type: "input.audio.delta",
                 turnId,
-                payload: {
-                  callId: session.callId,
-                  streamSid: session.streamSid,
-                  bytes: audioBuffer.byteLength,
-                },
+                payload: { bytes: audioBuffer.byteLength },
               });
               session.sttSession.sendAudio(audioBuffer);
             }
@@ -324,39 +320,36 @@ export class MediaStreamHandler {
       return null;
     }
 
-    const sttSession = this.config.transcriptionProvider.createSession({
-      cfg: this.config.cfg,
-      providerConfig: this.config.providerConfig,
-      onPartial: (partial) => {
-        const session = this.sessions.get(streamSid);
-        if (session) {
-          this.emitTalkEvent(session, {
-            type: "transcript.delta",
-            turnId: this.ensureActiveTurn(session),
-            payload: { callId: callSid, streamSid, text: partial, role: "user" },
-          });
-        }
-        this.config.onPartialTranscript?.(callSid, partial, streamSid);
-      },
-      onTranscript: (transcript) => {
-        const session = this.sessions.get(streamSid);
-        if (session) {
-          const turnId = this.ensureActiveTurn(session);
+    const onTranscript = (text: string, isFinal: boolean) => {
+      const session = this.sessions.get(streamSid);
+      if (session) {
+        const turnId = this.ensureActiveTurn(session);
+        if (isFinal) {
           this.emitTalkEvent(session, {
             type: "input.audio.committed",
             turnId,
             final: true,
-            payload: { callId: callSid, streamSid },
-          });
-          this.emitTalkEvent(session, {
-            type: "transcript.done",
-            turnId,
-            final: true,
-            payload: { callId: callSid, streamSid, text: transcript, role: "user" },
+            payload: { callId: callSid },
           });
         }
-        this.config.onTranscript?.(callSid, transcript, streamSid);
-      },
+        this.emitTalkEvent(session, {
+          type: isFinal ? "transcript.done" : "transcript.delta",
+          turnId,
+          ...(isFinal ? { final: true } : {}),
+          payload: { callId: callSid, text, role: "user" },
+        });
+      }
+      if (isFinal) {
+        this.config.onTranscript?.(callSid, text, streamSid);
+      } else {
+        this.config.onPartialTranscript?.(callSid, text, streamSid);
+      }
+    };
+    const sttSession = this.config.transcriptionProvider.createSession({
+      cfg: this.config.cfg,
+      providerConfig: this.config.providerConfig,
+      onPartial: (text) => onTranscript(text, false),
+      onTranscript: (text) => onTranscript(text, true),
       onSpeechStart: () => {
         const session = this.sessions.get(streamSid);
         if (session) {
@@ -371,7 +364,7 @@ export class MediaStreamHandler {
           this.emitTalkEvent(session, {
             type: "session.error",
             final: true,
-            payload: { callId: callSid, streamSid, error: error.message },
+            payload: { callId: callSid, error: error.message },
           });
         }
       },
@@ -399,7 +392,7 @@ export class MediaStreamHandler {
     this.config.onConnect?.(callSid, streamSid);
     this.emitTalkEvent(session, {
       type: "session.started",
-      payload: { callId: callSid, streamSid, provider: this.config.transcriptionProvider.id },
+      payload: { provider: this.config.transcriptionProvider.id },
     });
     void this.connectTranscriptionAndNotify(session);
 
@@ -418,8 +411,6 @@ export class MediaStreamHandler {
         type: "session.error",
         final: true,
         payload: {
-          callId: session.callId,
-          streamSid: session.streamSid,
           error: error instanceof Error ? error.message : String(error),
         },
       });
@@ -444,7 +435,6 @@ export class MediaStreamHandler {
 
     this.emitTalkEvent(session, {
       type: "session.ready",
-      payload: { callId: session.callId, streamSid: session.streamSid },
     });
     this.config.onTranscriptionReady?.(session.callId, session.streamSid);
   }
@@ -458,7 +448,6 @@ export class MediaStreamHandler {
     this.emitTalkEvent(session, {
       type: "session.closed",
       final: true,
-      payload: { callId: session.callId, streamSid: session.streamSid },
     });
     this.config.onDisconnect?.(session.callId, session.streamSid);
   }
@@ -578,7 +567,7 @@ export class MediaStreamHandler {
       this.emitTalkEvent(session, {
         type: "output.audio.delta",
         turnId: this.ensureActiveTurn(session),
-        payload: { callId: session.callId, streamSid, bytes: muLawAudio.byteLength },
+        payload: { bytes: muLawAudio.byteLength },
       });
     }
     return this.sendToStream(streamSid, {
@@ -761,7 +750,6 @@ export class MediaStreamHandler {
           this.emitTalkEvent(session, {
             type: "output.audio.started",
             turnId: playbackTurnId,
-            payload: { callId: session.callId, streamSid },
           });
         }
         await entry.playFn(entry.controller.signal);
@@ -775,7 +763,6 @@ export class MediaStreamHandler {
             type: "output.audio.done",
             turnId,
             final: true,
-            payload: { callId: session.callId, streamSid },
           });
           if (session.talk.activeTurnId) {
             const ended = session.talk.endTurn({
@@ -802,8 +789,14 @@ export class MediaStreamHandler {
     }
   }
 
-  private emitTalkEvent(session: StreamSession, input: TalkEventInput): void {
-    const event = session.talk.emit(input);
+  private emitTalkEvent(
+    session: StreamSession,
+    input: Omit<TalkEventInput, "payload"> & { payload?: Record<string, unknown> },
+  ): void {
+    const event = session.talk.emit({
+      ...input,
+      payload: { callId: session.callId, streamSid: session.streamSid, ...input.payload },
+    });
     this.config.onTalkEvent?.(session.callId, session.streamSid, event);
   }
 

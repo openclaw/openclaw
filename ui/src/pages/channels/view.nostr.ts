@@ -22,10 +22,7 @@ function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
     return t("common.na");
   }
-  if (pubkey.length <= 20) {
-    return pubkey;
-  }
-  return `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
+  return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
 
 export function renderNostrCard(params: {

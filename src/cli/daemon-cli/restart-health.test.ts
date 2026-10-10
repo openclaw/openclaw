@@ -11,6 +11,7 @@ import {
   inspectPortUsage,
   inspectUnknownListener,
   makeGatewayService,
+  monotonicClock,
   callGateway,
   gatewayResponseError,
   readBestEffortConfig,
@@ -211,7 +212,8 @@ describe("restart health", () => {
     },
   );
 
-  it("treats a gateway listener child pid as healthy ownership", async () => {
+  it("verifies a healthy gateway listener child pid without marking it stale", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 7000 },
       portUsage: {
@@ -436,7 +438,7 @@ describe("restart health", () => {
     });
   });
 
-  it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
+  it("does not verify a busy port with unavailable listener details when health fails", async () => {
     const service = {
       readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
     } as unknown as GatewayService;
@@ -454,11 +456,42 @@ describe("restart health", () => {
     const { inspectGatewayRestart } = await import("./restart-health.js");
     const snapshot = await inspectGatewayRestart({ service, port: 18789 });
 
-    expect(snapshot.healthy).toBe(true);
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.probeError).toContain("ECONNREFUSED");
     expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith({
       env: process.env,
       command: null,
+    });
+  });
+  it("waits for managed startup after an initially unhealthy foreign listener", async () => {
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "stopped", missingUnit: true });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, command: "socat" }],
+      hints: [],
+    });
+    classifyPortListener.mockImplementation(() =>
+      monotonicClock.nowMs === 0 ? "non_gateway" : "gateway",
+    );
+    callGateway.mockImplementation(gatewayHealthResponse());
+    callGateway.mockRejectedValueOnce(new Error("connect ECONNRESET"));
+
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      requireRunningService: true,
+      attempts: 3,
+      delayMs: 500,
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      waitOutcome: "healthy",
+      runtime: { status: "running", pid: 8000 },
+      elapsedMs: 500,
     });
   });
 });

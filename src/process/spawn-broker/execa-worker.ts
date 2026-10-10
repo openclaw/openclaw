@@ -155,19 +155,6 @@ export async function startBrokerExeca(
   }
 }
 
-function isDescriptorSpawnError(error: unknown): error is NodeJS.ErrnoException {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const syscall = "syscall" in error ? error.syscall : undefined;
-  const code = "code" in error ? error.code : undefined;
-  return (
-    typeof syscall === "string" &&
-    syscall.startsWith("spawn") &&
-    (code === "EMFILE" || code === "ENFILE")
-  );
-}
-
 // Node returns a child without stdio when spawn hits EMFILE or ENFILE and emits that error on the
 // next tick. Execa reads the missing stdio first and throws, so the child it abandons has no error
 // listener and its spawn error would end this worker. Claim that error for the caller instead.
@@ -182,9 +169,17 @@ async function adoptAbandonedSpawnError(thrown: unknown): Promise<unknown> {
       resolve(error);
     };
     const onUncaught = (error: Error) => {
-      if (isDescriptorSpawnError(error)) {
-        settle(error);
-        return;
+      if (error instanceof Error) {
+        const syscall = "syscall" in error ? error.syscall : undefined;
+        const code = "code" in error ? error.code : undefined;
+        if (
+          typeof syscall === "string" &&
+          syscall.startsWith("spawn") &&
+          (code === "EMFILE" || code === "ENFILE")
+        ) {
+          settle(error);
+          return;
+        }
       }
       // Anything else keeps the default fatal handling once this listener is gone.
       settle(thrown);

@@ -4,16 +4,11 @@ import type {
   ThemeCritterId,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
+import { passerSprite } from "./lobster-pet-sprite.ts";
 
 // A penguin in a red fedora. Faces right like the duck;
 // the scene flips it through --lob-face for right-to-left crossings.
-const PENGUIN_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const PENGUIN_SPRITE = passerSprite(svg`
     <ellipse cx="46" cy="99" rx="12" ry="4.5" fill="#f5921b" />
     <ellipse cx="72" cy="99" rx="12" ry="4.5" fill="#f5921b" />
     <ellipse cx="59" cy="62" rx="31" ry="39" fill="#151515" />
@@ -32,24 +27,16 @@ const PENGUIN_SPRITE = svg`
       <path d="M41 22 Q60 18 79 22 L79 26 L41 26 Z" fill="#a60000" />
       <path d="M48 9 Q60 4 72 9" stroke="#ff6b6b" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.7" />
     </g>
-  </svg>
-`;
+`);
 
-const FEDORA_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const FEDORA_SPRITE = passerSprite(svg`
     <ellipse cx="60" cy="82" rx="54" ry="11" fill="#d40000" />
     <path d="M26 80 Q28 30 60 26 Q92 30 94 80 Z" fill="#ee0000" />
     <path d="M52 30 Q60 24 68 30 Q64 40 60 42 Q56 40 52 30 Z" fill="#c40000" opacity="0.7" />
     <path d="M28 66 Q60 58 92 66 L92 78 Q60 72 28 78 Z" fill="#a60000" />
     <path d="M40 36 Q50 29 58 28" stroke="#ff6b6b" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.7" />
     <ellipse cx="60" cy="82" rx="54" ry="11" fill="none" stroke="#a60000" stroke-width="1.5" />
-  </svg>
-`;
+`);
 
 export const THEME_CRITTER_SPRITES: Record<ThemeCritterId, TemplateResult> = {
   penguin: PENGUIN_SPRITE,

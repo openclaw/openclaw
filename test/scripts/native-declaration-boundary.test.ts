@@ -86,6 +86,36 @@ it.each([true, false])(
   },
 );
 
+it.each(["existing", "missing"] as const)(
+  "rechecks a previously resolved %s declaration path after its parent becomes a symlink",
+  (kind) => {
+    const ancestor = fs.realpathSync.native(roots.make("declaration-path-recheck-"));
+    const root = path.join(ancestor, "checkout");
+    const outside = path.join(ancestor, "outside");
+    const parent = path.join(root, "generated");
+    const file = path.join(parent, "value.d.ts");
+    fs.mkdirSync(root);
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "value.d.ts"), "export {};\n");
+    if (kind === "existing") {
+      fs.mkdirSync(parent);
+      fs.writeFileSync(file, "export {};\n");
+    }
+    const boundary = createDeclarationInputBoundary(root);
+    expect(boundary.assert(file)).toBe(file);
+    expect(boundary.assert(file)).toBe(file);
+
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.symlinkSync(outside, parent, "junction");
+    expect(() => boundary.assert(file)).toThrow("Declaration input escapes checkout");
+
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.mkdirSync(parent);
+    fs.writeFileSync(file, "export {};\n");
+    expect(boundary.assert(file)).toBe(file);
+  },
+);
+
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });
   const native = materializeNativeCompiler(declared);

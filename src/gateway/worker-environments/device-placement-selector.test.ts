@@ -54,6 +54,7 @@ function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodePro
     workerHost: {
       enabled: true,
       capturedExecPolicy: true,
+      promptContext: 1,
       capacity: environment.workerSlots ?? { total: 1, available: 0 },
     },
     commands: ["runtime.exec"],

@@ -24,6 +24,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { getFreePort } from "../test-utils/ports.js";
 import {
   prepareGatewayCliFixture,
+  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
@@ -119,6 +120,7 @@ describe("gateway-backed CLI process exit", () => {
         env,
       });
       closeOpenClawStateDatabaseForTest();
+      prepareSharedStateReadArtifacts(stateDir);
       const before = await snapshotDirectoryContents(stateDir);
       const expectedAfter = { ...before };
       const canonicalStateDir = await fs.realpath(stateDir);

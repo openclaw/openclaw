@@ -66,13 +66,9 @@ export function countPhysicalOutboundSends(results: readonly OutboundDeliveryRes
       return count;
     }
     const receipt = result.receipt;
-    if (!receipt) {
-      return count + 1;
-    }
     // Parts and platform ids describe the same sends. Prefer parts so aggregate
     // receipts preserve multiplicity without counting both representations.
-    const receiptCount =
-      receipt.parts.length > 0 ? receipt.parts.length : receipt.platformMessageIds.length;
+    const receiptCount = receipt ? receipt.parts.length || receipt.platformMessageIds.length : 0;
     return count + Math.max(1, receiptCount);
   }, 0);
 }

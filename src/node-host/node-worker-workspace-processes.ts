@@ -21,6 +21,7 @@ import {
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 
 const MAX_PROCESSES_PER_WORKSPACE = 32;
 const MAX_OUTPUT_CHARS = 4_096;
@@ -60,11 +61,7 @@ async function joinWorkspaceCleanup(operations: Promise<void>[]): Promise<void> 
   const failures = (await Promise.allSettled(operations)).flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
   );
-  if (failures.length > 0) {
-    throw failures.length === 1
-      ? failures[0]
-      : new AggregateError(failures, "Workspace process cleanup failed");
-  }
+  throwNodeHostCleanupErrors(failures, "Workspace process cleanup failed");
 }
 
 /** A workspace owns preview processes across tool calls and joins their trees before retirement. */

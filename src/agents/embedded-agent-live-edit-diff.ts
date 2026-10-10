@@ -15,7 +15,7 @@ export type LiveEditDiffProgressState = {
   lastCheckedAtMs: number;
 };
 
-type LiveEditDiffProgress = {
+export type LiveEditDiffProgress = {
   toolCallId: string;
   name: string;
   diff: { added: number; removed: number };
@@ -75,12 +75,31 @@ export function updateLiveEditDiffProgress(
   const block = readToolCallBlock(event);
   const toolCallId = typeof block?.id === "string" ? block.id : "";
   const name = typeof block?.name === "string" ? block.name : "";
-  const kind = resolveFileMutationToolName(name);
   const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
-  if (!toolCallId || !kind || !partialJson) {
+  return updateLiveEditDiffProgressFromInput(stateByToolCallId, {
+    toolCallId,
+    name,
+    partialJsonLength: partialJson.length,
+    readPartialJson: () => partialJson,
+  });
+}
+
+/** Share bounded counting without assembling cumulative CLI arguments before admission. */
+export function updateLiveEditDiffProgressFromInput(
+  stateByToolCallId: Map<string, LiveEditDiffProgressState>,
+  input: {
+    toolCallId: string;
+    name: string;
+    partialJsonLength: number;
+    readPartialJson: () => string;
+  },
+): LiveEditDiffProgress | undefined {
+  const { toolCallId, name, partialJsonLength } = input;
+  const kind = resolveFileMutationToolName(name);
+  if (!toolCallId || !kind || !partialJsonLength) {
     return undefined;
   }
-  if (partialJson.length > LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS) {
+  if (partialJsonLength > LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS) {
     stateByToolCallId.delete(toolCallId);
     return undefined;
   }
@@ -104,7 +123,10 @@ export function updateLiveEditDiffProgress(
   // Parsing is the expensive part. Rate-limit it before touching cumulative JSON
   // so fragmented large arguments cannot create quadratic work on the event path.
   progress.lastCheckedAtMs = now;
-  const counted = countStreamingFileMutationLines(kind, parseStreamingJson(partialJson));
+  const counted = countStreamingFileMutationLines(
+    kind,
+    parseStreamingJson(input.readPartialJson()),
+  );
   // Streaming parses are best effort. Never move a visible counter backwards if
   // an incomplete JSON boundary temporarily exposes less of the same arguments.
   progress.added = Math.max(progress.added, counted.added);

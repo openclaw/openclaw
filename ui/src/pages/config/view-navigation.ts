@@ -120,10 +120,6 @@ export const CATEGORISED_KEYS = new Set(
   SECTION_CATEGORIES.flatMap((category) => category.sections),
 );
 
-function getSectionIcon(key: string) {
-  return sidebarIcons[key] ?? icons.file;
-}
-
 export function renderConfigAccordionNav(
   props: Pick<ConfigProps, "activeSection" | "onSectionChange">,
   allCategories: SectionCategory[],
@@ -149,7 +145,7 @@ export function renderConfigAccordionNav(
               }}
             >
               <span class="config-accordion-group__icon">
-                ${getSectionIcon(category.sections[0]?.key ?? "default")}
+                ${sidebarIcons[category.sections[0]?.key ?? "default"] ?? icons.file}
               </span>
               <span>${category.label}</span>
               <svg
@@ -181,7 +177,7 @@ export function renderConfigAccordionNav(
                   }}
                 >
                   <span class="config-accordion-group__item-icon">
-                    ${getSectionIcon(section.key)}
+                    ${sidebarIcons[section.key] ?? icons.file}
                   </span>
                   ${section.label}
                 </button>`,

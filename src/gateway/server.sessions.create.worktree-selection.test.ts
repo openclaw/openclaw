@@ -5,8 +5,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import * as registryReads from "../agents/worktrees/registry-read.js";
+import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -49,7 +51,7 @@ function managedWorktreeFixture(params: {
   ownerId: string;
   path: string;
   repoRoot: string;
-}): NonNullable<ReturnType<typeof managedWorktrees.findLiveById>> {
+}): ManagedWorktreeRecord {
   return {
     ...params,
     baseRef: "HEAD",
@@ -275,16 +277,18 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
   ]);
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
-  const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
-    record: managedWorktreeFixture({
-      id: "worktree-options",
-      name: "target-task",
-      ownerId: key,
-      path: worktreePath,
-      repoRoot,
-    }),
-    materialized: true,
-  });
+  const createSpy = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockResolvedValue({
+      record: managedWorktreeFixture({
+        id: "worktree-options",
+        name: "target-task",
+        ownerId: key,
+        path: worktreePath,
+        repoRoot,
+      }),
+      materialized: true,
+    });
   try {
     const created = await directSessionReq<{
       entry: {
@@ -369,9 +373,9 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   testState.agentConfig = { workspace: configuredWorkspace };
   await createSessionStoreDir();
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
     .mockResolvedValue({ record, materialized: true });
-  const findSpy = vi.spyOn(managedWorktrees, "findLiveById").mockReturnValue(record);
+  const findSpy = vi.spyOn(registryReads, "readSessionWorktreeBinding").mockResolvedValue(record);
   try {
     const created = await directSessionReq<{
       entry: {

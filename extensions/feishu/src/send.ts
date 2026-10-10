@@ -19,7 +19,7 @@ import {
   type FeishuMarkdownChunkOptions,
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
-import { buildMentionedCardContent } from "./mention.js";
+import { buildMentionedCardContent, normalizeMentions } from "./mention.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { renderPostContent } from "./post.js";
@@ -222,6 +222,7 @@ function parseFeishuMessageItem(
 ): FeishuMessageInfo {
   const msgType = item.msg_type ?? "text";
   const rawContent = item.body?.content ?? "";
+  const content = parseFeishuMessageContent(rawContent, msgType, item.message_id);
 
   return {
     messageId: item.message_id ?? fallbackMessageId ?? "",
@@ -230,7 +231,8 @@ function parseFeishuMessageItem(
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
-    content: parseFeishuMessageContent(rawContent, msgType, item.message_id),
+    // Text placeholders use item metadata; posts/cards already render native mention elements.
+    content: msgType === "text" ? normalizeMentions(content, item.mentions) : content,
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     ...(item.root_id ? { rootId: item.root_id } : {}),

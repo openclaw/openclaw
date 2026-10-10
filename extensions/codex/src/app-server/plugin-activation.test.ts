@@ -126,7 +126,7 @@ describe("Codex plugin activation", () => {
     ]);
     expect(pluginListCalls).toBe(2);
     expect(
-      metadataCache.read("runtime", "curated-global")?.response.marketplaces[0]?.plugins[0],
+      metadataCache.read("runtime", "curated-global")?.marketplaces[0]?.plugins[0],
     ).toMatchObject({ installed: true, enabled: true });
   });
 

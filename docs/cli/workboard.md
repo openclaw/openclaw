@@ -28,6 +28,12 @@ openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--u
 
 The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
 
+Plugin loading opens the local database before selecting a subcommand and can
+initialize or upgrade its schema. Prepare that state with the local Gateway
+stopped, even for `list` or `show`; those commands are not guaranteed to be
+read-only during startup. Use the Control UI or Gateway RPC for online access
+when local state still needs preparation.
+
 Valid `status` values: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`. Valid `priority` values: `low`, `normal`, `high`, `urgent`.
 
 ## `list`
@@ -45,6 +51,8 @@ Text output is compact:
 ```
 
 Columns are id prefix, status, priority, board id, optional agent id, and title.
+
+An invalid `--status` exits with an error listing the allowed values instead of returning an empty list.
 
 | Flag                 | Purpose                                       |
 | -------------------- | --------------------------------------------- |
@@ -72,7 +80,9 @@ openclaw workboard create "Write Workboard docs" --status ready --agent docs-age
 | `--labels <items>`      | Comma-separated labels                  |
 | `--json`                | Print the created card as machine JSON  |
 
-`create` writes directly to Workboard SQLite state. The card is immediately visible in the Control UI Workboard tab and to Workboard tools.
+`create` writes directly to local Workboard SQLite state and requires the Gateway
+to be stopped. While the Gateway is running, create cards through the Control UI
+or Gateway RPC so its owner can publish the change to readers.
 
 ## `show`
 
@@ -95,6 +105,9 @@ openclaw workboard move 7f4a2c10 --status done --json
 ```
 
 `move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token. Claim tokens remain scoped to agent-tool mutations, and JSON output redacts them.
+
+This command writes local state directly; stop the Gateway before using it.
+Use the Control UI or Gateway RPC to move cards while the Gateway is running.
 
 ## `dispatch`
 
@@ -132,11 +145,19 @@ The CLI falls back to data-only dispatch against local Workboard state when both
 
 Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. Auth, permission, and validation failures, and failures for an explicit `--url` or `--token` target, are reported directly instead of triggering the fallback.
 
+Data-only dispatch requires the Gateway to be stopped. A connection error or
+missing RPC method alone does not establish that it stopped. A running Gateway
+does not poll for mutations made by another process.
+
 Text output reports worker starts:
 
 ```text
 dispatch complete: started=2 failures=0
 ```
+
+When a worker cannot start, text output also prints its card id prefix and the failure reason. JSON output includes the same reason in `startFailures`.
+
+For a card already authorized for full-host workspace access, a refusal because the current caller is limited to configured workspaces includes a `--admin` hint. This requests `operator.admin`; the Gateway must approve that scope. The hint does not apply to cards with restricted, read-only, or unknown persisted workspace authority, and `--admin` does not override those limits.
 
 Fallback output is explicit:
 

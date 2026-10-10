@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
-import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
+import { computeInlineScriptHashes } from "./control-ui-csp.js";
+import {
+  PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
+  renderPublicSessionDocument,
+} from "./control-ui-public-session-render.js";
 
 function render(
   messages: unknown[],
@@ -13,6 +17,7 @@ function render(
     latestUrl: "/share/session?token=v1.opaque",
     canonicalUrl: "https://example.test/share/session/demo",
     cardUrl: "https://example.test/share/card.png",
+    assetBasePath: "/control",
     ...overrides,
   });
 }
@@ -34,6 +39,7 @@ describe("public session document", () => {
     });
     expect(unavailable).toContain("not publicly available");
     expect(unavailable).not.toContain("Public · Read-only");
+    expect(unavailable).not.toContain("Made with OpenClaw");
     expect(unavailable).not.toContain('http-equiv="refresh"');
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
@@ -175,13 +181,27 @@ describe("public session document", () => {
       ],
       { title: '<img src=x onerror="unsafe">' },
     );
-    expect(html).toContain("&lt;script&gt;");
-    expect(html).toContain("&lt;iframe");
-    expect(html).toContain("[Image omitted]");
-    expect(html).toContain('href="https://example.test/docs" rel="noreferrer noopener nofollow"');
-    expect(html).not.toContain("tracker.png");
-    expect(html).not.toMatch(/<(script|iframe|img)\b/);
-    expect(html).not.toMatch(/href="(?:javascript:|\/api\/private)/);
+    const transcript = html.slice(
+      html.indexOf('<section class="transcript"'),
+      html.indexOf("</section>"),
+    );
+    expect(transcript).toContain("&lt;script&gt;");
+    expect(transcript).toContain("&lt;iframe");
+    expect(transcript).toContain("[Image omitted]");
+    expect(transcript).toContain(
+      'href="https://example.test/docs" rel="noreferrer noopener nofollow"',
+    );
+    expect(transcript).not.toContain("tracker.png");
+    expect(transcript).not.toMatch(/<(script|iframe|img)\b/);
+    expect(transcript).not.toMatch(/href="(?:javascript:|\/api\/private)/);
+    expect(transcript).toContain('<div class="code"><pre><code class="language-html">');
+    // The page's only script is the fixed entry script, whose hash the shared policy carries.
+    expect(html.match(/<script\b/g)).toHaveLength(1);
+    for (const hash of computeInlineScriptHashes(html)) {
+      expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain(hash);
+    }
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("font-src 'self'");
+    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
   });
 
   it("bounds the newest public messages and visibly marks omitted history or text", () => {
@@ -236,6 +256,23 @@ describe("public session document", () => {
     expect(html).toContain('property="og:title" content="A shared conversation"');
     expect(html).toContain('aria-label="Conversation"');
     expect(html).toContain('name="referrer" content="no-referrer"');
+    expect(html).toContain("Made with OpenClaw");
+    expect(html).toContain(
+      'href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">Get started',
+    );
+  });
+
+  it("groups consecutive turns from one speaker under a single identity", () => {
+    const html = render([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "First answer" },
+      { role: "assistant", content: "Follow-up answer" },
+    ]);
+    expect(html).toContain('class="message user" aria-label="User message"');
+    expect(html).toContain('class="message assistant" aria-label="Assistant message"');
+    expect(html).toContain('class="message assistant continued" aria-label="Assistant message"');
+    expect(html).toContain("3 messages");
+    expect(html.match(/class="avatar"/g)).toHaveLength(1);
   });
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {

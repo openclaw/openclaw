@@ -29,6 +29,7 @@ describe("settings search target manifest", () => {
       ]),
     ).toEqual([
       ["webSearch", "/settings/search", "", ""],
+      ["appearanceBackground", "/settings/appearance", "", "#settings-appearance-background"],
       ["sessionStorage", "/settings/ai-agents", "?section=session", "#settings-session-storage"],
       [
         "meetingCapture",
@@ -72,6 +73,12 @@ describe("settings search target manifest", () => {
         "/settings/appearance",
         "?section=__appearance__",
         "#settings-appearance-typography",
+      ],
+      [
+        "appearanceTabIcon",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-appearance-tab-icon",
       ],
       [
         "appearanceTextSize",

@@ -13,6 +13,7 @@ import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.j
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   getSubagentRunsForChildSession,
+  getSubagentSessionReadLookup,
   immutableSubagentRun,
   immutableSubagentRunSessionList,
   subagentRuns,
@@ -44,7 +45,6 @@ import {
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -150,16 +150,15 @@ function rememberPersistedSubagentRunsSnapshot(
 export function publishSubagentRunsAfterAtomicStore(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds: readonly string[] | undefined,
-  deferredObserverEvents: Array<() => void>,
   databasePath?: string,
-): void {
+): () => void {
   subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, databasePath);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
-  deferredObserverEvents.push(() => {
+  return () => {
     publishSubagentRunChanges(keys, changedRunIds, "persistence");
     events.forEach(emitSessionLifecycleEvent);
-  });
+  };
 }
 
 /** Hydration establishes a notification baseline before synchronous ownership observers run. */
@@ -438,20 +437,24 @@ export function getSubagentSessionListRunsSnapshotForSessions(
   }
   const cache = persistedSubagentSessionListRunsReadCache;
   const cached = shouldReadPersistedSubagentRuns() ? getPersistedSubagentRunsSnapshot(cache) : null;
-  const lookup = cached ? getSessionListLookup(cache, cached) : undefined;
-  const indexed = lookup?.selectSessions(sessionKeys, inMemoryRuns.values());
-  const selected =
-    indexed?.sessionKeys ??
-    collectSubagentSessionReadKeys(sessionKeys, cached?.values() ?? [], inMemoryRuns.values());
+  const live = getSubagentSessionReadLookup(inMemoryRuns);
+  const lookup = cached ? getSessionListLookup(cache, cached) : live;
+  const indexed = lookup.selectSessions(sessionKeys, live);
+  const persisted = cached ? indexedSnapshotRows(cached, indexed.cacheKeys) : [];
   return getSubagentRunsSnapshot(inMemoryRuns, cache, {
     // The loader owns cache selection so topology and metadata use the same source.
     load: () => {
       if (cached) {
-        return indexed ? indexedSnapshotRows(cached, indexed.cacheKeys) : cached.values();
+        return persisted;
       }
       throw new Error("Subagent session-list facts must be prepared before synchronous reads");
     },
-    matches: (entry) => selected.has(entry.childSessionKey.trim()),
+    // A live replacement can have moved out of a selected durable child bucket.
+    liveRunIds: new Set([
+      ...live.selectChildren(indexed.sessionKeys),
+      ...persisted.map((entry) => entry.runId),
+    ]),
+    matches: (entry) => indexed.sessionKeys.has(entry.childSessionKey.trim()),
   });
 }
 

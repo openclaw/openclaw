@@ -348,6 +348,9 @@ export async function validateConfigMutation(params: {
     nextConfig: config,
     pending: params.deferredPluginMigrations ?? [],
     editedPaths: operations.map((operation) => operation.setPath),
+    unsetPaths: operations
+      .filter((operation) => operation.mutation === "delete")
+      .map((operation) => operation.setPath),
   });
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,

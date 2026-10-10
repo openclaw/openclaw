@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -203,65 +203,58 @@ export async function launchFallbackTaskScript(
   const scriptPath = resolveTaskScriptPath(env);
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
+  let argv: string[];
+  let options: SpawnOptions;
   if (command?.programArguments.length) {
-    // Task inspection intentionally hides the wrapper flag so it can match the
-    // inner Gateway. Direct fallback must restore that wrapper or it loses the
-    // Job Object owner that terminates the whole Gateway process tree.
-    const programArguments =
+    // Task inspection hides the wrapper flag; direct launches still need its process-tree owner.
+    argv =
       command.environment?.OPENCLAW_SERVICE_KIND === "gateway"
         ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
         : command.programArguments;
-    const { child } = await spawnWithFallback({
-      assertCurrent,
-      argv: programArguments,
-      options: {
-        cwd: command.workingDirectory || undefined,
-        detached: true,
-        env: mergeProcessEnv([process.env, command.environment]),
+    options = {
+      cwd: command.workingDirectory || undefined,
+      env: mergeProcessEnv([process.env, command.environment]),
+    };
+  } else {
+    // Preserve native missing-script errors before testing the actual cmd.exe access contract.
+    await (await fs.open(scriptPath, "r")).close();
+    // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
+    const scriptProbe = spawnSync(
+      getWindowsPowerShellExePath(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(
+          "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
+          "utf16le",
+        ).toString("base64"),
+      ],
+      {
+        env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
         stdio: "ignore",
         windowsHide: true,
       },
-    });
-    child.unref();
-    return;
-  }
-  // Preserve native missing-script errors before testing the actual cmd.exe access contract.
-  await (await fs.open(scriptPath, "r")).close();
-  // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
-  const scriptProbe = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(
-        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
-        "utf16le",
-      ).toString("base64"),
-    ],
-    {
-      env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
-  if (scriptProbe.error) {
-    throw scriptProbe.error;
-  }
-  if (scriptProbe.status !== 0) {
-    throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
+    );
+    if (scriptProbe.error) {
+      throw scriptProbe.error;
+    }
+    if (scriptProbe.status !== 0) {
+      throw Object.assign(new Error("Windows login item script is not readable"), {
+        code: "EACCES",
+      });
+    }
+    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
+    argv = [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'];
+    options = {
+      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
+      windowsVerbatimArguments: true,
+    };
   }
   const { child } = await spawnWithFallback({
     assertCurrent,
-    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
-    argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
-    options: {
-      detached: true,
-      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
-      stdio: "ignore",
-      windowsHide: true,
-      windowsVerbatimArguments: true,
-    },
+    argv,
+    options: { detached: true, stdio: "ignore", windowsHide: true, ...options },
   });
   child.unref();
 }
@@ -282,12 +275,14 @@ export async function readStartupEntryState(
   };
   let command: GatewayServiceCommandConfig | null = null;
   let env = args.env ?? process.env;
+  let runtime: GatewayServiceRuntime;
+  let loadState: GatewayServiceState["loadState"] = { status: "loaded" };
   try {
     const captured = await capture();
     command = captured.command;
     env = mergeGatewayServiceEnv(env, command);
     args.validateEnvBeforeStatusRead?.(env);
-    let runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
+    runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
       (error: unknown) => createServiceRuntimeInspectionFailure(error, args.timeoutMs),
     );
     if (!isDeepStrictEqual(await capture(), captured)) {
@@ -299,30 +294,23 @@ export async function readStartupEntryState(
         args.timeoutMs,
       );
     }
-    return {
-      installed: true,
-      loadState: { status: "loaded" },
-      running: runtime.status === "running",
-      env,
-      command,
-      runtime,
-      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
-    };
   } catch (error) {
     if (!(error instanceof ScheduledTaskInspectionError) || error.timeoutMs === undefined) {
       throw error;
     }
-    const runtime = createServiceRuntimeInspectionFailure(error, args.timeoutMs);
-    return {
-      installed: command !== null,
-      loadState: { status: "unknown", detail: runtime.inspectionFailure.detail },
-      running: false,
-      env,
-      command,
-      runtime,
-      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
-    };
+    const failed = createServiceRuntimeInspectionFailure(error, args.timeoutMs);
+    runtime = failed;
+    loadState = { status: "unknown", detail: failed.inspectionFailure.detail };
   }
+  return {
+    installed: command !== null,
+    loadState,
+    running: runtime.status === "running",
+    env,
+    command,
+    runtime,
+    ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
+  };
 }
 
 export async function resolveFallbackRuntime(

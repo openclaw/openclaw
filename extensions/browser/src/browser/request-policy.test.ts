@@ -88,4 +88,44 @@ describe("browser url pattern matching", () => {
     expect(matchBrowserUrlPattern("", "https://example.com")).toBe(false);
     expect(matchBrowserUrlPattern("   ", "https://example.com")).toBe(false);
   });
+
+  it("rejects a nested star pattern without scanning the whole event loop", () => {
+    const pattern = "*a".repeat(14);
+    const url = `${"a".repeat(29)}x`;
+    const started = Date.now();
+    expect(matchBrowserUrlPattern(pattern, url)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(matchBrowserUrlPattern("*a".repeat(3), "xa ya za")).toBe(true);
+  });
+
+  it("keeps matching wildcard patterns longer than 512 characters", () => {
+    const prefix = `https://example.com/${"a".repeat(500)}`;
+    expect(matchBrowserUrlPattern(`${prefix}*`, `${prefix}b`)).toBe(true);
+    expect(matchBrowserUrlPattern(`${prefix}*`, `${prefix.slice(0, -1)}b`)).toBe(false);
+    expect(matchBrowserUrlPattern("*".repeat(513), "a")).toBe(true);
+  });
+
+  it("matches a repeated star literal in one pass per segment", () => {
+    const path = "a".repeat(20_000);
+    const started = Date.now();
+    expect(matchBrowserUrlPattern("https://example.com/*a*", `https://example.com/${path}`)).toBe(
+      true,
+    );
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(matchBrowserUrlPattern("https://example.com/*a*", "https://example.com/bbb")).toBe(
+      false,
+    );
+    const separated = "ab".repeat(10_000);
+    const separatedStarted = Date.now();
+    expect(
+      matchBrowserUrlPattern("https://example.com/*a*", `https://example.com/${separated}`),
+    ).toBe(true);
+    expect(Date.now() - separatedStarted).toBeLessThan(250);
+    expect(
+      matchBrowserUrlPattern(
+        "https://example.com/*a*",
+        `https://example.com/${"b".repeat(10_000)}`,
+      ),
+    ).toBe(false);
+  });
 });

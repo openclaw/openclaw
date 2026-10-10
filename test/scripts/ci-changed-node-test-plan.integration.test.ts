@@ -194,6 +194,29 @@ it("retains package and plugin consumers together in a mixed diff", () => {
   expect(extensionGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
 });
 
+it.each([
+  "packages/markdown-core/src/render-aware-chunking.ts",
+  "packages/markdown-core/src/ir-slice.ts",
+])("selects channel chunk-contract suites when %s changes", (source) => {
+  // Channels import the chunker through the Plugin SDK facade, below the PR import-walk depth.
+  expect(
+    resolveChangedNodeTestTargets([source], {
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    }),
+  ).toEqual(
+    expect.arrayContaining([
+      "extensions/googlechat/src/format.test.ts",
+      "extensions/signal/src/format.test.ts",
+      "extensions/slack/src/format.test.ts",
+      "extensions/sms/src/send.test.ts",
+      "extensions/telegram/src/format.test.ts",
+      "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+    ]),
+  );
+});
+
 it("keeps UI and core changes with exact owners and direct consumers", () => {
   const paths = [
     "ui/src/components/markdown-file-links.ts",

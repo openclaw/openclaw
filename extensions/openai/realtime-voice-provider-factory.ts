@@ -444,27 +444,18 @@ export function buildOpenAIRealtimeVoiceProvider(
         return false;
       }
       const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-      if (isOpenAIGptLiveModel(model)) {
-        return (
-          options?.quicksilverBrowserSessionBroker !== undefined &&
-          (hasOpenAIRealtimePlatformAuthInput(
-            { configuredApiKey: config.apiKey, cfg, agentId },
-            context,
-          ) ||
-            (isOpenAIGptLiveSubscriptionModel(model) &&
-              hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
-        );
+      const isGptLive = isOpenAIGptLiveModel(model);
+      const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
+      if (isGptLive && !hasBroker) {
+        return false;
       }
       return (
         hasOpenAIRealtimePlatformAuthInput(
-          {
-            configuredApiKey: config.apiKey,
-            cfg,
-            agentId,
-          },
+          { configuredApiKey: config.apiKey, cfg, agentId },
           context,
         ) ||
-        (options?.quicksilverBrowserSessionBroker !== undefined &&
+        (hasBroker &&
+          (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },

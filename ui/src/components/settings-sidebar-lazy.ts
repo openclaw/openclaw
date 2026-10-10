@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
+import type { LazyRenderer } from "../app/lazy-renderer.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
@@ -7,24 +8,17 @@ import { icons } from "./icons.ts";
 type SettingsSidebarModule = typeof import("./settings-sidebar.ts");
 type SettingsSidebarProps = Parameters<SettingsSidebarModule["renderSettingsSidebar"]>[0];
 
-type LazySettingsSidebarHost = {
-  readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
-  readonly settingsSidebarLoadFailed: boolean;
-  loadSettingsSidebarRenderer(): void;
-  retrySettingsSidebarRenderer(): void;
-};
-
 export function renderLazySettingsSidebar(
-  host: LazySettingsSidebarHost,
+  loader: LazyRenderer<SettingsSidebarModule["renderSettingsSidebar"]>,
   props: SettingsSidebarProps,
 ) {
-  const renderer = host.settingsSidebarRenderer;
+  const renderer = loader.renderer;
   if (renderer) {
     return renderer(props);
   }
-  const failed = host.settingsSidebarLoadFailed;
+  const failed = loader.failed;
   if (!failed) {
-    host.loadSettingsSidebarRenderer();
+    loader.load();
   }
   if (props.presentation === "embed-list" || props.presentation === "embed-page") {
     return html`<section
@@ -38,7 +32,7 @@ export function renderLazySettingsSidebar(
       <p role=${failed ? "alert" : "status"}>
         ${t(failed ? "nav.settingsLoadFailed" : "common.loading")}
       </p>
-      ${failed ? html`<button class="btn" @click=${() => host.retrySettingsSidebarRenderer()}>${t("common.retry")}</button>` : nothing}
+      ${failed ? html`<button class="btn" @click=${() => loader.retry()}>${t("common.retry")}</button>` : nothing}
     </section>`;
   }
   return html`<aside class="settings-sidebar" aria-busy=${failed ? nothing : "true"}>
@@ -53,11 +47,7 @@ export function renderLazySettingsSidebar(
       failed
         ? html`<div class="settings-sidebar__empty" role="alert">
             ${t("nav.settingsLoadFailed")}
-            <button
-              class="btn btn--sm"
-              type="button"
-              @click=${() => host.retrySettingsSidebarRenderer()}
-            >
+            <button class="btn btn--sm" type="button" @click=${() => loader.retry()}>
               ${t("common.retry")}
             </button>
           </div>`

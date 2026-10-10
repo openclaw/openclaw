@@ -67,7 +67,7 @@ export function resolveSessionEntryResetFreshness(
 ): ResolvedSessionEntryResetFreshness {
   const scope = resolveFreshnessScope(params);
   const entry = loadSessionEntryReadOnly(scope);
-  return resolveEntryFreshness(
+  return resolvePreparedSessionEntryResetFreshness(
     params,
     entry,
     resolveSessionLifecycleTimestamps({ ...scope, entry }),
@@ -88,7 +88,7 @@ export async function resolveSessionEntryResetFreshnessAsync(
     [{ ...scope, sessionKeys: [sessionKey], lifecycleSessionKey: sessionKey }],
     ([read]) => {
       read!.assertCurrent();
-      return resolveEntryFreshness(
+      return resolvePreparedSessionEntryResetFreshness(
         params,
         read!.result.entries[0]?.entry,
         read!.result.lifecycleTimestamps,
@@ -98,7 +98,8 @@ export async function resolveSessionEntryResetFreshnessAsync(
   );
 }
 
-function resolveEntryFreshness(
+/** Consume entry and lifecycle facts from one retained read without opening another snapshot. */
+export function resolvePreparedSessionEntryResetFreshness(
   params: ResolveSessionEntryResetFreshnessParams,
   entry: SessionEntry | undefined,
   lifecycleTimestamps: SessionLifecycleTimestamps,

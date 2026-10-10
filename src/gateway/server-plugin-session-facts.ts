@@ -59,6 +59,18 @@ type ReadScope = {
   reset: object;
   completedReset?: object;
 };
+
+function createReadScope(token: string): ReadScope {
+  return {
+    token,
+    visibility: new WeakMap(),
+    facts: new Map(),
+    dirty: new Map(),
+    transient: new Set(),
+    reset: {},
+  };
+}
+
 const readScopes = new WeakMap<
   object,
   {
@@ -221,14 +233,7 @@ export async function withTrustedPluginSessionFacts<T>(
           if (entry.scopes.size >= 64) {
             entry.scopes.delete(entry.scopes.keys().next().value!);
           }
-          authority = {
-            token: randomUUID(),
-            visibility: new WeakMap(),
-            facts: new Map(),
-            dirty: new Map(),
-            transient: new Set(),
-            reset: {},
-          };
+          authority = createReadScope(randomUUID());
           entry.scopes.set(scopeKey, authority);
         }
       }
@@ -244,14 +249,7 @@ export async function withTrustedPluginSessionFacts<T>(
         });
       }
       const currentPrFacts = prFacts;
-      const cache: ReadScope = authority ?? {
-        token: "",
-        visibility: new WeakMap<object, boolean>(),
-        facts: new Map(),
-        dirty: new Map<string, object>(),
-        transient: new Set<string>(),
-        reset: {},
-      };
+      const cache = authority ?? createReadScope("");
       const snapshot = await projection.withSelectionPreparation(async () => {
         do {
           await projection.prepareSelection(true);

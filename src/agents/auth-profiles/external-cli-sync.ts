@@ -19,6 +19,8 @@ type ExternalCliAuthProfileOptions = {
   profileIds?: Iterable<string>;
 };
 
+type PersistedExternalCliAuthProfile = RuntimeExternalOAuthProfile & { persistence: "persisted" };
+
 const PERSISTED_EXTERNAL_CLI_AUTH_FLOW = "external-cli";
 const MINIMAX_PROVIDER = "minimax-portal";
 const MINIMAX_PROVIDER_IDS = [MINIMAX_PROVIDER, "minimax", "minimax-cli"];
@@ -30,11 +32,12 @@ function isMiniMaxCliProfile(params: { profileId: string; credential?: OAuthCred
   );
 }
 
-function readMiniMaxCredential(env?: NodeJS.ProcessEnv): OAuthCredential | null {
-  return readMiniMaxCliCredentialsCached({
+function readMiniMaxCredential(env?: NodeJS.ProcessEnv, provider?: string): OAuthCredential | null {
+  const credential = readMiniMaxCliCredentialsCached({
     ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
     ...(env ? { homeDir: resolveRequiredOsHomeDir(env) } : {}),
   });
+  return credential && provider !== undefined ? { ...credential, provider } : credential;
 }
 
 /** True when durable metadata assigns this stored profile to an external CLI owner. */
@@ -59,13 +62,6 @@ export function listExternalCliSyncProviderIds(): string[] {
   return [...MINIMAX_PROVIDER_IDS];
 }
 
-function normalizeExternalCliCredentialProvider(
-  credential: OAuthCredential | null,
-  provider: string,
-): OAuthCredential | null {
-  return credential ? { ...credential, provider } : null;
-}
-
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
   profileId: string;
@@ -74,10 +70,7 @@ export function readExternalCliBootstrapCredential(params: {
   if (!isMiniMaxCliProfile(params)) {
     return null;
   }
-  const imported = normalizeExternalCliCredentialProvider(
-    readMiniMaxCredential(),
-    params.credential.provider,
-  );
+  const imported = readMiniMaxCredential(undefined, params.credential.provider);
   if (imported && isOAuthRefreshFence(params.credential)) {
     // An external snapshot has no generation ordering proof. It must not clear
     // a fence and make an older single-use refresh token replayable.
@@ -172,12 +165,9 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, store } = params;
-  const requestedProfileIds = Array.from(options?.profileIds ?? [])
+  const matchingRequestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  const matchingRequestedProfileIds = requestedProfileIds.filter(
-    (profileId) => MINIMAX_CLI_PROFILE_ID === profileId,
-  );
+    .filter((profileId) => MINIMAX_CLI_PROFILE_ID === profileId);
   if (matchingRequestedProfileIds.length > 0) {
     return matchingRequestedProfileIds;
   }
@@ -212,8 +202,8 @@ function backfillExternalCliIdentity(params: {
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
   options?: ExternalCliAuthProfileOptions,
-): RuntimeExternalOAuthProfile[] {
-  const profiles: RuntimeExternalOAuthProfile[] = [];
+): PersistedExternalCliAuthProfile[] {
+  const profiles: PersistedExternalCliAuthProfile[] = [];
   const now = Date.now();
   if (!isMiniMaxCliInScope({ store, options })) {
     return profiles;
@@ -253,10 +243,7 @@ export function resolveExternalCliAuthProfiles(
       }
       continue;
     }
-    const creds = normalizeExternalCliCredentialProvider(
-      readMiniMaxCredential(options?.env),
-      existingOAuth?.provider ?? MINIMAX_PROVIDER,
-    );
+    const creds = readMiniMaxCredential(options?.env, existingOAuth?.provider ?? MINIMAX_PROVIDER);
     if (!creds) {
       continue;
     }

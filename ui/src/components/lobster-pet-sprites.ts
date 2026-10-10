@@ -1,10 +1,11 @@
-import { svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { svg, type TemplateResult } from "lit";
 import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
 import type {
   LobsterPetAccessory,
   LobsterPetAntennae,
   LobsterPetPaletteId,
 } from "./lobster-pet-contract.ts";
+import { passerSprite } from "./lobster-pet-sprite.ts";
 import {
   CHIMERA_STITCHES,
   ECLIPSE_CORONA,
@@ -142,6 +143,127 @@ const BLUEPRINT_MARKS = svg`
   </g>
 `;
 
+// Laurel and imperial sash belong to the shell, not the random wardrobe.
+const CLAWNSTANTINE_REGALIA = svg`
+  <g class="lob-clawnstantine">
+    <path d="M18 48 Q60 62 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#4e296e" />
+    <path d="M28 61 Q30 72 39 78 M70 88 Q82 82 91 65" fill="none" stroke="#a576c4" stroke-width="1.6" stroke-linecap="round" />
+    <!-- The lower edge follows the shell contour so the sash wraps around it. -->
+    <path d="M81.5 45.5 C70 64 50 78 29.9 85.444 C32.971 88.632 36.349 91.249 39.814 93.121 C62 85 81 68 90.5 50.5 Z" fill="#e5bc62" />
+    <path d="M84 51 C73 68 57 80 39 87" fill="none" stroke="#fff0bc" stroke-width="1.6" stroke-linecap="round" />
+    <circle cx="85" cy="49" r="6" fill="#e5bc62" />
+    <circle cx="85" cy="49" r="3" fill="#58c8b5" />
+    <g class="lob-clawnstantine__laurel" fill="#e5bc62" stroke="#bd8a38" stroke-width="0.6">
+      <path d="M31 27 Q31 15 50 11 M89 27 Q89 15 70 11" fill="none" stroke="#e5bc62" stroke-width="2" />
+      <path d="M33 25 Q23 21 28 15 Q35 17 33 25 Z M37 19 Q28 13 34 9 Q41 12 37 19 Z M43 14 Q38 7 44 6 Q49 9 43 14 Z" />
+      <path d="M87 25 Q97 21 92 15 Q85 17 87 25 Z M83 19 Q92 13 86 9 Q79 12 83 19 Z M77 14 Q82 7 76 6 Q71 9 77 14 Z" />
+    </g>
+  </g>
+`;
+
+// Face paint rides the shell; the shared renderer draws the eyes above it.
+const CLAWIE_STARDUST_BOLT = svg`
+  <g class="lob-clawiestardust">
+    <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#4dc8eb" transform="translate(2.5 0)" />
+    <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#e6393d" />
+  </g>
+`;
+
+// Direct claw paths inherit the existing size transform as well as wave/snip.
+const MICROPHONE = svg`
+  <path class="lob-microphone" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747" />
+  <path class="lob-microphone" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80" />
+  <path class="lob-microphone" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round" />
+`;
+
+const LEONARDO_PAINTBRUSH = svg`
+  <path class="lob-leonardodepinchy__brush" d="M107 32 L112 33 L106 57 Q104 59 102 56 Z" fill="#855233" />
+  <path class="lob-leonardodepinchy__brush" d="M106 27 L114 29 L112 36 L104 34 Z" fill="#b4b7b5" />
+  <path class="lob-leonardodepinchy__brush" d="M106 27 C105 21 110 18 111 11 C119 21 118 26 114 29 Z" fill="#e6c88e" />
+  <path class="lob-leonardodepinchy__brush" d="M111 11 Q114 16 115 18 Q111 21 108 22 Q110 16 111 11 Z" fill="#4a89b8" />
+`;
+
+const TELEPHONE_RECEIVER = svg`
+  <path class="lob-telephone-receiver" d="M105 33 L112 34 L108 56 Q105 59 102 55 Z" fill="#4b3c30" />
+  <path class="lob-telephone-receiver" d="M102 29 C104 21 113 21 117 29 L117 34 Q109 39 101 34 Z" fill="#35312f" />
+  <path class="lob-telephone-receiver" d="M103 30 Q110 34 116 30" fill="none" stroke="#bc955c" stroke-width="2" stroke-linecap="round" />
+  <path class="lob-telephone-receiver" d="M105 56 Q101 63 108 65 Q115 67 110 71 Q106 74 112 77" fill="none" stroke="#574631" stroke-width="1.8" stroke-linecap="round" />
+`;
+
+export const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
+  taylorpinch: MICROPHONE,
+  shellvis: MICROPHONE,
+  leonardodepinchy: LEONARDO_PAINTBRUSH,
+  alexandergrahamshell: TELEPHONE_RECEIVER,
+};
+
+const TAYLOR_PINCH_SPARKLES = svg`
+  <g class="lob-taylorpinch">
+    <path d="M51 44 Q56 40 60 43 Q64 40 69 44 Q60 54 51 44 Z" fill="#c92e48" />
+    <path d="M16 52 Q37 50 60 62 Q83 50 104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#9c82cf" />
+    <path d="M22 57 Q40 56 60 68 Q80 56 98 57" fill="none" stroke="#d5c4f2" stroke-width="2" stroke-linecap="round" />
+    <g fill="#fff4fb">
+      <path d="M36 65 L37.5 69.5 L42 71 L37.5 72.5 L36 77 L34.5 72.5 L30 71 L34.5 69.5 Z" />
+      <path d="M79 72 L80.5 76.5 L85 78 L80.5 79.5 L79 84 L77.5 79.5 L73 78 L77.5 76.5 Z" />
+      <circle cx="57" cy="79" r="1.5" /><circle cx="67" cy="88" r="1.5" /><circle cx="87" cy="64" r="1.5" />
+    </g>
+  </g>
+`;
+
+const CLAWTOO_DEETOO_PANELS = svg`
+  <g class="lob-clawtoodeetoo">
+    <path d="M27 26 C35 14 45 8 60 8 C75 8 85 14 93 26 Q60 19 27 26 Z" fill="#b8c3cf" />
+    <g fill="#2d5cbd">
+      <path d="M37 17 L46 12 L46 22 L34 24 Z M54 9 H66 L67 21 H53 Z M74 12 L84 17 L86 24 L74 22 Z" />
+      <path d="M20 46 Q60 42 100 46 L101 53 Q60 49 19 53 Z" />
+      <rect x="53" y="58" width="14" height="9" rx="1.5" />
+      <rect x="53" y="71" width="14" height="9" rx="1.5" />
+    </g>
+    <g fill="none" stroke="#9ba8b7" stroke-width="1.5">
+      <rect x="32" y="59" width="13" height="25" rx="2" /><rect x="75" y="59" width="13" height="25" rx="2" />
+      <path d="M54 86 H66 M54 90 H66" stroke-linecap="round" />
+    </g>
+    <circle cx="87" cy="49" r="2.5" fill="#ef5261" />
+  </g>
+`;
+
+const LEONARDO_SMOCK = svg`
+  <g class="lob-leonardodepinchy">
+    <path d="M18 48 Q60 61 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#5f6950" />
+    <path d="M60 63 V93 M27 64 Q31 77 40 84 M93 64 Q89 77 80 84" fill="none" stroke="#87906e" stroke-width="1.6" stroke-linecap="round" />
+    <path d="M40 42 Q60 52 80 42 Q78 58 60 66 Q42 58 40 42 Z" fill="#eee3ce" />
+    <path d="M52 49 Q60 54 68 49" fill="none" stroke="#c7b99e" stroke-width="1.5" stroke-linecap="round" />
+    <path d="M25 24 C29 9 51 5 67 8 C83 4 96 10 95 20 Q71 29 25 24 Z" fill="#49352c" />
+    <path d="M28 23 Q61 27 91 21" fill="none" stroke="#765545" stroke-width="2" stroke-linecap="round" />
+    <circle cx="38" cy="72" r="3" fill="#bd644f" /><circle cx="77" cy="81" r="3" fill="#4a89b8" /><circle cx="83" cy="65" r="2.5" fill="#dfb34f" />
+  </g>
+`;
+
+const SHELLVIS_JUMPSUIT = svg`
+  <g class="lob-shellvis">
+    <path d="M18 48 L43 47 L60 62 L77 47 L102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#fff7e9" />
+    <path d="M43 49 L48 66 L60 61 L72 66 L77 49 M26 80 Q60 87 94 80" fill="none" stroke="#d7ab4c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M53 46 L60 50 L67 46 L64 54 L72 74 L65 71 L59 56 L51 68 L48 63 L56 53 Z" fill="#c84248" />
+    <rect x="56" y="80" width="8" height="6" rx="1.5" fill="#d7ab4c" />
+    <path d="M24 26 Q21 10 41 9 Q42 1 62 5 C76 1 96 7 96 19 L91 29 Q82 21 77 20 Q59 31 43 21 Q34 21 24 26 Z" fill="#29272d" />
+    <path d="M35 17 Q50 10 61 13 Q75 8 85 15" fill="none" stroke="#4d4750" stroke-width="2" stroke-linecap="round" />
+    <path d="M25 27 L32 25 L32 42 L26 38 Z M88 25 L95 27 L94 38 L88 42 Z" fill="#29272d" />
+  </g>
+`;
+
+const GRAHAM_SHELL_WAISTCOAT = svg`
+  <g class="lob-alexandergrahamshell">
+    <path d="M18 48 Q60 58 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#3d4b53" />
+    <path d="M37 47 L49 73 L60 63 L71 73 L83 47" fill="#f1ebdf" />
+    <path d="M35 61 L45 86 M85 61 L75 86" fill="none" stroke="#65747a" stroke-width="1.6" stroke-linecap="round" />
+    <path d="M28 29 Q25 18 35 15 L38 32 L32 42 Z M92 29 Q95 18 85 15 L82 32 L88 42 Z" fill="#c9ceca" />
+    <path d="M31 38 Q40 47 47 43 Q60 52 73 43 Q80 47 89 38 Q88 59 76 66 Q71 76 60 77 Q49 76 44 66 Q32 59 31 38 Z" fill="#dfe0dc" />
+    <path d="M51 52 Q60 57 69 52 M49 65 Q60 72 71 65" fill="none" stroke="#b8beba" stroke-width="1.5" stroke-linecap="round" />
+    <path d="M50 78 L60 81 L70 78 V86 L60 83 L50 86 Z" fill="#8f3347" />
+    <circle cx="60" cy="91" r="1.8" fill="#bc955c" />
+  </g>
+`;
+
 const MECHA_PLATES = svg`
   <g class="lob-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
@@ -221,6 +343,13 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "phosphor",
   "heisenbug",
   "blueprint",
+  "clawnstantine",
+  "clawiestardust",
+  "taylorpinch",
+  "clawtoodeetoo",
+  "leonardodepinchy",
+  "shellvis",
+  "alexandergrahamshell",
   "clawtron",
   "selene",
   "pixel",
@@ -335,6 +464,13 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   geode: GEODE_FACETS,
   phosphor: PHOSPHOR_SCANLINES,
   blueprint: BLUEPRINT_MARKS,
+  clawnstantine: CLAWNSTANTINE_REGALIA,
+  clawiestardust: CLAWIE_STARDUST_BOLT,
+  taylorpinch: TAYLOR_PINCH_SPARKLES,
+  clawtoodeetoo: CLAWTOO_DEETOO_PANELS,
+  leonardodepinchy: LEONARDO_SMOCK,
+  shellvis: SHELLVIS_JUMPSUIT,
+  alexandergrahamshell: GRAHAM_SHELL_WAISTCOAT,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,
@@ -385,13 +521,17 @@ export const RETRO_ANTENNAE = svg`
   </g>
 `;
 
-export const RETRO_FACE = svg`
-  <g stroke="#0a1014" stroke-linecap="round" fill="none">
-    <path d="M37 24 L51 28" stroke-width="3.5" />
-    <path d="M69 28 L83 24" stroke-width="3.5" />
-    <path d="M49 45 Q59 51 69 45 L72 42" stroke-width="3" />
-  </g>
-`;
+function browedFace(mouth: string): TemplateResult {
+  return svg`
+    <g stroke="#0a1014" stroke-linecap="round" fill="none">
+      <path d="M37 24 L51 28" stroke-width="3.5" />
+      <path d="M69 28 L83 24" stroke-width="3.5" />
+      <path d=${mouth} stroke-width="3" />
+    </g>
+  `;
+}
+
+export const RETRO_FACE = browedFace("M49 45 Q59 51 69 45 L72 42");
 
 // Tail-fan lobes peek out diagonally behind the lower body (drawn before the
 // body path so they read as "behind"). Fill color lives in lobster-pet.css.
@@ -431,13 +571,7 @@ export const SAILOR_CAP = svg`
   </g>
 `;
 
-export const GRUMPY_FACE = svg`
-  <g stroke="#0a1014" stroke-linecap="round" fill="none">
-    <path d="M37 24 L51 28" stroke-width="3.5" />
-    <path d="M69 28 L83 24" stroke-width="3.5" />
-    <path d="M50 48 Q60 42 70 48" stroke-width="3" />
-  </g>
-`;
+export const GRUMPY_FACE = browedFace("M50 48 Q60 42 70 48");
 
 export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
@@ -453,19 +587,6 @@ export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
     </g>
   `,
 };
-
-function passerSprite(content: SVGTemplateResult): SVGTemplateResult {
-  return svg`
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      ${content}
-    </svg>
-  `;
-}
 
 const CRAB_SPRITE = passerSprite(svg`
     <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">

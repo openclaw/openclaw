@@ -30,11 +30,9 @@ import {
 } from "../plugins/lifecycle.js";
 import type { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
@@ -194,7 +192,9 @@ describe("Gateway Claw package cleanup owner", () => {
       throw new Error("Fixture deletion journal is missing");
     }
     await withAgentDeletion("worker", async (begin) => {
-      const deletion = await begin(previous);
+      const deletion = await begin(previous, {
+        expectedClawInstall: readClawInstallRecord("worker"),
+      });
       const oldOperationId = deletion.entry.operationId;
       f.input.operationId = oldOperationId;
       const entered = createDeferred();
@@ -219,7 +219,7 @@ describe("Gateway Claw package cleanup owner", () => {
         }),
       ]);
       try {
-        updateClawInstallRecordStatus("worker", "partial", { deletionOperation: deletion });
+        await deletion.handoffClawRetry();
         expect(readAgentDeletionJournal("worker")?.operationId).not.toBe(oldOperationId);
         expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(false);
       } finally {

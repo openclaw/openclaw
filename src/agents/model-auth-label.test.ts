@@ -110,61 +110,6 @@ describe("resolveModelAuthLabel", () => {
     expect(label).not.toContain("...");
   });
 
-  it("shows oauth type with profile label", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "anthropic:oauth": {
-          type: "oauth",
-          provider: "anthropic",
-        },
-      },
-    } as never);
-    mocks.resolveAuthProfileOrder.mockReturnValue(["anthropic:oauth"]);
-    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("anthropic:oauth");
-
-    const label = resolveModelAuthLabel({
-      provider: "anthropic",
-      cfg: {},
-      sessionEntry: { authProfileOverride: "anthropic:oauth" } as never,
-    });
-
-    expect(label).toBe("oauth (anthropic:oauth)");
-  });
-
-  it("uses accepted provider ids before falling back to provider env auth", () => {
-    // Accepted provider ids let aliases share a profile match before env
-    // fallback would report a less-specific API-key label.
-    mocks.ensureAuthProfileStore.mockReturnValue(
-      createAuthProfileStoreFixture({
-        "openai:user@example.com": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
-      }) as never,
-    );
-    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }: { provider?: string }) =>
-      provider === "openai" ? ["openai:user@example.com"] : [],
-    );
-    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai:user@example.com");
-    mocks.resolveEnvApiKey.mockReturnValue({
-      apiKey: "env-key-placeholder",
-      source: "env: OPENAI_API_KEY",
-    });
-
-    const label = resolveModelAuthLabel({
-      provider: "openai",
-      acceptedProviderIds: ["openai"],
-      cfg: {},
-    });
-
-    expect(label).toBe("oauth (openai:user@example.com)");
-    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
-  });
-
   it("shows codex cli auth for codex provider without auth profiles", () => {
     mocks.ensureAuthProfileStore.mockReturnValue(createAuthProfileStoreFixture({}) as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);

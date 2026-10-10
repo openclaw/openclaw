@@ -15,6 +15,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import {
+  projectionLane,
+  rotateDatabaseWorkers,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -130,6 +134,9 @@ it.each(
       recordSelected("a", 10);
       recordSelected("b", 20);
     }
+    // Raw fixture writes bypass admission; drain setup maintenance before warming either cache.
+    await closeOpenClawAgentDatabasesAsync(state.root);
+    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     const database = openOpenClawAgentDatabase(selected);
     if (write.startsWith("legacy sibling")) {
       expect(loadSessionEntry(sibling)?.sessionId).toBe("sibling");
@@ -605,6 +612,8 @@ it.each([
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
               skipMaintenance: true,
+              // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+              assertCommitAllowed: () => {},
             });
           } else if (changeEntry) {
             const writer = scenario.external ? new DatabaseSync(database.path) : database.db;
@@ -672,6 +681,8 @@ it.each([
             message: "Session changed while preparing its metadata. Retry the request.",
           });
           expect(changed.respond).not.toHaveBeenCalled();
+          // Retire cached readers without releasing request-owned registrations.
+          await rotateDatabaseWorkers(projectionLane);
           expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
           return;
         }
@@ -679,9 +690,10 @@ it.each([
         await invoke(fresh);
         // Fresh preparation agrees before asserting the held request, including on the old source.
         expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
         expect(changed.error).toBeUndefined();
         expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
+        await rotateDatabaseWorkers(projectionLane);
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       } finally {
         release?.();
         await pending?.catch(() => {});

@@ -172,6 +172,7 @@ export function createDirectChatContext(
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
     recoveryRuntime: {
+      prepareRestartRecovery: () => undefined,
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),
@@ -197,6 +198,32 @@ export function createTextTranscriptEvent(
       ...message,
     },
   };
+}
+
+export function createOversizedReplayTranscriptEvent(options: {
+  id: string;
+  parentId: string;
+  siblingCount: number;
+}): string {
+  return JSON.stringify({
+    type: "message",
+    id: options.id,
+    parentId: options.parentId,
+    message: {
+      role: "assistant",
+      // Replay metadata repeats the text; keep each row below the per-message byte cap.
+      content: Array.from({ length: options.siblingCount }, (_, index) => ({
+        type: "text",
+        text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
+        textSignature: JSON.stringify({
+          v: 1,
+          id: `history-progress-${index}`,
+          phase: "commentary",
+        }),
+      })),
+      timestamp: Date.now() + 1,
+    },
+  });
 }
 
 type ChatConnectionIdentityInput = {

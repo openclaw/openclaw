@@ -15,6 +15,7 @@ import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-v
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { DoctorHealthCheckContext } from "../flows/doctor-health-contribution-types.js";
 import {
+  stateSchemaHealthCheck,
   exitCodeFromFindings,
   runDoctorLintChecks,
   selectUpdateReadinessChecks,
@@ -51,6 +52,7 @@ import {
   withPluginSourceCaptureStorage,
 } from "../plugins/plugin-source-capture-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { artifactPreservingReads } from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   withArtifactPreservingStateReads,
@@ -110,8 +112,9 @@ export async function runDoctorLintCliInProcess(
     reported = execution;
   };
   try {
-    const execution = await withArtifactPreservingStateReads(() =>
-      prepareDoctorLintExecution(runtime, opts, reportBeforeDisposal ? report : undefined),
+    const execution = await withArtifactPreservingStateReads(
+      () => prepareDoctorLintExecution(runtime, opts, reportBeforeDisposal ? report : undefined),
+      { agentDatabases: true },
     );
     if (!reported) {
       report(execution);
@@ -134,8 +137,9 @@ export async function runDoctorLintCliInProcess(
 export async function collectDoctorFindings(
   runtime: RuntimeEnv,
 ): Promise<readonly HealthFinding[]> {
-  const execution = await withArtifactPreservingStateReads(() =>
-    prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+  const execution = await withArtifactPreservingStateReads(
+    () => prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+    { agentDatabases: true },
   );
   return execution.findings;
 }
@@ -438,7 +442,8 @@ async function executeDoctorLint(
     deferInspectionDisposal: stateView.deferInspectionDisposal,
   };
 
-  const checks = [
+  const checks: HealthCheck[] = [
+    stateSchemaHealthCheck,
     ...coreChecks.map((check) => withCoreLintContext(check, coreCtx, availabilityFindings)),
     ...extensionChecks,
   ];
@@ -497,8 +502,7 @@ async function executeDoctorLint(
     warnings,
     cleanupWarnings: stateView.cleanupWarnings,
     writeOutput() {
-      const mode = detectDoctorLintOutputMode(opts);
-      if (mode === "json") {
+      if (detectDoctorLintOutputMode(opts) === "json") {
         writeJsonResult({
           ok: exitCode === 0,
           checksRun: result.checksRun,
@@ -562,6 +566,11 @@ async function withReadOnlyPluginStateSnapshot<T>(
     throw new DoctorLintStateSnapshotError(error);
   }
   const privateStateDir = path.join(privateRoot, "openclaw-state");
+  // Only this owned copy is mutable; source-bound checks keep the enclosing read scope.
+  const inspection = artifactPreservingReads.getStore();
+  if (inspection) {
+    inspection.privateRoots.add(privateStateDir);
+  }
   const privateDatabasePath = resolveOpenClawStateSqlitePath({
     ...sourceEnv,
     OPENCLAW_STATE_DIR: privateStateDir,

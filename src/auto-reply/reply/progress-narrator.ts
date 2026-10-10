@@ -327,9 +327,7 @@ function createProgressNarrator(params: {
       }
       // Command-output titles usually carry the raw command text; honor the
       // channel's commandText: "status" policy for the failure note too.
-      const title = params.hideCommandText
-        ? payload.name || "command"
-        : payload.title || payload.name || "command";
+      const title = (!params.hideCommandText && payload.title) || payload.name || "command";
       recordEvent(
         "command_output",
         {
@@ -405,25 +403,21 @@ export function attachProgressNarratorToReplyOptions(params: {
   });
   return {
     ...opts,
-    ...(opts.onToolStart
-      ? {
-          onToolStart: async (payload) => {
-            narrator.noteToolStart(payload);
-            return await opts.onToolStart?.(payload);
-          },
-        }
-      : {}),
+    ...(opts.onToolStart && {
+      onToolStart: async (payload) => {
+        narrator.noteToolStart(payload);
+        return await opts.onToolStart?.(payload);
+      },
+    }),
     onCommandOutput: async (payload) => {
       narrator.noteCommandOutput(payload);
       return await opts.onCommandOutput?.(payload);
     },
-    ...(opts.onItemEvent
-      ? {
-          onItemEvent: async (payload) => {
-            narrator.noteItemEvent(payload);
-            return await opts.onItemEvent?.(payload);
-          },
-        }
-      : {}),
+    ...(opts.onItemEvent && {
+      onItemEvent: async (payload) => {
+        narrator.noteItemEvent(payload);
+        return await opts.onItemEvent?.(payload);
+      },
+    }),
   };
 }

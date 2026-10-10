@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../config/config.js";
+import { createConfigIO } from "../config/io.factory.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { purgeExpiredSecretStoreEntries } from "../secrets/store/secret-store.js";
 import {
@@ -55,7 +55,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   const githubOAuth = createGitHubOAuthLifecycle({
     scheduler: params.scheduler,
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
-    getPersistedConfig: () => getRuntimeConfig({ pin: false }),
+    getPersistedConfig: () => createConfigIO().loadConfigAsync(),
     warn: params.logWarning,
   });
   params.gatewayRequestContext.githubOAuthService = githubOAuth;

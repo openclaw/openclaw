@@ -2,6 +2,10 @@ import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-s
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+// Startup issues several sequential app-server requests across up to three
+// attempts and may wait for a retired owner's exit. Observed startups take
+// seconds to a few minutes; ten request timeouts stays generous on slow hosts.
+const CODEX_APP_SERVER_STARTUP_REQUEST_TIMEOUT_MULTIPLE = 10;
 // Native terminal receipt must still reach local settlement; a blocked
 // projection must not retain the session lane indefinitely.
 export const TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
@@ -58,10 +62,8 @@ export async function withCodexStartupTimeout<T>(params: {
       params.operation(),
       new Promise<never>((_, reject) => {
         const rejectOnce = (error: Error) => {
-          if (timeout) {
-            clearTimeout(timeout);
-            timeout = undefined;
-          }
+          clearTimeout(timeout);
+          timeout = undefined;
           reject(error);
         };
         timeout = setTimeout(() => {
@@ -86,23 +88,33 @@ export async function withCodexStartupTimeout<T>(params: {
     }
     throw error;
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
     abortCleanup?.();
   }
 }
 
+/**
+ * Bounds app-server startup by the turn budget and, when known, by a multiple of
+ * the per-request timeout, so a turn with a long budget cannot hang silently in startup.
+ */
 export function resolveCodexStartupTimeoutMs(params: {
   timeoutMs: number;
+  requestTimeoutMs?: number;
   timeoutFloorMs?: number;
 }): number {
   const timeoutFloorMs = resolveTimerTimeoutMs(
     params.timeoutFloorMs,
     CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
   );
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, timeoutFloorMs);
-  return Math.max(timeoutFloorMs, timeoutMs);
+  const turnTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, timeoutFloorMs);
+  const requestBudgetMs =
+    params.requestTimeoutMs === undefined
+      ? turnTimeoutMs
+      : resolveTimerTimeoutMs(
+          params.requestTimeoutMs * CODEX_APP_SERVER_STARTUP_REQUEST_TIMEOUT_MULTIPLE,
+          turnTimeoutMs,
+        );
+  return Math.max(timeoutFloorMs, Math.min(turnTimeoutMs, requestBudgetMs));
 }
 
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {

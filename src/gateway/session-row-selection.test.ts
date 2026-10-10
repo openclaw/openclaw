@@ -23,6 +23,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
@@ -32,6 +34,7 @@ import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
+  prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
 
@@ -344,10 +347,22 @@ it.each([false, true])(
           entry,
         };
       });
-      projection.selectEntries = (query) =>
-        query?.parentSessionKey
+      projection.selectEntries = (query) => {
+        if (query?.sessionIdOrKey) {
+          const keys = new Set(
+            rows
+              .filter(
+                (row) =>
+                  row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
+              )
+              .map((row) => row.key),
+          );
+          return rows.filter((row) => keys.has(row.key));
+        }
+        return query?.parentSessionKey
           ? rows.filter((row) => row.entry.spawnedBy === query.parentSessionKey)
           : rows;
+      };
       projection.state.scope = () => ({
         paths: new Map([
           ["primary", 0],
@@ -395,6 +410,41 @@ it.each([false, true])(
           prepareSessionRowSelection(projection, { ...prepared.opts, spawnedBy: parent }),
         );
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
+        if (activeOnly) {
+          const context = requestContext(cfg);
+          const registrations = [
+            ["main", "shadow-global"],
+            ["ops", "ops-global"],
+            ["main", "unknown-shadow"],
+          ].map(([agentId, sessionId]) =>
+            registerChatAbortController({
+              chatAbortControllers: context.chatAbortControllers,
+              runId: sessionId!,
+              agentId,
+              sessionId: sessionId!,
+              sessionKey: `agent:${agentId}:run-alias`,
+              timeoutMs: 60_000,
+            }),
+          );
+          try {
+            const { filters } = prepareProjectedSessionList({
+              projection,
+              context,
+              opts: prepared.opts,
+              now,
+              metadataPrepared: true,
+            });
+            // The live fallback ID cannot displace its inactive physical winner.
+            // Other agents' sentinel rows and same-ID aliases remain independently visible.
+            expect(
+              filterAndSortSessionEntries(filters).map(([, entry]) => entry.sessionId),
+            ).toEqual(["ops-global", "unknown-shadow"]);
+          } finally {
+            for (const registration of registrations) {
+              registration.cleanup();
+            }
+          }
+        }
       } finally {
         projection.dispose();
       }

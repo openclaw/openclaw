@@ -16,13 +16,6 @@ type MantisBeforeAfterCommanderOptions = Omit<
   "commandRunner" | "fastMode" | "now"
 > & { fast?: boolean };
 
-async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
-  await runWithMantisCliInterrupts(async (signal) => {
-    const runtime = await import("./cli.runtime.js");
-    await runtime.runMantisBeforeAfterCommand({ ...opts, signal });
-  });
-}
-
 type MantisDesktopBrowserSmokeCommanderOptions = Omit<
   MantisDesktopBrowserSmokeOptions,
   "commandRunner" | "env" | "now" | "videoDurationSeconds"
@@ -96,7 +89,10 @@ export function registerMantisCli(qa: Command) {
     .option("--skip-build", "Skip pnpm build in baseline/candidate worktrees", false)
     .action(async (opts: MantisBeforeAfterCommanderOptions) => {
       const { fast, ...options } = opts;
-      await runBeforeAfter({ ...options, fastMode: fast });
+      await runWithMantisCliInterrupts(async (signal) => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisBeforeAfterCommand({ ...options, fastMode: fast, signal });
+      });
     });
 
   mantis

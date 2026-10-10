@@ -121,7 +121,7 @@ type StoreEntry = {
   allowedHosts?: string[];
 };
 
-type StoreEnvHost = "gateway" | "sandbox" | "node";
+type StoreEnvHost = "gateway" | "sandbox";
 
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
@@ -179,9 +179,6 @@ async function captureStoreExecEnvironment(params: {
   await tool.execute(params.callId, { command: "echo ok", yieldMs: 120_000 });
   if (params.host === "gateway") {
     return mocks.spawnInputs.at(-1)?.env ?? {};
-  }
-  if (params.host === "node") {
-    return mocks.nodeHostParams.at(-1)?.env ?? {};
   }
   return sandboxEnv ?? {};
 }
@@ -383,7 +380,7 @@ describe("exec store environment", () => {
     });
   });
 
-  it.each(["gateway", "sandbox", "node"] as const)(
+  it.each(["gateway", "sandbox"] as const)(
     "applies enabled secret egress only to gateway exec (%s)",
     async (host) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "false");

@@ -44,7 +44,7 @@ Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/o
 
 ## Shared secret store
 
-`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
+`openclaw secrets store` routes writes through the Gateway that owns the local state directory. With the Gateway stopped, it takes exclusive offline ownership until the write and cleanup settle. If the running Gateway is older or cannot be reached, the command refuses without a local fallback; update or stop that Gateway before retrying. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
 
 Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets). That tool asks you to type a credential into a masked prompt. It stores the credential without the value reaching the model.
 
@@ -91,7 +91,7 @@ openclaw secrets store set TLS_PRIVATE_KEY \
   --value-file ./client-key.pem
 ```
 
-`set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
+`set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. An online write refreshes affected config references in the Gateway. If that refresh fails after saving, the error reports the saved change and directs you to `openclaw secrets reload`; it does not replay the write locally.
 
 `audit` reports previously stored or resolved placeholders as `PLACEHOLDER_VALUE`
 and counts them as unresolved credentials (exit `2`). For a corrupt store-backed

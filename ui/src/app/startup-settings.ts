@@ -190,7 +190,6 @@ export function resolveApplicationStartupSettings(
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
   const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
-  const hasBootstrapProfileParam = hashParams.has(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
   const bootstrapProfile = normalizeOptionalString(
     hashParams.get(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM),
   );
@@ -199,13 +198,6 @@ export function resolveApplicationStartupSettings(
     inferBasePathFromPathname(location.pathname),
   );
   const shouldResetSessionForToken = Boolean(token && !sessionPath && !gatewayUrlChanged);
-  let shouldCleanUrl = false;
-
-  if (params.has("token")) {
-    params.delete("token");
-    shouldCleanUrl = true;
-  }
-
   if (hasTokenParam) {
     if (queryToken != null) {
       console.warn(
@@ -217,8 +209,6 @@ export function resolveApplicationStartupSettings(
     } else if (token) {
       updateSettings({ token });
     }
-    hashParams.delete("token");
-    shouldCleanUrl = true;
   }
 
   if (hasBootstrapTokenParam) {
@@ -227,12 +217,6 @@ export function resolveApplicationStartupSettings(
       bootstrapToken && bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
         ? CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
         : null;
-    hashParams.delete("bootstrapToken");
-    shouldCleanUrl = true;
-  }
-  if (hasBootstrapProfileParam) {
-    hashParams.delete(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
-    shouldCleanUrl = true;
   }
 
   if (shouldResetSessionForToken) {
@@ -242,20 +226,25 @@ export function resolveApplicationStartupSettings(
     });
   }
 
-  if (params.has("password") || hashParams.has("password")) {
-    params.delete("password");
-    hashParams.delete("password");
-    shouldCleanUrl = true;
-  }
-
   if (gatewayUrlRaw != null) {
     pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
     if (!gatewayUrlChanged || pendingBootstrapToken) {
       pendingGatewayToken = null;
     }
-    params.delete("gatewayUrl");
-    hashParams.delete("gatewayUrl");
-    shouldCleanUrl = true;
+  }
+
+  let shouldCleanUrl = false;
+  for (const source of [params, hashParams]) {
+    const keys = ["token", "password", "gatewayUrl"];
+    if (source === hashParams) {
+      keys.push("bootstrapToken", CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
+    }
+    for (const key of keys) {
+      if (source.has(key)) {
+        source.delete(key);
+        shouldCleanUrl = true;
+      }
+    }
   }
 
   if (shouldCleanUrl) {

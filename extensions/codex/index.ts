@@ -1,7 +1,3 @@
-/**
- * Bundled Codex plugin entry: app-server harness, media understanding,
- * migration provider, CLI-session commands, and binding hooks.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizePluginsConfig,
@@ -120,10 +116,7 @@ export default definePluginEntry({
         // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
-      if (!enabled) {
-        return undefined;
-      }
-      return livePluginConfig;
+      return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;

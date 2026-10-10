@@ -601,9 +601,18 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         getSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["getSessionEntry"]>(
           () => undefined,
         ),
+        getSessionEntryAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["getSessionEntryAsync"]>()
+          .mockResolvedValue(undefined),
+        getSessionEntryByIdAsync: vi
+          .fn<PluginRuntime["agent"]["session"]["getSessionEntryByIdAsync"]>()
+          .mockResolvedValue(undefined),
         listSessionEntries: vi.fn<PluginRuntime["agent"]["session"]["listSessionEntries"]>(
           () => [],
         ),
+        createSessionEntryListReader: vi
+          .fn<PluginRuntime["agent"]["session"]["createSessionEntryListReader"]>()
+          .mockResolvedValue(async () => ({ entries: [], assertCurrent: () => {} })),
         patchSessionEntry: vi
           .fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>()
           .mockResolvedValue(null),

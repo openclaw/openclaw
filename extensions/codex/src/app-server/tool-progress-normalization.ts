@@ -33,8 +33,5 @@ export function sanitizeCodexAgentEventRecord(
 export function sanitizeCodexToolArguments(
   value: JsonValue | undefined,
 ): Record<string, unknown> | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  return sanitizeCodexAgentEventRecord(value);
+  return isJsonObject(value) ? sanitizeCodexAgentEventRecord(value) : undefined;
 }

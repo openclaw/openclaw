@@ -144,7 +144,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           expect(next[0]!.content).toContain("Conversation info:");
         } else {
           expect(next).not.toContainEqual(first[1]);
-          expect(next[0]!.content).not.toContain("Conversation info:");
+          expect(next[0]!.content).toContain("Conversation info:");
         }
         expect(next.at(-1)).toMatchObject({
           role: "user",

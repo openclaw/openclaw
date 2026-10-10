@@ -41,24 +41,6 @@ function resolvedHeaders(
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
-function resolveProviderCredential(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  provider: string;
-}): string | undefined {
-  return (
-    resolveManagedSecretRefRuntimeProviderAuth({
-      cfg: params.config,
-      provider: params.provider,
-    })?.apiKey ??
-    resolveUsableCustomProviderApiKey({
-      cfg: params.config,
-      provider: params.provider,
-      env: params.env,
-    })?.apiKey
-  );
-}
-
 /** Capture worker-compatible models and their already-resolved node-local credentials. */
 export function snapshotNodeWorkerNativeInference(
   config: OpenClawConfig,
@@ -70,7 +52,9 @@ export function snapshotNodeWorkerNativeInference(
   }
   const models = new Map<string, NodeWorkerNativeInferenceModel>();
   for (const [providerId, provider] of Object.entries(config.models?.providers ?? {})) {
-    const credential = resolveProviderCredential({ config, env, provider: providerId });
+    const credential =
+      resolveManagedSecretRefRuntimeProviderAuth({ cfg: config, provider: providerId })?.apiKey ??
+      resolveUsableCustomProviderApiKey({ cfg: config, provider: providerId, env })?.apiKey;
     if (!credential?.trim()) {
       continue;
     }
@@ -147,24 +131,6 @@ export function projectNodeWorkerNativeInference(
       [...snapshot.models.entries()].map(([modelRef, { credential }]) => [modelRef, credential]),
     ),
   };
-}
-
-/** Diagnostic scrubbing covers every projected credential and configured header value. */
-function nodeWorkerNativeInferenceSecrets(snapshot: NodeWorkerNativeInferenceSnapshot): string[] {
-  const secrets: string[] = [];
-  for (const { model, credential } of snapshot.models.values()) {
-    secrets.push(credential, ...Object.values(model.headers ?? {}));
-  }
-  return secrets.filter((value) => value.length > 0);
-}
-
-export function nodeWorkerNativeInferenceSecretsForDescriptor(
-  snapshot: NodeWorkerNativeInferenceSnapshot | undefined,
-  descriptor: WorkerLaunchDescriptor,
-): string[] {
-  return descriptor.assignment.inference === "runtime-local" && snapshot
-    ? nodeWorkerNativeInferenceSecrets(snapshot)
-    : [];
 }
 
 export function assertNodeWorkerNativeInferenceAvailable(

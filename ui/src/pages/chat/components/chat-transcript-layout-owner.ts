@@ -8,23 +8,17 @@ import {
 /** Match ResizeObserver's fractional border box without pane transition transforms. */
 export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle(element)) {
   const borderBox = style.boxSizing === "border-box";
+  const dimension = (size: "width" | "height", start: "Left" | "Top", end: "Right" | "Bottom") =>
+    Number.parseFloat(style[size]) +
+    (borderBox
+      ? 0
+      : Number.parseFloat(style[`padding${start}`]) +
+        Number.parseFloat(style[`padding${end}`]) +
+        Number.parseFloat(style[`border${start}Width`]) +
+        Number.parseFloat(style[`border${end}Width`]));
   return {
-    width:
-      Number.parseFloat(style.width) +
-      (borderBox
-        ? 0
-        : Number.parseFloat(style.paddingLeft) +
-          Number.parseFloat(style.paddingRight) +
-          Number.parseFloat(style.borderLeftWidth) +
-          Number.parseFloat(style.borderRightWidth)),
-    height:
-      Number.parseFloat(style.height) +
-      (borderBox
-        ? 0
-        : Number.parseFloat(style.paddingTop) +
-          Number.parseFloat(style.paddingBottom) +
-          Number.parseFloat(style.borderTopWidth) +
-          Number.parseFloat(style.borderBottomWidth)),
+    width: dimension("width", "Left", "Right"),
+    height: dimension("height", "Top", "Bottom"),
   };
 }
 

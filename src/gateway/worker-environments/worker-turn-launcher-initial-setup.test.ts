@@ -255,6 +255,46 @@ describe("initial worker setup admission", () => {
     }
   });
 
+  it("refreshes pending-result facts after waiting for initial setup", async ({ signal }) => {
+    const fixture = await setup("remote-exec", "syncing", async () => {
+      const claim = await placements.claimTurn({
+        ...sessionTarget,
+        claimId: "setup-result-claim",
+        runId: "setup-result-run",
+        owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      });
+      await placements.markWorkspaceResultPending(claim);
+      placements.clearLocalTurnClaimsAfterRestart();
+    });
+    const claimTurn = vi.spyOn(placements, "claimTurn");
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      waitForInitialPlacement: fixture.waitForInitialPlacement,
+    });
+    const run = provider.executeTurn(
+      { ...sessionTarget, runId: "waiting-input" },
+      { ...turn("waiting-input"), abortSignal: signal },
+      runLocal,
+    );
+    void run.catch(() => undefined);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(fixture.waiting, run, "turn skipped the setup wait"),
+        signal,
+      );
+      fixture.finish.resolve();
+      await fixture.operation;
+      await expect(run).rejects.toThrow("Workspace recovery is still pending");
+      expect(claimTurn.mock.calls.filter(([claim]) => claim.runId === "waiting-input")).toEqual([]);
+      expect(runLocal).not.toHaveBeenCalled();
+    } finally {
+      fixture.finish.resolve();
+      await Promise.allSettled([run, fixture.operation]);
+    }
+  });
+
   it.for([
     "failure",
     "abort",

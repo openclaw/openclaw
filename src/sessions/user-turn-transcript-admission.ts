@@ -1,3 +1,4 @@
+import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
@@ -5,6 +6,8 @@ import type {
 } from "./user-turn-transcript.types.js";
 
 type AdmissionOwner = {
+  pendingInput: () => SessionPendingInputReceipt | undefined;
+  withdrawnInputId: () => string | undefined;
   receipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   message: () => PersistedUserTurnMessage | undefined;
   blocked: () => boolean;
@@ -29,6 +32,12 @@ export function getUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
 ): AdmissionOwner | undefined {
   return admissionOwners.get(recorder);
+}
+
+export function readWithdrawnUserTurnInputId(
+  recorder: UserTurnTranscriptRecorder | undefined,
+): string | undefined {
+  return recorder && admissionOwners.get(recorder)?.withdrawnInputId();
 }
 
 /** Snapshot only the factory-owned input that has not crossed its foreground model boundary. */

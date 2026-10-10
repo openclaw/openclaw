@@ -41,6 +41,14 @@ export type SpawnAcpResult =
       errorCode: SpawnAcpErrorCode;
     });
 
+export function buildAcpSpawnError(
+  errorCode: SpawnAcpErrorCode,
+  error: string,
+  status: "error" | "forbidden" = "error",
+) {
+  return { status, errorCode, error };
+}
+
 export function buildAcpSpawnFailureResult(
   result: Extract<Awaited<ReturnType<typeof runSpawnPipeline>>, { ok: false }>,
   childSessionKey: string,

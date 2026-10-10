@@ -2,12 +2,14 @@ import { parentPort, workerData } from "node:worker_threads";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { withSqliteDatabaseAdmissionExchange } from "../infra/sqlite-database-admission.js";
 import {
   isSqliteLockError,
   sqliteErrorCode,
   sqliteExtendedResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
@@ -30,8 +32,16 @@ import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js
 
 // SAFETY: The lease owner alone starts this private entry with its typed structured-clone payload.
 const params = workerData as LeaseHeartbeatWorkerData;
+function withDatabaseAdmission<T>(operation: () => T): T {
+  return withSqliteDatabaseAdmissionExchange(
+    (admissions, location, create) =>
+      exchangeSqliteDatabaseAdmissions(params.databaseAdmissionPort, admissions, location, create),
+    operation,
+  );
+}
 const shared = new BigInt64Array(params.shared);
 const renewalProgress = new BigInt64Array(params.renewalProgress);
+const completedRequest = new BigInt64Array(params.completedRequest);
 Atomics.store(shared, state.startupPhase, startupPhase["body-entry"]);
 function observeDurableExpiry(expiresAt: number | undefined) {
   Atomics.store(shared, state.expiresAt, BigInt(expiresAt ?? 0));
@@ -63,7 +73,7 @@ function openHeartbeatDatabase() {
   }
   throw new Error("state lease heartbeat startup deadline expired or owner stopped");
 }
-const db = openHeartbeatDatabase();
+const db = withDatabaseAdmission(openHeartbeatDatabase);
 Atomics.store(shared, state.startupPhase, startupPhase["open-complete"]);
 let processOwner = params.processOwner;
 let heartbeat: ReturnType<typeof setTimeout> | undefined;
@@ -195,7 +205,7 @@ const renew = (
   Atomics.add(renewalProgress, 0, 1n);
   Atomics.notify(shared, state.ack);
   try {
-    return renewInWorker(explicit, path);
+    return withDatabaseAdmission(() => renewInWorker(explicit, path));
   } finally {
     Atomics.add(renewalProgress, 0, 1n);
     Atomics.notify(shared, state.ack);
@@ -255,7 +265,9 @@ parentPort?.on("message", (request: LeaseHeartbeatParentMessage) => {
       const expiresAt =
         request.operation === "renew"
           ? renew(true, path)
-          : observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity));
+          : withDatabaseAdmission(() =>
+              observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity)),
+            );
       if (expiresAt === undefined) {
         outcome = "no-current-owned-unexpired-row";
         throw new OpenClawStateLeaseError("state lease heartbeat no longer owns its lease", {
@@ -283,6 +295,8 @@ parentPort?.on("message", (request: LeaseHeartbeatParentMessage) => {
       // Preserve the first loss before the existing request rejection can escape.
       recordLoss({ path, outcome });
     }
+    // Parent deadlines can run before delivery of this completed request's reply.
+    Atomics.store(completedRequest, 0, BigInt(request.id));
     parentPort?.postMessage(reply, []);
     if (lost) {
       lose({ path, outcome });

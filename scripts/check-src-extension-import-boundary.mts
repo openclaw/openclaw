@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Runs the src/** extension import boundary checker.
 import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
@@ -26,9 +25,6 @@ const checker = createExtensionImportBoundaryChecker({
   },
 });
 
-/**
- * Entrypoint for the src extension import boundary checker.
- */
 export const main = checker.main;
 
 runAsScript(import.meta.url, main);

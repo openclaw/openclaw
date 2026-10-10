@@ -22,10 +22,12 @@ import {
   finalizeBuildStepCache,
   type BuildCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
-import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
+import { cleanTsdownOutputRoots } from "../../scripts/tsdown-build.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -207,6 +209,41 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
+  it.each(["full", "package", "strictSmoke", "pluginSdkStrictSmoke"])(
+    "keeps generated plugin artifacts from invalidating %s declaration inputs",
+    async (profile) => {
+      const cwd = tempDirs.make("openclaw-build-declaration-inputs-");
+      writeFixture(cwd, "tsconfig.json", '{"compilerOptions":{"types":[]},"include":["src"]}');
+      writeFixture(cwd, "src/index.ts", "export const value = 1;\n");
+      const signatures: string[] = [];
+      const runner = buildRunner();
+      runner.runStep.mockImplementation(({ args, options }) => {
+        if (args.includes(TSDOWN_UNIFIED_CONFIG_GROUP)) {
+          cleanTsdownOutputRoots({ cwd, roots: ["dist", "dist-runtime"], env: options.env });
+        }
+        if (args.includes("scripts/build-external-plugin-local-dist.mts")) {
+          writeFixture(cwd, "extensions/example/assets/runtime.js", "export const asset = 1;\n");
+        }
+        if (args.includes("scripts/write-unified-entry-dts.ts")) {
+          const inputs = new CompilerInputSnapshot(cwd, {
+            toolchainFiles: [],
+            generatorInputs: [],
+          });
+          signatures.push(inputs.signature("tsconfig.json", [], ["src/index.ts"]));
+        }
+        if (args.includes("scripts/runtime-postbuild.mts")) {
+          writeFixture(cwd, "dist-runtime/extensions/example/index.d.ts", "export {};\n");
+        }
+        return { status: 0 };
+      });
+      for (let build = 0; build < 2; build++) {
+        expect((await runBuildAllSteps(profile, { ...runner, cwd })).exitCode).toBe(0);
+      }
+      expect(signatures).toHaveLength(2);
+      expect(signatures[1]).toBe(signatures[0]);
+    },
+  );
+
   it.each([
     ["full", "0"],
     ["full", "1"],
@@ -497,7 +534,7 @@ describe("resolveBuildAllSteps", () => {
         memoryLimit: buildMemoryLimit(5),
         resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
         runStep: (invocation) => ({
-          status: invocation.args.includes("scripts/write-plugin-sdk-entry-dts.ts") ? 23 : 0,
+          status: invocation.args.includes("scripts/write-unified-entry-dts.ts") ? 23 : 0,
         }),
       });
       const labels = result.timings.map((timing) => timing.label);
@@ -509,10 +546,9 @@ describe("resolveBuildAllSteps", () => {
           "tsdown-packages",
           "tsdown-unified",
           "write-unified-entry-dts",
-          "runtime-postbuild",
         ]),
       );
-      expect(labels.at(-1)).toBe("write-plugin-sdk-entry-dts");
+      expect(labels.at(-1)).toBe("write-unified-entry-dts");
       expect(labels).not.toContain("check-plugin-sdk-exports");
       for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
         expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
@@ -623,7 +659,7 @@ describe("resolveBuildAllSteps", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
         }).map((step) => step.label),
       );
-      expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
+      expect(labels).not.toContain("write-plugin-sdk-entry-dts");
       expect(labels.includes("write-unified-entry-dts")).toBe(!runtimeOnly);
       expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
       expect(labels.includes("clean:dist")).toBe(profile === "package");
@@ -836,8 +872,8 @@ describe("resolveBuildStepCacheState", () => {
         }),
       );
     }
-    expect(listBundledPluginBuildEntries({ cwd: rootDir, env: after })).not.toEqual(
-      listBundledPluginBuildEntries({ cwd: rootDir, env: before }),
+    expect(collectBundledPluginBuildEntries({ cwd: rootDir, env: after })).not.toEqual(
+      collectBundledPluginBuildEntries({ cwd: rootDir, env: before }),
     );
     for (const label of ["tsdown-ai", "tsdown-packages"]) {
       const step = getBuildAllStep(label);

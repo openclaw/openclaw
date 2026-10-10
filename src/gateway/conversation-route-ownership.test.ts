@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConversationRouteEligibilityForAgent } from "./conversation-route-ownership.js";
+import { assertConversationRouteEligibleForAgent } from "./conversation-route-ownership.js";
 
 const baseConversation = {
+  conversationRef: "conv_11111111111111111111111111111111",
   accountId: "default",
   channel: "reef",
   kind: "group" as const,
@@ -17,7 +18,7 @@ function configWithBindings(bindings: NonNullable<OpenClawConfig["bindings"]>): 
   };
 }
 
-describe("resolveConversationRouteEligibilityForAgent", () => {
+describe("assertConversationRouteEligibleForAgent", () => {
   it("replays authoritative parent context when selecting the route owner", () => {
     const config = configWithBindings([
       {
@@ -32,12 +33,12 @@ describe("resolveConversationRouteEligibilityForAgent", () => {
       routeContext: { parentPeerId: "parent-room" },
     };
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "main", conversation }),
-    ).toBe("denied");
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "finance", conversation }),
-    ).toBe("eligible");
+    expect(() =>
+      assertConversationRouteEligibleForAgent({ config, agentId: "main", conversation }),
+    ).toThrow("Conversation is not available to this agent");
+    expect(() =>
+      assertConversationRouteEligibleForAgent({ config, agentId: "finance", conversation }),
+    ).not.toThrow();
   });
 
   it("does not treat an unrelated peer binding as a possible parent owner for a legacy thread", () => {
@@ -49,13 +50,13 @@ describe("resolveConversationRouteEligibilityForAgent", () => {
       },
     ]);
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({
+    expect(() =>
+      assertConversationRouteEligibleForAgent({
         config,
         agentId: "main",
         conversation: { ...baseConversation, threadId: "topic-7" },
       }),
-    ).toBe("eligible");
+    ).not.toThrow();
   });
 
   it("replays a legacy thread parent binding from its retained route peer", () => {
@@ -68,12 +69,12 @@ describe("resolveConversationRouteEligibilityForAgent", () => {
     ]);
     const conversation = { ...baseConversation, peerId: "parent-room", threadId: "topic-7" };
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "main", conversation }),
-    ).toBe("denied");
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "finance", conversation }),
-    ).toBe("eligible");
+    expect(() =>
+      assertConversationRouteEligibleForAgent({ config, agentId: "main", conversation }),
+    ).toThrow("Conversation is not available to this agent");
+    expect(() =>
+      assertConversationRouteEligibleForAgent({ config, agentId: "finance", conversation }),
+    ).not.toThrow();
   });
 
   it("fails closed for a matching contextual wildcard when legacy context is absent", () => {
@@ -85,20 +86,20 @@ describe("resolveConversationRouteEligibilityForAgent", () => {
       },
     ]);
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({
+    expect(() =>
+      assertConversationRouteEligibleForAgent({
         config,
         agentId: "main",
         conversation: baseConversation,
       }),
-    ).toBe("denied");
+    ).toThrow("Conversation is not available to this agent");
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({
+    expect(() =>
+      assertConversationRouteEligibleForAgent({
         config,
         agentId: "main",
         conversation: { ...baseConversation, routeContextObserved: true },
       }),
-    ).toBe("eligible");
+    ).not.toThrow();
   });
 });

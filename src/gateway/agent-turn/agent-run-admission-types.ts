@@ -25,7 +25,8 @@ export type PreparedAgentRunModelRuntime =
       acquireWorkspaceModelRuntime?: never;
     }
   | {
-      preparedModelRuntimeLease?: never;
+      /** Retains the dispatch generation until deferred workspace preparation selects its lease. */
+      preparedModelRuntimeLease: PreparedModelRuntimeLease;
       acquireWorkspaceModelRuntime: (
         workspaceDir: string | undefined,
       ) => Promise<PreparedModelRuntimeLease>;

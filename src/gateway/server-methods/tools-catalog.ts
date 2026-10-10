@@ -1,4 +1,3 @@
-// Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -113,17 +112,26 @@ function buildPluginGroups(params: {
     }
   }
   const seenToolIds = new Set<string>();
-  for (const tool of pluginTools) {
-    const meta = getPluginToolMeta(tool);
-    const pluginId = meta?.pluginId ?? "plugin";
-    const groupId = `plugin:${pluginId}`;
-    const existing: ToolCatalogGroup = groups.get(groupId) ?? {
-      id: groupId,
-      label: pluginId,
+  const appendTool = (
+    pluginId: string,
+    label: string,
+    tool: Omit<ToolCatalogGroup["tools"][number], "source" | "pluginId" | "defaultProfiles">,
+  ) => {
+    const id = `plugin:${pluginId}`;
+    const group: ToolCatalogGroup = groups.get(id) ?? {
+      id,
+      label,
       source: "plugin",
       pluginId,
       tools: [],
     };
+    group.tools.push({ ...tool, source: "plugin", pluginId, defaultProfiles: [] });
+    seenToolIds.add(tool.id);
+    groups.set(id, group);
+  };
+  for (const tool of pluginTools) {
+    const meta = getPluginToolMeta(tool);
+    const pluginId = meta?.pluginId ?? "plugin";
     const ownedMetadata = meta?.pluginId
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
@@ -131,7 +139,7 @@ function buildPluginGroups(params: {
     const fullDescription =
       ownedMetadata?.description ??
       (typeof tool.description === "string" ? tool.description : undefined);
-    existing.tools.push({
+    appendTool(pluginId, pluginId, {
       id: tool.name,
       label:
         normalizeOptionalString(ownedMetadata?.displayName) ??
@@ -143,15 +151,10 @@ function buildPluginGroups(params: {
       }),
       fullDescription,
       ...(parameters?.length ? { parameters } : {}),
-      source: "plugin",
-      pluginId,
       optional: meta?.optional,
       risk: ownedMetadata?.risk,
       tags: ownedMetadata?.tags,
-      defaultProfiles: [],
     });
-    seenToolIds.add(tool.name);
-    groups.set(groupId, existing);
   }
   for (const entry of catalogRegistry?.tools ?? []) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
@@ -159,20 +162,12 @@ function buildPluginGroups(params: {
       if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
         continue;
       }
-      const groupId = `plugin:${entry.pluginId}`;
       // Declared-but-unresolved plugin tools still appear so operators can see
       // optional capabilities that may need config before they bind at runtime.
-      const existing: ToolCatalogGroup = groups.get(groupId) ?? {
-        id: groupId,
-        label: entry.pluginName ?? entry.pluginId,
-        source: "plugin",
-        pluginId: entry.pluginId,
-        tools: [],
-      };
       const ownedMetadata = pluginToolMetadata.get(
         buildPluginToolMetadataKey(entry.pluginId, name),
       );
-      existing.tools.push({
+      appendTool(entry.pluginId, entry.pluginName ?? entry.pluginId, {
         id: name,
         label: normalizeOptionalString(ownedMetadata?.displayName) ?? name,
         description:
@@ -180,15 +175,10 @@ function buildPluginGroups(params: {
             rawDescription: ownedMetadata?.description,
           }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
         fullDescription: ownedMetadata?.description,
-        source: "plugin",
-        pluginId: entry.pluginId,
         optional: entry.optional,
         risk: ownedMetadata?.risk,
         tags: ownedMetadata?.tags,
-        defaultProfiles: [],
       });
-      seenToolIds.add(name);
-      groups.set(groupId, existing);
     }
   }
   return Array.from(groups.values(), (group) => {

@@ -198,41 +198,35 @@ function renderAnnotateBar(controller: BrowserPanelController) {
   if (controller.mode !== "annotate") {
     return nothing;
   }
+  const actions = [
+    { label: t("browser.annotateUndo"), run: () => controller.input.undoStroke() },
+    { label: t("browser.annotateClear"), run: () => controller.input.clearStrokes() },
+    {
+      label: icons.x,
+      title: t("browser.annotateDone"),
+      requiresStroke: false,
+      run: () => controller.exitCaptureModes(),
+    },
+    {
+      label: t("browser.annotateSend"),
+      primary: true,
+      run: () => void controller.input.sendAnnotation({}),
+    },
+  ];
   return html`
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">${t("browser.annotateHint")}</span>
-      <button
-        class="bp-btn"
-        type="button"
-        ?disabled=${controller.strokes.length === 0}
-        @click=${() => controller.input.undoStroke()}
-      >
-        ${t("browser.annotateUndo")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        ?disabled=${controller.strokes.length === 0}
-        @click=${() => controller.input.clearStrokes()}
-      >
-        ${t("browser.annotateClear")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        title=${t("browser.annotateDone")}
-        @click=${() => controller.exitCaptureModes()}
-      >
-        ${icons.x}
-      </button>
-      <button
-        class="bp-btn bp-btn--primary"
-        type="button"
-        ?disabled=${controller.strokes.length === 0}
-        @click=${() => void controller.input.sendAnnotation({})}
-      >
-        ${t("browser.annotateSend")}
-      </button>
+      ${actions.map(
+        (action) => html`<button
+          class=${action.primary ? "bp-btn bp-btn--primary" : "bp-btn"}
+          type="button"
+          title=${action.title ?? nothing}
+          ?disabled=${action.requiresStroke !== false && controller.strokes.length === 0}
+          @click=${action.run}
+        >
+          ${action.label}
+        </button>`,
+      )}
     </div>
   `;
 }

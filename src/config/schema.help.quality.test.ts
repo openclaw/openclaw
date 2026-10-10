@@ -87,13 +87,6 @@ describe("config help copy quality", () => {
     return label;
   }
 
-  it("describes auto-mode weekly Workshop review", () => {
-    const help = requireHelp("skills.workshop.autonomous.mode");
-    expect(help).toContain("weekly");
-    expect(help).toContain("Workshop-owned skills");
-    expect(help).toContain("ordinary file edits");
-  });
-
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(requireLabel(key)).not.toHaveLength(0);

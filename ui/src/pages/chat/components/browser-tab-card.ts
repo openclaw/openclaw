@@ -6,6 +6,7 @@ import { applicationContext, type ApplicationContext } from "../../../app/contex
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { postNativeExternalLink } from "../../../app/native-link-routing.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
+import { brandIcons } from "../../../components/brand-icons.ts";
 import { browserTabKey, readBrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
@@ -19,6 +20,7 @@ import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { browserTabTweet } from "./browser-tab-tweet.ts";
 import sessionMenuStyles from "../../../styles/session-menu.css?inline";
 
 class OpenClawBrowserTabCard extends OpenClawLitElement {
@@ -53,10 +55,12 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     css`
       :host {
         display: block;
-        max-width: 320px;
+        max-width: 480px;
         margin-block: 6px;
       }
       .card {
+        box-sizing: border-box;
+        max-width: 320px;
         overflow: hidden;
         background: var(--card);
         border: 1px solid var(--border);
@@ -101,8 +105,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         justify-content: center;
         color: var(--muted);
       }
-      .icon svg,
-      .icon img {
+      .icon svg {
         width: 16px;
         height: 16px;
       }
@@ -171,6 +174,75 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       .actions .more svg {
         width: 16px;
         height: 16px;
+      }
+      .tweet {
+        max-width: none;
+        border-radius: var(--radius-lg);
+      }
+      .tweet-header {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 16px 16px 12px;
+      }
+      .tweet-mark {
+        display: flex;
+        flex: none;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        color: var(--text);
+        background: var(--panel-hover);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+      }
+      .tweet-mark svg {
+        width: 20px;
+        height: 20px;
+      }
+      .tweet-author {
+        color: var(--text);
+        font-size: 0.9rem;
+        font-weight: 650;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+      .tweet-handle {
+        color: var(--muted);
+        font-size: 0.8rem;
+        line-height: 1.5;
+      }
+      .tweet-text {
+        margin: 0;
+        padding: 0 16px 16px;
+        color: var(--text);
+        font-size: 0.9rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .tweet .shot {
+        border-top: 1px solid var(--border);
+      }
+      .tweet .shot.social img {
+        max-height: 320px;
+        aspect-ratio: auto;
+      }
+      .tweet .bar {
+        justify-content: space-between;
+        padding: 8px 12px 8px 16px;
+        border-top: 1px solid var(--border);
+      }
+      .tweet-source {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+      .tweet .actions {
+        opacity: 1;
+      }
+      .tweet .actions button {
+        min-height: 32px;
       }
       .shot[data-new-tab-action],
       .actions button[data-new-tab-action] {
@@ -337,6 +409,17 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     }
   };
 
+  private renderImage(src: string) {
+    return html`<img
+      src=${src}
+      alt=""
+      @error=${() => {
+        this.failedImages.add(src);
+        this.requestUpdate();
+      }}
+    />`;
+  }
+
   override render() {
     const preview = this.preview;
     if (!preview) {
@@ -359,8 +442,23 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     }
     const title = preview.title?.trim() || page?.title || host || t("browser.title");
     const label = preview.url ? `${title} — ${preview.url}` : title;
+    const tweet = browserTabTweet(preview.url, preview.title, page);
     return html`
-      <div class="card">
+      <div class=${tweet ? "card tweet" : "card"}>
+        ${
+          tweet
+            ? html`<header class="tweet-header">
+                  <span class="tweet-mark" aria-hidden="true">${brandIcons.x}</span>
+                  <span class="identity">
+                    <span class="tweet-author" dir="auto"
+                      >${tweet.author ?? t("browser.tweetPost")}</span
+                    >
+                    ${tweet.handle ? html`<span class="tweet-handle" dir="ltr">${tweet.handle}</span>` : nothing}
+                  </span>
+                </header>
+                ${tweet.text ? html`<p class="tweet-text" dir="auto">${tweet.text}</p>` : nothing}`
+            : nothing
+        }
         ${
           image && !this.failedImages.has(image)
             ? html`
@@ -372,37 +470,27 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                   ?data-new-tab-action=${this.opensExternally}
                   @click=${this.open}
                 >
-                  <img
-                    src=${image}
-                    alt=""
-                    @error=${() => {
-                      this.failedImages.add(image);
-                      this.requestUpdate();
-                    }}
-                  />
+                  ${this.renderImage(image)}
                 </button>
               `
             : nothing
         }
         <div class="bar">
-          <span class="icon" aria-hidden="true"
-            >${
-              favicon && !this.failedImages.has(favicon)
-                ? html`<img
-                    src=${favicon}
-                    alt=""
-                    @error=${() => {
-                      this.failedImages.add(favicon);
-                      this.requestUpdate();
-                    }}
-                  />`
-                : icons.globe
-            }</span
-          >
-          <span class="identity">
-            <span class="title">${title}</span>
-            ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
-          </span>
+          ${
+            tweet
+              ? html`<span class="tweet-source">${host}</span>`
+              : html`<span class="icon" aria-hidden="true"
+                    >${
+                      favicon && !this.failedImages.has(favicon)
+                        ? this.renderImage(favicon)
+                        : icons.globe
+                    }</span
+                  >
+                  <span class="identity">
+                    <span class="title">${title}</span>
+                    ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
+                  </span>`
+          }
           <span class="actions">
             <button
               type="button"
@@ -410,7 +498,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
               ?data-new-tab-action=${this.opensExternally}
               @click=${this.open}
             >
-              ${t("browser.open")}
+              ${t(tweet ? "browser.openPost" : "browser.open")}
             </button>
             <wa-dropdown
               class="session-menu"

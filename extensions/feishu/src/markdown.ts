@@ -1,4 +1,3 @@
-// Feishu-specific Markdown parsing and chunking.
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";

@@ -150,13 +150,7 @@ export function submitRelayAgentControlProviderResults(
   };
 }
 
-export function scheduleForcedAgentConsult(
-  session: RelaySession | undefined,
-  question: string,
-): void {
-  if (!session || !question.trim()) {
-    return;
-  }
+export function scheduleForcedAgentConsult(session: RelaySession, question: string): void {
   if (session.harness.forcedConsults.hasRecentNativeConsult(question)) {
     return;
   }

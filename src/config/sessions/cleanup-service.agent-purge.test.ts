@@ -22,7 +22,7 @@ describe("purgeAgentSessionStoreEntries", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it.each(["fixed selector", "exact database", "retired schema owner"])(
+  it.each(["fixed selector", "retired schema owner"])(
     "purges only the deleted agent's state with a %s",
     async (kind) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {

@@ -5,138 +5,75 @@ import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { hasMachineOutputOption } from "../machine-output-argv.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
-export const CORE_CLI_COMMAND_DESCRIPTORS = [
-  {
-    name: "setup",
-    description: "Chat with OpenClaw; onboard when setup is incomplete",
-    hasSubcommands: false,
-  },
-  {
-    name: "crestodian", // hidden alias
-    description: "Deprecated: use openclaw setup",
-    hasSubcommands: false,
-    hidden: true,
-  },
-  {
-    name: "onboard",
-    description: "Guided setup for auth, models, Gateway, workspace, channels, and skills",
-    hasSubcommands: true,
-  },
-  {
-    name: "configure",
-    description: "Interactive configuration for credentials, channels, gateway, and agent defaults",
-    hasSubcommands: false,
-  },
-  {
-    name: "config",
-    description:
-      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
-    hasSubcommands: true,
-    machineOutput: ({ argv }) => isConfigMachineOutput(argv),
-  },
-  {
-    name: "claws",
-    description: "Inspect and add experimental OpenClaw Claws",
-    hasSubcommands: true,
+function command(
+  name: string,
+  description: string,
+  hasSubcommands: boolean,
+  options: Omit<NamedCommandDescriptor, "name" | "description" | "hasSubcommands"> = {},
+): NamedCommandDescriptor {
+  return { name, description, hasSubcommands, ...options };
+}
+
+export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
+  command("setup", "Chat with OpenClaw; onboard when setup is incomplete", false),
+  command("crestodian", "Deprecated: use openclaw setup", false, { hidden: true }),
+  command(
+    "onboard",
+    "Guided setup for auth, models, Gateway, workspace, channels, and skills",
+    true,
+  ),
+  command(
+    "configure",
+    "Interactive configuration for credentials, channels, gateway, and agent defaults",
+    false,
+  ),
+  command(
+    "config",
+    "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
+    true,
+    { machineOutput: ({ argv }) => isConfigMachineOutput(argv) },
+  ),
+  command("claws", "Inspect and add experimental OpenClaw Claws", true, {
     parentDefaultHelp: true,
-  },
-  {
-    name: "backup",
-    description: "Create, verify, and restore backup archives and SQLite snapshots",
-    hasSubcommands: true,
-  },
-  {
-    name: "database",
-    description: "Inspect database schema compatibility and shared-state write ownership",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
-  },
-  {
-    name: "migrate",
-    description: "Import state from another agent system",
-    hasSubcommands: true,
-  },
-  {
-    name: "storage",
-    description: "List, initialize, and test configured storage locations",
-    hasSubcommands: true,
+  }),
+  command("backup", "Create, verify, and restore backup archives and SQLite snapshots", true),
+  command(
+    "database",
+    "Inspect database schema compatibility and shared-state write ownership",
+    true,
+    { parentDefaultHelp: true },
+  ),
+  command("migrate", "Import state from another agent system", true),
+  command("storage", "List, initialize, and test configured storage locations", true, {
     parentDefaultHelp: true,
     machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
-  },
-  {
-    name: "doctor",
-    description: "Health checks + quick fixes for the gateway and channels",
-    hasSubcommands: false,
+  }),
+  command("doctor", "Health checks + quick fixes for the gateway and channels", false, {
     machineOutput: isDoctorMachineOutput,
-  },
-  {
-    name: "triage",
-    description: "Collect sanitized diagnostics and open a local coding agent for repair",
-    hasSubcommands: false,
-    machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
-  },
-  {
-    name: "dashboard",
-    description: "Open the Control UI with your current token",
-    hasSubcommands: false,
-  },
-  {
-    name: "reset",
-    description: "Reset local config/state (keeps the CLI installed)",
-    hasSubcommands: false,
-  },
-  {
-    name: "uninstall",
-    description: "Uninstall the gateway service + local data",
-    hasSubcommands: false,
-  },
-  {
-    name: "message",
-    description: "Send, read, and manage messages and channel actions",
-    hasSubcommands: true,
-  },
-  {
-    name: "mcp",
-    description: "Manage OpenClaw mcp.servers config and channel bridge",
-    hasSubcommands: true,
+  }),
+  command(
+    "triage",
+    "Collect sanitized diagnostics and open a local coding agent for repair",
+    false,
+    {
+      machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
+    },
+  ),
+  command("dashboard", "Open the Control UI with your current token", false),
+  command("reset", "Reset local config/state (keeps the CLI installed)", false),
+  command("uninstall", "Uninstall the gateway service + local data", false),
+  command("message", "Send, read, and manage messages and channel actions", true),
+  command("mcp", "Manage OpenClaw mcp.servers config and channel bridge", true, {
     parentDefaultHelp: true,
-  },
-  {
-    name: "transcripts",
-    description: "Inspect stored transcripts",
-    hasSubcommands: true,
-  },
-  {
-    name: "agent",
-    description: "Run an agent turn via the Gateway (use --local for embedded)",
-    hasSubcommands: true,
-  },
-  {
-    name: "agents",
-    description: "Manage isolated agents (workspaces + auth + routing)",
-    hasSubcommands: true,
-  },
-  {
-    name: "status",
-    description: "Show channel health and recent session recipients",
-    hasSubcommands: false,
-  },
-  {
-    name: "health",
-    description: "Fetch health from the running gateway",
-    hasSubcommands: false,
-  },
-  {
-    name: "audit",
-    description: "Inspect activity records and exact-run identity context",
-    hasSubcommands: false,
-  },
-  {
-    name: "sessions",
-    description: "List stored conversation sessions",
-    hasSubcommands: true,
-  },
-] as const satisfies ReadonlyArray<NamedCommandDescriptor>;
+  }),
+  command("transcripts", "Inspect stored transcripts", true),
+  command("agent", "Run an agent turn via the Gateway (use --local for embedded)", true),
+  command("agents", "Manage isolated agents (workspaces + auth + routing)", true),
+  command("status", "Show channel health and recent session recipients", false),
+  command("health", "Fetch health from the running gateway", false),
+  command("audit", "Inspect activity records and exact-run identity context", false),
+  command("sessions", "List stored conversation sessions", true),
+];
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<NamedCommandDescriptor> {
   return isExperimentalClawsEnabled()

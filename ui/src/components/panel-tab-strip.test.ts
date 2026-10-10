@@ -45,6 +45,57 @@ function renderStrip(options: {
   return container;
 }
 
+function tabStrip(container: ParentNode) {
+  return container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip");
+}
+
+function renderedTabs(container: ParentNode) {
+  return [...container.querySelectorAll<HTMLElement>(".tabstrip-tab")];
+}
+
+async function settleTabStrip(container: ParentNode) {
+  const strip = tabStrip(container);
+  expect(strip).not.toBeNull();
+  await strip!.updateComplete;
+}
+
+function tabViewport(container: ParentNode) {
+  const viewport = tabStrip(container)?.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+  if (!viewport) {
+    throw new Error("expected rendered tab strip viewport");
+  }
+  return viewport;
+}
+
+function requestTabSelection(container: ParentNode, id: string) {
+  tabStrip(container)!.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: id } }));
+}
+
+function deferTabLayout() {
+  const gate = createDeferred<boolean>();
+  const prototype = customElements.get("wa-tab-group")?.prototype;
+  expect(prototype).toBeDefined();
+  Object.defineProperty(prototype!, "updateComplete", {
+    configurable: true,
+    get: () => gate.promise,
+  });
+  return gate;
+}
+
+function resetTabLayout() {
+  Reflect.deleteProperty(customElements.get("wa-tab-group")?.prototype ?? {}, "updateComplete");
+}
+
+async function renderTabViewportBeforeLayout(container: ParentNode) {
+  const strip = container.querySelector<
+    HTMLElement & { getUpdateComplete: () => Promise<unknown> }
+  >(".tabstrip");
+  expect(strip).not.toBeNull();
+  // Set up the renderer's viewport without releasing the held layout completion.
+  await strip!.getUpdateComplete();
+  return tabViewport(container);
+}
+
 function tabMeasurementClock() {
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
@@ -92,7 +143,7 @@ function tabMeasurementClock() {
 afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.removeAttribute("dir");
-  Reflect.deleteProperty(customElements.get("wa-tab-group")?.prototype ?? {}, "updateComplete");
+  resetTabLayout();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -106,7 +157,7 @@ describe("renderPanelTabStrip", () => {
     const onNew = vi.fn();
     const container = renderStrip({ onNew });
 
-    expect(container.querySelector("wa-tab-group")).toBeNull();
+    expect(tabStrip(container)).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".tabstrip-new");
     expect(button?.hasAttribute("slot")).toBe(false);
     button?.click();
@@ -116,7 +167,7 @@ describe("renderPanelTabStrip", () => {
   it("slots the new button into a nonempty tab group", () => {
     const container = renderStrip({ tabs: [TAB] });
 
-    expect(container.querySelector("wa-tab-group")).not.toBeNull();
+    expect(tabStrip(container)).not.toBeNull();
     expect(container.querySelector(".tabstrip-new")?.getAttribute("slot")).toBe("nav");
   });
 
@@ -146,16 +197,12 @@ describe("renderPanelTabStrip", () => {
     const onSelect = vi.fn();
     const tabs = [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2" }];
     const container = renderStrip({ tabs, onSelect });
-    const group = container.querySelector("wa-tab-group")!;
-    const show = (name: string) =>
-      group.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name } }));
-
-    show(TAB.id);
+    requestTabSelection(container, TAB.id);
     expect(onSelect).not.toHaveBeenCalled();
-    show("tab-2");
+    requestTabSelection(container, "tab-2");
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("tab-2");
     renderStrip({ tabs, onSelect, container, activeId: "tab-2" });
-    show("tab-2");
+    requestTabSelection(container, "tab-2");
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
@@ -164,17 +211,18 @@ describe("renderPanelTabStrip", () => {
     const onSelect = vi.fn();
     const onClose = vi.fn();
     const container = renderStrip({ tabs: [{ ...TAB, onActivate }], onSelect, onClose });
-    const tab = container.querySelector("wa-tab")!;
-    tab.click();
+    const [tab] = renderedTabs(container);
+    expect(tab).toBeDefined();
+    tab!.click();
     expect(onActivate).toHaveBeenCalledTimes(1);
     for (const key of ["Enter", " "]) {
       const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      tab.dispatchEvent(event);
+      tab!.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(true);
-      tab.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
+      tab!.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
     }
     expect(onActivate).toHaveBeenCalledTimes(3);
-    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    tab!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     container.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
     expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
     expect(onActivate).toHaveBeenCalledTimes(3);
@@ -206,7 +254,7 @@ describe("renderPanelTabStrip", () => {
     const onClose = vi.fn();
     const container = renderStrip({ tabs: [TAB], onClose });
 
-    container.querySelector("wa-tab")?.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
+    renderedTabs(container)[0]?.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
     expect(onClose).toHaveBeenCalledWith(TAB.id);
   });
 
@@ -216,9 +264,7 @@ describe("renderPanelTabStrip", () => {
     document.body.append(container);
     const tabs = [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2" }];
     renderStrip({ tabs, container });
-    const group = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
-    )!;
+    const group = tabStrip(container)!;
     const labels = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")];
     const operations: string[] = [];
     for (const [index, label] of labels.entries()) {
@@ -238,7 +284,7 @@ describe("renderPanelTabStrip", () => {
         return toggle(name, force);
       });
     }
-    await group.updateComplete;
+    await settleTabStrip(container);
     clock.flush();
     operations.length = 0;
 
@@ -301,11 +347,9 @@ describe("renderPanelTabStrip", () => {
         newLabel: "New tab",
       });
       const root = render(template, container);
-      const group = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-        "wa-tab-group",
-      )!;
-      await group.updateComplete;
-      const scroller = group.shadowRoot!.querySelector<HTMLElement>('[part~="tabs"]')!;
+      const group = tabStrip(container)!;
+      await settleTabStrip(container);
+      const scroller = tabViewport(container);
       vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
         left: 0,
         right: 100,
@@ -343,7 +387,7 @@ describe("renderPanelTabStrip", () => {
 
       contentLeft = 0;
       root.setConnected(true);
-      await group.updateComplete;
+      await settleTabStrip(container);
       clock.flush();
       expect(clock.observed(scroller)).toBe(true);
       expect(group.classList.contains("has-scroll-left")).toBe(false);
@@ -354,13 +398,7 @@ describe("renderPanelTabStrip", () => {
   // Installation waits for the group's shadow scroller. Renders during that
   // wait must not accumulate subscriptions that cleanup can no longer reach.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
-    const gate = createDeferred<boolean>();
-    const groupPrototype = customElements.get("wa-tab-group")?.prototype;
-    expect(groupPrototype).toBeDefined();
-    Object.defineProperty(groupPrototype!, "updateComplete", {
-      configurable: true,
-      get: () => gate.promise,
-    });
+    const gate = deferTabLayout();
 
     const observers: { target: Element | null; live: boolean }[] = [];
     class CountingResizeObserver {
@@ -386,15 +424,9 @@ describe("renderPanelTabStrip", () => {
       renderStrip({ tabs, container });
     }
 
-    const group = container.querySelector<
-      HTMLElement & { getUpdateComplete?: () => Promise<unknown> }
-    >("wa-tab-group");
-    expect(group).not.toBeNull();
-    await group?.getUpdateComplete?.();
-    const scroller = group?.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
-    expect(scroller).toBeDefined();
-    const added = vi.spyOn(scroller!, "addEventListener");
-    const removed = vi.spyOn(scroller!, "removeEventListener");
+    const scroller = await renderTabViewportBeforeLayout(container);
+    const added = vi.spyOn(scroller, "addEventListener");
+    const removed = vi.spyOn(scroller, "removeEventListener");
 
     gate.resolve(true);
     await gate.promise;
@@ -436,7 +468,7 @@ describe("renderPanelTabStrip", () => {
         onReorder,
         container: host,
       });
-      const [source, target] = [...container.querySelectorAll<HTMLElement>("wa-tab")];
+      const [source, target] = renderedTabs(container);
       const dataTransfer = createDataTransferStub();
       const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
         const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
@@ -450,9 +482,7 @@ describe("renderPanelTabStrip", () => {
 
       dispatchDrag(source!, "dragstart", 0);
       const sourceId = reorderIds?.[0] ?? "tab-1";
-      expect(container.querySelector<HTMLElement>("wa-tab-group")?.dataset.draggedPanelTab).toBe(
-        sourceId,
-      );
+      expect(tabStrip(container)?.dataset.draggedPanelTab).toBe(sourceId);
       expect(dataTransfer.getData("application/x-openclaw-panel-tab")).toBe(sourceId);
       dispatchDrag(target!, "dragover", 110);
       // The indicator must preview the same edge the drop will use; `drop` clears
@@ -472,7 +502,7 @@ describe("renderPanelTabStrip", () => {
       tabs: [{ ...TAB, draggable: false }],
       onReorder,
     });
-    const tab = container.querySelector("wa-tab")!;
+    const tab = renderedTabs(container)[0]!;
     const dataTransfer = { setData: vi.fn(), effectAllowed: "none" };
     const event = new MouseEvent("dragstart", { bubbles: true });
     Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
@@ -481,9 +511,7 @@ describe("renderPanelTabStrip", () => {
     tab.dispatchEvent(event);
     expect(dataTransfer.setData).not.toHaveBeenCalled();
     expect(dataTransfer.effectAllowed).toBe("none");
-    expect(container.querySelector("wa-tab-group")?.hasAttribute("data-dragged-panel-tab")).toBe(
-      false,
-    );
+    expect(tabStrip(container)?.hasAttribute("data-dragged-panel-tab")).toBe(false);
     expect(onReorder).not.toHaveBeenCalled();
   });
 });

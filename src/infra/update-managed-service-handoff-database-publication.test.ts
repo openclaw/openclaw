@@ -442,7 +442,7 @@ describe("managed handoff database publication", () => {
 
 it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const)(
   "admits a %s grant and fences parent replacement",
-  (version) => {
+  async (version) => {
     const identityLess = version === "9.4 identity-less";
     const numeric = version === "9.6 numeric" || version === "9.6 bridge";
     const directory = root;
@@ -487,6 +487,16 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         throw readError;
       }
       const stat = lstat(...args);
+      if (stat && String(args[0]) === directory) {
+        Object.defineProperty(stat, "ino", {
+          value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
+        });
+      }
+      return stat;
+    });
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const stat = statSync(...args);
       if (stat && String(args[0]) === directory) {
         Object.defineProperty(stat, "ino", {
           value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
@@ -541,7 +551,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
             originalChildKey: childKey,
           }),
     };
-    const admitted = resolveUpdateCommandChildBinding(grant, runId, root);
+    const admitted = await resolveUpdateCommandChildBinding(grant, runId, root);
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
     expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
@@ -574,7 +584,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
       originalChildKey: descendantKey,
       childKey: descendantKey,
     };
-    const resolveDescendant = () => {
+    const resolveDescendant = async () => {
       // Model the next receiver's parent PID without booting another source runtime.
       const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
       assert(descriptor);
@@ -583,12 +593,12 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         value: admitted.child.executor.pid,
       });
       try {
-        return resolveUpdateCommandChildBinding(descendantGrant, runId, root);
+        return await resolveUpdateCommandChildBinding(descendantGrant, runId, root);
       } finally {
         Object.defineProperty(process, "ppid", descriptor);
       }
     };
-    expect(resolveDescendant().child.key).toBe(descendantKey);
+    expect((await resolveDescendant()).child.key).toBe(descendantKey);
     parentInode += identityLess ? 1n : -1n;
     expect(numericIdentity(directory)).toMatch(
       identityLess ? /:9007199254740992$/ : /:168040561096346660$/,
@@ -596,20 +606,22 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     expect(() => admitted.store.acquire(root, "replacement", { kind: "update" })).toThrow(
       "identity changed",
     );
-    expect(resolveDescendant).toThrow("identity changed");
+    await expect(resolveDescendant()).rejects.toThrow("identity changed");
     if (version === "9.7 exact") {
-      expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+      await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
         "identity changed",
       );
     }
     parentInode += 4096n;
     if (!identityLess) {
-      expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+      await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
         "identity changed",
       );
     }
     readError = new Error("lease parent metadata unavailable");
-    expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(readError.message);
+    await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
+      readError.message,
+    );
     readError = undefined;
     parentInode = initialInode;
     const damaged = new DatabaseSync(databasePath);
@@ -618,7 +630,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     } finally {
       damaged.close();
     }
-    expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+    await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
       /lease is unreadable:.*no such table/i,
     );
   },

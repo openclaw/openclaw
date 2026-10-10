@@ -87,12 +87,10 @@ extension OpenClawChatViewModel {
                     clearsOverride ? nil : acceptedLevel,
                     sessionKey: state.key,
                     exactMatchOnly: state.exactMatchOnly)
-                if let thinkingLevels = acceptedResult.thinkingLevels {
-                    self.updateCurrentSessionThinkingLevels(
-                        thinkingLevels,
-                        sessionKey: state.key,
-                        exactMatchOnly: state.exactMatchOnly)
-                }
+                self.updateCurrentSessionThinkingLevels(
+                    acceptedResult.thinkingLevels,
+                    sessionKey: state.key,
+                    exactMatchOnly: state.exactMatchOnly)
                 guard !state.exactMatchOnly else { return }
                 self.preferredThinkingLevel = acceptedLevel
                 self.thinkingLevel = acceptedLevel
@@ -114,12 +112,10 @@ extension OpenClawChatViewModel {
                     self.acceptedThinkingOverrideClearedByTarget[target] == true ? nil : rollbackLevel,
                     sessionKey: state.key,
                     exactMatchOnly: state.exactMatchOnly)
-                if let thinkingLevels = rollbackResult?.thinkingLevels {
-                    self.updateCurrentSessionThinkingLevels(
-                        thinkingLevels,
-                        sessionKey: state.key,
-                        exactMatchOnly: state.exactMatchOnly)
-                }
+                self.updateCurrentSessionThinkingLevels(
+                    rollbackResult?.thinkingLevels,
+                    sessionKey: state.key,
+                    exactMatchOnly: state.exactMatchOnly)
                 guard !state.exactMatchOnly else { return }
                 self.prefersExplicitThinkingLevel = rollbackIsExplicit
                 self.preferredThinkingLevel = rollbackPreferredLevel
@@ -176,11 +172,12 @@ extension OpenClawChatViewModel {
     }
 
     func updateCurrentSessionThinkingLevels(
-        _ thinkingLevels: [OpenClawChatThinkingLevelOption],
+        _ thinkingLevels: [OpenClawChatThinkingLevelOption]?,
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        guard let thinkingLevels,
+              let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
         else { return }
         sessions[index].thinkingLevels = thinkingLevels
         sessions[index].thinkingOptions = thinkingLevels.map(\.label)

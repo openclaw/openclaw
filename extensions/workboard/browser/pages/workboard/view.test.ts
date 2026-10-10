@@ -114,7 +114,7 @@ async function inlineEditor(container: Element, field: "title" | "notes" | "labe
     ),
   );
   const owner = expectDefined(
-    trigger.closest<HTMLElement>("workboard-inline-text"),
+    trigger.closest<LitElement>("workboard-inline-text"),
     "inline editor",
   );
   const popover = owner.querySelector<HTMLElement>("[popover]");
@@ -2240,6 +2240,25 @@ describe("renderWorkboard", () => {
       await waitForFast(() => expect(state.cards[0]).toMatchObject(patch));
     },
   );
+
+  it("keeps notes selectable and opens the editor only on a plain click", async () => {
+    const card = createWorkboardCard({ notes: "Copy me" });
+    const { state, container, renderView } = createWorkboardView({
+      client: createWorkboardTestClient({}),
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+    const { trigger, owner, open } = await inlineEditor(container, "notes");
+    const selection = expectDefined(document.getSelection(), "selection");
+    selection.selectAllChildren(trigger);
+    trigger.click();
+    await owner.updateComplete;
+    expect(owner.querySelector("textarea")).toBeNull();
+    selection.removeAllRanges();
+    const textarea = await open();
+    expect(textarea.value).toBe("Copy me");
+  });
 
   it("resumes dirty labels after light dismissal and clears them only on explicit cancel", async () => {
     const card = createWorkboardCard({ labels: ["original"] });

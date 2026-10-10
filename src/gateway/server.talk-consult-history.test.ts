@@ -117,7 +117,7 @@ beforeEach(async () => {
   sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
-  storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   testState.sessionStorePath = storePath;
   await writeSessionStore({
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
@@ -189,7 +189,7 @@ beforeEach(async () => {
       }),
     );
   });
-  voiceSessionId = createOrResumeClientVoiceSession({
+  voiceSessionId = await createOrResumeClientVoiceSession({
     agentId: "main",
     sessionKey,
     origin: "client",
@@ -366,7 +366,11 @@ describe("Browser Talk consult target handoff", () => {
           session: entry.global ? { scope: "global" } : {},
         },
       });
-      voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
+      voiceSessionId = await createOrResumeClientVoiceSession({
+        agentId,
+        sessionKey,
+        origin: "client",
+      });
       if (!entry.fresh) {
         await rpc("talk.client.transcript", {
           sessionKey,

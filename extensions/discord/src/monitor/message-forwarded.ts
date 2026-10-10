@@ -113,15 +113,9 @@ export function formatDiscordSnapshotAuthor(
   const username = normalizeOptionalString(author.username) ?? undefined;
   const name = normalizeOptionalString(author.name) ?? undefined;
   const discriminator = normalizeOptionalString(author.discriminator) ?? undefined;
-  const base = globalName || username || name;
+  const base = globalName || username || name || author.id;
   if (username && discriminator && discriminator !== "0") {
     return `@${username}#${discriminator}`;
   }
-  if (base) {
-    return `@${base}`;
-  }
-  if (author.id) {
-    return `@${author.id}`;
-  }
-  return undefined;
+  return base ? `@${base}` : undefined;
 }

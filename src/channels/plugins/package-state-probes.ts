@@ -192,10 +192,7 @@ function resolveChannelPackageStateChecker(params: {
     specifier: metadata.specifier!,
   })) {
     try {
-      const moduleExport = loadChannelPluginModule({
-        modulePath: location.modulePath,
-        rootDir: location.rootDir,
-      }) as Record<string, unknown>;
+      const moduleExport = loadChannelPluginModule(location) as Record<string, unknown>;
       const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
       if (typeof checker !== "function") {
         throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);

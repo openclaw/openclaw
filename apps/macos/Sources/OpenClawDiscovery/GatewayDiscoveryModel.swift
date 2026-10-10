@@ -307,65 +307,54 @@ public final class GatewayDiscoveryModel {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
         if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
-        let generation = self.generation
-        self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
-            var attempt = 0
-            let startedAt = Date()
-            while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
-                let hasResults = await MainActor.run {
-                    self.hasUsableWideAreaResults
-                }
-                if hasResults { return }
-
-                // Wide-area discovery can be racy (Tailscale not yet up, DNS zone not
-                // published yet). Retry with a short backoff while onboarding is open.
-                let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
-                if !beacons.isEmpty {
-                    await MainActor.run { [weak self] in
-                        guard let self, self.generation == generation, !Task.isCancelled else { return }
-                        self.wideAreaFallback = (domain, beacons)
-                        self.recomputeGateways()
-                    }
-                    return
-                }
-
-                attempt += 1
-                let backoff = min(8.0, 0.6 + (Double(attempt) * 0.7))
-                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
-            }
-        }
+        self.wideAreaFallbackTask = self.scheduleFallback(
+            discover: { await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0) },
+            shouldContinue: { !$0.hasUsableWideAreaResults },
+            backoff: { min(8.0, 0.6 + (Double($0) * 0.7)) },
+            publish: { $0.wideAreaFallback = (domain, $1) })
     }
 
     private func scheduleTailscaleServeFallback() {
         if Self.isRunningTests { return }
         guard self.tailscaleServeFallbackTask == nil else { return }
+        self.tailscaleServeFallbackTask = self.scheduleFallback(
+            discover: { await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4) },
+            shouldContinue: {
+                Self.shouldContinueTailscaleServeDiscovery(
+                    currentGateways: $0.gateways,
+                    tailscaleServeGateways: $0.tailscaleServeFallbackGateways)
+            },
+            backoff: { min(8.0, 0.8 + (Double($0) * 0.8)) },
+            publish: { $0.tailscaleServeFallbackBeacons = $1 })
+    }
+
+    private func scheduleFallback<Beacon: Sendable>(
+        discover: @escaping @Sendable () async -> [Beacon],
+        shouldContinue: @escaping @MainActor @Sendable (GatewayDiscoveryModel) -> Bool,
+        backoff: @escaping @Sendable (Int) -> TimeInterval,
+        publish: @escaping @MainActor @Sendable (GatewayDiscoveryModel, [Beacon]) -> Void) -> Task<Void, Never>
+    {
         let generation = self.generation
-        self.tailscaleServeFallbackTask = Task.detached(priority: .utility) { [weak self] in
+        return Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             var attempt = 0
             let startedAt = Date()
             while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
-                let shouldContinue = await MainActor.run {
-                    Self.shouldContinueTailscaleServeDiscovery(
-                        currentGateways: self.gateways,
-                        tailscaleServeGateways: self.tailscaleServeFallbackGateways)
-                }
-                if !shouldContinue { return }
+                guard await shouldContinue(self) else { return }
 
-                let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4)
+                // Remote discovery can race Tailscale startup or DNS publication.
+                let beacons = await discover()
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
                         guard let self, self.generation == generation, !Task.isCancelled else { return }
-                        self.tailscaleServeFallbackBeacons = beacons
+                        publish(self, beacons)
                         self.recomputeGateways()
                     }
                     return
                 }
 
                 attempt += 1
-                let backoff = min(8.0, 0.8 + (Double(attempt) * 0.8))
-                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(backoff(attempt) * 1_000_000_000))
             }
         }
     }

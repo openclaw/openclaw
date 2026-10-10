@@ -68,6 +68,17 @@ function runtimePlanRequiresHostApiKey(plan?: AgentRuntimeAuthPlan): boolean {
   return plan?.modelRoute?.authRequirement === "api-key";
 }
 
+function unsupportedHarnessCompaction(harnessId: string): EmbeddedAgentCompactResult | undefined {
+  return harnessId === "openclaw"
+    ? undefined
+    : {
+        ok: false,
+        compacted: false,
+        reason: `Agent harness "${harnessId}" does not support compaction.`,
+        failure: { reason: "unsupported_harness_compaction" },
+      };
+}
+
 function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams): {
   agentDir: string;
   agentId: string;
@@ -443,15 +454,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
     return undefined;
   }
   if (!options.nativeCompactionRequest && !harness.compact) {
-    if (harness.id !== "openclaw") {
-      return {
-        ok: false,
-        compacted: false,
-        reason: `Agent harness "${harness.id}" does not support compaction.`,
-        failure: { reason: "unsupported_harness_compaction" },
-      };
-    }
-    return undefined;
+    return unsupportedHarnessCompaction(harness.id);
   }
   const compactIdentity = resolveHarnessCompactIdentity(params);
   const sourceAuthority = options.sourceAuthority;
@@ -523,15 +526,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
       return undefined;
     }
     if (!options.nativeCompactionRequest && !harness.compact) {
-      if (harness.id !== "openclaw") {
-        return {
-          ok: false,
-          compacted: false,
-          reason: `Agent harness "${harness.id}" does not support compaction.`,
-          failure: { reason: "unsupported_harness_compaction" },
-        };
-      }
-      return undefined;
+      return unsupportedHarnessCompaction(harness.id);
     }
     if (
       nativeToolPolicyRestricted &&

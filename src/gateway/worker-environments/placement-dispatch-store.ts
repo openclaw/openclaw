@@ -107,14 +107,14 @@ export async function startWorkerPlacementDispatch(
     orderedAdmission: true,
     assertCurrent,
     stageCommit(facts) {
-      return stagePlacementTurnClaimWorkerPublication(context.admission.identity, {
-        ...identity,
-        state: "requested",
-        executionMode,
-        environmentId: null,
-        activeOwnerEpoch: null,
-        turnClaim: readDispatchTurnClaim(facts),
-      });
+      const updated = readDispatchReceipt(facts, identity, executionMode);
+      return stagePlacementTurnClaimWorkerPublication(
+        context.admission.identity,
+        updated,
+        undefined,
+        undefined,
+        updated,
+      );
     },
     readReceipt(facts, publication) {
       publication?.commit();

@@ -278,6 +278,32 @@ it("advertises configured native inference only to a capable Gateway", async () 
   }
 });
 
+it("negotiates assignment prompt context again on each Gateway connection", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  try {
+    start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT] : [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration.workerHost.enabled).toBe(true);
+      if (supported) {
+        expect(declaration.workerHost.promptContext).toBe(1);
+      } else {
+        expect(declaration.workerHost).not.toHaveProperty("promptContext");
+      }
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+    }
+  } finally {
+    await connection.close();
+  }
+});
+
 it("logs failures once per connection, redacts secrets, and waits for the next cadence", async () => {
   const { connection, request, publications, writeStderrLine } = startConnectionFixture();
   request.mockImplementation(async (method) => {

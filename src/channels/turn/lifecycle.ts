@@ -346,8 +346,8 @@ async function applyRoutedDirectMessageSending(params: {
       payload: params.payload,
       suppression: createSuppressedChannelDeliveryResult({
         reason: "cancelled_by_message_sending_hook",
-        cancelReason: hookResult.cancelReason,
-        metadata: hookResult.hookMetadata,
+        cancelReason: hookResult.hookEffect?.cancelReason,
+        metadata: hookResult.hookEffect?.metadata,
       }),
     };
   }
@@ -356,9 +356,7 @@ async function applyRoutedDirectMessageSending(params: {
     return {
       payload: hookResult.payload,
       suppression: createSuppressedChannelDeliveryResult({
-        reason: hookResult.contentRewritten
-          ? "empty_after_message_sending_hook"
-          : "no_visible_payload",
+        reason: hookResult.changed ? "empty_after_message_sending_hook" : "no_visible_payload",
       }),
     };
   }

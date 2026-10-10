@@ -633,7 +633,7 @@ describe("convertMessages relocatable region", () => {
           { type: "text", text: "Runtime facts" },
         ],
       },
-      { role: "system", content: "OpenClaw runtime context:\nlater context" },
+      { role: "developer", content: "OpenClaw runtime context:\nlater context" },
     ]);
     expect(cacheOptOutIndexes).toEqual(new Set([3, 4]));
   });
@@ -657,7 +657,7 @@ describe("convertMessages relocatable region", () => {
 
     expect(converted).toEqual([
       { role: "system", content: "Stable prefix" },
-      { role: "system", content: "legacy plugin runtime context" },
+      { role: "developer", content: "legacy plugin runtime context" },
     ]);
     expect(cacheOptOutIndexes).toEqual(new Set([1]));
   });
@@ -755,54 +755,82 @@ describe("convertMessages relocatable region", () => {
     expect(converted[1]?.content).toBe("hi\n\nRuntime: session=alpha");
   });
 
-  it("preserves all prior messages including the full tool result on follow-up", () => {
-    // Moving Runtime to the last user turn used to rewrite the earlier cached prefix.
-    const toolResult = "X".repeat(30000);
-    const turn1: Context = {
-      systemPrompt: `Stable prefix${marked("Runtime: session=alpha")}`,
-      messages: [{ role: "user", content: "user1", timestamp: 1 }],
-    };
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
-      usage: emptyUsage,
-      stopReason: "toolUse",
-      timestamp: 2,
-    };
-    const withToolResult: Context = {
-      ...turn1,
-      messages: [
-        ...turn1.messages,
-        assistant,
-        makeTextToolResult("c1", "read", toolResult, false, 3),
-      ],
-    };
-    const followUp: Context = {
-      ...withToolResult,
-      messages: [...withToolResult.messages, { role: "user", content: "user2", timestamp: 4 }],
-    };
-
-    const first = convertMessages(model, turn1, compat());
-    const beforeFollowUp = convertMessages(model, withToolResult, compat());
-    const afterFollowUp = convertMessages(model, followUp, compat());
-
-    expect(beforeFollowUp).toEqual([
-      ...first,
-      {
+  it.each([
+    { reasoning: false, supportsDeveloperRole: false, noticeRole: "user" },
+    { reasoning: true, supportsDeveloperRole: false, noticeRole: "user" },
+    { reasoning: false, supportsDeveloperRole: true, noticeRole: "developer" },
+    { reasoning: true, supportsDeveloperRole: true, noticeRole: "developer" },
+  ])(
+    "preserves prior prompt bytes when runtime notices follow tool results (%j)",
+    ({ reasoning, supportsDeveloperRole, noticeRole }) => {
+      const noticeModel = { ...model, reasoning };
+      const noticeCompat = { ...compat(), supportsDeveloperRole };
+      // Moving Runtime to the last user turn used to rewrite the earlier cached prefix.
+      const toolResult = "X".repeat(30000);
+      const turn1: Context = {
+        systemPrompt: `Stable prefix${marked("Runtime: session=alpha")}`,
+        messages: [{ role: "user", content: "user1", timestamp: 1 }],
+      };
+      const assistant: AssistantMessage = {
         role: "assistant",
-        content: null,
-        tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }],
-      },
-      { role: "tool", tool_call_id: "c1", content: toolResult },
-    ]);
-    expect(JSON.stringify(afterFollowUp.slice(0, beforeFollowUp.length))).toBe(
-      JSON.stringify(beforeFollowUp),
-    );
-    expect(afterFollowUp.at(-1)).toEqual({ role: "user", content: "user2" });
-  });
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
+        usage: emptyUsage,
+        stopReason: "toolUse",
+        timestamp: 2,
+      };
+      const withToolResult: Context = {
+        ...turn1,
+        messages: [
+          ...turn1.messages,
+          assistant,
+          makeTextToolResult("c1", "read", toolResult, false, 3),
+        ],
+      };
+      const followUp: Context = {
+        ...withToolResult,
+        messages: [
+          ...withToolResult.messages,
+          {
+            role: "user",
+            content: "OpenClaw runtime context:\nnotice",
+            runtimeContext: {},
+            timestamp: 4,
+          },
+          { role: "user", content: "user2", timestamp: 5 },
+        ],
+      };
+
+      const original = structuredClone(followUp);
+      const cacheOptOutIndexes = new Set<number>();
+      const first = convertMessages(noticeModel, turn1, noticeCompat);
+      const beforeFollowUp = convertMessages(noticeModel, withToolResult, noticeCompat);
+      const afterFollowUp = convertMessages(noticeModel, followUp, noticeCompat, {
+        cacheOptOutIndexes,
+      });
+
+      expect(beforeFollowUp).toEqual([
+        ...first,
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }],
+        },
+        { role: "tool", tool_call_id: "c1", content: toolResult },
+      ]);
+      expect(JSON.stringify(afterFollowUp.slice(0, beforeFollowUp.length))).toBe(
+        JSON.stringify(beforeFollowUp),
+      );
+      expect(afterFollowUp.slice(-2)).toEqual([
+        { role: noticeRole, content: "OpenClaw runtime context:\nnotice" },
+        { role: "user", content: "user2" },
+      ]);
+      expect(cacheOptOutIndexes).toEqual(new Set([1, 4]));
+      expect(followUp).toEqual(original);
+    },
+  );
 
   it("keeps trailing hook guidance in the system message", () => {
     const context: Context = {

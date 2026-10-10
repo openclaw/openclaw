@@ -230,12 +230,14 @@ suite.define(() => {
 
       const scope = { sessionKey: key };
       const modelsBefore = await count("models.list", scope);
-      const metadataBefore = await count("chat.metadata", scope);
+      const metadataScope = { agentId: "main", includeModels: false };
+      const metadataBefore = await count("chat.metadata", metadataScope);
       await gateway.deferNext("models.list", scope);
       await changed("patch");
       await page.clock.runFor(2_500);
       await settle("models.list");
-      expect(await count("chat.metadata", scope)).toBe(metadataBefore + 1);
+      // The startup fixture omitted commands; acquire them beside the pending catalog once.
+      expect(await count("chat.metadata", metadataScope)).toBe(metadataBefore + 1);
       expect(await count("models.list", scope)).toBe(modelsBefore + 1);
       await gateway.resolveDeferred("models.list");
       await settle();

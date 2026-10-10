@@ -18,12 +18,6 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
-function extractCaptures(text: string, pattern: RegExp) {
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  const globalPattern = new RegExp(pattern.source, flags);
-  return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
-}
-
 export function extractExactReplyDirective(text: string) {
   return (
     extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i) ??
@@ -177,7 +171,9 @@ export function extractBlockStreamingMarkerDirectives(text: string) {
     };
   }
 
-  const markers = extractCaptures(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
+  const markers = Array.from(text.matchAll(/exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/gi), (match) =>
+    match[1]?.trim(),
+  ).filter(Boolean);
   if (markers.length < 2) {
     return null;
   }

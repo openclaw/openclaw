@@ -73,7 +73,7 @@ other behavior, use the clearest appropriate boundary proof; a video and a
 screenshot set are not mandatory when assertions already demonstrate the change.
 
 - Keep the Vitest E2E assertions deterministic; do not commit generated screenshots or videos.
-- The shared suite disables Chromium partial rasterization; exact repeat comparisons are still required before claiming reproducibility.
+- The shared suite disables Chromium partial rasterization and GPU rasterization to avoid observed paint-history-dependent edge pixels. Exact repeat comparisons are still required before claiming reproducibility.
 - For transient states such as **Saved**, install `page.clock` before the fixture, pause it with `pauseVirtualClock`, and advance only the fixture work needed to enter that state. `setFixedTime` alone does not pause timers. Capture readiness uses native layout delivery without advancing the fixture clock.
 - For stills, use `takeControlUiScreenshotFrame` from `ui/src/test-helpers/control-ui-e2e-screenshot.ts` with explicit semantic content and `animations: "disabled"`. Pass viewport changes and the intended scroll target through its `viewport`/`scrollTo` options; it verifies retained centering, viewport/scroll-clip intersection, and settled layout, fonts, and visible images.
 - Pass all related element locators in `elements`, then save the returned page PNG and crops from that single frame. Crops enclose fractional bounds in measured PNG pixels; dimensions and unchanged bounds are asserted. Do not combine separate page and locator screenshots as same-frame evidence.

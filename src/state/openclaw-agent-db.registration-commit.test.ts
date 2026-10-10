@@ -92,23 +92,32 @@ describe("agent registration commit publication", () => {
       const assertCurrent = vi.fn(() => fixture.admission.assertCurrent());
       const registration = fixture.capture({ admission: { ...fixture.admission, assertCurrent } });
       registration.begin();
-      if (throws) {
-        assertCurrent.mockImplementation(() => {
-          throw new Error("existing schema scope ended");
-        });
-        expect(() => registration.finish()).toThrow("existing schema scope ended");
-      }
       const prepared = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         { env: fixture.env },
         () => false,
       );
+      let waiting: Promise<void> | undefined;
       try {
-        if (!throws) {
-          await expect(prepared.read()).rejects.toThrow("ownership is changing");
+        const refused = await prepared.read().catch((error: unknown) => error);
+        if (!(refused instanceof registryListing.AgentDatabaseRegistryPendingError)) {
+          throw new Error("Expected pending registry admission", { cause: refused });
+        }
+        let settled = false;
+        waiting = refused.waitForSettlement().then(() => {
+          settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        if (throws) {
+          assertCurrent.mockImplementation(() => {
+            throw new Error("existing schema scope ended");
+          });
+          expect(() => registration.finish()).toThrow("existing schema scope ended");
         }
       } finally {
         registration.finish();
       }
+      await waiting;
       const after = await prepared.read();
       expect(after.result).toEqual({ status: "available", entries: [] });
       expect(after.assertCurrent).not.toThrow();

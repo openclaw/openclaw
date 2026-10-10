@@ -209,14 +209,6 @@ export function resolveModelRefsFromEntries(params: {
   });
 }
 
-export function resolveModelKeysFromEntries(
-  params: Parameters<typeof resolveModelRefsFromEntries>[0],
-): Array<string | undefined> {
-  return resolveModelRefsFromEntries(params).map((ref) =>
-    ref ? modelKey(ref.provider, ref.model) : undefined,
-  );
-}
-
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
   const agentId = normalizeAgentId(rawAgentId);
   if (!listAgentIds(cfg).includes(agentId)) {

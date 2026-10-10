@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";

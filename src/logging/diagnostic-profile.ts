@@ -54,6 +54,10 @@ function hasProfilerConflict() {
   return (
     options === null ||
     Boolean(process.env.NODE_V8_COVERAGE) ||
+    // Bun's environment-started inspector is not reported by inspector.url().
+    Boolean(
+      process.versions.bun && (process.env.BUN_INSPECT || process.env.BUN_INSPECT_CONNECT_TO),
+    ) ||
     [...process.execArgv, ...(options ?? [])].some((option) =>
       /^--(?:inspect|cpu-prof|heap-prof|prof|perf-|.*coverage)/.test(option.replaceAll("_", "-")),
     )
@@ -187,9 +191,6 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
   };
   try {
     assertActive();
-    if (process.versions.bun) {
-      throw new ProfileFailure("unsupported");
-    }
     const inspector = await import("node:inspector/promises").catch(() => {
       throw new ProfileFailure("unsupported");
     });
@@ -226,7 +227,9 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
     // or V8 allocation bound when the Gateway is blocked; return native actual timing.
-    await delay(options.durationMs, undefined, { signal: options.signal });
+    if (options.durationMs > 0) {
+      await delay(options.durationMs, undefined, { signal: options.signal });
+    }
     assertActive();
     stopAttempted = true;
     ({ profile } = await options.stop(session));

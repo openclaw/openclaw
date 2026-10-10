@@ -13,7 +13,6 @@ import {
   capturePluginRegistryLifecycleSignal,
 } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -74,23 +73,18 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     return;
   }
   const catalogRegistrations = catalogRegistrationSnapshot();
-  let selected: SessionCatalogProvider[];
-  if (request.catalogId) {
-    const provider = catalogRegistrations.providers.find(
-      (candidate) => candidate.id === request.catalogId,
+  const requestedProvider = request.catalogId
+    ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
+    : undefined;
+  if (request.catalogId && !requestedProvider) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
     );
-    if (!provider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
-      );
-      return;
-    }
-    selected = [provider];
-  } else {
-    selected = catalogRegistrations.providers;
+    return;
   }
+  const selected = requestedProvider ? [requestedProvider] : catalogRegistrations.providers;
   if (request.metadataOnly) {
     const metadataConfig = context.getRuntimeConfig();
     const metadataAgent = resolveAgentIdOrRespondError({

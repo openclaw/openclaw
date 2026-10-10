@@ -144,7 +144,7 @@ describe("registered provider review continuation", () => {
       deliver: false,
     });
     expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
-    const normalized = normalizeChatSendRequest({
+    const normalized = await normalizeChatSendRequest({
       params: chatOptions.params,
       client: chatOptions.client,
       providerReviewAcknowledgment: acknowledgment,

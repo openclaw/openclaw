@@ -25,14 +25,13 @@ function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTimi
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const receivedToAckMs = normalizeAckTimingValue(record.receivedToAckMs);
-  const loadSessionMs = normalizeAckTimingValue(record.loadSessionMs);
-  const prepareAttachmentsMs = normalizeAckTimingValue(record.prepareAttachmentsMs);
-  const timing: ChatSendAckServerTiming = {
-    ...(receivedToAckMs !== undefined ? { receivedToAckMs } : {}),
-    ...(loadSessionMs !== undefined ? { loadSessionMs } : {}),
-    ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
-  };
+  const timing: ChatSendAckServerTiming = {};
+  for (const key of ["receivedToAckMs", "loadSessionMs", "prepareAttachmentsMs"] as const) {
+    const duration = normalizeAckTimingValue(record[key]);
+    if (duration !== undefined) {
+      timing[key] = duration;
+    }
+  }
   return Object.keys(timing).length > 0 ? timing : undefined;
 }
 

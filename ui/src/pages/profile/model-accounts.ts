@@ -9,7 +9,6 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
-  UsersSelectModelAccountResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -214,38 +213,28 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     }
   }
 
-  private updateLink(change: { authProfileId: string } | { provider: string }) {
-    const linking = "authProfileId" in change;
-    if (linking && (!change.authProfileId || !this.target?.canAdmin)) {
+  private updateAccount(action: "link" | "unlink" | "select", value: string) {
+    if (action === "link" && (!value || !this.target?.canAdmin)) {
       return;
     }
+    const methods = {
+      link: "users.linkAuthProfile",
+      unlink: "users.unlinkAuthProfile",
+      select: "users.selectModelAccount",
+    };
     void this.runAction(
       "request",
       (target) =>
-        target.client.request<UsersListAuthLinksResult>(
-          linking ? "users.linkAuthProfile" : "users.unlinkAuthProfile",
-          { profileId: target.profileId, ...change },
-        ),
-      (result) => {
-        this.applyLinks(result.links);
-        this.linkDraft = "";
-        this.notice = linking ? "selected" : "cleared";
-        void this.loadAccounts();
-      },
-    );
-  }
-
-  private selectAccount(authProfileId: string) {
-    void this.runAction(
-      "request",
-      (target) =>
-        target.client.request<UsersSelectModelAccountResult>("users.selectModelAccount", {
+        target.client.request<UsersListAuthLinksResult>(methods[action], {
           profileId: target.profileId,
-          authProfileId,
+          ...(action === "unlink" ? { provider: value } : { authProfileId: value }),
         }),
       (result) => {
         this.applyLinks(result.links);
-        this.notice = "selected";
+        if (action !== "select") {
+          this.linkDraft = "";
+        }
+        this.notice = action === "unlink" ? "cleared" : "selected";
         void this.loadAccounts();
       },
     );
@@ -471,9 +460,9 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
             onLinkDraftInput: (value) => {
               this.linkDraft = value;
             },
-            onLink: () => this.updateLink({ authProfileId: this.linkDraft.trim() }),
-            onUnlink: (provider) => this.updateLink({ provider }),
-            onSelectAccount: (authProfileId) => this.selectAccount(authProfileId),
+            onLink: () => this.updateAccount("link", this.linkDraft.trim()),
+            onUnlink: (provider) => this.updateAccount("unlink", provider),
+            onSelectAccount: (authProfileId) => this.updateAccount("select", authProfileId),
             onLoadMore: () => void this.loadAccounts(this.nextCursor),
             onRefresh: () => void this.loadAccounts(),
             onAddAccount: () => this.openSignIn(),

@@ -27,6 +27,7 @@ import {
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
   WORKBOARD_REQUIRED_WORKER_TOOLS,
+  WorkboardWorkspaceOutsideRootsError,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -364,10 +365,19 @@ async function runWorkboardDispatch(
         }
       }
     } catch (error) {
+      // A broader caller may retry a host-authorized card; it must never
+      // override the card's own persisted workspace ceiling.
+      const canRequestHostAccess =
+        error instanceof WorkboardWorkspaceOutsideRootsError &&
+        params.options?.workspaceAccess?.unrestricted === false &&
+        card.metadata?.automation?.workspaceAccess?.unrestricted === true;
+      const message = formatErrorMessage(error);
       startFailures.push({
         cardId: card.id,
         title: card.title,
-        error: formatErrorMessage(error),
+        error: canRequestHostAccess
+          ? `${message} Rerun with --admin to request operator.admin for full-host workspace access.`
+          : message,
       });
       continue;
     }

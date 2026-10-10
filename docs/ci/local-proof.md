@@ -8,6 +8,17 @@ read_when:
 
 ## Local equivalents
 
+Strict managed commands join their process group and captured output before
+releasing temporary resources. A leader can exit before an unreferenced helper
+finishes responding to stdin EOF, so normal POSIX exit reserves half the existing
+cleanup budget for natural group drainage and half for forced cleanup. Requiring
+forced cleanup still fails the command; live or uninspectable groups and output
+that remains open never count as successful completion. Zombie-only groups are
+already terminated, even when their new parent has not reaped them yet.
+Cancellation during natural drainage forwards its signal immediately; its grace
+ends no later than the original halfway point, preserving the recovery allowance
+and total cleanup deadline.
+
 The complete channels test lane prepares its native worker artifacts before
 starting the test process. Cold compilation therefore does not consume the
 test-output watchdog's deadline. Focused channel selections retain lazy
@@ -316,6 +327,35 @@ expressions, steps, and scripts through YAML anchors and aliases.
 
 ## Local check gates and changed routing
 
+### Assertion inventory reports
+
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a deterministic JSON
+inventory to stdout without changing the assertion baseline. The ref selects the
+committed source and baseline, including files omitted by a sparse checkout.
+Ordinary ratchet checks still inspect worktree or staged content; their `--base`
+option selects comparison ancestry, not source bytes.
+
+The report records source Git object IDs, SHA-256 hashes of the executing
+collector and policy files, and the installed parser and Node versions. It lists
+zero-count files, excluded declaration/test-support files, missing baseline paths,
+syntax diagnostics, and every parsed assertion's current policy exemption.
+Positions use one-based lines/columns and half-open source-text spans.
+
+Unused allowance means the baseline exceeds the observed policy count. It is
+accounting evidence, not proof of a repair: adding a SAFETY marker can reduce
+the count while retaining the assertion. Exemptions describe the existing guard's
+decision; they do not validate the stated invariant. Assertion fingerprints hash
+the exact assertion text, so repeated hashes are ambiguous and whitespace changes
+can change a hash. The report does not match sites between revisions or classify
+assertions semantically.
+
+Exit zero means inventory coverage is complete, not that the ratchet passed or
+debt was repaired. Parse failures or caught collection errors produce incomplete
+coverage and a nonzero exit; unknown counts and unused allowances stay `null`.
+Successful file records remain available when other files fail. A killed process
+can produce no report; absent or truncated output is incomplete evidence. Qualify
+the reported source, tooling and dependency inputs before comparing separate runs.
+
 ### Config baseline count ratchet
 
 `pnpm config:docs:check` rejects undocumented config-surface growth and corrupt or stale count snapshots. When a reviewed product change intentionally adds schema paths, run `pnpm config:docs:gen`, inspect the core/channel/plugin count deltas and generated SHA-256 files, and commit the conscious baseline bump with the schema, help, labels, migration, and tests. Do not hand-edit the counts file to bypass the ratchet.
@@ -347,7 +387,7 @@ unchanged files.
 
 Schema dependency selection reuses the local relative-import graph, including re-exports and deleted leaf paths still referenced by surviving source. Shared SDK channel UI-hint and secret-input schema owners, plus the workspace sensitive-URL hint owner, are explicit roots across alias boundaries. Edits to their SDK facades are also selected without traversing unrelated facade runtime dependencies. This is not universal alias or computed-import resolution.
 
-Local changed-test routing lives in `scripts/test-projects.test-support.mts` and is intentionally cheaper than `check:changed`: direct test edits run themselves, source edits prefer explicit mappings, then sibling tests and import-graph dependents. Shared group-room delivery config is one of the explicit mappings: changes to the group visible-reply config, source reply delivery mode, or the message-tool system prompt route through the core reply tests plus Discord and Slack delivery regressions so a shared default change fails before the first PR push. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
+Local changed-test routing lives in `scripts/test-projects.test-support.mts` and is intentionally cheaper than `check:changed`: direct test edits run themselves, source edits prefer explicit mappings, then sibling tests and import-graph dependents. Shared group-room delivery config is one of the explicit mappings: changes to the group visible-reply config, source reply delivery mode, or the message-tool system prompt route through the core reply tests plus Discord and Slack delivery regressions so a shared default change fails before the first PR push. The shared Markdown render-aware chunker and its IR and render modules in `packages/markdown-core` map the same way to the Google Chat, Signal, Slack, SMS, Telegram, and WhatsApp format, send, and delivery suites: channels reach the chunker through the Plugin SDK `text-chunking` facade, deeper than the import walks follow. PR CI receives these as explicit owners beside its import consumers. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
 
 ## Testbox validation
 
@@ -361,9 +401,9 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.69.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.73.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.69.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.73.0 release
 before provider discovery or lease work. The original binary stays untouched.
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
@@ -385,7 +425,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.69.0 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.73.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.

@@ -40,7 +40,7 @@ import { reviewPrivateComposerDraft } from "./components/private-composer-recove
 import {
   ChatComposerPersistence,
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import {
@@ -558,7 +558,9 @@ describe("cross-region Home composer ownership", () => {
       // persistence must never overwrite the current presentation's newer edit.
       page.current.chatMessage = "stale retained draft";
       page.current.requestUpdate();
-      expect(loadChatComposerSnapshot(dock.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(loadChatComposerState(dock.current, sessionKey).snapshot?.draft).toBe(
+        "Edited in the dock",
+      );
       page.view.presented = true;
       page.handoff.claim();
       dock.handoff.dispose();
@@ -567,7 +569,9 @@ describe("cross-region Home composer ownership", () => {
       expect(page.current.chatAttachments).toEqual([file]);
       expect(getChatAttachmentDataUrl(file)).not.toBeNull();
       expect(dock.current.chatAttachments).toEqual([]);
-      expect(loadChatComposerSnapshot(page.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(loadChatComposerState(page.current, sessionKey).snapshot?.draft).toBe(
+        "Edited in the dock",
+      );
       expect(activeQueuedMessageEdit(page.current)?.draftText).toBe("unfinished queue correction");
       expect(dock.current.chatQueuedEdit).toBeNull();
       expect(isQueuedMessageBeingEdited(dock.current, queued.id)).toBe(true);

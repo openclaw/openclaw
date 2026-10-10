@@ -16,6 +16,7 @@ import {
   hasOpenClawAgentReadOnlySchema,
   openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
+  readOpenClawAgentDatabaseSnapshot,
   withFreshOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
@@ -49,11 +50,12 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
   writer: OpenClawAgentDatabase,
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
+  behavior: { snapshot?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   let companion = companions.get(writer.db);
   // Nested operations keep their own statement/transaction window and cleanup.
   if (companion?.active) {
-    return withFreshOpenClawAgentDatabaseReadOnly(operation, options);
+    return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
   }
   if (
     companion &&
@@ -63,7 +65,7 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
     companion = undefined;
   }
   if (!companion && !isOpenClawAgentDatabasePathCurrent(writer)) {
-    return withFreshOpenClawAgentDatabaseReadOnly(operation, options);
+    return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
   }
   if (!companion) {
     const opened = openOpenClawAgentDatabaseReadOnly(options);
@@ -86,7 +88,9 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
     try {
       // A pathname replacement during open keeps the old one-shot read contract.
       if (!matchesWriter(reader, writer)) {
-        return readOpenClawAgentDatabase(reader, operation);
+        return behavior.snapshot
+          ? readOpenClawAgentDatabaseSnapshot(reader, operation)
+          : readOpenClawAgentDatabase(reader, operation);
       }
       unregisterDispose = registerNodeSqliteDisposeCallback(writer.db, close);
       idleTimer = runInSqliteMaintenanceContext(() =>
@@ -114,13 +118,19 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
   }
   const owned = companion;
   try {
-    if (!hasOpenClawAgentReadOnlySchema(owned.reader)) {
+    if (!behavior.snapshot && !hasOpenClawAgentReadOnlySchema(owned.reader)) {
       owned.close();
       return { found: false, reason: "schema-missing" };
     }
     owned.idleTimer.refresh();
     owned.active = true;
-    return readOpenClawAgentDatabase(owned.reader, operation);
+    const result = behavior.snapshot
+      ? readOpenClawAgentDatabaseSnapshot(owned.reader, operation)
+      : readOpenClawAgentDatabase(owned.reader, operation);
+    if (!result.found) {
+      owned.close();
+    }
+    return result;
   } catch (error) {
     owned.close();
     throw error;

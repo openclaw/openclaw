@@ -1,9 +1,10 @@
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { subscribeThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { icons } from "./icons.ts";
-import { currentThemeBranding } from "./neutral-mark.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 const SAVED_VISIBLE_MS = 2_000;
 
@@ -37,6 +38,13 @@ class SettingsSaveIndicator extends LitElement {
   @property({ attribute: false }) props?: SettingsSaveIndicatorProps;
   @state() private savedVisible = false;
   private previousStatus: SettingsSaveIndicatorProps["status"] | undefined;
+  private stopBranding?: () => void;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.stopBranding = subscribeThemeBranding(() => this.requestUpdate());
+  }
+
   private savedTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   override willUpdate(): void {
@@ -57,6 +65,8 @@ class SettingsSaveIndicator extends LitElement {
 
   override disconnectedCallback(): void {
     this.clearSavedTimer();
+    this.stopBranding?.();
+    this.stopBranding = undefined;
     super.disconnectedCallback();
   }
 
@@ -67,7 +77,7 @@ class SettingsSaveIndicator extends LitElement {
 
   private renderClaw(modifier: string) {
     return html`<span class="settings-save-indicator__claw ${modifier}" aria-hidden="true"
-      >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+      >${renderThemeBrandIcon(icons.claw)}</span
     >`;
   }
 

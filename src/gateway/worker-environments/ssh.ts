@@ -295,6 +295,21 @@ export function workerSshOptions(
   ];
 }
 
+export function workerSshCommandPrefix(
+  prepared: PreparedWorkerSsh,
+  port = prepared.port,
+): string[] {
+  return [
+    "ssh",
+    ...workerSshOptions(prepared, { forwarding: "disabled" }),
+    "-a",
+    "-x",
+    "-T",
+    "-p",
+    String(port),
+  ];
+}
+
 export function workerSshCommandOptions(params: {
   input?: string;
   timeoutMs: number;

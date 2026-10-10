@@ -128,18 +128,15 @@ export function createCodexRequestAttempt(params: {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let removeAbort: (() => void) | undefined;
         const waiterAttachedAtMs = diagnostics && observe ? performance.now() : 0;
-        const cleanup = () => {
-          clearTimeout(timer);
-          timer = undefined;
-          removeAbort?.();
-          removeAbort = undefined;
-        };
         const detach = (waiterOutcome: CodexRequestWaiterOutcome) => {
           if (!waiter) {
             return false;
           }
           waiter = undefined;
-          cleanup();
+          clearTimeout(timer);
+          timer = undefined;
+          removeAbort?.();
+          removeAbort = undefined;
           if (!params.retainWritten || !mayHaveWritten) {
             finish(mayHaveWritten ? "correlation-closed" : "not-written");
           }

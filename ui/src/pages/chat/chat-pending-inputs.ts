@@ -370,6 +370,7 @@ async function requestPendingInputPage(
         inputReceipts?: ChatInputReceipts;
       }>("chat.history", {
         sessionKey: view.sessionKey,
+        toolResultMaxChars: 2_000,
         agentId: view.agentId,
         limit: 20,
         ...(inputRunIds.length ? { inputRunIds } : {}),

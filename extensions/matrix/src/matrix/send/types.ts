@@ -1,4 +1,3 @@
-// Matrix type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { CoreConfig } from "../../types.js";

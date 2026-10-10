@@ -51,7 +51,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -1516,7 +1516,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(result.queuedFinal).toBe(false);
     expect(operation?.result).toMatchObject({
       kind: "aborted",
-      code: "aborted_for_restart",
+      code: "aborted_by_user",
     });
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);

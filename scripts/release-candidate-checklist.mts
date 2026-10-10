@@ -32,7 +32,7 @@ import {
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
-import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
+import { loadChangelogCollection } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
@@ -1054,7 +1054,7 @@ export function loadCandidateShippedBaseline(ref: string, rootDir = process.cwd(
   gitRevParse(`${tagRef}^{commit}`, rootDir);
   const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
   const version = requireString(releaseNotesVersionForTag(ref), "release notes version");
-  const source = loadReleaseChangelog({ rootDir, ref: tagRef, version });
+  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
   candidateContributionRecordPullRequests(
     source.record ?? source.section,
     `shipped baseline ${ref}`,
@@ -1069,6 +1069,10 @@ export function validateCandidateReleaseNotes({
   tag,
   contributionRecordPath,
 }: StringFields<"changelog" | "repository" | "tag"> & { contributionRecordPath?: string }) {
+  if (/-beta\.[1-9][0-9]*$/u.test(tag)) {
+    // New candidates cannot silently reuse cumulative or earlier-beta prose.
+    extractChangelogSection(changelog, tag.slice(1));
+  }
   const rendered = renderGithubReleaseNotes({
     changelog,
     version: releaseNotesVersionForTag(tag),
@@ -1099,7 +1103,7 @@ export function validateCandidateChangelogProvenance({
   isAncestor?: (ancestor: string, target: string) => boolean;
   loadShippedBaseline?: (ref: string) => { pullRequests: Set<number> };
 }) {
-  // Correction tags may carry their own changelog heading.
+  // Beta and correction tags may carry their own changelog heading.
   let section: string | undefined;
   let sectionVersion = version;
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);

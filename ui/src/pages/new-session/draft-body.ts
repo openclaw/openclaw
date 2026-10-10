@@ -68,6 +68,7 @@ export function renderNewSessionBody(options: {
   statusLabel?: string;
   completion?: { label: string; onOpen?: () => void; disabled?: boolean };
   showDraft?: boolean;
+  inChat?: boolean;
   renderDraft: () => TemplateResult;
   onOpenImage: (item: ImageLightboxItem) => void;
 }) {
@@ -84,7 +85,7 @@ export function renderNewSessionBody(options: {
       ${pendingMessage ? (options.completion?.label ?? options.statusLabel ?? t("newSession.starting")) : nothing}
     </div>
     <div
-      class="new-session-page__scroll ${pendingMessage ? `chat-thread ${avatarPlacement === "footer" ? "chat-thread--direct" : ""}` : ""}"
+      class="${options.inChat ? "" : "new-session-page__scroll"} ${pendingMessage || options.inChat ? `chat-thread ${avatarPlacement === "footer" ? "chat-thread--direct" : ""}` : ""}"
       ?inert=${draftLocked}
       aria-busy=${String(options.submitting)}
       @mousedown=${beginNativeWindowDragFromTopInset}
@@ -122,6 +123,8 @@ function renderNewSessionSubmission(
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
   const json = parseMarkdownJson(markdown);
   const imageOptions = { onOpenImage };
+  const textOptions = { role: "user", isStreaming: false };
+  const markdownOptions = { codeBlockChrome: "none" } as const;
   // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
   // images have their own lightbox handler and remain interactive while pending.
   return html`<div class="new-session-page__starting chat-thread-inner">
@@ -148,19 +151,9 @@ function renderNewSessionSubmission(
           ${renderAssistantAttachments(attachments, imageOptions, undefined, undefined, false)}
           ${
             json
-              ? renderMessageJson(
-                  json,
-                  key,
-                  { role: "user", isStreaming: false },
-                  { codeBlockChrome: "none" },
-                )
+              ? renderMessageJson(json, key, textOptions, markdownOptions)
               : markdown
-                ? renderMessageMarkdown(
-                    markdown,
-                    key,
-                    { role: "user", isStreaming: false },
-                    { codeBlockChrome: "none" },
-                  )
+                ? renderMessageMarkdown(markdown, key, textOptions, markdownOptions)
                 : nothing
           }
         </div>

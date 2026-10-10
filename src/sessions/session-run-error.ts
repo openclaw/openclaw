@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
+import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
 import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
@@ -39,7 +40,8 @@ export async function recordGatewaySessionRunFailure(
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
-        : `Your request couldn't be completed: ${error}`,
+        : (renderCodexAppServerFailureCopy(error) ??
+          `Your request couldn't be completed: ${error}`),
     display: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };

@@ -173,18 +173,22 @@ export async function stageSandboxMedia(params: {
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
     let downloadedMediaUri: string | undefined;
     const stageSource = async (sourcePath: string) => {
-      if (remoteBridge) {
-        const { buffer } = await readLocalFileSafely({
-          filePath: sourcePath,
-          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
-        });
-        abortSignal?.throwIfAborted();
-        await prepareDestination();
-        abortSignal?.throwIfAborted();
-        if (!remoteBridge.createFileExclusive) {
+      const destination = remoteBridge
+        ? { bridge: remoteBridge }
+        : { root: await fsRoot(effectiveWorkspaceDir) };
+      const { buffer } = await readLocalFileSafely({
+        filePath: sourcePath,
+        maxBytes: SANDBOX_MEDIA_MAX_BYTES,
+      });
+      // A completed read must not start a new copy after cancellation.
+      abortSignal?.throwIfAborted();
+      await prepareDestination();
+      abortSignal?.throwIfAborted();
+      if (destination.bridge) {
+        if (!destination.bridge.createFileExclusive) {
           throw new Error("SSH sandbox filesystem does not support exclusive input staging");
         }
-        const created = await remoteBridge.createFileExclusive({
+        const created = await destination.bridge.createFileExclusive({
           filePath: relativeDest,
           data: buffer,
           signal: abortSignal,
@@ -207,16 +211,7 @@ export async function stageSandboxMedia(params: {
           downloadedMediaUri = buildInboundMediaUriFromPath(saved.path);
         }
       } else {
-        const root = await fsRoot(effectiveWorkspaceDir);
-        const { buffer } = await readLocalFileSafely({
-          filePath: sourcePath,
-          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
-        });
-        // A completed read must not start a new copy after cancellation.
-        abortSignal?.throwIfAborted();
-        await prepareDestination();
-        abortSignal?.throwIfAborted();
-        await root.create(relativeDest, buffer);
+        await destination.root.create(relativeDest, buffer);
       }
     };
 
@@ -324,15 +319,12 @@ async function isUrlAliasForStagedSource(params: {
   if (!urlSource) {
     return false;
   }
-  const [sourceIdentity, urlIdentity] = await Promise.all([
-    resolveLocalSourceIdentity(params.source),
-    resolveLocalSourceIdentity(urlSource),
-  ]);
+  const [sourceIdentity, urlIdentity] = await Promise.all(
+    [params.source, urlSource].map((source) =>
+      fs.realpath(source).catch(() => path.resolve(source)),
+    ),
+  );
   return sourceIdentity === urlIdentity;
-}
-
-async function resolveLocalSourceIdentity(sourcePath: string): Promise<string> {
-  return await fs.realpath(sourcePath).catch(() => path.resolve(sourcePath));
 }
 
 async function resolveStageableMediaSource(value: string): Promise<string | null> {

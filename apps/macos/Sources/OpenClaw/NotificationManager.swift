@@ -89,33 +89,32 @@ struct NotificationManager {
 @MainActor
 struct BackgroundSessionNotificationActions {
     private struct Action {
+        let identifier: String
         let sourceIdentifier: String
         let open: () -> Void
     }
 
-    private var actions: [String: Action] = [:]
-    private var actionOrder: [String] = []
+    private var actions: [Action] = []
     private let maximumActions = 64
 
     mutating func begin(sourceIdentifier: String, open: @escaping () -> Void)
         -> (identifier: String, retired: [String])?
     {
-        guard !self.actions.values.contains(where: { $0.sourceIdentifier == sourceIdentifier }) else { return nil }
+        guard !self.actions.contains(where: { $0.sourceIdentifier == sourceIdentifier }) else { return nil }
         // Actions retain routes, not windows. Retire the matching OS notice when
         // bounding this process-lifetime queue so eviction leaves no dead button.
-        let retired = self.actionOrder.count >= self.maximumActions ? self.retire([self.actionOrder[0]]) : []
+        let retired = self.actions.count >= self.maximumActions ? self.retire([self.actions[0].identifier]) : []
         let requestIdentifier = "background-session-\(UUID().uuidString)"
-        self.actions[requestIdentifier] = Action(sourceIdentifier: sourceIdentifier, open: open)
-        self.actionOrder.append(requestIdentifier)
+        self.actions.append(Action(identifier: requestIdentifier, sourceIdentifier: sourceIdentifier, open: open))
         return (requestIdentifier, retired)
     }
 
     func contains(_ identifier: String) -> Bool {
-        self.actions[identifier] != nil
+        self.actions.contains { $0.identifier == identifier }
     }
 
     func openAction(for identifier: String) -> (() -> Void)? {
-        self.actions[identifier]?.open
+        self.actions.first { $0.identifier == identifier }?.open
     }
 
     mutating func finish(identifier: String, sent: Bool, sourceIsCurrent: Bool) -> [String] {
@@ -126,15 +125,12 @@ struct BackgroundSessionNotificationActions {
 
     mutating func retire(_ identifiers: [String]) -> [String] {
         let removed = Set(identifiers)
-        self.actionOrder.removeAll { removed.contains($0) }
-        for identifier in identifiers {
-            self.actions.removeValue(forKey: identifier)
-        }
+        self.actions.removeAll { removed.contains($0.identifier) }
         return identifiers
     }
 
     mutating func stop() -> [String] {
-        self.retire(self.actionOrder)
+        self.retire(self.actions.map(\.identifier))
     }
 }
 

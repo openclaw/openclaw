@@ -252,13 +252,13 @@ export function createCodexInferenceDispatch(params: {
   const { context, assertCurrent } = params;
   const prepare = async (
     bytes: Buffer,
-    sampling: boolean,
     path: string,
     headers: IncomingHttpHeaders,
     signal: AbortSignal,
     transport: "http" | "websocket",
   ) => {
     assertCurrent();
+    const sampling = path === "/responses";
     let execution: CodexInferenceModelExecution | undefined;
     let released = false;
     const release = () => {
@@ -335,7 +335,6 @@ export function createCodexInferenceDispatch(params: {
   };
   const prepareHttp = async (
     req: IncomingMessage,
-    sampling: boolean,
     path: string,
     signal: AbortSignal,
     release: () => void,
@@ -349,7 +348,7 @@ export function createCodexInferenceDispatch(params: {
     const decoded =
       encoding === "zstd" ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }) : wire;
     signal.throwIfAborted();
-    const prepared = await prepare(decoded, sampling, path, req.headers, signal, "http");
+    const prepared = await prepare(decoded, path, req.headers, signal, "http");
     try {
       const body =
         prepared.bytes === decoded

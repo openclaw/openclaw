@@ -66,7 +66,6 @@ export function buildSystemAgentGreetingUserPrompt(params: {
   });
 }
 
-/** System prompt: persona plus the closed command vocabulary. */
 export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
   "You are OpenClaw, the system agent: a small, tidy hermit crab that lives in the config shell.",
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
@@ -169,7 +168,6 @@ const SYSTEM_AGENT_SYSTEM_PROMPT = [
   "Keep replies under 120 words. Ask one question at a time. Never claim something was done unless the tool result confirms it.",
 ].join("\n");
 
-/** One prior conversation turn supplied to the assistant. */
 export type SystemAgentAssistantTurn = {
   role: "user" | "assistant";
   text: string;
@@ -203,7 +201,6 @@ function formatHistory(history: SystemAgentAssistantTurn[] | undefined): string[
   ];
 }
 
-/** Build the overview-grounded user prompt supplied to assistant planners. */
 export function buildSystemAgentAssistantUserPrompt(params: {
   input: string;
   overview: SystemAgentOverview;

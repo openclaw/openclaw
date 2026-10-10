@@ -19,30 +19,13 @@ type SessionMaintenanceContext = {
   admit(stage: "transaction" | "commit"): void;
 };
 
-export function executeSessionMaintenance(
-  command: Extract<
-    SqliteWorkerCommand<SessionMaintenanceOperations>,
-    { type: "session.transcript.branch" }
-  >,
+export function executeSessionMaintenance<
+  Command extends SqliteWorkerCommand<SessionMaintenanceOperations>,
+>(
+  command: Command,
   scope: SessionTranscriptWriteScope,
   context: SessionMaintenanceContext,
-): SessionMaintenanceOperations["session.transcript.branch"]["output"];
-export function executeSessionMaintenance(
-  command: Extract<
-    SqliteWorkerCommand<SessionMaintenanceOperations>,
-    { type: "session.transcript.replaceSuffix" }
-  >,
-  scope: SessionTranscriptWriteScope,
-  context: SessionMaintenanceContext,
-): SessionMaintenanceOperations["session.transcript.replaceSuffix"]["output"];
-export function executeSessionMaintenance(
-  command: Extract<
-    SqliteWorkerCommand<SessionMaintenanceOperations>,
-    { type: "session.transcript.rewrite" }
-  >,
-  scope: SessionTranscriptWriteScope,
-  context: SessionMaintenanceContext,
-): SessionMaintenanceOperations["session.transcript.rewrite"]["output"];
+): SessionMaintenanceOperations[Command["type"]]["output"];
 export function executeSessionMaintenance(
   command: SqliteWorkerCommand<SessionMaintenanceOperations>,
   scope: SessionTranscriptWriteScope,

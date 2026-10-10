@@ -24,8 +24,68 @@ afterEach(() => {
 });
 
 describe("openclaw-board-view", () => {
+  it("retains one loading surface through snapshot and sandbox document readiness", async () => {
+    vi.useFakeTimers();
+    const response = deferred<Response>();
+    const fetchMock = vi.fn(() => response.promise);
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", ((input, init) =>
+      (typeof input === "string" ? input : input instanceof URL ? input.href : input.url).includes(
+        "/__openclaw__/board/",
+      )
+        ? fetchMock()
+        : originalFetch(input, init)) satisfies typeof fetch);
+    const view = document.createElement("openclaw-board-view");
+    view.activeTabId = "main";
+    view.callbacks = callbacks();
+    view.widgetFrameUrl = () => "/__openclaw__/board/session/alpha/index.html?bt=ticket";
+    const provider = createApplicationContextProvider(gatewayContext(null));
+    provider.append(view);
+    document.body.append(provider);
+    await view.updateComplete;
+    const skeleton = view.querySelector("openclaw-panel-loading-skeleton");
+    expect(skeleton).not.toBeNull();
+    view.snapshot = snapshot({
+      widgets: [
+        boardWidget({ sandboxUrl: "/mcp-app-sandbox", sandboxPort: 18790, viewTicket: "ticket" }),
+      ],
+    });
+    await settleCells(view);
+    const frame = view.querySelector("iframe")!;
+    const ready = deferred<{ renderId: string }>();
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message) => {
+      if (message.method === "ui/notifications/sandbox-resource-ready") {
+        ready.resolve(message.params);
+      }
+    });
+    const receive = (data: object) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          origin: new URL(frame.src).origin,
+          data,
+        }),
+      );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(view.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBe(skeleton);
+    expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(true);
+    receive({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+    response.resolve(new Response("<p>Dashboard</p>"));
+    const { renderId } = await ready.promise;
+    await settleCells(view);
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBe(skeleton);
+    receive({ method: "ui/notifications/sandbox-resource-loaded", params: { renderId } });
+    await vi.advanceTimersByTimeAsync(32);
+    await settleCells(view);
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(false);
+    expect(view.querySelector("iframe")).toBe(frame);
+  });
+
   it("renders only the active tab widgets with sandboxed frames", async () => {
     const view = await mount();
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     const cells = view.querySelectorAll('[data-test-id="board-widget"]');
     expect(cells).toHaveLength(2);
     expect([...cells].map((cell) => cell.getAttribute("data-widget-name"))).toEqual([
@@ -39,6 +99,26 @@ describe("openclaw-board-view", () => {
       expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     }
   });
+
+  it.each(["pending", "rejected", "invalid-frame"] as const)(
+    "reveals the %s recovery state instead of leaving the board loading",
+    async (mode) => {
+      const view = await mount({
+        context: gatewayContext(null),
+        snapshot: snapshot({
+          widgets: [
+            boardWidget({
+              viewTicket: "ticket",
+              grantState: mode === "invalid-frame" ? "none" : mode,
+            }),
+          ],
+        }),
+      });
+      expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(false);
+      expect(view.querySelector(".board-widget__body")?.textContent?.trim()).not.toBe("");
+    },
+  );
 
   it("renders an ungranted widget in the shared sandbox without popup authority", async () => {
     vi.stubGlobal(

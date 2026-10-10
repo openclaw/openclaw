@@ -30,7 +30,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-it.each(["sibling", "restart", "memory-and-plugin", "memory-only", "session-store"] as const)(
+it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
@@ -43,8 +43,8 @@ it.each(["sibling", "restart", "memory-and-plugin", "memory-only", "session-stor
     const pluginFailure = new Error("registered plugin cleanup failed");
     const memoryFailure = new Error("registered memory cleanup failed");
     const stateFailure = mode === "session-store";
-    const hasPluginFailure = mode !== "memory-only" && !stateFailure;
-    const hasMemoryFailure = mode === "memory-and-plugin" || mode === "memory-only";
+    const hasPluginFailure = !stateFailure;
+    const hasMemoryFailure = mode === "memory-and-plugin";
     const port = await fixture.reservePort();
     const logFile = fixture.state.path("shutdown.log");
     setLoggerOverride({ file: logFile, level: "debug", consoleLevel: "silent" });

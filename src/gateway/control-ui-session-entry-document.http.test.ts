@@ -7,6 +7,30 @@ import { handleControlUiHttpRequest } from "./control-ui.js";
 import { createRequest, createResponse } from "./server-http.test-harness.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
+it.each(["token", "password", "trusted-proxy"] as const)(
+  "opts only proxy-authenticated app documents into direct chat navigation: %s",
+  async (mode) => {
+    const root = dirs.make("session-entry-navigation-");
+    fs.writeFileSync(
+      path.join(root, "index.html"),
+      "<!doctype html><html><head></head><body></body></html>",
+    );
+    const response = createResponse();
+    await handleControlUiHttpRequest(
+      createRequest({ path: "/control/", host: "localhost" }),
+      response.res,
+      {
+        basePath: "/control",
+        root: { kind: "resolved", path: root },
+        auth: { mode, allowTailscale: false },
+      },
+    );
+    expect(response.getBody().includes('data-openclaw-proxy-session-entry="true"')).toBe(
+      mode === "trusted-proxy",
+    );
+  },
+);
+
 it("restores the mounted canonical path before SPA scripts with the full app CSP", async () => {
   const root = dirs.make("session-entry-document-");
   fs.writeFileSync(

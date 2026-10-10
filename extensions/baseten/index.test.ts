@@ -1,5 +1,11 @@
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createApiRegistry, createNodeLlmRuntime } from "@openclaw/ai";
+import {
+  createAssistantMessageEventStream,
+  getApiProvider,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+} from "openclaw/plugin-sdk/llm";
 import {
   createRuntimeEnv,
   createTestWizardPrompter,
@@ -85,6 +91,102 @@ async function captureRegisteredPayloads(params: {
 }
 
 describe("Baseten provider registration", () => {
+  it.each<{
+    name: string;
+    options: SimpleStreamOptions;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+    expected?: string;
+  }>([
+    {
+      name: "native session",
+      options: { sessionId: "synthetic-session" },
+      expected: "synthetic-session",
+    },
+    {
+      name: "explicit cache key",
+      options: { sessionId: "synthetic-session", promptCacheKey: "synthetic-cache-key" },
+      expected: "synthetic-cache-key",
+    },
+    { name: "no session", options: {} },
+    { name: "disabled cache", options: { sessionId: "synthetic-session", cacheRetention: "none" } },
+    {
+      name: "custom endpoint",
+      baseUrl: "https://proxy.example/v1",
+      options: { sessionId: "synthetic-session" },
+    },
+    {
+      name: "model header",
+      headers: { "X-Session-Affinity": "model-affinity" },
+      options: { sessionId: "synthetic-session" },
+      expected: "model-affinity",
+    },
+    {
+      name: "request header",
+      options: {
+        sessionId: "synthetic-session",
+        headers: { "X-Session-Affinity": "caller-affinity" },
+      },
+      expected: "caller-affinity",
+    },
+  ])(
+    "sends Baseten cache affinity in the real request: $name",
+    async ({ options, baseUrl, headers, expected }) => {
+      const provider = await registerSingleProviderPlugin(basetenPlugin);
+      const model: Model = {
+        id: "synthetic-model",
+        name: "Synthetic model",
+        provider: "baseten",
+        api: "openai-completions",
+        baseUrl: baseUrl ?? "https://inference.baseten.co/v1",
+        headers,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 128,
+      };
+      const registry = createApiRegistry();
+      const completions = getApiProvider("openai-completions");
+      if (!completions) {
+        throw new Error("expected built-in Chat Completions adapter");
+      }
+      registry.registerApiProvider(completions);
+      let sentHeaders: Headers | undefined;
+      const runtime = createNodeLlmRuntime(registry, {
+        buildModelFetch: () => async (_url, init) => {
+          sentHeaders = new Headers(init?.headers);
+          return new Response(
+            JSON.stringify({ error: { message: "synthetic request captured" } }),
+            {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      });
+      const wrapped = provider.wrapStreamFn?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        streamFn: runtime.streamSimple,
+      });
+      if (!wrapped) {
+        throw new Error("expected registered Baseten stream wrapper");
+      }
+      const result = await (
+        await wrapped(
+          model,
+          { messages: [{ role: "user", content: "Synthetic question", timestamp: 1 }] },
+          { ...options, apiKey: "synthetic-unused-key" },
+        )
+      ).result();
+      expect(result.errorMessage).toContain("synthetic request captured");
+      expect(sentHeaders).toBeDefined();
+      expect(sentHeaders?.get("x-session-affinity")).toBe(expected ?? null);
+    },
+  );
+
   it.each([undefined, "replace"] as const)(
     "keeps registered %s setup separate from the public catalog preset",
     async (mode) => {

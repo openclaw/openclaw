@@ -38,7 +38,7 @@ export type UpdateCommandExecutionGuards = {
 export type MutableUpdateExecutionParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
-  updateInstallKind: "git" | "package" | "unknown";
+  updateInstallKind: "git" | "package";
   switchToGit: boolean;
   timeoutMs: number | undefined;
   updateStepTimeoutMs: number;

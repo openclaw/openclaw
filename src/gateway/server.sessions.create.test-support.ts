@@ -147,7 +147,7 @@ function requireNonEmptyString(value: string | undefined, label: string): string
 }
 
 async function removeSessionWorktree(key: string | undefined) {
-  const worktree = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
+  const worktree = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
   if (worktree) {
     await managedWorktrees.remove({
       id: worktree.id,

@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -16,6 +17,12 @@ import type { IrcNickServConfig } from "./types.js";
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 const IRC_MAX_LINE_BYTES = 512;
+// Recipients see our line with the server's `:nick!user@host ` prefix in front, and 512 bytes
+// bounds that relayed line too: servers truncate it or reject the send outright (Ergo answers
+// 417 "Line too long to be relayed without truncation"). Our user@host is only as long as the
+// server makes it, so reserve its ceiling: `~` + USERLEN 10, and HOSTLEN 63.
+const IRC_MAX_RELAY_USER_BYTES = 11;
+const IRC_MAX_RELAY_HOST_BYTES = 63;
 // Inbound framing cap: IRCv3 allows up to 8191 bytes of message tags plus a 512-byte
 // line body. Bound a pending (unterminated) line at twice that so compliant servers
 // never trip it, while a peer that withholds the line terminator cannot grow memory.
@@ -39,16 +46,9 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   if (end === text.length) {
     return text;
   }
-  const fitted = text.slice(0, end);
-  // A delimiter just beyond the cap already gives this chunk a clean word boundary.
-  if (text[end] === " ") {
-    return fitted;
-  }
-  const splitAt = fitted.lastIndexOf(" ");
-  if (splitAt >= Math.floor(fitted.length / 2)) {
-    return fitted.slice(0, splitAt);
-  }
-  return fitted;
+  const splitAt = text.lastIndexOf(" ", end);
+  const preferredEnd = splitAt >= Math.floor(end / 2) ? splitAt : end;
+  return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
 type IrcPrivmsgEvent = {
@@ -91,8 +91,7 @@ function toIrcError(err: unknown): Error {
 let nickCollisionFallbackSeq = 0;
 
 function buildFallbackNick(nick: string): string {
-  const normalized = nick.replace(/\s+/g, "");
-  const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
+  const safe = nick.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;
@@ -224,9 +223,13 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
-    const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
+    const relayPrefixBytes =
+      Buffer.byteLength(`:${currentNick}!@ `, "utf8") +
+      IRC_MAX_RELAY_USER_BYTES +
+      IRC_MAX_RELAY_HOST_BYTES;
+    const lineOverheadBytes =
+      relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
     while (remaining.length > 0) {
@@ -416,8 +419,15 @@ export async function connectIrcClient(options: IrcClientOptions) {
 
   socket.once("connect", () => {
     try {
-      if (options.password && options.password.trim()) {
-        sendRaw(`PASS ${options.password.trim()}`);
+      const password = options.password?.trim();
+      if (password) {
+        // Servers read only the first word of a middle parameter, so a passphrase
+        // with spaces or a leading ":" must go in the trailing parameter.
+        sendRaw(
+          password.includes(" ") || password.startsWith(":")
+            ? `PASS :${password}`
+            : `PASS ${password}`,
+        );
       }
       sendRaw(`NICK ${options.nick.trim()}`);
       sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);

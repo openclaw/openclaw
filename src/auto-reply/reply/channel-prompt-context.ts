@@ -15,9 +15,7 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
   if (!Array.isArray(channelPromptContext) || channelPromptContext.length === 0) {
     return base;
   }
-  const entries = channelPromptContext
-    .map((entry) => normalizeInboundTextNewlines(entry))
-    .filter((entry) => Boolean(entry));
+  const entries = channelPromptContext.map(normalizeInboundTextNewlines).filter(Boolean);
   if (entries.length === 0) {
     return base;
   }

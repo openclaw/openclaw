@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Development runner that rebuilds OpenClaw, runs runtime postbuild steps, and
-// restarts the CLI when watched source or metadata changes.
 import {
   spawn,
   spawnSync,
@@ -483,7 +481,6 @@ const hasMissingRequiredRuntimePostBuildOutput = (deps: RunNodeRequirementDeps) 
   );
 };
 
-/** Decides whether source changes require a new dev build. */
 export const resolveBuildRequirement = (
   deps: RunNodeRequirementDeps,
   options: { allowEquivalentInputs?: boolean } = {},
@@ -580,7 +577,6 @@ export const resolveBuildRequirement = (
   return { shouldBuild: false, reason: "clean" };
 };
 
-/** Decides whether runtime postbuild artifacts need to be regenerated. */
 export const resolveRuntimePostBuildRequirement = (
   deps: RunNodeRuntimeRequirementDeps,
   options: { requireCleanInputs?: boolean; allowEquivalentInputs?: boolean } = {},
@@ -1106,24 +1102,16 @@ const waitForSpawnedProcess = async (
 
   try {
     return await new Promise<SpawnedProcessResult>((resolve) => {
-      let settled = false;
-      const settle = (res: SpawnedProcessResult) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(res);
-      };
       const handleError = (error: Error) => {
         logRunner(`Spawn failed: ${error.message}`, deps);
-        settle({ exitCode: 1, exitSignal: null, forwardedSignal });
+        resolve({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
         if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
-        settle({ exitCode, exitSignal, forwardedSignal });
+        resolve({ exitCode, exitSignal, forwardedSignal });
       };
       childProcess.on("error", handleError);
       childProcess.on("exit", handleExit);
@@ -1325,7 +1313,6 @@ const removeStaleBuildLock = (deps: RunNodeLockDeps, lockDir: string, staleMs: n
   }
 };
 
-/** Acquires the dev-build lock used to serialize local rebuilds. */
 export const acquireRunNodeBuildLock = async (
   deps: RunNodeLockDeps,
   signal?: AbortSignal,
@@ -1386,10 +1373,9 @@ export const acquireRunNodeBuildLock = async (
           // detection if the directory is still present.
         }
       };
-      const onExit = () => removeLockDir();
-      deps.process.on("exit", onExit);
+      deps.process.on("exit", removeLockDir);
       return () => {
-        deps.process.off("exit", onExit);
+        deps.process.off("exit", removeLockDir);
         removeLockDir();
       };
     } catch (error) {
@@ -1585,7 +1571,10 @@ const canUseStampedGatewayClientDist = (deps: RunNodeDeps) => {
   }
   // Remote clients intentionally use existing dist. Retain metadata/output checks
   // without treating producer source cleanliness as a client rebuild requirement.
-  return !resolveRuntimePostBuildRequirement(deps, { requireCleanInputs: false }).shouldSync;
+  return !resolveRuntimePostBuildRequirement(deps, {
+    requireCleanInputs: false,
+    allowEquivalentInputs: true,
+  }).shouldSync;
 };
 
 type QaReportScript = "qa-parity-report.ts" | "qa-coverage-report.ts";
@@ -1675,7 +1664,6 @@ export function resolveRunNodePreparation(
   return { build, runtime, immutable: (build || runtime) && isImmutableGitDeployment(deps) };
 }
 
-/** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
 export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {

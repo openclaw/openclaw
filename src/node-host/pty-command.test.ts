@@ -76,7 +76,7 @@ describe("node PTY command", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it.skipIf(Boolean(process.versions.bun)).each(["source", "abort"] as const)(
+  it.each(["source", "abort"] as const)(
     "closes PTY admission when %s authority changes during loading",
     async (change) => {
       nodePtySpawn.mockImplementation(() => {

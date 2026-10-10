@@ -574,30 +574,6 @@ require("node:module").syncBuiltinESMExports();
     }
   });
 
-  it("writes an explicit local project for unpublished core package tarballs", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
-    try {
-      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", [
-        "/tmp/openclaw-ai.tgz",
-        "/tmp/openclaw-gateway-client.tgz",
-        "/tmp/openclaw-gateway-protocol.tgz",
-      ]);
-      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-        dependencies?: Record<string, string>;
-        private?: boolean;
-      };
-      expect(manifest.private).toBe(true);
-      expect(manifest.dependencies).toEqual({
-        "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
-        "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
-        "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
-        openclaw: "file:///tmp/openclaw.tgz",
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("writes a gateway-packages-only local project when the root does not require AI", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
     try {
@@ -609,7 +585,9 @@ require("node:module").syncBuiltinESMExports();
       );
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
+        private?: boolean;
       };
+      expect(manifest.private).toBe(true);
       expect(manifest.dependencies).toEqual({
         "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
         "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",

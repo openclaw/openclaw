@@ -15,6 +15,7 @@ import {
 } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -203,7 +204,7 @@ async function closeForIntegrityAdmission(f: Fixture) {
 }
 
 async function closeWorkerForIntegrityAdmission(f: Fixture) {
-  await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath));
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
@@ -347,7 +348,9 @@ it("does not reopen a disposed handle for a missing replacement's result-only co
   const f = fixture();
   const probe = observeAdmission(f.databasePath);
   const update = vi.fn(async () => {
-    expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+    expect(
+      await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath)),
+    ).toBe(true);
     return {
       result: "no-op",
       replacements: [

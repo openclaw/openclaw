@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 it.each([false, true])(
-  "expands the selected provider on every open (inherited=%s)",
+  "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
     const container = document.createElement("div");
     const params: Parameters<typeof renderChatModelPicker>[0] = {
@@ -50,7 +50,7 @@ it.each([false, true])(
     expect(selected.hidden).toBe(false);
     expect(other.hidden).toBe(true);
 
-    // A deliberate collapse lasts only for this visit to the picker.
+    // A deliberate collapse survives closing and reopening the picker.
     toggle.click();
     expect(selected.hidden).toBe(true);
     details.open = false;
@@ -58,8 +58,8 @@ it.each([false, true])(
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
     await Promise.resolve();
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(selected.hidden).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(selected.hidden).toBe(true);
     expect(other.hidden).toBe(true);
 
     // The next selection, including a change while closed, owns the open group.
@@ -105,4 +105,117 @@ it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => 
       : ["fixture/model-299", "fixture/model-0", "fixture/model-1"],
   );
   expect(rows[hasDefault ? 1 : 0]?.getAttribute("aria-selected")).toBe("true");
+});
+
+it.each([false, true])(
+  "drops the All models row once expanded so the rest continue the group (rest disabled=%s)",
+  async (restDisabled) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatModelPicker({
+        disabled: false,
+        modelSelectionLocked: false,
+        modelOptions: [
+          {
+            provider: "fixture",
+            value: "fixture/lead",
+            commitValue: "fixture/lead",
+            label: "lead",
+            isDefault: false,
+            recommended: true,
+          },
+          {
+            provider: "fixture",
+            value: "fixture/rest",
+            commitValue: "fixture/rest",
+            label: "rest",
+            isDefault: false,
+            disabled: restDisabled,
+          },
+        ],
+        selectedModelValue: "fixture/lead",
+        sessionModelPinned: true,
+        sessionKey: "main",
+        triggerModelLabel: "lead",
+        open: true,
+        onModelSelect: vi.fn(async () => {}),
+      }),
+      container,
+    );
+    await Promise.resolve();
+    const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+    const rest = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="fixture/rest"]',
+    )!;
+    const group = container.querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!;
+    expect(more.hidden).toBe(false);
+    expect(rest.hidden).toBe(true);
+
+    more.focus();
+    more.click();
+    expect(more.hidden).toBe(true);
+    expect(rest.hidden).toBe(false);
+    // Keyboard focus lands on the first selectable revealed model, else back on search.
+    expect(document.activeElement).toBe(
+      restDisabled ? container.querySelector("[data-chat-model-search]") : rest,
+    );
+
+    // Collapsing and reopening the provider group keeps the models inline, with no row to re-collapse.
+    group.click();
+    group.click();
+    expect(more.hidden).toBe(true);
+    expect(rest.hidden).toBe(false);
+    container.remove();
+  },
+);
+
+it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
+  const container = document.createElement("div");
+  const option = (provider: string, id: string, agentRuntimeId?: string) => ({
+    provider,
+    value: `${provider}/${id}`,
+    commitValue: `${provider}/${id}`,
+    label: id,
+    isDefault: false,
+    ...(agentRuntimeId ? { agentRuntimeId } : {}),
+  });
+  render(
+    renderChatModelPicker({
+      disabled: false,
+      modelSelectionLocked: false,
+      modelOptions: [
+        option("anthropic", "claude-opus-4-8", "claude-cli"),
+        option("claude-cli", "claude-haiku-5-5"),
+        option("anthropic", "claude-sonnet-5-5", "openclaw"),
+      ],
+      selectedModelValue: "anthropic/claude-opus-4-8",
+      sessionModelPinned: true,
+      sessionKey: "main",
+      triggerModelLabel: "claude-opus-4-8",
+      onModelSelect: vi.fn(async () => {}),
+      providerAuth: new Map([["anthropic", { kind: "subscription", label: "Claude Max" }]]),
+    }),
+    container,
+  );
+  const groups = Object.fromEntries(
+    Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]")).map(
+      (group) => [
+        group.dataset.chatModelProviderGroup,
+        Array.from(group.querySelectorAll<HTMLElement>("[data-chat-model-option]")).map(
+          (row) => row.dataset.chatModelOption,
+        ),
+      ],
+    ),
+  );
+  expect(groups).toEqual({
+    "claude-cli": ["anthropic/claude-opus-4-8", "claude-cli/claude-haiku-5-5"],
+    anthropic: ["anthropic/claude-sonnet-5-5"],
+  });
+  // Claude CLI signs in through the Anthropic account, so its group carries that auth label.
+  expect(
+    container.querySelector(
+      '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
+    )?.textContent,
+  ).toBe("Claude Max");
 });

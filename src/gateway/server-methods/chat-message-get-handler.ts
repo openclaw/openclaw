@@ -32,7 +32,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
-    const { sessionKey, messageId, maxChars } = params;
+    const { sessionKey, messageId, maxChars, sessionId: requestedSessionId } = params;
     const agentIdOverride = normalizeOptionalString(params.agentId);
     const selection = await prepareChatHistorySessionRead({
       context,
@@ -43,6 +43,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       method: "chat.message.get",
       sessionKey,
       agentIdOverride,
+      requestedSessionId,
     });
     if (!selection) {
       return;
@@ -50,22 +51,45 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     try {
       const { selectedSession, entry, queries, readCurrentSharing, rowProjection } = selection;
       const { cfg, agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
-      const sessionId = entry?.sessionId;
+      const sessionId = requestedSessionId ?? entry?.sessionId;
+      const historyEntry =
+        requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
       const withCurrentSession = <T>(consume: () => T) =>
         withReadySessionRows(rowProjection, queries, (read) => {
           signal?.throwIfAborted();
           return readCurrentSharing(read) ? consume() : undefined;
         });
-      if (!sessionId) {
-        await withCurrentSession(() =>
-          respond(true, { ok: false, unavailableReason: "not_found" }),
+      const respondNotFound = () => respond(true, { ok: false, unavailableReason: "not_found" });
+      const respondMessage = (message: unknown, applyModelPolicy = false) => {
+        if (!message) {
+          respond(true, { ok: false, unavailableReason: "not_visible" });
+          return;
+        }
+        // maxChars bounds individual fields; structured content must also fit the transport.
+        respond(
+          true,
+          jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
+            ? { ok: false, unavailableReason: "oversized" }
+            : applyModelPolicy
+              ? projectOperatorModelRead(
+                  { context, client, agentId: sessionAgentId },
+                  { ok: true, message },
+                )
+              : { ok: true, message },
         );
+      };
+      if (!sessionId) {
+        await withCurrentSession(respondNotFound);
         return;
       }
       const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
       if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
         // Pending IDs have their own owner. A transcript miss must never widen
         // into pending custody or an archived physical session.
+        if (sessionId !== entry?.sessionId) {
+          await withCurrentSession(respondNotFound);
+          return;
+        }
         const pending = await readSessionPendingInput(
           {
             agentId: sessionAgentId,
@@ -79,9 +103,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           return;
         }
         if (!pending) {
-          await withCurrentSession(() =>
-            respond(true, { ok: false, unavailableReason: "not_found" }),
-          );
+          await withCurrentSession(respondNotFound);
           return;
         }
         const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
@@ -95,23 +117,14 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
             undefined,
             resolveCronJobName,
           );
-          if (!message) {
-            respond(true, { ok: false, unavailableReason: "not_visible" });
-            return;
-          }
-          respond(
-            true,
-            jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
-              ? { ok: false, unavailableReason: "oversized" }
-              : { ok: true, message },
-          );
+          respondMessage(message);
         });
         return;
       }
       const resolved = await readChatHistoryMessageById({
-        entry,
-        provider: getCliSessionBinding(entry, "claude-cli")?.sessionId
-          ? resolveSessionModelRef(cfg, entry, sessionAgentId, {
+        entry: historyEntry,
+        provider: getCliSessionBinding(historyEntry, "claude-cli")?.sessionId
+          ? resolveSessionModelRef(cfg, historyEntry, sessionAgentId, {
               allowPluginNormalization: false,
             }).provider
           : undefined,
@@ -131,9 +144,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!resolved.found) {
-        await withCurrentSession(() =>
-          respond(true, { ok: false, unavailableReason: "not_found" }),
-        );
+        await withCurrentSession(respondNotFound);
         return;
       }
       if (resolved.oversized) {
@@ -149,6 +160,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       await withCurrentSession(() => {
         const projectedMessage = resolved.message
           ? projectChatDisplayMessage(resolved.message, {
+              includeCommentaryFallbacks: true,
               maxChars: effectiveMaxChars,
               resolveCurrentUserProfileDisplay,
               resolveCronJobName,
@@ -157,22 +169,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         const projected = projectedMessage
           ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
           : undefined;
-        if (!projected) {
-          respond(true, { ok: false, unavailableReason: "not_visible" });
-          return;
-        }
-
-        // maxChars bounds individual text fields, not the serialized message: many
-        // blocks or structured output must not bypass the WebSocket payload limit.
-        respond(
-          true,
-          jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
-            ? { ok: false, unavailableReason: "oversized" }
-            : projectOperatorModelRead(
-                { context, client, agentId: sessionAgentId },
-                { ok: true, message: projected },
-              ),
-        );
+        respondMessage(projected, true);
       });
     } finally {
       selection.release();

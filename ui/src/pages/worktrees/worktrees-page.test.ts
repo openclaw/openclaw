@@ -15,8 +15,7 @@ type WorktreesPageTestElement = HTMLElement & {
   loading: boolean;
   records: WorktreeRecord[];
   error: string | null;
-  busyId: string | null;
-  creating: boolean;
+  operation: "row" | "create" | "gc" | null;
   createOpen: boolean;
   createRepoRoot: string;
   createName: string;
@@ -375,7 +374,7 @@ describe("WorktreesPage lifecycle", () => {
       force: true,
     });
     expect(page.error).toBeNull();
-    expect(page.busyId).toBeNull();
+    expect(page.operation).toBeNull();
   });
 
   it("does not remove through a replacement gateway after confirmation", async () => {
@@ -503,7 +502,7 @@ describe("WorktreesPage lifecycle", () => {
     await restoring;
 
     expect(page.error).toBeNull();
-    expect(page.busyId).toBeNull();
+    expect(page.operation).toBeNull();
   });
 
   it("keeps a restore error after the reconciliation refresh succeeds", async () => {
@@ -528,7 +527,7 @@ describe("WorktreesPage lifecycle", () => {
 
     expect(listRequests).toBe(2);
     expect(page.error).toBe("restore failed: OPENAI_API_KEY=sk-123...cdef");
-    expect(page.busyId).toBeNull();
+    expect(page.operation).toBeNull();
   });
 
   it("replaces a mutation error when the reconciliation refresh also fails", async () => {
@@ -555,7 +554,7 @@ describe("WorktreesPage lifecycle", () => {
 
     expect(listRequests).toBe(2);
     expect(page.error).toBe("list failed");
-    expect(page.busyId).toBeNull();
+    expect(page.operation).toBeNull();
   });
 
   it("surfaces an operation failure after an earlier list failure", async () => {
@@ -601,15 +600,15 @@ describe("WorktreesPage lifecycle", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" }),
     );
-    expect(page.creating).toBe(true);
+    expect(page.operation).toBe("create");
 
     source.emit(false);
     source.emit(true);
-    expect(page.creating).toBe(false);
+    expect(page.operation === "create").toBe(false);
 
     pendingCreate.reject(new Error("gateway closed"));
     await creating;
-    expect(page.creating).toBe(false);
+    expect(page.operation === "create").toBe(false);
     expect(page.error).toBeNull();
   });
 

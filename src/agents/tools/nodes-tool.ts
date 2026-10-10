@@ -189,30 +189,22 @@ export function createNodesTool(options?: {
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
-          case "approve": {
-            const requestId = readToolStringParam(params, "requestId", {
-              required: true,
-            });
-            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
-            return jsonResult(
-              await callGatewayTool(
-                "node.pair.approve",
-                gatewayOpts,
-                {
-                  requestId,
-                },
-                { scopes },
-              ),
-            );
-          }
+          case "approve":
           case "reject": {
             const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
+            const approvalOptions =
+              action === "approve"
+                ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
+                : undefined;
             return jsonResult(
-              await callGatewayTool("node.pair.reject", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                `node.pair.${action}`,
+                gatewayOpts,
+                { requestId },
+                approvalOptions,
+              ),
             );
           }
           case "notify": {

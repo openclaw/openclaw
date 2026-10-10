@@ -21,6 +21,7 @@ import { recoverStore } from "./main-session-restart-recovery-store.js";
 const sessionKey = "agent:main:main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unusedGatewayRuntime: GatewayRecoveryRuntime = {
+  prepareRestartRecovery: () => undefined,
   dispatchSessionMethod: async () => {
     throw new Error("terminal residue must not dispatch session methods");
   },

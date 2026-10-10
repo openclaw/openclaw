@@ -55,7 +55,7 @@ export function prepareLocalAgentAvatar(
       const previous = runtime.cached.peek(key);
       const pool = (runtime.pool ??= new WorkerTaskPool({
         workerUrl: resolveRuntimeProcessEntrypointUrl("localAgentAvatar"),
-        maxWorkers: 2,
+        workerClass: "file-reader",
         sharedCompute: true,
         maxPendingTasks: 256,
         maxPendingBytes: 1024 * 1024,

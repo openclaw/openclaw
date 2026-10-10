@@ -57,6 +57,7 @@ it.each(
         workerHost: {
           enabled: true,
           capturedExecPolicy: true,
+          promptContext: 1,
           capacity: { total: 2, available: 2 },
         },
         commands: ["system.run"],

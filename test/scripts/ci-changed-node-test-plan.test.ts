@@ -1017,7 +1017,7 @@ describe("CI changed Node test plan", () => {
         );
         expect(shard.predictedSeconds).toBeGreaterThan(0);
         if (runnerBackend === "blacksmith" && !shard.requiresDist) {
-          expect(shard.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
+          expect(shard.runner).toBe("blacksmith-16vcpu-ubuntu-2404");
         }
       }
       expect(new Set((shards ?? []).flatMap(resolveTestGitCommits))).toEqual(

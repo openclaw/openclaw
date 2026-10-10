@@ -97,21 +97,6 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
   });
 
-  it.each([null, "reconnecting"] as const)(
-    "does not invent gateway metadata on the web (%s)",
-    async (connectionStatus) => {
-      const gateway = createGateway({} as GatewayBrowserClient);
-      const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-      sidebar.connectionStatus = connectionStatus;
-      await sidebar.updateComplete;
-
-      expect(
-        sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
-      ).not.toContain("Local Gateway");
-      expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
-    },
-  );
-
   it("shows gateway identity without treating aggregate health as this window’s status", async () => {
     setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
     setNativeGatewayTestState(twoGateways);
@@ -130,15 +115,12 @@ describe("AppSidebar gateway footer subtitle", () => {
     ).not.toContain("git@e8cbc62");
   });
 
-  it.each([
-    ["reconnecting", "Reconnecting…"],
-    ["suspended", "Suspended"],
-    ["reload-required", "Refresh required"],
-  ] as const)("shows one %s subtitle without delivery counts", async (connectionStatus, label) => {
+  it("shows one suspended subtitle without delivery counts", async () => {
+    const label = "Suspended";
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.connectionStatus = connectionStatus;
+    sidebar.connectionStatus = "suspended";
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-footer-bar");

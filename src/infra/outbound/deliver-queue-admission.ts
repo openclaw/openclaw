@@ -13,6 +13,7 @@ import {
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
+import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import {
   loadPendingDelivery,
   type QueuedDelivery,
@@ -24,6 +25,7 @@ import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.j
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
+  preparedOutboundPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
@@ -66,9 +68,7 @@ export function restoreQueuedDeliveryCustody(
       target,
     );
   }
-  const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
-    (prepared) => prepared.payload,
-  );
+  const payloads = preparedOutboundPayloads(custody.preparedBatch);
   return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
 }
 
@@ -150,28 +150,17 @@ export async function stageAndEnqueueOutboundDelivery(
       : undefined;
     const queuedPreparedBatch = mapPreparedOutboundAcceptedPayloads(preparedBatch, staged.payloads);
     const delivery = {
+      ...projectQueuedDeliveryOptions(params),
       channel,
       to,
-      accountId: params.accountId,
       queuePolicy,
       requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
       ...(params.reusePendingDeliveryIntent ? { requiresProducerClaim: true } : {}),
       ...(initialProducerClaim ? { initialProducerClaim } : {}),
       preparedBatch: queuedPreparedBatch,
       renderedBatchPlan,
-      threadId: params.threadId,
       reply: normalizeOutboundReplyFacts(params),
-      formatting: params.formatting,
-      identity: params.identity,
-      bestEffort: params.bestEffort,
-      gifPlayback: params.gifPlayback,
-      forceDocument: params.forceDocument,
-      silent: params.silent,
-      mirror: params.mirror,
-      session: params.session,
       sessionGeneration: params.sessionGeneration,
-      gatewayClientScopes: params.gatewayClientScopes,
-      preparedMessageId: params.preparedMessageId,
       completionRetention: params.completionRetention,
       maxRetries: params.maxRetries,
       deliveryCompletion: params.deliveryCompletion,

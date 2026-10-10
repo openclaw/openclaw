@@ -20,8 +20,7 @@ export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string):
 }
 
 function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
-  const trustEntries: SkillBinTrustEntry[] = [];
-  const seen = new Set<string>();
+  const trustEntries = new Map<string, SkillBinTrustEntry>();
   for (const raw of bins) {
     const name = raw.trim();
     if (!name) {
@@ -31,14 +30,9 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
     if (!resolvedPath) {
       continue;
     }
-    const key = `${name}\u0000${resolvedPath}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    trustEntries.push({ name, resolvedPath });
+    trustEntries.set(`${name}\u0000${resolvedPath}`, { name, resolvedPath });
   }
-  return trustEntries.toSorted(
+  return [...trustEntries.values()].toSorted(
     (left, right) =>
       left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
   );

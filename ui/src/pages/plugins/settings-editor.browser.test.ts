@@ -450,6 +450,9 @@ describe("grouped editor field discovery", () => {
       expect(editor.textContent).toContain("Storage: Path");
       expect(editor.textContent).not.toContain("Timeout");
     } else {
+      expect(
+        editor.querySelector(".cfg-map > .settings-row .settings-row__title")?.textContent?.trim(),
+      ).toBe("Custom entries");
       expect(editor.querySelector('input[aria-label="Key: alpha"]')).not.toBeNull();
       expect(editor.querySelector('input[aria-label="Key: beta"]')).toBeNull();
     }

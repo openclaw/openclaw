@@ -71,13 +71,7 @@ function formatProviderReset(resetAt: number | undefined): string | null {
 
 function renderProviderBilling(snapshot: ProviderUsageDetails) {
   return (snapshot.billing ?? []).map((entry) => {
-    const label =
-      entry.label ??
-      (entry.type === "balance"
-        ? t("usage.providerUsage.balance")
-        : entry.type === "spend"
-          ? t("usage.providerUsage.spend")
-          : t("usage.providerUsage.budget"));
+    const label = entry.label ?? t(`usage.providerUsage.${entry.type}`);
     const formatAmount = createProviderAmountFormatter(entry.unit);
     const value =
       entry.type === "budget"
@@ -92,11 +86,10 @@ function renderProviderBilling(snapshot: ProviderUsageDetails) {
   });
 }
 
-function providerHistoryAmount(snapshot: ProviderUsageDetails, days: number): number {
-  const history = snapshot.costHistory;
-  if (!history) {
-    return 0;
-  }
+function providerHistoryAmount(
+  history: NonNullable<ProviderUsageDetails["costHistory"]>,
+  days: number,
+): number {
   const now = new Date();
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const cutoff = today - (Math.max(1, days) - 1) * 86_400_000;
@@ -145,8 +138,8 @@ function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
   const cacheCount = formatCompactTokenCount(totals.cache);
   const outputCount = formatCompactTokenCount(totals.output);
   const windows = [
-    [t("usage.providerUsage.today"), providerHistoryAmount(snapshot, 1)],
-    [t("usage.providerUsage.last7Days"), providerHistoryAmount(snapshot, 7)],
+    [t("usage.providerUsage.today"), providerHistoryAmount(history, 1)],
+    [t("usage.providerUsage.last7Days"), providerHistoryAmount(history, 7)],
     [t("usage.providerUsage.lastDays", { count: String(history.periodDays) }), periodAmount],
   ] as const;
   const formatAmount = createProviderAmountFormatter(history.unit);

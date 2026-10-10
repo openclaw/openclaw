@@ -120,40 +120,18 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func loadSessions(agentID: String?) async -> [OpenClawChatSessionEntry] {
         guard !self.isRetired else { return [] }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
-        do {
-            return try await self.databases.cacheQueue.write { db in
-                let rows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT payload_json FROM cached_agent_sessions
-                    WHERE gateway_id = ? AND agent_id = ? ORDER BY position
-                    """,
-                    arguments: [gatewayID, normalizedAgentID])
-                do {
-                    return try rows.map { row in
-                        let payload: String = row["payload_json"]
-                        return try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(payload.utf8))
-                    }
-                } catch {
-                    cacheLogger.error(
-                        "gateway session cache decode failed: \(error.localizedDescription, privacy: .public)")
-                    // Decode and cleanup share one agent partition transaction;
-                    // corruption in one roster must not erase another agent.
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_session_rosters
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, normalizedAgentID])
-                    return []
-                }
-            }
-        } catch {
-            cacheLogger.error("gateway session cache read failed: \(error.localizedDescription, privacy: .public)")
-            return []
-        }
+        return await self.loadCachedRows(
+            OpenClawChatSessionEntry.self,
+            select: """
+            SELECT payload_json FROM cached_agent_sessions
+            WHERE gateway_id = ? AND agent_id = ? ORDER BY position
+            """,
+            discard: """
+            DELETE FROM cached_session_rosters
+            WHERE gateway_id = ? AND agent_id = ?
+            """,
+            arguments: [self.gatewayID, Self.normalizedAgentID(agentID)],
+            context: "gateway session cache")
     }
 
     public func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage] {
@@ -162,39 +140,48 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func loadTranscript(sessionKey: String, agentID: String?) async -> [OpenClawChatMessage] {
         guard !self.isRetired else { return [] }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
+        return await self.loadCachedRows(
+            OpenClawChatMessage.self,
+            select: """
+            SELECT payload_json FROM cached_messages
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+            ORDER BY position
+            """,
+            discard: """
+            DELETE FROM cached_transcripts
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+            """,
+            arguments: [self.gatewayID, sessionKey, Self.normalizedAgentID(agentID)],
+            context: "gateway transcript cache")
+    }
+
+    private func loadCachedRows<Value: Decodable & Sendable>(
+        _ type: Value.Type,
+        select: String,
+        discard: String,
+        arguments: [String],
+        context: String) async -> [Value]
+    {
         do {
             return try await self.databases.cacheQueue.write { db in
-                let rows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT payload_json FROM cached_messages
-                    WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                    ORDER BY position
-                    """,
-                    arguments: [gatewayID, sessionKey, normalizedAgentID])
+                let arguments = StatementArguments(arguments)
+                let rows = try Row.fetchAll(db, sql: select, arguments: arguments)
                 do {
                     return try rows.map { row in
                         let payload: String = row["payload_json"]
-                        return try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(payload.utf8))
+                        return try JSONDecoder().decode(type, from: Data(payload.utf8))
                     }
                 } catch {
                     cacheLogger.error(
-                        "gateway transcript cache decode failed: \(error.localizedDescription, privacy: .public)")
-                    // Keep the failed read and partition cleanup atomic; an
-                    // overlapping history write must survive this recovery.
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_transcripts
-                        WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, sessionKey, normalizedAgentID])
+                        "\(context, privacy: .public) decode failed: \(error.localizedDescription, privacy: .public)")
+                    // Failed decoding and exact-partition cleanup share the read's transaction.
+                    try db.execute(sql: discard, arguments: arguments)
                     return []
                 }
             }
         } catch {
-            cacheLogger.error("gateway transcript cache read failed: \(error.localizedDescription, privacy: .public)")
+            cacheLogger
+                .error("\(context, privacy: .public) read failed: \(error.localizedDescription, privacy: .public)")
             return []
         }
     }

@@ -174,7 +174,7 @@ describe("worker plugin state", () => {
     });
   });
 
-  it.each(["register", "delete"] as const)(
+  it.each(["register", "delete", "delete-aborted"] as const)(
     "revalidates caller authority after asynchronous worker admission for %s",
     async (operation) => {
       await withOpenClawTestState({ label: "plugin-state-current-owner" }, async (state) => {
@@ -184,6 +184,7 @@ describe("worker plugin state", () => {
           env: state.env,
         });
         await store.register("subscription", "original");
+        const canceled = new AbortController();
         let current = true;
         const assertCurrent = () => {
           if (!current) {
@@ -193,8 +194,15 @@ describe("worker plugin state", () => {
         const pending =
           operation === "register"
             ? store.register("subscription", "replacement", { assertCurrent })
-            : store.delete("subscription", { assertCurrent });
-        current = false;
+            : store.delete("subscription", {
+                assertCurrent,
+                signal: operation === "delete-aborted" ? canceled.signal : undefined,
+              });
+        if (operation === "delete-aborted") {
+          canceled.abort(new Error("callback task deadline expired"));
+        } else {
+          current = false;
+        }
         await expect(pending).rejects.toThrow("plugin state");
         expect(await store.lookup("subscription")).toBe("original");
       });

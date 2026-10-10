@@ -81,7 +81,9 @@ job. Open the page that matches your task.
   the fallback. Input hints retain integer and numeric bounds as comments, such
   as `offset?: number /* integer, >= 1 */`. Other validation details remain in
   the full schema available through `describe()`. These hints do not change
-  tool validation or output contracts.
+  tool validation or output contracts. Core file and shell tool signatures stay
+  first in the bounded index, followed by tools with declared output hints, so
+  catalog growth does not hide their input argument names.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent

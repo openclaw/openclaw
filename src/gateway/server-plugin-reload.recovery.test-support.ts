@@ -293,6 +293,7 @@ export async function createPluginReloadRecoveryFixture(
     nextConfig = config,
     pluginIds: readonly string[] = ["first"],
     changedPaths: string[] = [],
+    ownership?: Pick<Parameters<typeof reloadGatewayPlugins>[1], "checkpoint" | "isAborted">,
   ) => {
     aborted = false;
     return withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -327,7 +328,7 @@ export async function createPluginReloadRecoveryFixture(
           nextConfig,
           sourceConfig: nextConfig,
           changedPaths,
-          checkpoint: options.checkpoint,
+          checkpoint: ownership?.checkpoint ?? options.checkpoint,
           prepareConfigEffects:
             options.prepareConfigEffects ??
             (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
@@ -347,7 +348,7 @@ export async function createPluginReloadRecoveryFixture(
             await options.afterPublish?.();
           },
           env: options.env ?? {},
-          isAborted: () => aborted,
+          isAborted: () => aborted || ownership?.isAborted?.() === true,
           assertInvokerOwned: options.assertInvokerOwned,
         },
       ),

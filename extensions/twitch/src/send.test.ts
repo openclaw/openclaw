@@ -71,6 +71,25 @@ describe("sendMessageTwitchInternal", () => {
     );
   });
 
+  it.each([
+    ["Read **the [docs](https://example.com/docs)**", "Read the docs (https://example.com/docs)"],
+    ["_line one\nline two_", "line one line two"],
+    [
+      "use foo_bar_baz with _italic_ and __bold__ text",
+      "use foo_bar_baz with italic and bold text",
+    ],
+  ])("renders Markdown for the platform send: %s", async (text, expected) => {
+    await sendMessageTwitchInternal({ ...params, text });
+
+    expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
+      account,
+      "testchannel",
+      expected,
+      cfg,
+      "default",
+    );
+  });
+
   it("strips Markdown once, preserving literal thematic breaks", async () => {
     await sendMessageTwitchInternal({ ...params, text: "`---`" });
 

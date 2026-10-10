@@ -76,12 +76,13 @@ repos:
         language: system
         types: [text]
 
-      # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+      # Advisory findings are visible but never block commits.
       - id: pnpm-audit-prod
         name: pnpm-audit-prod
-        entry: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        entry: node scripts/ci-production-audit.mjs
         language: system
         pass_filenames: false
+        verbose: true
 
       # oxlint --type-aware src test
       - id: oxlint

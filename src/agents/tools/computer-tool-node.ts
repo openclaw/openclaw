@@ -1,8 +1,5 @@
-import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
@@ -41,6 +38,7 @@ import {
   SCREEN_SNAPSHOT_COMMAND,
 } from "./computer-tool-shared.js";
 import type { GatewayCallOptions } from "./gateway.js";
+import { nodeToolIdempotencyKey } from "./nodes-utils.js";
 
 type ComputerState =
   | { kind: "unbound" }
@@ -71,38 +69,6 @@ function parseComputerActPayload(value: unknown): ComputerActResult {
       cause: error,
     });
   }
-}
-
-function computerActIdempotencyKey(params: {
-  scope?: string;
-  toolCallId: string;
-  purpose?: "follow-up-observation";
-}): string {
-  const stableScope = params.scope?.trim();
-  const stableCallId = params.toolCallId.trim();
-  if (!stableScope || !stableCallId) {
-    // Runner-normalized call ids are unique within an attempt, not across all runs.
-    // Without both a stable run scope and call id, avoid collapsing unrelated actions.
-    return crypto.randomUUID();
-  }
-  const parts = [
-    stableScope,
-    getAgentToolAssistantTurnId() ?? "",
-    stableCallId,
-    COMPUTER_ACT_COMMAND,
-  ];
-  if (params.purpose) {
-    parts.push(params.purpose);
-  }
-  const digest = sha256Hex(JSON.stringify(parts));
-  // The automatic read shares a tool-call id with input, but must never replay its result.
-  if (params.purpose) {
-    return `computer.observation:v2:${digest}`;
-  }
-  // `v2` versions this key's composition (scope + assistant turn + call id + command), not the
-  // `computer.act` wire contract. Changing what goes into the digest needs a
-  // new prefix so in-flight keys from an older node cannot collide.
-  return `computer.act:v2:${digest}`;
 }
 
 function gatewayRequestDetails(err: unknown): Record<string, unknown> | undefined {
@@ -150,8 +116,7 @@ function isButtonAlreadyReleasedError(err: unknown): boolean {
 }
 
 export class ComputerToolSession {
-  private selectedCapabilities: ComputerUseCapabilityDescriptor | undefined;
-  private selectedCapabilityTargetKey: string | undefined;
+  private selectedBinding: ComputerBinding | undefined;
   private observationState: ComputerObservationState | undefined;
   private computerState: ComputerState = { kind: "unbound" };
   private heldButtonTarget: ComputerTarget | undefined;
@@ -181,15 +146,14 @@ export class ComputerToolSession {
   }
 
   private bindCapabilities(binding: ComputerBinding, refresh = false): void {
-    const next = binding.capabilities;
-    const targetKey = computerHostKey(binding.host);
+    const previous = this.selectedBinding;
     const changed =
-      this.selectedCapabilityTargetKey !== targetKey ||
-      this.selectedCapabilities?.provider.generation !== next?.provider.generation;
-    this.selectedCapabilityTargetKey = targetKey;
-    this.selectedCapabilities = next;
+      !previous ||
+      computerHostKey(previous.host) !== computerHostKey(binding.host) ||
+      previous.capabilities?.provider.generation !== binding.capabilities?.provider.generation;
+    this.selectedBinding = binding;
     if (changed || refresh) {
-      this.options.onCapabilitiesChanged(next);
+      this.options.onCapabilitiesChanged(binding.capabilities);
     }
     if (changed) {
       this.observationState = undefined;
@@ -204,10 +168,10 @@ export class ComputerToolSession {
     }
   }
 
-  private prepareScreenshotTarget(target: ComputerTarget): void {
+  private visibleFrameForTarget(target: ComputerTarget): ComputerFrame | undefined {
     const frame = this.computerState;
     const contextEpoch = this.options.contextEpoch;
-    // Retain the visible frame only until replacement pixels are verified; failures clear it.
+    // Without context tracking, the earlier screenshot may already have been pruned.
     if (
       contextEpoch?.frameImageIdentity &&
       frame.kind === "frame" &&
@@ -215,9 +179,16 @@ export class ComputerToolSession {
       frame.target.screenIndex === target.screenIndex &&
       frame.contextEpoch === contextEpoch.value
     ) {
-      return;
+      return frame;
     }
-    this.setTarget(target);
+    return undefined;
+  }
+
+  private prepareScreenshotTarget(target: ComputerTarget): void {
+    // Retain the visible frame only until replacement pixels are verified; failures clear it.
+    if (!this.visibleFrameForTarget(target)) {
+      this.setTarget(target);
+    }
   }
 
   refreshUnchangedFrame(params: {
@@ -225,17 +196,8 @@ export class ComputerToolSession {
     capture: ScreenshotCapture;
     imageIdentity?: string;
   }): ComputerFrame | undefined {
-    const frame = this.computerState;
-    const contextEpoch = this.options.contextEpoch;
-    // Without context tracking, the earlier screenshot may already have been pruned.
-    if (
-      !contextEpoch?.frameImageIdentity ||
-      contextEpoch.frameImageIdentity !== params.imageIdentity ||
-      frame.kind !== "frame" ||
-      computerHostKey(frame.target) !== computerHostKey(params.target) ||
-      frame.target.screenIndex !== params.target.screenIndex ||
-      frame.contextEpoch !== contextEpoch.value
-    ) {
+    const frame = this.visibleFrameForTarget(params.target);
+    if (!frame || this.options.contextEpoch?.frameImageIdentity !== params.imageIdentity) {
       return undefined;
     }
     // Keep the model's original image/frame binding while refreshing the node's capture token.
@@ -487,7 +449,8 @@ export class ComputerToolSession {
     await binding.invoke({
       command: COMPUTER_ACT_COMMAND,
       commandParams: { action: "__take_control", executionId: this.options.executionId },
-      idempotencyKey: computerActIdempotencyKey({
+      idempotencyKey: nodeToolIdempotencyKey({
+        command: COMPUTER_ACT_COMMAND,
         scope: this.options.idempotencyScope,
         toolCallId,
       }),
@@ -625,7 +588,8 @@ export class ComputerToolSession {
           command: COMPUTER_ACT_COMMAND,
           commandParams,
           timeoutMs: invokeTimeoutMs,
-          idempotencyKey: computerActIdempotencyKey({
+          idempotencyKey: nodeToolIdempotencyKey({
+            command: COMPUTER_ACT_COMMAND,
             scope: this.options.idempotencyScope,
             toolCallId: params.toolCallId,
             purpose: params.purpose,

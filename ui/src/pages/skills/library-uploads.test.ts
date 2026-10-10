@@ -38,13 +38,7 @@ function harness() {
   const gateway = new GatewayPageController(host, { getGateway: () => connection.gateway });
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
-  const library = new SkillLibraryController(
-    host,
-    gateway,
-    () => "main",
-    async () => {},
-    () => config,
-  );
+  const library = new SkillLibraryController(host, gateway, () => config);
   document.body.append(host);
   library.list = {
     entries: [],

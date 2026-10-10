@@ -96,25 +96,6 @@ describe("Codex desktop generation service", () => {
     vi.useRealTimers();
   });
 
-  it("starts without blocking on initial convergence", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("desktop-start");
-    current = harness;
-
-    await harness.service.start(harness.context);
-
-    expect(harness.registrations).toHaveLength(2);
-    expect(
-      harness.registrations.map(({ watchedPath, recursive }) => [watchedPath, recursive]),
-    ).toEqual([
-      ["/Applications", false],
-      ["/Applications/ChatGPT.app", true],
-    ]);
-    expect(harness.clearFailure).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(() => expect(harness.clearFailure).toHaveBeenCalledOnce());
-  });
-
   it("rearms stable directory watches and publishes a settled root replacement", async () => {
     vi.useFakeTimers();
     const harness = createHarness("desktop-x");

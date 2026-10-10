@@ -319,6 +319,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.findSidebarHovercardRowByKey(sessionKey)?.attention).toEqual({
       kind: "error",
       reason: "Provider credits exhausted",
+      sourceSessionKey: sessionKey,
     });
   });
 

@@ -7,7 +7,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyRoutingEvidence } from "./policy-state-types.js";
 
-export const ROUTING_MATCH_KINDS = [
+const ROUTING_MATCH_KINDS = [
   "binding.peer",
   "binding.peer.parent",
   "binding.peer.wildcard",
@@ -18,6 +18,19 @@ export const ROUTING_MATCH_KINDS = [
   "binding.channel",
   "default",
 ] as const satisfies readonly ResolvedAgentRoute["matchedBy"][];
+
+export function validPolicyRoutingMatchKinds(
+  value: unknown,
+): value is readonly ResolvedAgentRoute["matchedBy"][] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (entry) => typeof entry === "string" && ROUTING_MATCH_KINDS.some((kind) => kind === entry),
+    ) &&
+    new Set(value).size === value.length
+  );
+}
 
 type PolicyRoutingProbe = {
   readonly id: string;

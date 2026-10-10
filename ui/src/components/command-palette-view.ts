@@ -1,4 +1,4 @@
-import { html, noChange, nothing } from "lit";
+import { html, noChange, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
   pathForAgentPanel,
@@ -252,6 +252,10 @@ function resolvePaletteResults(props: CommandPaletteProps) {
   return { hideSearch, matches, grouped, items, activeIndex };
 }
 
+function renderPaletteHint(shortcut: TemplateResult, label: string) {
+  return html`<span class="cmd-palette__hint">${shortcut}${" "}<span>${label}</span></span>`;
+}
+
 export function renderCommandPalette(readProps: () => CommandPaletteProps) {
   const props = readProps();
   if (!props.open) {
@@ -482,23 +486,11 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                     <div id="cmd-palette-keys" class="cmd-palette__footer">
                       ${
                         items.length > 0 && !props.query.includes("\n")
-                          ? html`<span class="cmd-palette__hint"
-                                >${renderKbd(["↑", "↓"])}${" "}<span
-                                  >${t("palette.footer.navigate")}</span
-                                ></span
-                              >
-                              <span class="cmd-palette__hint"
-                                >${renderKbd("↵")}${" "}<span
-                                  >${t("palette.footer.select")}</span
-                                ></span
-                              >`
+                          ? html`${renderPaletteHint(renderKbd(["↑", "↓"]), t("palette.footer.navigate"))}
+                            ${renderPaletteHint(renderKbd("↵"), t("palette.footer.select"))}`
                           : nothing
                       }
-                      <span class="cmd-palette__hint"
-                        >${renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.newline)}${" "}<span
-                          >${t("palette.footer.newline")}</span
-                        ></span
-                      >
+                      ${renderPaletteHint(renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.newline), t("palette.footer.newline"))}
                     </div>
                   `
             }

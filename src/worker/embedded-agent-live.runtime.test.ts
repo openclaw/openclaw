@@ -1,11 +1,56 @@
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WorkerLiveEventSchema,
+  type WorkerLiveEvent,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { readAgentAssistantSource } from "../infra/agent-events.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 describe("createWorkerLiveRuntime", () => {
+  it("keeps distinct reasoning occurrences through bounded worker payloads", () => {
+    const emitted: WorkerLiveEvent[] = [];
+    const runtime = createWorkerLiveRuntime({
+      enqueuePreview: (event) => {
+        emitted.push(event);
+        return true;
+      },
+      emitTerminal: async () => {},
+    });
+    const text = "Synthetic reasoning. ".repeat(2_000);
+    const sources: string[] = [];
+    for (let occurrence = 0; occurrence < 2; occurrence++) {
+      const message = makeAgentAssistantMessage({
+        content: [{ type: "thinking", thinking: text }],
+      });
+      runtime.handleSessionEvent({ type: "message_start", message });
+      runtime.handleSessionEvent({
+        type: "message_update",
+        message,
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          contentIndex: 0,
+          delta: text,
+          partial: message,
+        },
+      });
+      const source = readAgentAssistantSource(message);
+      if (!source?.itemId) {
+        throw new Error("Worker persistence requires the source occurrence");
+      }
+      sources.push(source.itemId);
+    }
+    expect(emitted.map((event) => Value.Check(WorkerLiveEventSchema, event))).toEqual([true, true]);
+    expect(emitted.map((event) => event.payload)).toEqual(
+      sources.map((itemId) => ({ itemId, text: expect.any(String), delta: expect.any(String) })),
+    );
+    expect(sources[0]).not.toBe(sources[1]);
+    expect(emitted.every((event) => JSON.stringify(event).length < text.length)).toBe(true);
+  });
+
   it("publishes attachment references only when the assistant message is complete", () => {
     const emitted: WorkerLiveEvent[] = [];
     const runtime = createWorkerLiveRuntime({

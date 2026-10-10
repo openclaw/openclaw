@@ -356,20 +356,6 @@ export async function unregisterIMessageApprovalReactionTarget(params: {
   ]);
 }
 
-function resolveTarget(params: {
-  target: IMessageApprovalReactionTarget | null | undefined;
-  reactionKey: string;
-}): IMessageApprovalReactionResolution | null {
-  const target = resolveTypedApprovalReactionTarget(params);
-  return target
-    ? {
-        approvalId: target.approvalId,
-        approvalKind: target.approvalKind,
-        decision: target.decision,
-      }
-    : null;
-}
-
 function formatCanonicalApprovalTerminalState(approval: ApprovalResolveResult["approval"]): string {
   const decision =
     approval.status === "allowed" || approval.status === "denied"
@@ -390,12 +376,16 @@ export async function resolveIMessageApprovalReactionTargetWithPersistence(param
   // (chat_guid → chat_identifier → chat_id → handle) and accept the first hit.
   const keys = enumerateApprovalTargetKeys(params);
   for (const key of keys) {
-    const target = resolveTarget({
+    const target = resolveTypedApprovalReactionTarget({
       target: await imessageApprovalReactionTargets.lookup(key),
       reactionKey: params.reactionKey,
     });
     if (target) {
-      return target;
+      return {
+        approvalId: target.approvalId,
+        approvalKind: target.approvalKind,
+        decision: target.decision,
+      };
     }
   }
   return null;
@@ -426,30 +416,20 @@ function readApprovalReactionEvent(
   if (!reaction) {
     return null;
   }
-  const reactionKey = reaction.emoji.trim();
-  const candidates = (reaction.targetGuids ?? [])
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  const primary = reaction.targetGuid?.trim() || candidates[0] || "";
-  const messageIdCandidates = candidates.length > 0 ? candidates : primary ? [primary] : [];
-  const actorHandle = normalizeIMessageHandle((message.sender ?? "").trim());
+  const reactionKey = reaction.emoji;
+  const primary = reaction.targetGuid;
+  const actorHandle = normalizeIMessageHandle(message.sender ?? "");
   if (!reactionKey || !primary || !actorHandle) {
     return null;
   }
-  const conversation = buildIMessageApprovalConversationKeyForInbound({
-    chatGuid: message.chat_guid,
-    chatIdentifier: message.chat_identifier,
-    chatId: message.chat_id,
-    isGroup: message.is_group,
-    actorHandle,
-  });
+  const conversation = buildIMessageApprovalConversationKeyForInbound(message, actorHandle);
   if (!normalizeConversationKey(conversation)) {
     return null;
   }
   return {
     conversation,
     messageId: primary,
-    messageIdCandidates,
+    messageIdCandidates: reaction.targetGuids ?? [],
     actorHandle,
     reactionKey,
     action: reaction.action,
@@ -469,11 +449,7 @@ export async function handleIMessageApprovalReaction(params: {
   if (!event) {
     return { handled: false, stopPolling: false };
   }
-  // A removed tapback (user un-taps 👍 or switches to a different emoji) is
-  // intentionally NOT a fresh resolve. We only want to clear the binding so
-  // the next added-tapback resolves freshly. Falling through to `return false`
-  // would surface the un-tap as a noisy reaction system event; instead we
-  // own the event and stay quiet.
+  // Removing a tapback is not a fresh approval decision.
   if (event.action === "removed") {
     return { handled: false, stopPolling: false };
   }

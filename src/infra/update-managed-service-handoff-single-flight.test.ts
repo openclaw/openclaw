@@ -428,9 +428,11 @@ describe("managed service update handoff single-flight", () => {
   });
 
   it("terminates the exact helper when its initial start identity is unavailable", async () => {
-    vi.mocked((await import("../shared/pid-alive.js")).getFileLockProcessStartTime)
-      .mockReturnValueOnce(17)
-      .mockReturnValueOnce(null);
+    const startIdentity = vi.mocked(
+      (await import("../shared/pid-alive.js")).getFileLockProcessStartTime,
+    );
+    const parentIdentity = startIdentity(process.pid);
+    startIdentity.mockImplementation((pid) => (pid === process.pid ? parentIdentity : null));
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
     const identity = {

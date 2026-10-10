@@ -16,9 +16,13 @@ import type { MentionMutation, MentionMutationResult } from "./mention-inbox.wor
 export const mentionReadOperations = {
   "mentions.snapshot": (revision: number, db) => ({
     type: "mentions.snapshot" as const,
-    snapshot: runSqliteDeferredTransactionSync(db, () => readMentionStoreSnapshot(revision, db), {
-      operationLabel: "mentions.read",
-    }),
+    // An unchanged head is one atomic read; changed snapshots reread inside their transaction.
+    snapshot:
+      revision >= 0 && readMentionStoreHead(db).revision === revision
+        ? undefined
+        : runSqliteDeferredTransactionSync(db, () => readMentionStoreSnapshot(revision, db), {
+            operationLabel: "mentions.read",
+          }),
   }),
 } satisfies WorkerOperationHandlers<DatabaseSync>;
 

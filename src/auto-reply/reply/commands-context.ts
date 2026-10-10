@@ -7,12 +7,37 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
-import type { CommandContext } from "./commands-types.js";
+import type { CommandContext, HandleCommandsParams } from "./commands-types.js";
 import { stripMentions } from "./mentions.js";
 
 /** Selection and execution must bind to the same channel, including origin-routed turns. */
 export function resolveCommandChannel(ctx: MsgContext): string {
   return normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
+}
+
+export function buildPluginCommandContext(params: HandleCommandsParams) {
+  const { command, ctx } = params;
+  return {
+    senderId: command.senderId,
+    channel: command.channel,
+    channelId: command.channelId,
+    isAuthorizedSender: command.isAuthorizedSender,
+    senderIsOwner: command.senderIsOwner,
+    assertOwnerCurrent: command.assertOwnerCurrent,
+    gatewayClientScopes: ctx.GatewayClientScopes,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    from: command.from,
+    to: command.to,
+    originatingTo: normalizeOptionalString(ctx.OriginatingTo),
+    accountId: ctx.AccountId ?? undefined,
+    messageThreadId:
+      typeof ctx.MessageThreadId === "string" || typeof ctx.MessageThreadId === "number"
+        ? ctx.MessageThreadId
+        : undefined,
+    threadParentId: normalizeOptionalString(ctx.ThreadParentId),
+  };
 }
 
 export function buildCommandContext(params: {

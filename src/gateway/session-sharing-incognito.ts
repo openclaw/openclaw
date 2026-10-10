@@ -1,7 +1,38 @@
 import { assertSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import type { IncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
-import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
+import {
+  captureIncognitoSessionBinding,
+  type IncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+
+export type IncognitoSessionSharingTarget = {
+  agentId?: string;
+  sessionKey: string;
+  resolved: { readSource?: { path: string }; storePath: string } | null;
+  absentTarget?: { storePath: string };
+};
+
+export function captureSessionSharingIncognitoBinding(target: IncognitoSessionSharingTarget) {
+  return captureIncognitoSessionBinding({
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+    storePath:
+      target.resolved?.readSource?.path ??
+      target.resolved?.storePath ??
+      target.absentTarget?.storePath,
+  });
+}
+
+/** Production incognito stays native until acquisition supplies its explicit binding. */
+export function hasNativeIncognitoSessionSharingSource(
+  targets: readonly IncognitoSessionSharingTarget[],
+): boolean {
+  return targets.some(
+    (target) =>
+      isIncognitoSessionKey(target.sessionKey) && !captureSessionSharingIncognitoBinding(target),
+  );
+}
 
 export class SessionMutationFactsUnavailableError extends Error {
   constructor(options?: ErrorOptions) {
@@ -62,12 +93,17 @@ export function captureIncognitoSessionMutationFacts(
         }
         return { target: null, membership: new Set<string>() };
       }
-      const target: NonNullable<PreparedSessionMutationFacts["target"]> = {
+      const target = {
         agentId: actor.agentId,
         canonicalKey,
         storeKey: canonicalKey,
         storeKeys: [canonicalKey],
         storePath: actor.path,
+        readSource: {
+          agentId: actor.agentId,
+          path: actor.path,
+          databaseIdentity: actor.identity.incarnation,
+        },
         entry: current.entry,
       };
       return {

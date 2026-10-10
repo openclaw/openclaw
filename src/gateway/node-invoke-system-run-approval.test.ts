@@ -1,13 +1,16 @@
 /**
  * Node invoke system-run approval tests.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
 } from "../infra/system-run-approval-binding.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
-import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
+import {
+  createApprovalScheduler,
+  createTestApprovalManager,
+} from "./exec-approval-manager.test-support.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
@@ -90,7 +93,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     execApprovalManager?: SanitizerOptions["execApprovalManager"];
     client?: SanitizerOptions["client"];
     nodeId?: string;
-    nowMs?: number;
   }) {
     return await sanitizeSystemRunParamsForForwarding({
       rawParams: approvedRunParams(opts.rawParams),
@@ -99,7 +101,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       execApprovalManager:
         opts.execApprovalManager ??
         manager(opts.record ?? makeRecord(echoSafeCommand, echoSafeArgv)),
-      nowMs: opts.nowMs ?? now,
     });
   }
 
@@ -107,14 +108,12 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     rawParams: ApprovedRunParamOverrides;
     record?: ExecApprovalRecord;
     client?: SanitizerOptions["client"];
-    nowMs?: number;
   }) {
     return await sanitizeSystemRunParamsForForwarding({
       rawParams: fallbackRunParams(opts.rawParams),
       nodeId: "node-1",
       client: opts.client ?? client,
       execApprovalManager: manager(opts.record ?? makeTimedOutRecord()),
-      nowMs: opts.nowMs ?? now,
     });
   }
 
@@ -291,7 +290,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nodeId: "node-1",
       client: opts.client ?? trustedBackendClient,
       execApprovalManager: manager(opts.record ?? makeChatRecord()),
-      nowMs: now,
     });
   }
 
@@ -335,7 +333,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         client,
         execApprovalManager: approvalManager,
-        nowMs: now,
       });
 
     const first = await sanitize();
@@ -403,36 +400,63 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(record.decision).toBe("allow-once");
   });
 
-  test("forwards timed-out fallback during resolved-record grace after expiry", async () => {
-    const record = makeTimedOutRecord();
-    record.expiresAtMs = now - 1_000;
-    record.resolvedAtMs = now - 500;
-    const result = await sanitizeFallbackRun({
-      rawParams: {
-        command: echoSafeArgv,
-        rawCommand: echoSafeCommand,
-      },
-      record,
-    });
+  test.for([
+    { decision: "allow-once", handoff: "none" },
+    { decision: "allow-always", handoff: "none" },
+    { decision: "allow-once", handoff: "retained" },
+    { decision: "allow-always", handoff: "retained" },
+    { decision: "allow-once", handoff: "released" },
+    { decision: "allow-always", handoff: "released" },
+  ] as const)(
+    "forwards live $decision after the request deadline with $handoff handoff custody",
+    async ({ decision, handoff }, testContext) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const approvalManager = createTestApprovalManager(testContext, {
+        scheduler: createApprovalScheduler().scheduler,
+      });
+      const record = approvalManager.create(
+        makeRecord(echoSafeCommand, echoSafeArgv).request,
+        1_000,
+      );
+      record.requestedByDeviceId = "dev-1";
+      let release: (() => void) | null = null;
+      try {
+        await approvalManager.register(record, 1_000);
+        clock.mockReturnValue(now + 500);
+        expect(await approvalManager.resolve(record.id, decision)).toBe(true);
+        if (handoff !== "none") {
+          release = approvalManager.retainForHandoff(record.id);
+          expect(release).not.toBeNull();
+        }
+        clock.mockReturnValue(now + (handoff === "none" ? 1_100 : 20_000));
+        if (handoff === "released") {
+          release?.();
+          clock.mockReturnValue(now + 21_000);
+        }
+        const forward = () =>
+          sanitizeSystemRunParamsForForwarding({
+            nodeId: "node-1",
+            rawParams: approvedRunParams({ command: echoSafeArgv, runId: record.id }),
+            client,
+            execApprovalManager: approvalManager,
+          });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("unreachable");
-    }
-    const forwarded = result.params as Record<string, unknown>;
-    expect(forwarded.approvalSource).toBe("ask-fallback");
-  });
-
-  test("accepts a no-route server expiration as ask fallback", async () => {
-    const record = makeTimedOutRecord();
-    record.resolvedBy = "no-approval-route";
-    const result = await sanitizeFallbackRun({
-      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
-      record,
-    });
-
-    expect(result.ok).toBe(true);
-  });
+        expect(await forward()).toMatchObject({
+          ok: true,
+          params: { command: echoSafeArgv, approved: true, approvalDecision: decision },
+        });
+        if (decision === "allow-once") {
+          expectRejectedForwardingResult(await forward(), "APPROVAL_REQUIRED");
+        }
+        release?.();
+        clock.mockReturnValue(Date.now() + 15_000);
+        expectRejectedForwardingResult(await forward(), "UNKNOWN_APPROVAL_ID");
+      } finally {
+        release?.();
+        clock.mockRestore();
+      }
+    },
+  );
 
   test("rejects ask fallback without a canonical execution plan", async () => {
     const record = makeTimedOutRecord();
@@ -445,56 +469,43 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_PLAN_REQUIRED");
   });
 
-  test("consumes ask fallback exactly once", async () => {
-    const record = makeTimedOutRecord();
-    const approvalManager = manager(record);
-    const rawParams = fallbackRunParams({
-      command: echoSafeArgv,
-      rawCommand: echoSafeCommand,
-    });
-    const sanitize = async () =>
-      await sanitizeSystemRunParamsForForwarding({
-        rawParams,
-        nodeId: "node-1",
-        client,
-        execApprovalManager: approvalManager,
-        nowMs: now,
+  test.for(["timeout", "no-approval-route"] as const)(
+    "forwards %s fallback only during the approval owner's resolved grace",
+    async (reason, testContext) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const approvalManager = createTestApprovalManager(testContext, {
+        scheduler: createApprovalScheduler().scheduler,
       });
+      const record = approvalManager.create(makeTimedOutRecord().request, 60_000);
+      record.requestedByDeviceId = "dev-1";
+      try {
+        await approvalManager.register(record, 60_000);
+        clock.mockReturnValue(now + (reason === "timeout" ? 60_000 : 500));
+        if (reason === "timeout") {
+          expect(await approvalManager.getSnapshot(record.id)).toMatchObject({ status: "expired" });
+        } else {
+          expect(await approvalManager.expire(record.id, reason)).toBe(true);
+        }
+        const forward = () =>
+          sanitizeSystemRunParamsForForwarding({
+            nodeId: "node-1",
+            rawParams: fallbackRunParams({ command: echoSafeArgv, runId: record.id }),
+            client,
+            execApprovalManager: approvalManager,
+          });
 
-    expect((await sanitize()).ok).toBe(true);
-    expectRejectedForwardingResult(await sanitize(), "APPROVAL_REQUIRED");
-  });
-
-  test("rejects timed-out fallback after resolved-record grace", async () => {
-    const record = makeTimedOutRecord();
-    record.expiresAtMs = now - 20_000;
-    record.resolvedAtMs = now - 16_000;
-    const result = await sanitizeFallbackRun({
-      rawParams: {
-        command: echoSafeArgv,
-        rawCommand: echoSafeCommand,
-      },
-      record,
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_EXPIRED");
-  });
-
-  test("rejects an early no-route fallback after resolved-record grace", async () => {
-    const record = makeTimedOutRecord();
-    record.expiresAtMs = now + 60_000;
-    record.resolvedAtMs = now - 16_000;
-    record.resolvedBy = "no-approval-route";
-    const result = await sanitizeFallbackRun({
-      rawParams: {
-        command: echoSafeArgv,
-        rawCommand: echoSafeCommand,
-      },
-      record,
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_EXPIRED");
-  });
+        expect(await forward()).toMatchObject({
+          ok: true,
+          params: { command: echoSafeArgv, approvalSource: "ask-fallback" },
+        });
+        expectRejectedForwardingResult(await forward(), "APPROVAL_REQUIRED");
+        clock.mockReturnValue(Date.now() + 15_000);
+        expectRejectedForwardingResult(await forward(), "UNKNOWN_APPROVAL_ID");
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   test("rejects timed-out fallback without authenticated provenance", async () => {
     const result = await sanitizeApprovedRun({
@@ -858,7 +869,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       rawParams: params,
       client,
       execApprovalManager: approvalManager,
-      nowMs: now,
     });
     expectAllowOnceForwardingResult(first);
 
@@ -867,7 +877,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       rawParams: params,
       client,
       execApprovalManager: approvalManager,
-      nowMs: now,
     });
     expectRejectedForwardingResult(second, "APPROVAL_REQUIRED");
   });

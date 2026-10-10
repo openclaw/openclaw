@@ -12,11 +12,14 @@ import {
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
+import type { ExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals-core.js";
 import { resolveExecApprovalRequestAllowedDecisions } from "../infra/exec-approvals-policy.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -31,6 +34,7 @@ import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { createApprovalHandlers } from "./server-methods/approval.js";
 import { getOperatorApproval, createContext } from "./server-methods/approval.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 beforeAll(async () => {
@@ -46,7 +50,10 @@ afterEach(() => {
 });
 afterAll(async () => state.cleanup());
 
-function createFixture(standingGrant?: CronStandingGrantMintSpec) {
+function createFixture(
+  standingGrant?: CronStandingGrantMintSpec,
+  forwarder?: ExecApprovalForwarder,
+) {
   const persistence = {
     runtimeEpoch: "internal-approval-test",
     databaseOptions: { env: state.env },
@@ -63,7 +70,8 @@ function createFixture(standingGrant?: CronStandingGrantMintSpec) {
     persistence,
   });
   const handlers = {
-    ...createExecApprovalHandlers(exec),
+    ...createExecApprovalHandlers(exec, { forwarder }),
+    ...createPluginApprovalHandlers(plugin, { forwarder }),
     ...createApprovalHandlers({
       execApprovalManager: exec,
       pluginApprovalManager: plugin,
@@ -132,6 +140,60 @@ function createFixture(standingGrant?: CronStandingGrantMintSpec) {
     },
   };
 }
+
+it.each(["exec", "plugin"] as const)(
+  "acknowledges a %s verdict before its channel notice completes",
+  async (kind) => {
+    const forwarding = createDeferredCore();
+    const releaseForwarding = createDeferredCore();
+    const forwarded = createDeferredCore();
+    const handleResolved = async () => {
+      forwarding.resolve();
+      await releaseForwarding.promise;
+      forwarded.resolve();
+    };
+    const fixture = createFixture(undefined, {
+      handleRequested: async () => false,
+      handleResolved,
+      handlePluginApprovalResolved: handleResolved,
+      stop: async () => {},
+    });
+    const register = async <TPayload>(
+      manager: ExecApprovalManager<TPayload>,
+      request: TPayload,
+    ) => {
+      const record = manager.create(request, 60_000, `notice-${kind}`);
+      return { record, ...(await manager.register(record, 60_000)) };
+    };
+    const { record, decision } = await (kind === "exec"
+      ? register(fixture.exec, { command: "echo synthetic" })
+      : register(fixture.plugin, {
+          title: "Synthetic operation",
+          description: "Confirm the synthetic operation",
+        }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const resolution = fixture.runtime.nativeApprovals.request(`${kind}.approval.resolve`, {
+      id: record.id,
+      decision: "deny",
+    });
+    const outcome = resolution.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await forwarding.promise;
+      await expect(decision).resolves.toBe("deny");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await outcome).toEqual({ value: { ok: true } });
+    } finally {
+      releaseForwarding.resolve();
+      await forwarded.promise;
+      await resolution.catch(() => {});
+      vi.useRealTimers();
+      await fixture.close();
+    }
+  },
+);
 
 it.each(["channel", "tool"] as const)(
   "resolves %s approvals without caller-thread SQL",
@@ -268,22 +330,18 @@ it.each(["channel", "tool"] as const)(
     await fixture.exec.register(record, 60_000);
     let current = true;
     let transaction = 0;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            transaction++;
-          }
-          if (request.stage === "commit" && transaction === (route === "channel" ? 2 : 1)) {
-            current = false;
-            if (route === "channel") {
-              fixture.revoke();
-            }
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        transaction++;
+      }
+      if (request.stage === "commit" && transaction === (route === "channel" ? 2 : 1)) {
+        current = false;
+        if (route === "channel") {
+          fixture.revoke();
+        }
+      }
+      return admit(request, grant);
+    });
     try {
       await expect(fixture.resolve(record.id, route, () => current)).rejects.toThrow();
       expect(transaction).toBe(route === "channel" ? 2 : 1);

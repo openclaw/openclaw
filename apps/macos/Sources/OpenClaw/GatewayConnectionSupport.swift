@@ -7,6 +7,22 @@ extension GatewayConnection {
     nonisolated static let requestRetryDelaysMs = [150, 400, 900]
 }
 
+@MainActor
+final class GatewayStoreRefresh {
+    let revision: UInt64?
+    var lease: GatewayConnection.ServerLease?
+    var task: Task<Void, Never>?
+
+    init(revision: UInt64?) {
+        self.revision = revision
+    }
+
+    func isCurrent(on gateway: GatewayConnection) -> Bool {
+        self.task?.isCancelled != true && self.revision == gateway.selectedEndpointRevision &&
+            self.lease.map(gateway.serverLeaseMatchesCurrentState) != false
+    }
+}
+
 struct GatewayRouteChangedAfterDispatchError: LocalizedError, Sendable {
     let method: String
 

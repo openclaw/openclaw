@@ -1,11 +1,14 @@
-// Settlement and rollback for claimed task suggestions and partial sessions.
 import {
   ErrorCodes,
   errorShape,
   type TaskSuggestion,
   type TaskSuggestionsAcceptResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  withGatewaySessionEntry,
+} from "../session-utils-store.js";
 import {
   abandonTaskSuggestionAcceptance,
   cancelTaskSuggestionAcceptance,
@@ -75,9 +78,24 @@ async function rollbackSuggestedTaskSession(params: {
         );
       },
     });
+    const source = captureIncognitoSessionSource({
+      sessionKey: params.key,
+      agentId: params.agentId,
+    });
+    if (source && "kind" in source) {
+      source.assertCurrent();
+      return deletionConfirmed;
+    }
     return (
       deletionConfirmed &&
-      !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
+      (source
+        ? await withGatewaySessionEntry(
+            params.key,
+            { agentId: params.agentId },
+            (session) => !session.entry,
+            params.options.context.getRuntimeConfig(),
+          )
+        : !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry)
     );
   } catch {
     return false;

@@ -511,8 +511,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.hovercard.position();
       return;
     }
-    card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    card.addEventListener("keydown", this.hovercard.handleCardKeyDown);
+    card.addEventListener("pointerleave", this.hovercard.handleCardPointerLeave);
     this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false, () =>
       render(nothing, card),
     );
@@ -525,11 +524,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       }, 0);
     }
   }
-
-  private readonly handleCardPointerLeave = () => {
-    this.hovercard.pointerOverCard = false;
-    this.hovercard.scheduleClose();
-  };
 
   private personActivity(): PersonActivityRouting | undefined {
     const context = this.applicationContext;

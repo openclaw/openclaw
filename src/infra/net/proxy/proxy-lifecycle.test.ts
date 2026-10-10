@@ -33,8 +33,9 @@ const {
 });
 const forceResetGlobalDispatcherMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@openclaw/proxyline", () => ({
-  installGlobalProxy: installGlobalProxyMock,
+vi.mock("../proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../proxyline-runtime.js")>()),
+  loadProxyline: () => ({ installGlobalProxy: installGlobalProxyMock }),
 }));
 
 vi.mock("../undici-global-dispatcher.js", () => ({

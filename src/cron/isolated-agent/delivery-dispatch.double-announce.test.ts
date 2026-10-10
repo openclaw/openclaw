@@ -207,7 +207,11 @@ import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
 } from "./delivery-dispatch.js";
-import { makeBaseParams, makeResolvedDelivery } from "./delivery-dispatch.test-fixtures.js";
+import {
+  makeBaseParams,
+  makeResolvedDelivery,
+  messageToolOutcome,
+} from "./delivery-dispatch.test-fixtures.js";
 import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import * as realFollowup from "./subagent-followup.js";
@@ -215,23 +219,6 @@ import {
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.runtime.js";
-
-type SourceOutcome = Parameters<typeof dispatchCronDelivery>[0]["sourceDeliveryOutcome"];
-function messageToolOutcome(
-  targets: SourceOutcome["visibleDeliveries"][number]["target"][],
-  verified = true,
-): SourceOutcome {
-  return {
-    visibleDeliveries: targets.map((target) => ({
-      via: "message_tool",
-      target,
-      verifiedTarget: verified,
-    })),
-    verifiedMessageToolDelivery: verified,
-    satisfiesSourceDelivery: verified,
-    unverifiedMessageToolDelivery: !verified,
-  };
-}
 
 type ResolvedOutboundSessionRoute = NonNullable<
   Awaited<ReturnType<typeof resolveOutboundSessionRoute>>
@@ -326,7 +313,10 @@ describe("dispatchCronDelivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     deliverOutboundPayloadsMock.mockReset().mockResolvedValue([{ ok: true }]);
-    vi.spyOn(deliveryQueueSqlite, "getDeliveryQueueEntryStatus").mockReturnValue(undefined);
+    vi.spyOn(deliveryQueueSqlite, "inspectDeliveryQueueReceipt").mockResolvedValue({
+      status: undefined,
+      pendingEntry: null,
+    });
     vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -402,7 +392,7 @@ describe("dispatchCronDelivery", () => {
     expect(state.deliverySuppressionReason).toBe("channel_transform");
     expect(maybeApplyTtsToPayloadMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).not.toHaveBeenCalled();
+    expect(deliveryQueueSqlite.inspectDeliveryQueueReceipt).not.toHaveBeenCalled();
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
@@ -1447,7 +1437,7 @@ describe("dispatchCronDelivery", () => {
     );
   });
 
-  it.each(["disappeared", "live", "stale"] as const)(
+  it.each(["completed", "live", "stale"] as const)(
     "settles a competing cron delivery whose pending owner is %s",
     async (owner) => {
       if (owner === "live") {
@@ -1457,23 +1447,24 @@ describe("dispatchCronDelivery", () => {
         new Error("Stable delivery intent is already queued"),
       );
       const status = vi
-        .mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
-        .mockReturnValueOnce(undefined)
-        .mockReturnValueOnce("pending");
-      if (owner !== "stale") {
-        status.mockReturnValueOnce("completed");
+        .mocked(deliveryQueueSqlite.inspectDeliveryQueueReceipt)
+        .mockResolvedValueOnce({ status: undefined, pendingEntry: null })
+        .mockResolvedValueOnce({
+          status: owner === "completed" ? "completed" : "pending",
+          pendingEntry:
+            owner === "completed"
+              ? null
+              : {
+                  id: "cross-process-cron-intent",
+                  enqueuedAt: Date.now() - (owner === "stale" ? 60_000 : 0),
+                  retryCount: 0,
+                  platformSendStartedAt: Date.now() - (owner === "stale" ? 30_001 : 0),
+                  recoveryState: "send_attempt_started",
+                },
+        });
+      if (owner === "live") {
+        status.mockResolvedValueOnce({ status: "completed", pendingEntry: null });
       }
-      vi.spyOn(deliveryQueueSqlite, "loadDeliveryQueueEntry").mockReturnValue(
-        owner === "disappeared"
-          ? null
-          : {
-              id: "cross-process-cron-intent",
-              enqueuedAt: Date.now() - (owner === "stale" ? 60_000 : 0),
-              retryCount: 0,
-              platformSendStartedAt: Date.now() - (owner === "stale" ? 30_001 : 0),
-              recoveryState: "send_attempt_started",
-            },
-      );
       const state = await dispatchCronDelivery(
         makeBaseParams({ synthesizedText: "Cross-process cron update." }),
       );
@@ -1481,7 +1472,7 @@ describe("dispatchCronDelivery", () => {
       expect(state.deliveryAttempted).toBe(true);
       expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
       if (owner === "stale") {
-        expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).toHaveBeenCalledTimes(2);
+        expect(deliveryQueueSqlite.inspectDeliveryQueueReceipt).toHaveBeenCalledTimes(2);
       } else {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
       }
@@ -1499,7 +1490,7 @@ describe("dispatchCronDelivery", () => {
   it.each([true, false])(
     "handles a receipt-store outage with bestEffort=%s",
     async (bestEffort) => {
-      vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mockImplementationOnce(() => {
+      vi.mocked(deliveryQueueSqlite.inspectDeliveryQueueReceipt).mockImplementationOnce(() => {
         throw new Error("SQLite receipt store unavailable");
       });
       const pending = dispatchCronDelivery(
@@ -1523,9 +1514,9 @@ describe("dispatchCronDelivery", () => {
   );
 
   it("keeps regenerated signed media URLs on the same durable cron intent", async () => {
-    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce("completed");
+    vi.mocked(deliveryQueueSqlite.inspectDeliveryQueueReceipt)
+      .mockResolvedValueOnce({ status: undefined, pendingEntry: null })
+      .mockResolvedValueOnce({ status: "completed", pendingEntry: null });
     const params = structuredParams(
       [
         {
@@ -1542,7 +1533,7 @@ describe("dispatchCronDelivery", () => {
     ];
     expect((await dispatchCronDelivery(params)).delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
-    const calls = vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mock.calls;
+    const calls = vi.mocked(deliveryQueueSqlite.inspectDeliveryQueueReceipt).mock.calls;
     expect(calls[0]?.[1]).toBe("cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:");
     expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
   });
@@ -1983,6 +1974,8 @@ describe("dispatchCronDelivery", () => {
       vi.doUnmock("./helpers.js");
       vi.doUnmock("../../channels/plugins/index.js");
       runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
+      // Load the facade's lazy executor once for the adapter-outcome fixture.
+      await import("./run-executor.runtime.js");
       realDeliver = (
         await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
           "../../infra/outbound/deliver.js",
@@ -2009,71 +2002,75 @@ describe("dispatchCronDelivery", () => {
         .mockResolvedValue([{ ok: true } as never]);
     });
 
-    it.each([
+    it.for([
       { name: "best-effort retry", bestEffort: true, partialSend: false },
       { name: "required partial send without retry", bestEffort: false, partialSend: true },
-    ])("reports $name from actual adapter outcomes", async ({ bestEffort, partialSend }) => {
-      await withTempCronHome(async () => {
-        const notDispatched = new PlatformMessageNotDispatchedError(
-          "payload stopped before final dispatch",
-          { cause: new Error("connect ECONNREFUSED") },
-        );
-        const receipt = { channel: "telegram", messageId: "cron-retry-message" };
-        const sendText = vi.fn();
-        if (partialSend) {
-          sendText.mockResolvedValueOnce(receipt).mockRejectedValueOnce(notDispatched);
-        } else {
-          sendText.mockRejectedValueOnce(notDispatched).mockResolvedValueOnce(receipt);
-        }
-        const registry = createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "telegram",
-              outbound: { deliveryMode: "direct", sendText },
-            }),
-          },
-        ]);
-        setActivePluginRegistry(registry);
-        harness.preparedRunPluginRegistryMock.mockReturnValue(registry);
-        harness.runEmbeddedAgentMock.mockResolvedValue({
-          payloads: partialSend
-            ? [{ text: "First payload." }, { text: "Second payload." }]
-            : [{ text: "Retry me once." }],
-          meta: { agentMeta: {} },
-        });
-        const { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } =
-          await import("./job-fixtures.js");
-        const result = await runCronIsolatedAgentTurn(
-          makeIsolatedAgentParamsFixture({
-            job: makeIsolatedAgentJobFixture({
-              delivery: { mode: "announce", channel: "telegram", to: "123456", bestEffort },
-            }),
-          }),
-        );
-
-        expect(result.error).toBeUndefined();
-        expect(sendText).toHaveBeenCalledTimes(2);
-        expect(harness.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-        expect(deliverOutboundPayloads).toHaveBeenCalledTimes(partialSend ? 1 : 2);
-        expect(result.status).toBe("ok");
-        expect(result.deliveryAttempted).toBe(true);
-        expect.soft(result.delivered).toBe(!partialSend);
-        if (partialSend) {
-          expect(result.deliveryError).toContain(notDispatched.message);
-        } else {
-          expect.soft(result.deliveryError).toBeUndefined();
-          const intent = outboundDeliveryCall(0).deliveryIntentId;
-          expect(intent).toEqual(expect.stringContaining("cron-direct-delivery:v1:"));
-          expectDeliveryCall(1, {
-            deliveryIntentId: intent,
-            reusePendingDeliveryIntent: true,
-            completionRetention: directCronCompletionRetention,
+    ])(
+      "reports $name from actual adapter outcomes",
+      async ({ bestEffort, partialSend }, { signal }) => {
+        await withTempCronHome(async () => {
+          const notDispatched = new PlatformMessageNotDispatchedError(
+            "payload stopped before final dispatch",
+            { cause: new Error("connect ECONNREFUSED") },
+          );
+          const receipt = { channel: "telegram", messageId: "cron-retry-message" };
+          const sendText = vi.fn();
+          if (partialSend) {
+            sendText.mockResolvedValueOnce(receipt).mockRejectedValueOnce(notDispatched);
+          } else {
+            sendText.mockRejectedValueOnce(notDispatched).mockResolvedValueOnce(receipt);
+          }
+          const registry = createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: createOutboundTestPlugin({
+                id: "telegram",
+                outbound: { deliveryMode: "direct", sendText },
+              }),
+            },
+          ]);
+          setActivePluginRegistry(registry);
+          harness.preparedRunPluginRegistryMock.mockReturnValue(registry);
+          harness.runEmbeddedAgentMock.mockResolvedValue({
+            payloads: partialSend
+              ? [{ text: "First payload." }, { text: "Second payload." }]
+              : [{ text: "Retry me once." }],
+            meta: { agentMeta: {} },
           });
-        }
-      });
-    });
+          const { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } =
+            await import("./job-fixtures.js");
+          const result = await runCronIsolatedAgentTurn(
+            makeIsolatedAgentParamsFixture({
+              abortSignal: signal,
+              job: makeIsolatedAgentJobFixture({
+                delivery: { mode: "announce", channel: "telegram", to: "123456", bestEffort },
+              }),
+            }),
+          );
+
+          expect(result.error).toBeUndefined();
+          expect(sendText).toHaveBeenCalledTimes(2);
+          expect(harness.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+          expect(deliverOutboundPayloads).toHaveBeenCalledTimes(partialSend ? 1 : 2);
+          expect(result.status).toBe("ok");
+          expect(result.deliveryAttempted).toBe(true);
+          expect.soft(result.delivered).toBe(!partialSend);
+          if (partialSend) {
+            expect(result.deliveryError).toContain(notDispatched.message);
+          } else {
+            expect.soft(result.deliveryError).toBeUndefined();
+            const intent = outboundDeliveryCall(0).deliveryIntentId;
+            expect(intent).toEqual(expect.stringContaining("cron-direct-delivery:v1:"));
+            expectDeliveryCall(1, {
+              deliveryIntentId: intent,
+              reusePendingDeliveryIntent: true,
+              completionRetention: directCronCompletionRetention,
+            });
+          }
+        });
+      },
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,7 +2,7 @@ import { afterEach, vi } from "vitest";
 
 // The canonical executor still owns real SQL, admission, and settlement; only reply delivery changes.
 const delivery = vi.hoisted(() => ({
-  afterResult: undefined as (() => void | Promise<void>) | undefined,
+  afterResult: undefined as ((result: unknown) => void | Promise<void>) | undefined,
   releaseFailure: undefined as Error | undefined,
   afterRelease: undefined as (() => Promise<void>) | undefined,
 }));
@@ -29,7 +29,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
                 execute: async (command, commandOptions) => {
                   const result = await scope.execute(command, commandOptions);
                   if (command.type === "session.entries.replace") {
-                    await delivery.afterResult?.();
+                    await delivery.afterResult?.(result);
                   }
                   return result;
                 },

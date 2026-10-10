@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
+import { MINIMAX_M31_MODEL_ID } from "./thinking.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
@@ -58,6 +59,10 @@ type MinimaxTextModelDefinition = Omit<ModelDefinitionConfig, "input"> & {
 };
 
 function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
+  if (modelId === MINIMAX_M31_MODEL_ID) {
+    // This preview is Token Plan-only; MiniMax has not published per-token prices.
+    return MINIMAX_HOSTED_COST;
+  }
   if (modelId === "MiniMax-M2.7") {
     return MINIMAX_M27_API_COST;
   }

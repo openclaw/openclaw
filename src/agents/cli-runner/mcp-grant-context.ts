@@ -216,9 +216,6 @@ export function buildCliMcpGrantContext(params: {
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
-    ...(params.run.skillWorkshopProposalRevision
-      ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
-      : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
     ...(delegationCapability ? { delegationCapability } : {}),

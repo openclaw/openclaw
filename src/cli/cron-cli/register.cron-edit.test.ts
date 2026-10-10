@@ -356,6 +356,27 @@ describe("automation mutation options", () => {
     },
   );
 
+  it.each(["add", "edit"])(
+    "preserves escaped trailing on-exit whitespace on %s",
+    async (operation) => {
+      const schedule = { kind: "on-exit", command: " printf %s hello\\ " };
+      await run([
+        ...(operation === "add" ? [...addArgs, "--message", "done"] : ["edit", "job-1"]),
+        "--on-exit",
+        schedule.command,
+      ]);
+      if (operation === "edit") {
+        expectPatch({ schedule });
+      } else {
+        expect(callGatewayFromCli).toHaveBeenCalledWith(
+          "cron.add",
+          expect.anything(),
+          expect.objectContaining({ schedule }),
+        );
+      }
+    },
+  );
+
   it("rejects system-event timeouts on creation before RPC", async () => {
     await reject(
       [...addArgs, "--every", "1h", "--system-event", "tick", "--timeout-seconds", "bogus"],

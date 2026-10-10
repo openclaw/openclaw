@@ -98,11 +98,7 @@ export class ChatPaneMcpAppController {
       listen(MCP_APP_OPEN_EVENT, (event) => this.receiveOpen(event)),
       listen(WIDGET_PROMPT_EVENT, (event) => this.receiveWidgetPrompt(event)),
     ];
-    return () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
+    return () => cleanups.forEach((cleanup) => cleanup());
   }
 
   syncLaunch(): void {
@@ -118,15 +114,27 @@ export class ChatPaneMcpAppController {
       return;
     }
     this.openedLaunch = launch;
+    this.openLaunch(owner, launch);
+  }
+
+  private openLaunch(owner: ChatPaneMcpAppOwner, launch: McpAppOpenDetail, fileSuffix = ""): void {
     owner.state.handleOpenSidebar({
       kind: "mcp-app",
       title: launch.entrypoint.title,
       launch,
       fileTab: {
-        id: `mcp-app:${launch.serverName}/${launch.entrypoint.toolName}:${launch.settings ? "settings" : "app"}`,
+        id: `mcp-app:${launch.serverName}/${launch.entrypoint.toolName}:${launch.settings ? "settings" : "app"}${fileSuffix}`,
         label: launch.entrypoint.title,
       },
     });
+  }
+
+  private presentedEventOwner(event: CustomEvent<{ sessionKey: string }>) {
+    if (!(event instanceof CustomEvent) || event.defaultPrevented) {
+      return null;
+    }
+    const owner = this.options.current();
+    return owner?.presented && event.detail.sessionKey === owner.state.sessionKey ? owner : null;
   }
 
   private receiveWidgetPrompt(event: CustomEvent<WidgetPromptEventDetail>): void {
@@ -138,19 +146,11 @@ export class ChatPaneMcpAppController {
   }
 
   private receiveResourceMention(event: CustomEvent<McpAppResourceMentionDetail>): void {
-    if (!(event instanceof CustomEvent) || event.defaultPrevented) {
+    const owner = this.presentedEventOwner(event);
+    if (!owner || !uploadsEnabled(owner.state.uploadConfig)) {
       return;
     }
     const detail = event.detail;
-    const owner = this.options.current();
-    if (
-      !owner ||
-      !owner.presented ||
-      detail.sessionKey !== owner.state.sessionKey ||
-      !uploadsEnabled(owner.state.uploadConfig)
-    ) {
-      return;
-    }
     const state = owner.state;
     const { resource } = detail;
     const title = resource.title || resource.name;
@@ -182,14 +182,11 @@ export class ChatPaneMcpAppController {
   }
 
   private receiveMessage(event: CustomEvent<McpAppMessageEventDetail>): void {
-    if (!(event instanceof CustomEvent) || event.defaultPrevented) {
+    const owner = this.presentedEventOwner(event);
+    if (!owner) {
       return;
     }
     const detail = event.detail;
-    const owner = this.options.current();
-    if (!owner || !owner.presented || detail.sessionKey !== owner.state.sessionKey) {
-      return;
-    }
     const { state, context } = owner;
     event.preventDefault();
     void (async () => {
@@ -219,14 +216,11 @@ export class ChatPaneMcpAppController {
   }
 
   private receiveFile(event: CustomEvent<McpAppFileOpenEventDetail>): void {
-    if (!(event instanceof CustomEvent) || event.defaultPrevented) {
+    const owner = this.presentedEventOwner(event);
+    if (!owner) {
       return;
     }
     const detail = event.detail;
-    const owner = this.options.current();
-    if (!owner || !owner.presented || detail.sessionKey !== owner.state.sessionKey) {
-      return;
-    }
     event.preventDefault();
     owner.openFile(detail.path);
     detail.respond(true);
@@ -259,28 +253,12 @@ export class ChatPaneMcpAppController {
   }
 
   private receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
-    if (!(event instanceof CustomEvent) || event.defaultPrevented) {
-      return;
-    }
+    const owner = this.presentedEventOwner(event);
     const detail = event.detail;
-    const owner = this.options.current();
-    if (
-      !owner ||
-      !owner.presented ||
-      detail.sessionKey !== owner.state.sessionKey ||
-      detail.owner !== owner.context.gateway.snapshot.client
-    ) {
+    if (!owner || detail.owner !== owner.context.gateway.snapshot.client) {
       return;
     }
     event.preventDefault();
-    owner.state.handleOpenSidebar({
-      kind: "mcp-app",
-      title: detail.entrypoint.title,
-      launch: detail,
-      fileTab: {
-        id: `mcp-app:${detail.serverName}/${detail.entrypoint.toolName}:${detail.settings ? "settings" : "app"}:${detail.filePath ?? ""}`,
-        label: detail.entrypoint.title,
-      },
-    });
+    this.openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
   }
 }

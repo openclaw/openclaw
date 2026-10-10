@@ -20,6 +20,11 @@ import {
 } from "../../infra/update-freebsd-pkg-ownership.js";
 import { inspectImmutableInstall } from "../../infra/update-immutable-install.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
+import {
+  createUpdatePreflightFailure,
+  UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
+  type UPDATE_PREFLIGHT_DETAILS,
+} from "../../infra/update-preflight-details.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import {
   recordUpdateRunDiagnostics,
@@ -194,19 +199,74 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   return { status, installSurface };
 }
 
+type HandoffFailureKind = Extract<keyof typeof UPDATE_PREFLIGHT_DETAILS, `handoff-${string}`>;
+type HandoffFailureStage = "prepare" | "prepared" | "sentinel" | "transfer";
+
+function classifyHandoffFailure(
+  fact: ReturnType<typeof createUpdateErrorFact>,
+  stage: HandoffFailureStage,
+): HandoffFailureKind {
+  const detail = `${fact.code} ${fact.message ?? ""}`;
+  if (/\b(?:EACCES|EPERM|permission denied)\b/iu.test(detail)) {
+    return "handoff-permission-denied";
+  }
+  if (/\b(?:ETIMEDOUT|timed out|did not (?:respond|signal readiness))\b/iu.test(detail)) {
+    return "handoff-timeout";
+  }
+  if (
+    stage === "sentinel" ||
+    /\b(?:EPIPE|ENOSPC|EROFS|control input closed|invalid readiness response)\b/iu.test(detail)
+  ) {
+    return "handoff-payload-failed";
+  }
+  if (stage === "transfer") {
+    return "handoff-ownership-refused";
+  }
+  if (/\b(?:ENOENT|ENOEXEC|executable|entrypoint)\b/iu.test(detail)) {
+    return "handoff-runtime-unavailable";
+  }
+  if (/\b(?:spawn|EAGAIN|ENOMEM)\b/iu.test(detail)) {
+    return "handoff-helper-start-failed";
+  }
+  if (/\b(?:launchctl|systemctl|systemd-run|bootstrap)\b/iu.test(detail)) {
+    return "handoff-service-refused";
+  }
+  if (
+    /\b(?:lease|ownership|owner|authority|requester|aborted|process (?:start )?identity)\b/iu.test(
+      detail,
+    )
+  ) {
+    return "handoff-ownership-refused";
+  }
+  if (/\bexited before (?:responding|signaling readiness)\b/u.test(detail)) {
+    return "handoff-helper-exited";
+  }
+  return "handoff-preparation-failed";
+}
+
 export function recordHandoffFailure(
   runId: string,
   error: unknown,
   previous: UpdateRunResult,
   warn: (message: string) => void,
+  stage: HandoffFailureStage = "prepare",
 ): UpdateRunResult {
-  const { reason, failureFacts } =
-    error instanceof UpdatePreMutationError
-      ? error
-      : {
-          reason: "managed-service-handoff-failed",
-          failureFacts: [createUpdateErrorFact("managed-service", error)],
-        };
+  const cause = createUpdateErrorFact("managed-service", error);
+  const classified = createUpdatePreflightFailure(
+    classifyHandoffFailure(cause, stage),
+    undefined,
+    "managed-service",
+  );
+  const reason =
+    error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+  const failureFacts = [
+    ...(error instanceof UpdatePreMutationError ? error.failureFacts : [cause]).slice(0, 4),
+    ...classified.failureFacts,
+  ];
+  const rollbackOutcome =
+    stage === "prepare" || stage === "sentinel"
+      ? { status: "not-needed" as const, reason: UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL }
+      : previous.rollbackOutcome;
   const step = {
     name: "requested",
     command: "",
@@ -226,6 +286,7 @@ export function recordHandoffFailure(
   recordUpdateRunDiagnostics(
     runId,
     {
+      rollbackOutcome,
       failure: {
         step: step.name,
         exitCode: step.exitCode,
@@ -235,7 +296,13 @@ export function recordHandoffFailure(
     },
     warn,
   );
-  return { ...previous, status: "error", reason, steps: [...previous.steps, step] };
+  return {
+    ...previous,
+    status: "error",
+    reason,
+    rollbackOutcome,
+    steps: [...previous.steps, step],
+  };
 }
 
 export function createUnexpectedUpdateFailureResult(

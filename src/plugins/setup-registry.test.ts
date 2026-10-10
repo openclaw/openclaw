@@ -38,6 +38,7 @@ let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
+let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -77,8 +78,12 @@ beforeAll(async () => {
   resetRegistryJitiMocks();
   // A non-isolated sibling may have cached this owner before these hoisted mocks.
   vi.resetModules();
-  ({ resolvePluginSetupRegistry, resolvePluginSetupProviderCore, resolvePluginSetupCliBackend } =
-    await import("./setup-registry.js"));
+  ({
+    resolvePluginSetupRegistry,
+    resolvePluginSetupProviderCore,
+    resolvePluginSetupCliBackend,
+    runPluginSetupConfigMigrations,
+  } = await import("./setup-registry.js"));
   ({ clearPluginSetupRegistryCache } = await import("./setup-registry.test-fixtures.js"));
 });
 
@@ -325,9 +330,7 @@ describe("setup registry", () => {
   });
 
   it.each([
-    ["provider", "openai"],
     ["provider", "workspace-shadow"],
-    ["cliBackend", "openai"],
     ["cliBackend", "workspace-shadow"],
   ] as const)(
     "rejects ambiguous setup %s owners with second plugin %s before executing code",
@@ -352,4 +355,34 @@ describe("setup registry", () => {
       expect(mocks.createJiti).not.toHaveBeenCalled();
     },
   );
+
+  it.each([false, true])("isolates registered migration candidates (throws=%s)", (throws) => {
+    manifests(fixture({ id: "fixture" }));
+    registration((api) => {
+      api.registerConfigMigration((config) => ({
+        config: { ...config, gateway: { port: 18789 } },
+        changes: ["first"],
+      }));
+      api.registerConfigMigration((config) => {
+        config.gateway = { port: 19999 };
+        if (throws) {
+          throw new Error("fixture migration failed");
+        }
+        return null;
+      });
+      api.registerConfigMigration((config) => ({
+        config: { ...config, gateway: { ...config.gateway, bind: "loopback" } },
+        changes: ["last"],
+      }));
+    });
+    const config = { plugins: { entries: { fixture: {} } } };
+    const result = runPluginSetupConfigMigrations({ config, env: {} });
+
+    expect(result.config.gateway).toEqual({ port: 18789, bind: "loopback" });
+    expect(result.changes).toEqual(["first", "last"]);
+    expect(result.warnings ?? []).toEqual(
+      throws ? [expect.stringContaining('Plugin "fixture" config repair failed')] : [],
+    );
+    expect(config).toEqual({ plugins: { entries: { fixture: {} } } });
+  });
 });

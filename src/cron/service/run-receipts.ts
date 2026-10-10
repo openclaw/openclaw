@@ -130,7 +130,6 @@ export function markServiceCronJobActive(
   const marker = markCronJobActive(job.id, {
     agentId: runReceipt.agentId,
     stateIdentityKey: context.admission.identity.key,
-    declarationKey: job.declarationKey,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
     isMessageActionAuthorityCurrent: facts.job.messageToolAuthorityInputs
       ? isCurrent(false)

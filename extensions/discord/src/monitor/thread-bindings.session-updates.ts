@@ -6,58 +6,41 @@ import {
 } from "./thread-bindings.session-shared.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-export async function setThreadBindingIdleTimeoutBySessionKeyAsync(input: {
-  targetSessionKey: string;
-  accountId?: string;
-  idleTimeoutMs: number;
-}): Promise<ThreadBindingRecord[]> {
-  const params = { ...input };
-  const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
-  return mutateBindingsForTargetSession(params, (existing, now) => ({
+function createDurationUpdate(field: "idleTimeoutMs" | "maxAgeMs", raw: number) {
+  const duration = resolveNonNegativeIntegerOption(raw, 0);
+  return (existing: ThreadBindingRecord, now: number): ThreadBindingRecord => ({
     ...existing,
-    idleTimeoutMs,
+    [field]: duration,
+    ...(field === "maxAgeMs" ? { boundAt: now } : {}),
     lastActivityAt: now,
-  }));
+  });
 }
 
-export async function setThreadBindingMaxAgeBySessionKeyAsync(input: {
-  targetSessionKey: string;
-  accountId?: string;
-  maxAgeMs: number;
-}): Promise<ThreadBindingRecord[]> {
-  const params = { ...input };
-  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
-  return mutateBindingsForTargetSession(params, (existing, now) => ({
-    ...existing,
-    maxAgeMs,
-    boundAt: now,
-    lastActivityAt: now,
-  }));
+function createDurationSetters<Field extends "idleTimeoutMs" | "maxAgeMs">(field: Field) {
+  type Params = {
+    targetSessionKey: string;
+    accountId?: string;
+  } & Record<Field, number>;
+  return {
+    setAsync: async (input: Params): Promise<ThreadBindingRecord[]> => {
+      const params = { ...input };
+      return mutateBindingsForTargetSession(params, createDurationUpdate(field, params[field]));
+    },
+    set: (params: Params): ThreadBindingRecord[] => {
+      const ids = resolveBindingIdsForTargetSession(params);
+      return updateBindingsForTargetSessionSync(ids, createDurationUpdate(field, params[field]));
+    },
+  };
 }
 
-/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
-export function setThreadBindingIdleTimeoutBySessionKey(
-  params: Parameters<typeof setThreadBindingIdleTimeoutBySessionKeyAsync>[0],
-): ThreadBindingRecord[] {
-  const ids = resolveBindingIdsForTargetSession(params);
-  const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
-  return updateBindingsForTargetSessionSync(ids, (existing, now) => ({
-    ...existing,
-    idleTimeoutMs,
-    lastActivityAt: now,
-  }));
-}
+const idleSetters = createDurationSetters("idleTimeoutMs");
+const maxAgeSetters = createDurationSetters("maxAgeMs");
+
+export const setThreadBindingIdleTimeoutBySessionKeyAsync = idleSetters.setAsync;
+export const setThreadBindingMaxAgeBySessionKeyAsync = maxAgeSetters.setAsync;
 
 /** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
-export function setThreadBindingMaxAgeBySessionKey(
-  params: Parameters<typeof setThreadBindingMaxAgeBySessionKeyAsync>[0],
-): ThreadBindingRecord[] {
-  const ids = resolveBindingIdsForTargetSession(params);
-  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
-  return updateBindingsForTargetSessionSync(ids, (existing, now) => ({
-    ...existing,
-    maxAgeMs,
-    boundAt: now,
-    lastActivityAt: now,
-  }));
-}
+export const setThreadBindingIdleTimeoutBySessionKey = idleSetters.set;
+
+/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
+export const setThreadBindingMaxAgeBySessionKey = maxAgeSetters.set;

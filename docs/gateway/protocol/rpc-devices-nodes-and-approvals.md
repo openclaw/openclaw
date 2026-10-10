@@ -75,6 +75,9 @@ account authority while storage work is pending. Disconnecting the socket alone 
 Revoking that authority before commit admission prevents the verdict and withholds
 approval details; the pending approval remains available to another authorized reviewer.
 A verdict that already committed remains recorded and settles its waiting action.
+Resolution replies do not wait for best-effort channel or push notifications after
+the decision is recorded. A slow or failed notification cannot reopen the approval
+or delay acknowledgement of its verdict.
 
 `exec.approvals.get` accepts optional `expectedOwnerId`; `exec.approvals.set`
 accepts `file`, optional `baseHash`, and optional `expectedOwnerId`. Existing

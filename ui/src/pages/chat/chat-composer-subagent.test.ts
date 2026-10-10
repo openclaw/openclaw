@@ -123,6 +123,27 @@ it.each([
   },
 );
 
+it("keeps ordinary input usable while the initial placement turn is pending", () => {
+  const { state, context, container, draw, finishRecovery } =
+    createRecoveringComposer("Queue this follow-up");
+  finishRecovery();
+  state.hasPendingInitialTurn = () => true;
+  vi.spyOn(context.placementStartup, "get").mockReturnValue({
+    sessionKey: state.sessionKey,
+    phase: "provisioning",
+    startedAt: 1,
+  });
+  try {
+    const { input, send } = draw();
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    render(nothing, container);
+  }
+});
+
 it("updates held Send when an edited draft changes between control and ordinary input", () => {
   const { state, container, draw } = createRecoveringComposer("/stop");
   let renderRequested = false;

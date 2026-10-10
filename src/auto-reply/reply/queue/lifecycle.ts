@@ -180,3 +180,19 @@ export function completeFollowupRunLifecycle(
     }
   }
 }
+
+export function completeFollowupRuns(
+  items: Iterable<FollowupLifecycleRun>,
+  onError?: (error: unknown) => void,
+): void {
+  for (const item of items) {
+    try {
+      completeFollowupRunLifecycle(item);
+    } catch (error) {
+      if (!onError) {
+        throw error;
+      }
+      onError(error);
+    }
+  }
+}

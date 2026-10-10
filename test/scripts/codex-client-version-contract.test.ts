@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const CODEX_PACKAGE_JSON_URL = new URL("../../extensions/codex/package.json", import.meta.url);
-const OPENAI_PROVIDER_URL = new URL("../../extensions/openai/openai-provider.ts", import.meta.url);
+const OPENAI_PROVIDER_URL = new URL("../../extensions/openai/base-url.ts", import.meta.url);
 const OPENAI_CODEX_CLIENT_VERSION_PATTERN = /^const OPENAI_CODEX_CLIENT_VERSION = "([^"]+)";$/mu;
 
 function readManagedCodexVersion(): string {
@@ -21,7 +21,7 @@ function readOpenAICodexClientVersion(): string {
   const providerSource = fs.readFileSync(OPENAI_PROVIDER_URL, "utf8");
   const version = OPENAI_CODEX_CLIENT_VERSION_PATTERN.exec(providerSource)?.[1];
   if (!version) {
-    throw new Error("extensions/openai/openai-provider.ts must declare the Codex client version");
+    throw new Error("extensions/openai/base-url.ts must declare the Codex client version");
   }
   return version;
 }

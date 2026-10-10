@@ -346,45 +346,48 @@ describe("commands session store persistence", () => {
     });
   });
 
-  it("patches the persisted abort target when it already exists", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "agent:main:abort-target";
-      const otherKey = "agent:main:other";
-      const entry: SessionEntry = {
-        sessionId: "memory-session",
-        updatedAt: 1,
-      };
-      const persistedEntry: SessionEntry = {
-        sessionId: "persisted-session",
-        updatedAt: Date.now(),
-        model: "sonnet-4.6",
-      };
-      const otherEntry: SessionEntry = {
-        sessionId: "other-session",
-        updatedAt: 3,
-        delivery: { kind: "none" },
-      };
-      await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
-      await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
+  it.each([true, false])(
+    "only patches a matching persisted abort owner=%s",
+    async (matchesOwner) => {
+      await withTempStore(async (storePath) => {
+        const sessionKey = "agent:main:abort-target";
+        const otherKey = "agent:main:other";
+        const entry: SessionEntry = {
+          sessionId: matchesOwner ? "persisted-session" : "memory-session",
+          updatedAt: 1,
+        };
+        const persistedEntry: SessionEntry = {
+          sessionId: "persisted-session",
+          updatedAt: Date.now(),
+          model: "sonnet-4.6",
+        };
+        const otherEntry: SessionEntry = {
+          sessionId: "other-session",
+          updatedAt: 3,
+          delivery: { kind: "none" },
+        };
+        await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
+        await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
 
-      await expect(
-        persistAbortTargetEntry({
-          entry,
-          key: sessionKey,
-          sessionStore: { [sessionKey]: entry },
-          storePath,
-        }),
-      ).resolves.toBe(true);
+        await expect(
+          persistAbortTargetEntry({
+            entry,
+            key: sessionKey,
+            sessionStore: { [sessionKey]: entry },
+            storePath,
+          }),
+        ).resolves.toBe(matchesOwner);
 
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
-      expect(entry.abortedLastRun).toBe(true);
-      expect(persisted).toMatchObject({
-        sessionId: "persisted-session",
-        model: "sonnet-4.6",
-        abortedLastRun: true,
+        const persisted = loadSessionEntry({ storePath, sessionKey });
+        const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
+        expect(entry.abortedLastRun).toBe(true);
+        expect(persisted).toMatchObject({
+          sessionId: "persisted-session",
+          model: "sonnet-4.6",
+        });
+        expect(persisted?.abortedLastRun ?? false).toBe(matchesOwner);
+        expect(persistedOther).toStrictEqual(otherEntry);
       });
-      expect(persistedOther).toStrictEqual(otherEntry);
-    });
-  });
+    },
+  );
 });

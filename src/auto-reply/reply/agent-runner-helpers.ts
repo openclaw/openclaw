@@ -53,11 +53,10 @@ function createVerboseGate(
       return shouldEmit(params.resolvedVerboseLevel);
     }
     const now = Date.now();
-    if (now - cachedAtMs < VERBOSE_GATE_SESSION_REFRESH_MS) {
-      return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);
+    if (now - cachedAtMs >= VERBOSE_GATE_SESSION_REFRESH_MS) {
+      cachedLevel = readCurrentVerboseLevel(params);
+      cachedAtMs = now;
     }
-    cachedLevel = readCurrentVerboseLevel(params);
-    cachedAtMs = now;
     return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);
   };
 }

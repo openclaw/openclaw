@@ -296,23 +296,21 @@ export function createCollectorLaunchCallbacks(params: {
       if (!dispatchAttempted && registrationScope) {
         await settleFailure();
       }
-      if (canCleanupCreatedSession?.() === false) {
+      const ownsSessionCleanup = canCleanupCreatedSession?.() !== false;
+      if (!ownsSessionCleanup) {
         await disposeFailedPreparation();
-        if (dispatchAttempted || !registrationScope) {
-          await settleFailure();
-        }
-        if (cleanupAttempt) {
-          await publishCleanupCompletion(await cleanupAttempt);
-        }
-        releaseAuthority();
-        return true;
       }
-      const cleanup = await (cleanupAttempt ??= cleanupOnce());
+      const cleanup = ownsSessionCleanup ? await (cleanupAttempt ??= cleanupOnce()) : undefined;
       if (dispatchAttempted || !registrationScope) {
         await settleFailure();
       }
-      await publishCleanupCompletion(cleanup);
-      await disposeFailedPreparation();
+      const completedCleanup = cleanup ?? (cleanupAttempt && (await cleanupAttempt));
+      if (completedCleanup) {
+        await publishCleanupCompletion(completedCleanup);
+      }
+      if (ownsSessionCleanup) {
+        await disposeFailedPreparation();
+      }
       releaseAuthority();
       return true;
     }, "subagents:spawn-cleanup");

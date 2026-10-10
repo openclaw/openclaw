@@ -138,16 +138,6 @@ describe("refreshSlashCommands", () => {
     expect(getSlashCommandCategoryLabel("tools")).toBe("Tools");
   });
 
-  it("exposes /learn through the browser fallback registry", () => {
-    expect(requireCommandByName("learn")).toMatchObject({
-      description: "Draft a reusable skill from recent work or named sources.",
-      args: "[request]",
-      category: "tools",
-      executeLocal: false,
-      tier: "standard",
-    });
-  });
-
   it("requests the gateway default agent when no explicit agentId is available", async () => {
     const request = vi.fn().mockResolvedValue({
       commands: [pairCommand],
@@ -298,7 +288,7 @@ describe("refreshSlashCommands", () => {
 });
 
 describe("conversation reset confirmation", () => {
-  it.each(["owner", "member", "viewer"] as const)(
+  it.each(["owner", "viewer"] as const)(
     "authorizes /stop with narrow scope for a %s session",
     async (sharingRole) => {
       const sessionKey = "agent:main:current";

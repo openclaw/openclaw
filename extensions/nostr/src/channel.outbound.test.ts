@@ -183,8 +183,9 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("becomes ready on connection and recovers only after the last relay disconnects", async () => {
-    const h = await startGateway();
-    expect(h.context.getStatus()).toMatchObject({ lifecycle: "starting" });
+    const profile = { name: "Synthetic profile" };
+    const h = await startGateway({ account: buildResolvedNostrAccount({ profile }) });
+    expect(h.context.getStatus()).toMatchObject({ lifecycle: "starting", profile });
     expect(h.context.log?.info).toHaveBeenCalledWith(
       "[default] Nostr provider started with 1 configured relay(s)",
     );

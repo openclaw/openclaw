@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { notifyGatewayWorkMetricsChanged } from "../../../infra/gateway-work-metrics-events.js";
 import { hasRetainedPluginRuntimeCloseError } from "../../../plugins/runtime-close-error.js";
 import { SWARM_LANE_PREFIX, type CommandLaneConfiguration } from "../../../process/lanes.js";
 import {
@@ -94,13 +95,14 @@ const runLocations = new Map<
 >();
 
 function publishCapacityChange(item: QueuedSwarmRun) {
-  if (!item.owner || !item.onCapacityChange) {
+  if (!item.owner) {
     return;
   }
   const waiting = isSwarmRunWaitingForCapacity(item.runId, item.owner);
   if (waiting !== (item.reportedCapacityWait === true)) {
     item.reportedCapacityWait = waiting;
-    item.onCapacityChange();
+    notifyGatewayWorkMetricsChanged();
+    item.onCapacityChange?.();
   }
 }
 
@@ -316,6 +318,7 @@ export function bindSwarmRunReservation(
   if (item && item.owner === undefined) {
     item.owner = owner;
     item.onCapacityChange = onCapacityChange;
+    notifyGatewayWorkMetricsChanged();
     publishCapacityChange(item);
   }
 }
@@ -323,6 +326,10 @@ export function bindSwarmRunReservation(
 /** Includes held/preactivation work and the launch awaiting Gateway acceptance. */
 export function ownsSwarmRunReservation(runId: string, owner: object): boolean {
   return runLocations.get(runId)?.item?.owner === owner;
+}
+
+export function listSwarmRunReservationIds(): string[] {
+  return [...runLocations.keys()];
 }
 
 /** Preparation, cancellation holds, and already-admitted launches are not slot waits. */
@@ -386,6 +393,7 @@ export function releaseSwarmRun(runId: string): boolean {
   const previouslyFull = location.lane.active.size >= location.lane.limit;
   location.lane.active.delete(runId);
   runLocations.delete(runId);
+  notifyGatewayWorkMetricsChanged();
   publishLaneCapacityChange(location.lane, previouslyFull);
   pumpLane(location.lane);
   deleteLaneIfIdle(location.lane);
@@ -400,6 +408,7 @@ function removeQueuedSwarmRun(runId: string): boolean {
   const index = location.lane.queue.indexOf(location.item);
   location.lane.queue.splice(index, 1);
   runLocations.delete(runId);
+  notifyGatewayWorkMetricsChanged();
   void finalizeRemovedRun(location.item);
   publishCapacityChange(location.item);
   pumpLane(location.lane);
@@ -534,6 +543,7 @@ const testing = {
     lanes.clear();
     heldReservations.clear();
     runLocations.clear();
+    notifyGatewayWorkMetricsChanged();
     pendingRemovals.clear();
     pendingLaunches.clear();
   },

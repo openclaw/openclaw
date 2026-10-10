@@ -206,6 +206,11 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
+  if (!minimalTestGateway && !opts.updateCanary) {
+    const { startOpenClawDatabaseIntegrityVerifier } =
+      await import("../state/openclaw-database-verify.js");
+    registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
+  }
   activateAgentDatabases();
   // Health can answer as soon as the listener binds. Discovery, remote-skill
   // setup, and maintenance do not determine liveness, so keep them off that
@@ -242,11 +247,11 @@ export async function finishGatewayStartup(params: {
       kernel.setScheduledServiceHandles(activated);
     });
   };
-  const { createGatewayServerActiveWorkInspectors } = await startupTrace.measure(
+  const { startGatewayActiveWork } = await startupTrace.measure(
     "gateway.active-work-import",
-    () => import("./server-active-work.js"),
+    () => import("./server-work-metrics.js"),
   );
-  const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
+  const activeWorkInspectors = startGatewayActiveWork(runtime, log);
   const trackStartupWork = <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     // Register before starting, without lending the connection scope to long-lived services.
     const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
@@ -284,6 +289,7 @@ export async function finishGatewayStartup(params: {
           deps,
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
+          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
@@ -407,11 +413,6 @@ export async function finishGatewayStartup(params: {
   if (opts.updateCanary) {
     // Copied queues and jobs must not resume; the canary owns only startup probes.
     return { startupSettled: postAttachHandles.startupSettled };
-  }
-  if (!minimalTestGateway) {
-    const { startOpenClawDatabaseIntegrityVerifier } =
-      await import("../state/openclaw-database-verify.js");
-    registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();

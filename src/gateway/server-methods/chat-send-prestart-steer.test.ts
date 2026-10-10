@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../../test/helpers/capture-method-call.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { managedWorktrees, ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
 import { clearFollowupQueueForTest } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -89,13 +90,13 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       }),
     };
     const requestOptions = { ...controlUiClient, context };
-    const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+    const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
     const worktreeSpy = vi
-      .spyOn(managedWorktrees, "createWithOutcome")
-      .mockImplementation(async (params) => {
+      .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+      .mockImplementation(async function (this: ManagedWorktreeService, params) {
         preparingWorkspace.resolve();
         await releaseWorkspace.promise;
-        return createWorktree(params);
+        return createWorktree(this, params);
       });
     runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
       const runId = expectDefined(opts?.runId, "runtime run ID");
@@ -308,7 +309,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       dispatchInboundMessageMock.mockReset();
       runtime.execute.mockReset();
       if (sessionKey) {
-        const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+        const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
         if (owned) {
           await managedWorktrees.remove({
             id: owned.id,

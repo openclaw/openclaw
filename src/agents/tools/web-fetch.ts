@@ -389,10 +389,7 @@ type WebFetchRuntimeParams = {
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
+  if (!trimmed || containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
     return undefined;
   }
   const url = URL.parse(trimmed);
@@ -680,44 +677,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
         text = markdownToText(body);
       }
     } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
-      if (params.readabilityEnabled) {
-        const readable = await extractReadableContent({
-          html: body,
-          url: finalUrl,
-          extractMode: params.extractMode,
-          config: params.config,
-        });
-        if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = readable.extractor;
-        } else {
-          let payload: Record<string, unknown> | null = null;
-          try {
-            payload = await fetchProviderPayload(finalUrl);
-          } catch {
-            throwIfFetchAborted(params.signal);
-          }
-          if (payload) {
-            return payload;
-          }
-          const basic = await extractBasicHtmlContent({
-            html: body,
-            extractMode: params.extractMode,
-          });
-          if (basic?.text) {
-            text = basic.text;
-            title = basic.title;
-            extractor = "raw-html";
-          } else {
-            const providerLabel =
-              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-            throw new Error(
-              `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-            );
-          }
-        }
-      } else {
+      if (!params.readabilityEnabled) {
         const payload = await fetchProviderPayload(finalUrl);
         if (payload) {
           return payload;
@@ -726,6 +686,36 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
+      let extracted = await extractReadableContent({
+        html: body,
+        url: finalUrl,
+        extractMode: params.extractMode,
+        config: params.config,
+      });
+      if (!extracted?.text) {
+        let payload: Record<string, unknown> | null = null;
+        try {
+          payload = await fetchProviderPayload(finalUrl);
+        } catch {
+          throwIfFetchAborted(params.signal);
+        }
+        if (payload) {
+          return payload;
+        }
+        const basic = await extractBasicHtmlContent({
+          html: body,
+          extractMode: params.extractMode,
+        });
+        if (!basic?.text) {
+          const providerLabel =
+            (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+          throw new Error(
+            `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+          );
+        }
+        extracted = { ...basic, extractor: "raw-html" };
+      }
+      ({ text, title, extractor } = extracted);
     } else if (
       normalizedContentType === "application/json" ||
       normalizedContentType.endsWith("+json")

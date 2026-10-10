@@ -222,8 +222,8 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   currentEntries: ({ cfg }) => listMSTeamsGroupEntries(cfg),
   updatePrompt: ({ cfg }) => Boolean(cfg.channels?.msteams?.teams),
   setPolicy: ({ cfg, policy }) => setMSTeamsGroupPolicy(cfg, policy),
-  resolveAllowlist: async ({ cfg, entries, prompter }) =>
-    await resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
+  resolveAllowlist: ({ cfg, entries, prompter }) =>
+    resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
   applyAllowlist: ({ cfg, resolved }) =>
     setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
 };

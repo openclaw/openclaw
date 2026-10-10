@@ -69,14 +69,10 @@ export function createSessionObserverWork(params: {
         }),
       ),
     );
-    eventTail = result.then(
-      () => {
-        pending.delete(operation);
-      },
-      () => {
-        pending.delete(operation);
-      },
-    );
+    const clearPending = () => {
+      pending.delete(operation);
+    };
+    eventTail = result.then(clearPending, clearPending);
     return result;
   };
   function handleEvent(event: SessionObserverEvent, settledError = false) {
@@ -259,13 +255,12 @@ export function createSessionObserverWork(params: {
       );
       return enqueue(
         resolveSessionSubscriptionKey(target.canonicalSessionKey, target.agentId),
-        async (assertCurrent) => {
-          return reader.withRead((session) => {
+        async (assertCurrent) =>
+          reader.withRead((session) => {
             assertCurrent();
             reader.assertCurrent();
             return params.companionReader.read(target, session);
-          });
-        },
+          }),
       );
     },
   };

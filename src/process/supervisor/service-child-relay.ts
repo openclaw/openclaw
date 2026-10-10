@@ -6,6 +6,7 @@ import {
   resolveRuntimeProcessEntrypointUrl,
 } from "../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import type {
@@ -164,7 +165,8 @@ function runServiceChildRelay(): void {
     }
     reserveStdioEntry(stdio, "ipc");
     try {
-      anchor = spawn(process.execPath, resolveRuntimeWorkerArgv(anchorUrl), {
+      const executable = resolveLaunchableNodePath();
+      anchor = spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
         stdio,
         detached: true,
         windowsHide: true,

@@ -82,25 +82,19 @@ export function mutateCodexNativeSubagentSubmissions(params: {
   if (existing && !isDeepStrictEqual(existing, receipt)) {
     return { applied: false };
   }
-  if (params.consume) {
-    if (!current) {
-      return { applied: false };
-    }
-    const remaining = receipts.filter((entry) => entry !== existing);
-    return {
-      applied: true,
-      ...(remaining.length
-        ? { next: { version: 1, owner: current.owner, receipts: remaining } }
-        : {}),
-    };
+  if (params.consume && !current) {
+    return { applied: false };
   }
+  const nextReceipts = params.consume
+    ? receipts.filter((entry) => entry !== existing)
+    : existing
+      ? receipts
+      : [...receipts, receipt];
   return {
     applied: true,
-    next: {
-      version: 1,
-      owner: current?.owner ?? owner,
-      receipts: existing ? receipts : [...receipts, receipt],
-    },
+    ...(nextReceipts.length
+      ? { next: { version: 1, owner: current?.owner ?? owner, receipts: nextReceipts } }
+      : {}),
   };
 }
 

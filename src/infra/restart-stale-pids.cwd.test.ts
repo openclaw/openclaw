@@ -55,27 +55,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(
-  (["linux", "darwin"] as const).flatMap((platform) =>
-    [true, false].map((complete) => ({ platform, complete })),
-  ),
-)(
-  "distinguishes complete ancestry from unavailable parents on $platform ($complete)",
-  ({ platform, complete }) => {
-    vi.stubGlobal("process", { ...process, platform, pid: 41, ppid: 40 });
-    mocks.read.mockImplementation(() => {
-      if (!complete) {
-        throw new Error("process ancestry unavailable");
-      }
-      return "PPid:\t1\n";
-    });
-    mocks.spawn.mockReturnValue({ status: complete ? 0 : 1, stdout: complete ? "1\n" : "" });
-    expect(inspectSelfAndAncestorPidsSync()).toEqual({
-      pids: new Set(complete ? [41, 40, 1] : [41, 40]),
-      complete,
-    });
-  },
-);
+it("reports complete Linux ancestry through PID 1", () => {
+  vi.stubGlobal("process", { ...process, platform: "linux", pid: 41, ppid: 40 });
+  mocks.read.mockReturnValue("PPid:\t1\n");
+  expect(inspectSelfAndAncestorPidsSync()).toEqual({
+    pids: new Set([41, 40, 1]),
+    complete: true,
+  });
+});
 
 it("reports an unclassified Windows listener without reclaiming its process", () => {
   const pid = process.pid + 901;

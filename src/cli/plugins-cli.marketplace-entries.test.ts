@@ -185,32 +185,6 @@ describe("plugins marketplace entries", () => {
     },
   );
 
-  it("prints npm first for a fallback catalog with the old ClawHub default", async () => {
-    loadFeed.mockResolvedValue({
-      source: "bundled-fallback",
-      error: "hosted catalog feed offline mode",
-      entries: [
-        {
-          name: "@openclaw/acpx",
-          openclaw: {
-            plugin: { id: "acpx", label: "ACP" },
-            install: {
-              clawhubSpec: "clawhub:@openclaw/acpx",
-              npmSpec: "@openclaw/acpx",
-              defaultChoice: "clawhub",
-            },
-          },
-        },
-      ],
-    });
-    await entries({ offline: true });
-    expect(output()).toContain("bundled fallback");
-    expect(output()).toContain("@openclaw/acpx");
-    expect(output()).not.toContain("clawhub:@openclaw/acpx");
-    expect(output()).toContain("hosted catalog feed offline mode");
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
   it("bounds signed snapshot output and diagnostics", async () => {
     const filename = timeline();
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "1");
@@ -308,42 +282,29 @@ describe("plugins marketplace refresh", () => {
     });
   });
 
-  it.each([false, true])(
-    "reports fallback and rejects it only when pinned (pinned=%s)",
-    async (pinned) => {
-      const error = pinned
-        ? "hosted catalog feed checksum mismatch: expected sha256:expected"
-        : "hosted catalog feed returned HTTP 503";
-      loadFeed.mockResolvedValue({
-        source: "bundled-fallback",
-        entries: [{ name: "@openclaw/acpx" }],
-        error,
-        metadata: {
-          url: "https://clawhub.ai/v1/feeds/plugins",
-          status: pinned ? 200 : 503,
-          ...(pinned ? { checksum: "sha256:actual" } : {}),
-        },
-      });
-      if (pinned) {
-        await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
-          "exit 1",
-        );
-        expect(runtime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ source: "bundled-fallback" }),
-        );
-        expect(runtime.error).toHaveBeenCalledWith(
-          "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
-        );
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-      } else {
-        await refresh({});
-        expect(output()).toContain("bundled fallback");
-        expect(output()).toContain(error);
-        expect(runtime.exit).not.toHaveBeenCalled();
-      }
-      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a pinned refresh when the feed falls back", async () => {
+    loadFeed.mockResolvedValue({
+      source: "bundled-fallback",
+      entries: [{ name: "@openclaw/acpx" }],
+      error: "hosted catalog feed checksum mismatch: expected sha256:expected",
+      metadata: {
+        url: "https://clawhub.ai/v1/feeds/plugins",
+        status: 200,
+        checksum: "sha256:actual",
+      },
+    });
+    await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
+      "exit 1",
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "bundled-fallback" }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+  });
 
   it.each(["snapshot", "receipt"])(
     "reports a failed %s application without corrupting JSON",

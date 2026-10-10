@@ -32,6 +32,7 @@ import {
 import type {
   DevicePairingPendingRecord,
   DevicePairingPendingRequest,
+  DevicePairingStoreState,
   PairedDevice,
 } from "./device-pairing.types.js";
 
@@ -211,6 +212,15 @@ export function rejectDevicePairingInWorker(
 }
 
 /** Remove a paired device and any pending repair requests for the same device id. */
+function removePairedDeviceRecord(state: DevicePairingStoreState, deviceId: string): void {
+  delete state.pairedByDeviceId[deviceId];
+  for (const [requestId, pending] of Object.entries(state.pendingById)) {
+    if (pending.deviceId === deviceId) {
+      delete state.pendingById[requestId];
+    }
+  }
+}
+
 export function removePairedDeviceInWorker(
   deviceId: string,
   nowMs: number,
@@ -220,12 +230,7 @@ export function removePairedDeviceInWorker(
   if (!normalized || !state.pairedByDeviceId[normalized]) {
     return null;
   }
-  delete state.pairedByDeviceId[normalized];
-  for (const [requestId, pending] of Object.entries(state.pendingById)) {
-    if (pending.deviceId === normalized) {
-      delete state.pendingById[requestId];
-    }
-  }
+  removePairedDeviceRecord(state, normalized);
   persistState(state, undefined, "both", { clearApnsNodeIds: [normalized] });
   return { deviceId: normalized };
 }
@@ -293,12 +298,7 @@ export function pruneSupersededSilentPairedDevicesInWorker(params: {
     if (protectedDeviceIds.has(device.deviceId)) {
       continue;
     }
-    delete state.pairedByDeviceId[device.deviceId];
-    for (const [requestId, pending] of Object.entries(state.pendingById)) {
-      if (pending.deviceId === device.deviceId) {
-        delete state.pendingById[requestId];
-      }
-    }
+    removePairedDeviceRecord(state, device.deviceId);
     removed.push({
       deviceId: device.deviceId,
       roles: listApprovedPairedDeviceRoles(device),
@@ -335,12 +335,7 @@ export function removePairedDeviceRoleInWorker(params: {
   delete tokens[role];
   const remainingRoles = listApprovedPairedDeviceRoles(device).filter((entry) => entry !== role);
   if (remainingRoles.length === 0) {
-    for (const [requestId, pending] of Object.entries(state.pendingById)) {
-      if (pending.deviceId === normalizedDeviceId) {
-        delete state.pendingById[requestId];
-      }
-    }
-    delete state.pairedByDeviceId[normalizedDeviceId];
+    removePairedDeviceRecord(state, normalizedDeviceId);
     persistState(state, undefined, "both", {
       clearApnsNodeIds: [normalizedDeviceId],
     });
@@ -409,29 +404,19 @@ export function updatePairedDeviceMetadataInWorker(
       return { value: false };
     }
     const next: Partial<PairedDeviceMetadataPatch> = {};
-    if ("displayName" in patch) {
-      next.displayName = patch.displayName;
-    }
-    if ("operatorLabel" in patch) {
-      next.operatorLabel = patch.operatorLabel;
-    }
-    if ("platform" in patch) {
-      next.platform = patch.platform;
-    }
-    if ("clientId" in patch) {
-      next.clientId = patch.clientId;
-    }
-    if ("clientMode" in patch) {
-      next.clientMode = patch.clientMode;
-    }
-    if ("remoteIp" in patch) {
-      next.remoteIp = patch.remoteIp;
-    }
-    if ("lastSeenAtMs" in patch) {
-      next.lastSeenAtMs = patch.lastSeenAtMs;
-    }
-    if ("lastSeenReason" in patch) {
-      next.lastSeenReason = patch.lastSeenReason;
+    for (const key of [
+      "displayName",
+      "operatorLabel",
+      "platform",
+      "clientId",
+      "clientMode",
+      "remoteIp",
+      "lastSeenAtMs",
+      "lastSeenReason",
+    ] as const) {
+      if (key in patch) {
+        Object.assign(next, { [key]: patch[key] });
+      }
     }
     return { value: true, patch: next };
   });

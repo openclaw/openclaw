@@ -121,14 +121,11 @@ export function buildLocalAuthProfileStoreForSave(params: {
   for (const profileId of normalizeUniqueStringEntries(params.options?.pruneOrderProfileIds)) {
     keptOrderProfileIds.delete(profileId);
   }
-  for (const profileId of keptProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptProfileIds.delete(profileId);
-    }
-  }
-  for (const profileId of keptOrderProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptOrderProfileIds.delete(profileId);
+  for (const profileIds of [keptProfileIds, keptOrderProfileIds]) {
+    for (const profileId of profileIds) {
+      if (isUserModelAuthProfileId(profileId)) {
+        profileIds.delete(profileId);
+      }
     }
   }
   pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);

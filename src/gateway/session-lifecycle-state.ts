@@ -552,7 +552,8 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
-          // The SQLite writer already published sharing facts; this adapter only projects run state.
+          // The writer already published stored facts; this adapter only projects run state.
+          scope: "runtime",
           facts: { kind: "unchanged" },
         }),
     },

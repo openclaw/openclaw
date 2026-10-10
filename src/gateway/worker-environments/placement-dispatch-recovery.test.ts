@@ -613,6 +613,12 @@ describe("worker placement restart recovery", () => {
       let replacement: ReturnType<typeof placements.get>;
       const observedPlacements = {
         ...placements,
+        getAsync: async (sessionId: string) => {
+          const current = await placements.getAsync(sessionId);
+          return change === "session" && replacement && current
+            ? { ...current, sessionKey: "agent:main:replacement-session" }
+            : current;
+        },
         get: (sessionId: string) => {
           const current = placements.get(sessionId);
           return change === "session" && replacement && current

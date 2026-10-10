@@ -45,14 +45,6 @@ export type {
   SessionWorkspaceProps,
 } from "./chat-session-workspace-types.ts";
 
-function languageForFile(name: string): string {
-  const extension = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
-  if (extension === "yml") {
-    return "yaml";
-  }
-  return extension;
-}
-
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
   // stay on one logical line even when the Gateway returns hostile metadata.
@@ -101,6 +93,14 @@ function workspaceBrowserFilePath(root: string | undefined, filePath: string): s
   const base = root.replace(/[\\/]+$/, "");
   const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
   return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
+}
+
+function readWorkspaceFileText(file: SessionWorkspaceGetResult["file"] | undefined): string | null {
+  return file?.previewKind === "text" &&
+    file.contentEncoding === "utf8" &&
+    typeof file.content === "string"
+    ? file.content
+    : null;
 }
 
 async function loadArtifactSidebarContent(
@@ -198,6 +198,7 @@ function openFile(
         return null;
       }
       const name = file.name || pathDisplayName(path);
+      const filePath = file.workspacePath || file.path || path;
       if (file.previewKind === "image") {
         if (
           file.contentEncoding !== "base64" ||
@@ -212,7 +213,7 @@ function openFile(
           title: name,
           src: `data:${file.mimeType};base64,${file.content}`,
           mimeType: file.mimeType,
-          rawText: file.workspacePath || file.path || path,
+          rawText: filePath,
         };
       }
       if (file.previewKind === "unsupported") {
@@ -221,16 +222,13 @@ function openFile(
           fileLinkSessionKey: result.sessionKey,
         };
       }
-      if (
-        file.previewKind !== "text" ||
-        file.contentEncoding !== "utf8" ||
-        typeof file.content !== "string"
-      ) {
+      const text = readWorkspaceFileText(file);
+      if (text === null) {
         return null;
       }
       const canEdit =
         typeof file.hash === "string" &&
-        hasUniformLineEndings(file.content) &&
+        hasUniformLineEndings(text) &&
         isGatewayMethodAdvertised(state, "sessions.files.set") === true &&
         hasOperatorAdminAccess(state.hello?.auth ?? null);
       const edit = canEdit
@@ -303,22 +301,23 @@ function openFile(
             },
           }
         : undefined;
+      const extension = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
       return {
         kind: "file",
-        path: file.workspacePath || file.path || path,
+        path: filePath,
         name,
-        content: file.content,
+        content: text,
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: file.workspacePath || file.path || path,
+          path: filePath,
         },
         draftKey: [
           gatewayUrl,
           draftScope ?? "",
           result.sessionKey,
           result.root ?? "",
-          file.workspacePath || file.path || path,
+          filePath,
         ].join("\u0000"),
         draftContext: {
           sessionKey: result.sessionKey,
@@ -329,9 +328,9 @@ function openFile(
         },
         root: result.root ?? null,
         mimeType: file.mimeType,
-        language: languageForFile(name),
+        language: extension === "yml" ? "yaml" : extension,
         line: opts.line ?? null,
-        rawText: file.content,
+        rawText: text,
         ...(edit ? { edit } : {}),
       };
     },
@@ -530,16 +529,14 @@ export function resolveSessionDiffSidebarContent(
   state: SessionWorkspaceHost,
 ): SidebarContent | null {
   const workspace = getSessionWorkspace(state);
-  const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true && Boolean(state.client);
-  if (!canOpenDiff) {
+  const client = state.client;
+  if (isGatewayMethodAdvertised(state, "sessions.diff") !== true || !client) {
     return null;
   }
   if (workspace.diffContent) {
     return workspace.diffContent;
   }
   const sessionKey = state.sessionKey;
-  const client = state.client;
   const agentId = workspace.agentId;
   const canLoadFileText =
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
@@ -547,32 +544,19 @@ export function resolveSessionDiffSidebarContent(
     kind: "session-diff",
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
-    load: async (scope) => {
-      if (!client) {
-        throw new Error(t("chat.sessionDiff.disconnected"));
-      }
-      return await client.request<SessionsDiffResult>("sessions.diff", {
+    load: async (scope) =>
+      await client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
-      });
-    },
+      }),
     loadFileText: canLoadFileText
       ? async (path) => {
           try {
             const result = await state.sessions.getFile(sessionKey, path, {
               agentId,
             });
-            const file = result?.file;
-            if (
-              !file ||
-              file.previewKind !== "text" ||
-              file.contentEncoding !== "utf8" ||
-              typeof file.content !== "string"
-            ) {
-              return null;
-            }
-            return file.content;
+            return readWorkspaceFileText(result?.file);
           } catch {
             return null;
           }

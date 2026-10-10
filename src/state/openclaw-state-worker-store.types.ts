@@ -17,7 +17,11 @@ export type StoreOperations = OpenClawStateWorkerOperations &
 export type Store = SqliteWorkerStore<StoreOperations>;
 export type DomainScope = Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">;
 export type IdleTimer = ReturnType<typeof setTimeout> & { unref?: () => void };
-export type OpeningAdmission = { assertCurrent?: () => void; refusal?: { error: unknown } };
+export type OpeningAdmission = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+  refusal?: { error: unknown };
+};
 export type Entry = {
   source: ReturnType<typeof captureRuntimeWorkerSource>;
   context: OpenClawStateWorkerContext;

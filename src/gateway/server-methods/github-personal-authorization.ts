@@ -6,6 +6,7 @@ import {
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
+import { readGitHubPublicationSession } from "../github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "../github-publication-failure.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
@@ -19,7 +20,6 @@ import {
   resolveSessionMutationAuthorization,
 } from "../session-sharing.js";
 import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import {
   isIneligiblePersonalGatewayCaller,
@@ -149,7 +149,7 @@ export async function prepareGitHubPublicationOptionsRead(
             action: preparePersonalGitHubAction(options, "operator.read", signal),
           };
   const readSession = (key: string, agentId?: string) => {
-    const loaded = loadGatewaySessionEntryReadOnly(key, { agentId, targetDiscoveryCache });
+    const loaded = readGitHubPublicationSession(key, { agentId, targetDiscoveryCache });
     const filter = createSessionListEntryFilter({
       cfg: options.context.getRuntimeConfig(),
       client: currentClient(),
@@ -244,7 +244,7 @@ export function preparePersonalGitHubSessionAction(
 } {
   const action = preparePersonalGitHubAction(options, "operator.write");
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, targetDiscoveryCache });
+  const initial = readGitHubPublicationSession(sessionKey, { agentId, targetDiscoveryCache });
   if (!initial.entry?.sessionId) {
     throw new Error("GitHub publication session was not found.");
   }
@@ -252,7 +252,7 @@ export function preparePersonalGitHubSessionAction(
   const lifecycleRevision = initial.entry.lifecycleRevision ?? null;
   const assertCurrent = () => {
     action.assertCurrent();
-    const current = loadGatewaySessionEntryReadOnly(initial.canonicalKey, {
+    const current = readGitHubPublicationSession(initial.canonicalKey, {
       agentId: initial.agentId,
       targetDiscoveryCache,
     });

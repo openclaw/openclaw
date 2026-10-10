@@ -15,6 +15,7 @@ import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import type {
   UserTurnTranscriptAnnotation,
@@ -48,7 +49,10 @@ export function bindUserTurnTranscriptAnnotation(params: {
     target.sessionId !== admission.sessionId ||
     target.sessionKey !== admission.sessionKey ||
     target.agentId !== admission.agentId ||
-    resolveSessionTranscriptDatabasePath(target) !== admission.storePath ||
+    !isSameOpenClawAgentDatabasePath(
+      resolveSessionTranscriptDatabasePath(target),
+      admission.storePath,
+    ) ||
     !selected ||
     selected.sessionId !== admission.sessionId ||
     (selected.activeWriterRunId !== undefined && selected.activeWriterRunId !== params.runId)

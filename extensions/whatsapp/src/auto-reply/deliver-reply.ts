@@ -80,24 +80,17 @@ function createWhatsAppReplyDeliveryReceipt(
 ): MessageReceipt {
   const receiptResultsById = new Map<string, MessageReceiptSourceResult>();
   for (const result of results) {
-    if (result.receipt?.parts.length) {
-      for (const part of result.receipt.parts) {
-        receiptResultsById.set(part.platformMessageId, {
-          ...(part.raw ?? { channel: "whatsapp", messageId: part.platformMessageId }),
-          meta: {
-            ...part.raw?.meta,
-            kind: result.kind,
-            providerAccepted: result.providerAccepted,
-          },
-        });
-      }
-      continue;
-    }
-    for (const messageId of listWhatsAppSendResultMessageIds(result)) {
-      receiptResultsById.set(messageId, {
-        channel: "whatsapp",
-        messageId,
+    const parts = result.receipt?.parts.length
+      ? result.receipt.parts
+      : listWhatsAppSendResultMessageIds(result).map((platformMessageId) => ({
+          platformMessageId,
+          raw: undefined,
+        }));
+    for (const part of parts) {
+      receiptResultsById.set(part.platformMessageId, {
+        ...(part.raw ?? { channel: "whatsapp", messageId: part.platformMessageId }),
         meta: {
+          ...part.raw?.meta,
           kind: result.kind,
           providerAccepted: result.providerAccepted,
         },
@@ -262,12 +255,16 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
     }
   };
 
+  const sendText = async (chunk: string, label: string, quote = getQuote) => {
+    rememberSendResult(await sendWithRetry(() => transport.reply(chunk, quote()), label, "text"));
+  };
+
   if (mediaList.length === 0 && textChunks.length) {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
       const quote = getQuote();
-      rememberSendResult(await sendWithRetry(() => transport.reply(chunk, quote), "text", "text"));
+      await sendText(chunk, "text", () => quote);
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -334,9 +331,7 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
         mediaUrl,
       );
       if (media.kind === "audio" && caption) {
-        rememberSendResult(
-          await sendWithRetry(() => transport.reply(caption, quote), "media:audio-text", "text"),
-        );
+        await sendText(caption, "media:audio-text", () => quote);
       }
       whatsappOutboundLog.info(
         `Sent media reply to ${conversationId} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
@@ -365,35 +360,21 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
         `Failed sending web media to ${conversationId}: ${formatError(error)}`,
       );
       replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
-      if (!isFirst) {
-        // Non-first media failures were silently dropped before. Notify the user
-        // so they know a trailing attachment did not arrive.
-        whatsappOutboundLog.warn(`Trailing media failed; sent warning to ${conversationId}`);
-        rememberSendResult(
-          await sendWithRetry(
-            () => transport.reply("⚠️ Media unavailable.", getQuote()),
-            "media:fallback-unavailable",
-            "text",
-          ),
-        );
-        return;
-      }
-      const fallbackText = [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n");
-      whatsappOutboundLog.warn(`Media skipped; sent text-only to ${conversationId}`);
-      rememberSendResult(
-        await sendWithRetry(
-          () => transport.reply(fallbackText, getQuote()),
-          "media:fallback-text",
-          "text",
-        ),
+      // A failed trailing attachment needs its own warning after earlier accepted media.
+      const fallbackText = isFirst
+        ? [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n")
+        : "⚠️ Media unavailable.";
+      whatsappOutboundLog.warn(
+        isFirst
+          ? `Media skipped; sent text-only to ${conversationId}`
+          : `Trailing media failed; sent warning to ${conversationId}`,
       );
+      await sendText(fallbackText, isFirst ? "media:fallback-text" : "media:fallback-unavailable");
     },
   });
 
   for (const chunk of remainingText) {
-    rememberSendResult(
-      await sendWithRetry(() => transport.reply(chunk, getQuote()), "media:text", "text"),
-    );
+    await sendText(chunk, "media:text");
   }
   return finishDelivery();
 }

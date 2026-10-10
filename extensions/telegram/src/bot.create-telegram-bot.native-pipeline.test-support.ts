@@ -17,10 +17,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import {
   enqueueTelegramMenuSync,
   resolveTelegramMenuRemoteOwner,
@@ -68,7 +68,14 @@ async function settleUpdates(): Promise<void> {
   }
 }
 
-export const harness = {
+export const harness: {
+  readonly state: OpenClawTestState;
+  replySpy: Mock<ReplyResolver>;
+  transcribeFirstAudio: typeof transcribeFirstAudio;
+  settleUpdates: typeof settleUpdates;
+  listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
+  telegramBotDepsForTest: TelegramBotDeps;
+} = {
   get state() {
     return state;
   },

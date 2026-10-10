@@ -689,7 +689,7 @@ describe("sendMessageDiscord", () => {
       discordCode: 50013,
       status: 403,
       message: expect.stringContaining(
-        missing[0] ?? "permission probe did not identify missing ViewChannel/SendMessages",
+        missing[0] ?? "permission check did not identify missing ViewChannel/SendMessages",
       ),
     });
   });

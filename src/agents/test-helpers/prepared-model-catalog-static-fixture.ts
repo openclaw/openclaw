@@ -1,4 +1,3 @@
-import path from "node:path";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-catalog-owner.js";
 import { createCatalogFixture } from "../prepared-model-catalog-worker.test-support.js";
@@ -24,7 +23,7 @@ export function createStaticCatalogSnapshotFixture(params: {
       credentialOnlySyntheticAuth?: boolean;
       prepareInboundPluginRegistry?: boolean;
       readOnly?: boolean;
-      metadataWorkspace?: "gateway" | "none" | "activation";
+      metadataWorkspace?: "none" | "activation";
       provideMetadataToWorker?: boolean;
     },
   ) {
@@ -32,7 +31,7 @@ export function createStaticCatalogSnapshotFixture(params: {
       ...options,
       receiptBroadcastName: params.receiptBroadcastName?.(),
     });
-    const { agentDir, workspaceDir, env, root } = fixture;
+    const { agentDir, workspaceDir, env } = fixture;
     const config = options?.credentialOnlySyntheticAuth
       ? addCredentialOnlyProviderFixture(fixture)
       : fixture.config;
@@ -60,9 +59,6 @@ export function createStaticCatalogSnapshotFixture(params: {
               ? { ...config, plugins: { ...config.plugins, entries: {} } }
               : config,
           env,
-          ...(options.metadataWorkspace === "gateway"
-            ? { workspaceDir: path.join(root, "gateway-workspace") }
-            : {}),
         })
       : undefined;
     const providedMetadataSnapshot =

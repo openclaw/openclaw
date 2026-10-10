@@ -14,7 +14,7 @@ it.for([
   { withSibling: false, getterBacked: true, initiallyEmpty: false },
   { withSibling: true, getterBacked: false, initiallyEmpty: true },
 ])(
-  "models.list renews accepted inventory (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
+  "models.list reuses inventory until explicit refresh (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
   { timeout: 120_000 },
   async ({ withSibling, getterBacked, initiallyEmpty }, { signal }) => {
     const state = await createOpenClawTestState({
@@ -137,6 +137,7 @@ it.for([
         token,
         scopes: ["operator.admin"],
       });
+      let requestedRefresh: Promise<unknown> | undefined;
       try {
         await server.startupSettled;
         const list = async (refresh = false) => {
@@ -208,10 +209,14 @@ it.for([
         // Arm the response hold before making any accepted inventory due.
         failSibling = withSibling && !initiallyEmpty;
         expire(withSibling && !initiallyEmpty ? providers : [provider]);
-        // The renewal response stays held; bind waits to the test so a stall still reaches cleanup.
+        // Expiring a provider response cache does not invalidate the published Gateway view.
         const saved = await withinTest(list(), signal);
         expect(saved.models.map((row) => row.id)).toEqual(original);
         expect(saved.siblingModels).toEqual(withSibling ? ["sibling"] : []);
+        expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
+        expect(requests).toBe(initialRequests);
+        requestedRefresh = list(true);
+        void requestedRefresh.catch(() => undefined);
         await withinTest(renewal.promise, signal);
         const concurrent = await withinTest(Promise.all([list(), list()]), signal);
         expect(concurrent.map((result) => result.models.map((row) => row.id))).toEqual([
@@ -225,11 +230,13 @@ it.for([
             reply(response);
           }
         });
+        await requestedRefresh;
         expect(renewed.models.map((row) => row.id)).toEqual(["newly-published", ...original]);
 
         if (!withSibling || initiallyEmpty) {
           fail = true;
           expire([provider]);
+          await list(true);
         }
         const failed = await waitForCatalogPublication({
           signal,
@@ -241,7 +248,7 @@ it.for([
           advertised = ["original", "newly-published", "after-sibling-failure"];
           const afterSiblingFailure = await acceptRenewal(() => {
             expire([provider]);
-            return list();
+            return list(true);
           });
           expect(afterSiblingFailure.models.map((row) => row.id)).toEqual([
             "after-sibling-failure",
@@ -273,6 +280,7 @@ it.for([
         for (const response of held.splice(0)) {
           reply(response);
         }
+        await requestedRefresh?.catch(() => undefined);
         await disconnectGatewayClient(client);
         await server.close();
       }

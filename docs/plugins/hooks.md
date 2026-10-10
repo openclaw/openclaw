@@ -131,7 +131,7 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
 - `session_end` remains available as a metadata-only lifecycle hook without
   that grant. Its bounded `ctx.endedTranscript` reader is available only when
   the effective conversation-access policy allows it; see the
-  [session lifecycle contract](/plugins/hooks/reference#sessions-and-compaction).
+  [session lifecycle contract](/plugins/hooks/reference#hook-catalog).
 - `allowPromptInjection: false` blocks `agent_turn_prepare`,
   `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
   injections. It defaults to allowed, but does not grant conversation access.
@@ -231,7 +231,7 @@ resolve here.
 
 - <a id="registration-and-execution"></a>[Registration and execution](/plugins/hooks/reference#registration-and-execution)
 - <a id="hook-catalog"></a>[Hook catalog](/plugins/hooks/reference#hook-catalog)
-- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle and evaluation](/plugins/hooks/reference#skill-lifecycle-and-evaluation)
+- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle](/plugins/hooks/reference#skill-lifecycle)
 - <a id="channel-pairing-requests"></a>[Channel pairing requests](/plugins/hooks/reference#channel-pairing-requests)
 
 ### Tool call policy hooks

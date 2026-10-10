@@ -119,6 +119,18 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
 }
+
+function assertUtilityModelSeparation(
+  config: OpenClawConfig,
+  modelTarget: "utility" | undefined,
+): void {
+  if (modelTarget === "utility") {
+    const error = resolveUtilityModelSeparationError(config);
+    if (error) {
+      throw new Error(error);
+    }
+  }
+}
 export function applyProviderPluginAuthMethodResultConfig(params: {
   config: OpenClawConfig;
   result: ProviderAuthResult;
@@ -279,12 +291,10 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         env: params.env,
         includeUntrustedWorkspacePlugins: false,
       });
-      if ((manifestAuthChoice ?? installCatalogEntry)?.modelTarget === "utility") {
-        const error = resolveUtilityModelSeparationError(params.config);
-        if (error) {
-          throw new Error(error);
-        }
-      }
+      assertUtilityModelSeparation(
+        params.config,
+        (manifestAuthChoice ?? installCatalogEntry)?.modelTarget,
+      );
       const resolveChoice = (providers: ProviderPlugin[], config: OpenClawConfig) =>
         resolveProviderPluginChoice({
           providers,
@@ -409,12 +419,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           ? null
           : preparedWithoutAuthProfiles({ config: nextConfig, retrySelection: true });
       }
-      if (resolved.wizard?.modelTarget === "utility") {
-        const error = resolveUtilityModelSeparationError(params.config);
-        if (error) {
-          throw new Error(error);
-        }
-      }
+      assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
       if (nextConfig === params.config && enabledConfig !== params.config) {
         nextConfig = enabledConfig;
       }
@@ -442,12 +447,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
       beforePersistentEffect: async () => {
-        if (resolved.wizard?.modelTarget === "utility") {
-          const error = resolveUtilityModelSeparationError(params.config);
-          if (error) {
-            throw new Error(error);
-          }
-        }
+        assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
         await params.beforePersistentEffect?.();
       },
       secretInputMode: params.opts?.secretInputMode,

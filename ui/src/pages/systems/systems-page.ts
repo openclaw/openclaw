@@ -223,7 +223,7 @@ class SystemsPage extends OpenClawLightDomElement {
         <button
           class="systems-icon-button"
           aria-label=${t("systems.closeDetails")}
-          @click=${() => controller.toggleDetails()}
+          @click=${() => controller.updatePresentation({ showDetails: !controller.showDetails })}
         >
           ${icons.x}
         </button>
@@ -291,17 +291,11 @@ class SystemsPage extends OpenClawLightDomElement {
     const ready = setup?.state === "ready" || setup?.state === "managed";
     const title = enabled
       ? "systems.desktopSetupEnabled"
-      : setup?.state === "managed"
-        ? "systems.managedDesktopConfigured"
-        : setup?.state === "ready"
-          ? isMac
-            ? "systems.screenSharingDetected"
-            : "systems.desktopDetected"
-          : setup?.state === "needs-server"
-            ? isMac
-              ? "systems.screenSharingNeeded"
-              : "systems.desktopServerNeeded"
-            : "systems.desktopSetupAttention";
+      : ([
+          ["managed", "systems.managedDesktopConfigured"],
+          ["ready", isMac ? "systems.screenSharingDetected" : "systems.desktopDetected"],
+          ["needs-server", isMac ? "systems.screenSharingNeeded" : "systems.desktopServerNeeded"],
+        ].find(([kind]) => kind === setup?.state)?.[1] ?? "systems.desktopSetupAttention");
     const hint = enabled
       ? "systems.desktopSetupConnecting"
       : ready
@@ -401,7 +395,7 @@ class SystemsPage extends OpenClawLightDomElement {
           title=${t(controller.showStats ? "systems.hideStats" : "systems.stats")}
           aria-label=${t(controller.showStats ? "systems.hideStats" : "systems.stats")}
           aria-pressed=${controller.showStats}
-          @click=${() => controller.toggleStats()}
+          @click=${() => controller.updatePresentation({ showStats: !controller.showStats })}
         >
           ${icons.activity}
         </button>
@@ -411,7 +405,7 @@ class SystemsPage extends OpenClawLightDomElement {
           aria-label=${t("systems.details")}
           aria-pressed=${controller.showDetails}
           ?disabled=${!row}
-          @click=${() => controller.toggleDetails()}
+          @click=${() => controller.updatePresentation({ showDetails: !controller.showDetails })}
         >
           ${icons.panelRightOpen}
         </button>
@@ -455,7 +449,7 @@ class SystemsPage extends OpenClawLightDomElement {
                     <span class="systems-state__icon" aria-hidden="true">${icons.monitor}</span>
                     <h2>${emptyTitle}</h2>
                     <p>${emptyHint}</p>
-                    ${row ? html`<button class="systems-text-button" @click=${() => controller.toggleDetails()}>${t("systems.details")}</button>` : nothing}
+                    ${row ? html`<button class="systems-text-button" @click=${() => controller.updatePresentation({ showDetails: !controller.showDetails })}>${t("systems.details")}</button>` : nothing}
                   </div>`
           }
         </div>

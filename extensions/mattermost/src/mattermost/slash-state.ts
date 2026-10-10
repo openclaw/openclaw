@@ -48,7 +48,6 @@ type SlashCommandAccountState = {
   commandTokens: Set<string>;
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
-  /** Current HTTP handler for this account. */
   handler: SlashHandler | null;
 };
 

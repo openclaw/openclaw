@@ -30,14 +30,32 @@ function normalizeOpenAiModel(model: string): string {
   });
 }
 
-function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
-  return URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
-}
-
 export async function createOpenAiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
-  const client = await resolveOpenAiEmbeddingClient(options);
+  const originalModel = options.model;
+  const resolvedClient = await resolveRemoteEmbeddingClient({
+    provider: options.provider ?? "openai",
+    capability: "embedding",
+    options,
+    defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
+    normalizeModel: normalizeOpenAiModel,
+  });
+  // Routers expect the provider-qualified model name; only native OpenAI strips it.
+  if (
+    URL.parse(resolvedClient.baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") !==
+      "api.openai.com" &&
+    originalModel.startsWith("openai/")
+  ) {
+    resolvedClient.model = `openai/${normalizeOpenAiModel(originalModel)}`;
+  }
+  const client: OpenAiEmbeddingClient = {
+    ...resolvedClient,
+    inputType: options.inputType,
+    queryInputType: options.queryInputType,
+    documentInputType: options.documentInputType,
+    outputDimensionality: options.dimensions,
+  };
   return {
     provider: createRemoteEmbeddingProvider({
       id: "openai",
@@ -58,29 +76,5 @@ export async function createOpenAiEmbeddingProvider(
       },
     }),
     client,
-  };
-}
-
-async function resolveOpenAiEmbeddingClient(
-  options: MemoryEmbeddingProviderCreateOptions,
-): Promise<OpenAiEmbeddingClient> {
-  const originalModel = options.model;
-  const client = await resolveRemoteEmbeddingClient({
-    provider: options.provider ?? "openai",
-    capability: "embedding",
-    options,
-    defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
-    normalizeModel: normalizeOpenAiModel,
-  });
-  // Routers expect the provider-qualified model name; only native OpenAI strips it.
-  if (!isNativeOpenAiBaseUrl(client.baseUrl) && originalModel.startsWith("openai/")) {
-    client.model = `openai/${normalizeOpenAiModel(originalModel)}`;
-  }
-  return {
-    ...client,
-    inputType: options.inputType,
-    queryInputType: options.queryInputType,
-    documentInputType: options.documentInputType,
-    outputDimensionality: options.dimensions,
   };
 }

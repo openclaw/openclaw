@@ -6,23 +6,9 @@ import {
   resolveDiscordChannelInfoSafe,
   resolveDiscordChannelParentIdSafe,
 } from "./channel-access.js";
-import { resolveDiscordChannelInfo } from "./message-channel-info.js";
+import { buildDiscordChannelInfo, resolveDiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordChannelInfo, DiscordChannelInfoClient } from "./message-channel-info.js";
-import { resolveDiscordThreadParentInfo } from "./threading.js";
-
-function buildFetchedChannelInfo(channel: unknown): DiscordChannelInfo | null {
-  const channelInfo = resolveDiscordChannelInfoSafe(channel);
-  if (channelInfo.type === undefined) {
-    return null;
-  }
-  return {
-    type: channelInfo.type as ChannelType,
-    name: channelInfo.name,
-    topic: channelInfo.topic,
-    parentId: channelInfo.parentId,
-    ownerId: channelInfo.ownerId,
-  };
-}
+import { resolveDiscordThreadParentInfo } from "./threading.starter.js";
 
 export async function resolveDiscordThreadLikeChannelContext(params: {
   client: DiscordChannelInfoClient;
@@ -84,6 +70,6 @@ export async function resolveFetchedDiscordThreadLikeChannelContext(params: {
 }) {
   return await resolveDiscordThreadLikeChannelContext({
     ...params,
-    channelInfo: buildFetchedChannelInfo(params.channel),
+    channelInfo: buildDiscordChannelInfo(params.channel),
   });
 }

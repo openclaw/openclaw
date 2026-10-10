@@ -7,6 +7,7 @@ import type {
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -163,7 +164,9 @@ it.each([
                         if (sweep) {
                           sweepDispatches++;
                           if (continuation === "retires-between-batches" && sweepDispatches === 2) {
-                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                            closing = runInDetachedAsyncContext(() =>
+                              closeOpenClawAgentDatabasesAsync(stateDir),
+                            );
                           }
                         }
                         const result = await worker
@@ -210,7 +213,9 @@ it.each([
                               hasMore: false,
                             });
                             // Revocation is immediate; awaiting close would join this operation.
-                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                            closing = runInDetachedAsyncContext(() =>
+                              closeOpenClawAgentDatabasesAsync(stateDir),
+                            );
                           } else if (continuation === "retires-between-batches") {
                             expect(result).toMatchObject({
                               hasMore: true,
@@ -222,7 +227,9 @@ it.each([
                               hasMore: false,
                             });
                             // Closing joins this accepted task; await it after the owner settles.
-                            closing = closeSessionTranscriptReconcileWorkerPool();
+                            closing = runInDetachedAsyncContext(
+                              closeSessionTranscriptReconcileWorkerPool,
+                            );
                           }
                         }
                         return result;

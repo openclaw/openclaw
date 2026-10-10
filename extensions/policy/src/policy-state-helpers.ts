@@ -1,4 +1,3 @@
-// Shared policy evidence path and value helpers.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getPolicyPath } from "./policy-value.js";
 
@@ -40,4 +39,16 @@ export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
         value,
       }))
     : [];
+}
+
+export function resolvePolicyValue<T extends string | boolean>(
+  local: T | undefined,
+  inherited: T | undefined,
+  fallback: T,
+) {
+  return {
+    value: local ?? inherited ?? fallback,
+    explicit: local !== undefined || inherited !== undefined,
+    inherited: local === undefined && inherited !== undefined,
+  };
 }

@@ -48,7 +48,6 @@ function hasExplicitProviderAccountConfig(
   return Object.hasOwn(accounts, accountId);
 }
 
-/** Collect channel-specific security findings across active channel plugins/accounts. */
 export async function collectChannelSecurityFindingsCore(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;

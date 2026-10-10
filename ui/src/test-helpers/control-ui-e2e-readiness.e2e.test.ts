@@ -31,9 +31,25 @@ suite.define(() => {
           expect(await row.count()).toBe(0);
         }
         expect(navigated).toBe(false);
+        expect(await page.evaluate(() => window.openclawControlUi?.snapshot().rosterReady)).toBe(
+          false,
+        );
         await gateway.resolveDeferred("sessions.list");
         expect((await navigation)?.ok()).toBe(true);
         expect(await row.count()).toBe(1);
+        expect(
+          await page.evaluate(() => {
+            const snapshot = window.openclawControlUi?.snapshot();
+            return {
+              ready: snapshot?.ready,
+              routeReady: snapshot?.routeReady,
+              rosterReady: snapshot?.rosterReady,
+              published:
+                document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
+                String(snapshot?.generation),
+            };
+          }),
+        ).toEqual({ ready: true, routeReady: true, rosterReady: true, published: true });
       }
       expect(await page.goto("about:blank")).toBeNull();
       expect(await page.reload()).toBeNull();

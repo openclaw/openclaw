@@ -95,10 +95,9 @@ export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
 
 function normalizeProviderForComparison(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAnyChannelId(trimmed) || normalizeLowercaseStringOrEmpty(trimmed);
+  return trimmed
+    ? normalizeAnyChannelId(trimmed) || normalizeLowercaseStringOrEmpty(trimmed)
+    : undefined;
 }
 
 function normalizeTargetForDedupe(provider: string, target?: string): string | undefined {
@@ -183,9 +182,8 @@ function getMatchingMessagingToolReplyTargets(
       threadId: originThreadId,
     };
     const targetRoute = {
-      channel: provider,
+      ...originRoute,
       to: targetTo,
-      accountId: routeAccount,
       threadId: target.threadId ?? (target.threadImplicit ? originThreadId : undefined),
     };
     if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {

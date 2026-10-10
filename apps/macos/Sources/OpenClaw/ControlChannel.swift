@@ -222,7 +222,7 @@ final class ControlChannel {
         {
             self.pendingStateTask?.cancel()
             self.pendingStateTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
+                try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
                 guard let self, !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
                 self.pendingStateTask = nil
                 self.stateDebouncer.recordDeferredApply(at: Date())
@@ -238,10 +238,6 @@ final class ControlChannel {
     private func cancelPendingStateTask() {
         self.pendingStateTask?.cancel()
         self.pendingStateTask = nil
-    }
-
-    private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
-        UInt64(max(0, interval) * 1_000_000_000)
     }
 
     init(
@@ -285,7 +281,13 @@ final class ControlChannel {
         if self.eventTask == nil { self.startEventStream() }
         self.setStateThrottled(.connecting)
         do {
-            try await self.establishGatewayConnection()
+            try await self.gateway.refresh()
+            guard try await self.gateway.healthOK(timeoutMs: 5000) else {
+                throw NSError(
+                    domain: "Gateway",
+                    code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway health not ok"])
+            }
             guard !Task.isCancelled, self.reconcileCurrentConnection(generation: generation) else { return }
             guard let lease = await self.gateway.captureServerLease(),
                   generation == self.synchronizeRouteGeneration(),
@@ -317,10 +319,7 @@ final class ControlChannel {
     {
         let generation = self.synchronizeRouteGeneration()
         let start = Date()
-        var params: [String: AnyHashable]?
-        if let timeout {
-            params = ["timeout": AnyHashable(Int(timeout * 1000))]
-        }
+        let params = timeout.map { ["timeout": AnyHashable(Int($0 * 1000))] }
         let timeoutMs = (timeout ?? 15) * 1000
         let payload = try await self.request(
             method: "health", params: params, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
@@ -595,17 +594,6 @@ final class ControlChannel {
             } else if case let .degraded(message) = self.state {
                 self.logger.error("control channel recovery failed \(message, privacy: .public)")
             }
-        }
-    }
-
-    private func establishGatewayConnection(timeoutMs: Int = 5000) async throws {
-        try await self.gateway.refresh()
-        let ok = try await self.gateway.healthOK(timeoutMs: timeoutMs)
-        if ok == false {
-            throw NSError(
-                domain: "Gateway",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "gateway health not ok"])
         }
     }
 

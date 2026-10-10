@@ -19,9 +19,11 @@ import {
 import {
   createAgentRunStaleLifecycleError,
   isAgentRunStaleLifecycleError,
+  isRestartRecoveryClaimChangedError,
 } from "../../infra/agent-lifecycle-error.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -124,23 +126,18 @@ it.each([
           if (stage === "cold-registration") {
             await closeOpenClawAgentDatabasesAsync();
             clearOpenClawAgentDatabaseValidationCache();
-            const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
             let witnessed = 0;
-            const admission = vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, options) =>
-                createAdmission((request, grant) => {
-                  if (
-                    request.stage === "prepare" &&
-                    isRecord(request.facts) &&
-                    request.facts.kind === "agent-registration-committed"
-                  ) {
-                    witnessed += 1;
-                    rotateAgentEventLifecycleGeneration();
-                  }
-                  admit(request, grant);
-                }, options),
-              );
+            const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "prepare" &&
+                isRecord(request.facts) &&
+                request.facts.kind === "agent-registration-committed"
+              ) {
+                witnessed += 1;
+                rotateAgentEventLifecycleGeneration();
+              }
+              admit(request, grant);
+            });
             restore = () => admission.mockRestore();
             assertBoundary = () => {
               expect(witnessed).toBe(1);
@@ -337,6 +334,7 @@ describe("restart recovery claim settlement", () => {
     "missing-generation",
     "commit-rotation",
     "commit-abort",
+    "session-retarget",
   ] as const)(
     "preserves the delivery claim when queued cleanup loses ownership through %s",
     async (interruption) => {
@@ -345,7 +343,7 @@ describe("restart recovery claim settlement", () => {
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
       let restartAborted = false;
-      let interruptBeforeCommit = false;
+      let sessionId = "session";
       let entry: InternalSessionEntry = {
         sessionId: "session",
         updatedAt: 1,
@@ -363,20 +361,7 @@ describe("restart recovery claim settlement", () => {
           interruption === "missing-generation" ? undefined : lifecycleGeneration,
         admissionRunId: "recovery-run",
         getEntry: () => entry,
-        getSessionId: () => {
-          if (interruptBeforeCommit) {
-            interruptBeforeCommit = false;
-            // The store awaits the prepared patch before entering its write transaction.
-            queueMicrotask(() => {
-              if (interruption === "commit-rotation") {
-                rotateAgentEventLifecycleGeneration();
-              } else {
-                restartAborted = true;
-              }
-            });
-          }
-          return "session";
-        },
+        getSessionId: () => sessionId,
         isRestartAbort: () => restartAborted,
         resolveDeliveryContext: () => deliveryContext,
         setEntry: (next) => {
@@ -426,21 +411,57 @@ describe("restart recovery claim settlement", () => {
         return current;
       });
       await writerEntered.promise;
-      interruptBeforeCommit = interruption === "commit-rotation" || interruption === "commit-abort";
+      let interruptedAtCommit = false;
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, options) =>
+          createAdmission((request, grant) => {
+            if (
+              !interruptedAtCommit &&
+              (interruption === "commit-rotation" || interruption === "commit-abort") &&
+              request.stage === "transaction" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-validated"
+            ) {
+              interruptedAtCommit = true;
+              if (interruption === "commit-rotation") {
+                rotateAgentEventLifecycleGeneration();
+              } else {
+                restartAborted = true;
+              }
+            }
+            admit(request, grant);
+          }, options),
+        );
       // The old cleanup enters before shutdown; its actual write waits behind the handoff.
       const clearing = controller.clear().catch((error: unknown) => {
-        expect(isAgentRunStaleLifecycleError(error)).toBe(true);
+        expect(
+          interruption === "session-retarget"
+            ? isRestartRecoveryClaimChangedError(error)
+            : isAgentRunStaleLifecycleError(error),
+        ).toBe(true);
       });
       try {
         if (interruption === "restart-abort") {
           restartAborted = true;
         } else if (interruption === "successor-generation") {
           successorGeneration = rotateAgentEventLifecycleGeneration();
+        } else if (interruption === "session-retarget") {
+          sessionId = "successor-session";
         }
       } finally {
         releaseWriter.resolve();
       }
-      await Promise.all([handoff, clearing]);
+      try {
+        await Promise.all([handoff, clearing]);
+      } finally {
+        admission.mockRestore();
+      }
+      expect(interruptedAtCommit).toBe(
+        interruption === "commit-rotation" || interruption === "commit-abort",
+      );
 
       const persisted = loadSessionEntry(scope);
       expect(persisted).toMatchObject({

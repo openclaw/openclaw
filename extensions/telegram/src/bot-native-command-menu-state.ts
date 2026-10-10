@@ -200,9 +200,6 @@ const TELEGRAM_MENU_LANGUAGE_CODE_RECORD = {
   za: true,
   zu: true,
 } satisfies Record<LanguageCode, true>;
-const TELEGRAM_MENU_LANGUAGE_CODES: ReadonlySet<string> = new Set(
-  Object.keys(TELEGRAM_MENU_LANGUAGE_CODE_RECORD),
-);
 
 type TelegramMenuLocaleLedger = {
   version: typeof TELEGRAM_MENU_LOCALE_LEDGER_VERSION;
@@ -222,8 +219,6 @@ type TelegramMenuLocaleLedgerNormalization = {
 };
 
 const syncTails = new Map<string, Promise<void>>();
-// Successful command hashes stay process-local so restarts always republish.
-const syncedCommandHashes = new Map<string, string>();
 const knownLanguageCodes = new Map<string, Set<LanguageCode>>();
 
 export function resolveTelegramMenuRemoteOwner(params: {
@@ -266,14 +261,6 @@ export function enqueueTelegramMenuSync(params: {
   });
 }
 
-export function readTelegramMenuCommandHash(key: string): string | null {
-  return syncedCommandHashes.get(key) ?? null;
-}
-
-export function writeTelegramMenuCommandHash(key: string, hash: string): void {
-  syncedCommandHashes.set(key, hash);
-}
-
 export function getProcessKnownTelegramMenuLocales(ownerKey: string): Set<LanguageCode> {
   let locales = knownLanguageCodes.get(ownerKey);
   if (!locales) {
@@ -284,7 +271,7 @@ export function getProcessKnownTelegramMenuLocales(ownerKey: string): Set<Langua
 }
 
 function isTelegramMenuLanguageCode(languageCode: string): languageCode is LanguageCode {
-  return TELEGRAM_MENU_LANGUAGE_CODES.has(languageCode);
+  return Object.hasOwn(TELEGRAM_MENU_LANGUAGE_CODE_RECORD, languageCode);
 }
 
 export function normalizeTelegramMenuLanguageCode(languageCode: string): LanguageCode | null {
@@ -337,14 +324,13 @@ function normalizeTelegramMenuLocaleLedger(stored: unknown): TelegramMenuLocaleL
     rawLanguageCodes.length === canonicalLanguageCodes.length &&
     rawLanguageCodes.every((languageCode, index) => languageCode === canonicalLanguageCodes[index]);
   return {
-    ...(canonicalLanguageCodes.length > 0
-      ? {
-          value: {
+    value:
+      canonicalLanguageCodes.length > 0
+        ? {
             version: TELEGRAM_MENU_LOCALE_LEDGER_VERSION,
             languageCodes: canonicalLanguageCodes,
-          },
-        }
-      : {}),
+          }
+        : undefined,
     isCanonical,
     unsupportedLanguageCodes: [...unsupportedLanguageCodes].toSorted(),
     malformedEntryCount,

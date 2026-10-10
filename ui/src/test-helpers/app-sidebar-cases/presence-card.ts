@@ -95,12 +95,12 @@ describe("AppSidebar person activity card", () => {
     expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
       "FreeBSD · Command line",
       "Linux · App",
-      "Mac · ARM · Web",
+      "Mac · ARM · Web app",
       "Mac · App",
       "Mac · Terminal",
-      "Mac · Web",
-      "Windows · Web",
-      "iPad · Web",
+      "Mac · Web app",
+      "Windows · Web app",
+      "iPad · Web app",
     ]);
     expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
     expect(facts[1]?.textContent?.trim()).toBe("Activity unavailable");

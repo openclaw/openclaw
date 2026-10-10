@@ -6,11 +6,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import {
-  captureDeliveryQueueStateContext,
   getDeliveryQueueEntryStatus,
-} from "../delivery-queue-sqlite.js";
-import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
+  seedDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.test-support.js";
 import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { createDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import {

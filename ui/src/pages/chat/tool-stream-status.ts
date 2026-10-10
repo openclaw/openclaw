@@ -397,12 +397,9 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
       return true;
     }
     handleLifecycleCompactionEvent(host, payload);
-    handleLifecycleFallbackEvent(host, payload);
-    return true;
+  } else if (payload.stream !== "fallback") {
+    return false;
   }
-  if (payload.stream === "fallback") {
-    handleLifecycleFallbackEvent(host, payload);
-    return true;
-  }
-  return false;
+  handleLifecycleFallbackEvent(host, payload);
+  return true;
 }

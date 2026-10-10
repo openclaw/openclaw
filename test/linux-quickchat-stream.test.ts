@@ -72,6 +72,7 @@ function createFakeElement(tagName = "div") {
   const classes = new Set();
   const children: any[] = [];
   const styles = new Map<string, string>();
+  const listeners = new Map<string, (event: unknown) => void>();
   return {
     tagName: tagName.toUpperCase(),
     children,
@@ -112,7 +113,12 @@ function createFakeElement(tagName = "div") {
     title: "",
     referrerPolicy: "",
     contentWindow: tagName === "iframe" ? {} : null,
-    addEventListener() {},
+    addEventListener(name: string, callback: (event: unknown) => void) {
+      listeners.set(name, callback);
+    },
+    dispatchEvent(event: { type: string }) {
+      listeners.get(event.type)?.(event);
+    },
     append(...nodes: any[]) {
       children.push(...nodes);
     },
@@ -142,7 +148,9 @@ function createFakeElement(tagName = "div") {
   };
 }
 
-function createQuickChatHarness(): Record<string, any> {
+function createQuickChatHarness(
+  options: { initialize?: boolean; deferRegistration?: boolean; deferReady?: boolean } = {},
+): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
@@ -151,6 +159,12 @@ function createQuickChatHarness(): Record<string, any> {
     reject: (error: Error) => void;
   }> = [];
   const calls: Array<{ method: string; args: Record<string, any> }> = [];
+  const nativeListeners = new Map<string, (event: unknown) => void>();
+  const documentListeners = new Map<string, (event: unknown) => void>();
+  const registration = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<boolean>();
+  let nativeReady = !options.initialize;
+  let nativeVisible = true;
   const refreshes: Array<{
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
@@ -210,6 +224,18 @@ function createQuickChatHarness(): Record<string, any> {
           },
         ) {
           calls.push({ method, args: args ?? {} });
+          if (method === "quickchat_ready") {
+            return (options.deferReady ? ready.promise : Promise.resolve(true)).then((show) => {
+              nativeReady = true;
+              return show;
+            });
+          }
+          if (method === "quickchat_activate" || method === "quickchat_hide") {
+            if (nativeReady) {
+              nativeVisible = method === "quickchat_activate";
+            }
+            return Promise.resolve(nativeReady);
+          }
           if (method === "quickchat_send") {
             return new Promise((resolve, reject) => {
               sends.push({ resolve, reject });
@@ -254,7 +280,15 @@ function createQuickChatHarness(): Record<string, any> {
           return Promise.resolve(true);
         },
       },
-      event: { listen: async () => () => {} },
+      event: {
+        listen: async (name: string, callback: (event: unknown) => void) => {
+          nativeListeners.set(name, callback);
+          if (name === "quickchat:shown" && options.deferRegistration) {
+            await registration.promise;
+          }
+          return () => nativeListeners.delete(name);
+        },
+      },
     },
     addEventListener(name: string, callback: () => void) {
       windowListeners.set(name, callback);
@@ -282,6 +316,9 @@ function createQuickChatHarness(): Record<string, any> {
     documentElement: createFakeElement("html"),
     createElement: (tagName: string) => createFakeElement(tagName),
     createTextNode: (text: string) => ({ textContent: text }),
+    addEventListener(name: string, callback: (event: unknown) => void) {
+      documentListeners.set(name, callback);
+    },
     querySelector(selector: string) {
       if (!elements.has(selector)) {
         elements.set(selector, createFakeElement());
@@ -315,13 +352,13 @@ function createQuickChatHarness(): Record<string, any> {
     URL,
     TextEncoder,
   };
-  vm.runInNewContext(
-    `${quickchatSource.slice(0, browserBindingsEnd)}
+  const initialized = vm.runInNewContext(
+    `${options.initialize ? "(async () => {" : ""}
+${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
   send,
   prepareSend(payload) { prepareChatSend({gatewayGeneration: 1, ...payload}); },
   handleChatEvent(payload) { handleChatEvent({gatewayGeneration: 1, ...payload}); },
-  nextVisibilityOperation,
   requestHide,
   clearReply,
   toggleReply,
@@ -348,7 +385,8 @@ this.harness = {
   allowCanvasSurfaceRetry() { canvasSurfaceRetryAt = 0; },
   flushSurfaceRefresh() { return canvasSurfaceRefreshPromise ?? Promise.resolve(); },
   flushWidgets() { return widgetSyncPromise; },
-};`,
+};
+${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""}`,
     browserContext,
   );
   return {
@@ -366,6 +404,37 @@ this.harness = {
     sendCount: () => sends.length,
     calls,
     drain,
+    initialized: () => initialized,
+    releaseRegistration: () => registration.resolve(),
+    rejectRegistration: () => registration.reject(new Error("Native registration failed.")),
+    resolveReady: (show = true) => ready.resolve(show),
+    rejectReady: () => ready.reject(new Error("Native admission failed.")),
+    nativeVisible: () => nativeVisible,
+    emitNative: (name: string) => {
+      const listener = nativeListeners.get(name);
+      assert.ok(listener, `native ${name} listener registered`);
+      listener({});
+    },
+    pressEscape: () => {
+      let stopped = false;
+      const event = {
+        type: "keydown",
+        key: "Escape",
+        keyCode: 27,
+        defaultPrevented: false,
+        isComposing: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+        stopPropagation() {
+          stopped = true;
+        },
+      };
+      documentListeners.get("keydown")?.(event);
+      if (!stopped) {
+        elements.get("#message").dispatchEvent(event);
+      }
+    },
     flushWidgets: async () => {
       await drain();
       await browserContext.harness.flushWidgets();
@@ -421,11 +490,120 @@ this.harness = {
   };
 }
 
-test("visibility operations share one monotonic sequence", () => {
+for (const fireBeforeReady of [false, true]) {
+  test(`startup preserves Escape when its timer fires ${fireBeforeReady ? "before" : "after"} native admission`, async () => {
+    const harness = createQuickChatHarness({
+      initialize: true,
+      deferRegistration: true,
+      deferReady: true,
+    });
+    harness.pressEscape();
+    if (fireBeforeReady) {
+      await harness.advanceTime(45);
+    }
+    harness.releaseRegistration();
+    await harness.drain();
+    assert.ok(harness.calls.some(({ method }: { method: string }) => method === "quickchat_ready"));
+    harness.resolveReady();
+    await harness.initialized();
+    await harness.advanceTime(45);
+    assert.equal(harness.nativeVisible(), false, `early timer=${fireBeforeReady}`);
+    assert.deepEqual(
+      harness.calls
+        .filter(({ method }: { method: string }) =>
+          ["quickchat_activate", "quickchat_hide"].includes(method),
+        )
+        .map(({ method, args }: { method: string; args: { generation: number } }) => [
+          method,
+          args.generation,
+        ]),
+      [["quickchat_hide", 1]],
+    );
+  });
+}
+
+for (const showLast of [false, true]) {
+  test(`native admission applies only the latest queued ${showLast ? "show" : "hide"} intent`, async () => {
+    const harness = createQuickChatHarness({ initialize: true, deferReady: true });
+    await harness.drain();
+    harness.emitNative("quickchat:shown");
+    harness.emitNative("quickchat:hide-requested");
+    await harness.advanceTime(45);
+    if (showLast) {
+      harness.emitNative("quickchat:shown");
+    }
+    harness.resolveReady();
+    await harness.initialized();
+    await harness.drain();
+    assert.equal(harness.nativeVisible(), showLast);
+    assert.deepEqual(
+      harness.calls
+        .filter(({ method }: { method: string }) =>
+          ["quickchat_activate", "quickchat_hide"].includes(method),
+        )
+        .map(({ method, args }: { method: string; args: { generation: number } }) => [
+          method,
+          args.generation,
+        ]),
+      [[showLast ? "quickchat_activate" : "quickchat_hide", showLast ? 3 : 2]],
+    );
+  });
+}
+
+for (const failedStage of ["registration", "admission"] as const) {
+  test(`startup ${failedStage} failure settles queued visibility without bypassing native checks`, async () => {
+    const harness = createQuickChatHarness({
+      initialize: true,
+      deferRegistration: true,
+      deferReady: true,
+    });
+    harness.pressEscape();
+    await harness.advanceTime(45);
+    if (failedStage === "registration") {
+      harness.rejectRegistration();
+    } else {
+      harness.releaseRegistration();
+      await harness.drain();
+      harness.rejectReady();
+    }
+    await harness.initialized();
+    await harness.drain();
+    assert.equal(harness.nativeVisible(), true);
+    assert.equal(harness.error(), "Gateway unreachable — retrying");
+    assert.equal(
+      harness.calls.filter(({ method }: { method: string }) => method === "quickchat_hide").length,
+      0,
+    );
+
+    harness.pressEscape();
+    await harness.advanceTime(45);
+    assert.equal(
+      harness.calls.filter(({ method }: { method: string }) => method === "quickchat_hide").length,
+      1,
+      "a later request reaches native admission instead of waiting on failed startup",
+    );
+    assert.equal(
+      harness.nativeVisible(),
+      true,
+      "the unadmitted native session still rejects hiding",
+    );
+  });
+}
+
+test("visibility operations share one monotonic sequence", async () => {
   const harness = createQuickChatHarness();
-  assert.equal(harness.nextVisibilityOperation(), 1);
-  assert.equal(harness.nextVisibilityOperation(), 2);
-  assert.equal(harness.nextVisibilityOperation(), 3);
+  harness.reveal();
+  await harness.requestHide();
+  await harness.advanceTime(45);
+  harness.reveal();
+  assert.deepEqual(
+    harness.calls
+      .filter(({ method }: { method: string }) =>
+        ["quickchat_activate", "quickchat_hide"].includes(method),
+      )
+      .map(({ args }: { args: { generation: number } }) => args.generation),
+    [1, 2, 3],
+  );
 });
 
 test("gateway state updates and clears the Quick Chat user accent", () => {

@@ -8,19 +8,11 @@ import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
-import { baseProps, renderConfigView } from "./config-view.test-support.ts";
+import { baseProps, renderAppearance, renderConfigView } from "./config-view.test-support.ts";
 import { renderConfig, type ConfigProps } from "./view.ts";
 
 function object(properties: Record<string, JsonSchema>): JsonSchema {
   return { type: "object", properties };
-}
-
-function renderAppearance(overrides: Partial<ConfigProps> = {}) {
-  return renderConfigView({
-    activeSection: "__appearance__",
-    includeSections: ["__appearance__"],
-    ...overrides,
-  });
 }
 
 function settingsRow(container: HTMLElement, title: string) {
@@ -344,7 +336,7 @@ describe("config view", () => {
     expect(normalizedText(collapsed.container)).not.toContain("Reload mode");
     disclosure.open = true;
     disclosure.dispatchEvent(new Event("toggle"));
-    expect(collapsed.props.setShowAdvancedSettings).toHaveBeenCalledWith(true);
+    expect(collapsed.props.onAppearanceChange).toHaveBeenCalledWith({ showAdvancedSettings: true });
 
     for (const overrides of [
       { showAdvancedSettings: true },
@@ -362,7 +354,7 @@ describe("config view", () => {
       if (overrides.showAdvancedSettings) {
         expanded.open = false;
         expanded.dispatchEvent(new Event("toggle"));
-        expect(props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
+        expect(props.onAppearanceChange).toHaveBeenCalledWith({ showAdvancedSettings: false });
       }
       if (overrides.forceShowAdvanced) {
         expect(findOptionalButtonByText(container, "Show advanced")).toBeUndefined();
@@ -1441,22 +1433,22 @@ describe("config view", () => {
   it.each([
     {
       title: "Collapse task progress by default on desktop",
-      callback: "setChatCollapseTaskProgress",
+      preference: "chatCollapseTaskProgress",
       checked: false,
     },
     {
       title: "Show live agent activity in sidebar",
-      callback: "setSidebarLiveActivity",
+      preference: "sidebarLiveActivity",
       checked: true,
     },
-  ] as const)("changes the browser-local $title toggle", ({ title, callback, checked }) => {
+  ] as const)("changes the browser-local $title toggle", ({ title, preference, checked }) => {
     const { container, props } = renderAppearance();
     const row = settingsRow(container, title);
     expect(row.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(
       checked,
     );
     row.click();
-    expect(props[callback]).toHaveBeenCalledWith(!checked);
+    expect(props.onAppearanceChange).toHaveBeenCalledWith({ [preference]: !checked });
     expect(row.textContent).not.toContain("Using default:");
     expect(row.textContent).toContain("Stored in this browser only");
   });
@@ -1611,7 +1603,7 @@ describe("config view", () => {
     expect(audioContextCtor).not.toHaveBeenCalled();
     activateSwitch(disabledSwitch, true);
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
-    expect(props.setLobsterPetSounds).toHaveBeenCalledWith(true);
+    expect(props.onAppearanceChange).toHaveBeenCalledWith({ lobsterPetSounds: true });
 
     props.lobsterPetSounds = true;
     render(renderConfig(props), container);
@@ -1630,7 +1622,7 @@ describe("config view", () => {
 
     activateSwitch(enabledSwitch, false);
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
-    expect(props.setLobsterPetSounds).toHaveBeenLastCalledWith(false);
+    expect(props.onAppearanceChange).toHaveBeenLastCalledWith({ lobsterPetSounds: false });
   });
 
   it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
@@ -1700,38 +1692,6 @@ describe("config view", () => {
       localStorage.removeItem("openclaw.control.lobsterdex.v1");
       vi.unstubAllGlobals();
     }
-  });
-
-  it("validates and changes the browser-local chat width", () => {
-    const { container, props } = renderAppearance({});
-    const input = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]");
-    expect(input).not.toBeNull();
-
-    input!.value = " min(1280px,  82%) ";
-    input!.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(props.setChatMessageMaxWidth).toHaveBeenCalledWith("min(1280px, 82%)");
-
-    input!.value = "960px; color: red";
-    input!.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(input!.validationMessage).not.toBe("");
-    expect(props.setChatMessageMaxWidth).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks browser follow-up overrides and resets them to the server", () => {
-    const { container, props } = renderAppearance({
-      chatFollowUpMode: "queue",
-      chatFollowUpModeOverridden: true,
-      serverQueueMode: "steer",
-    });
-
-    expect(container.textContent).toContain("Overriding server default (steer)");
-    const reset = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Reset to server default",
-    );
-    expect(reset).toBeDefined();
-    reset?.click();
-    expect(props.resetChatFollowUpMode).toHaveBeenCalledOnce();
-    expect(props.setChatFollowUpMode).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -30,6 +32,55 @@ async function settleProjection(projection: SessionRowProjection) {
     await projection.ensureMaterialized();
   } while (projection.needsMaterialization);
 }
+
+describe("health agent summaries heartbeat roster", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("resolves heartbeat enrollment for the whole fleet without re-walking the roster per agent", async () => {
+    const agentCount = 200;
+    const entries: Record<string, { heartbeat?: { every?: string } }> = {};
+    for (let index = 0; index < agentCount; index += 1) {
+      entries[`agent-${index}`] = {};
+    }
+    entries["agent-7"] = { heartbeat: { every: "45m" } };
+    // An absent store isolates enrollment from session storage.
+    const plain = {
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { every: "30m", target: "owner" } },
+        entries,
+      },
+      session: {
+        store: path.join(tempDirs.make("openclaw-health-heartbeat-roster-"), "sessions.json"),
+      },
+    } satisfies OpenClawConfig;
+    let rosterReads = 0;
+    const agents = new Proxy(plain.agents, {
+      get(target, property, receiver) {
+        if (property === "entries") {
+          rosterReads += 1;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const summaries = await buildHealthAgentSummaries(
+      { ...plain, agents },
+      resolveHealthAgentOrder(plain),
+    );
+
+    expect(summaries).toHaveLength(agentCount);
+    // Per-agent resolution used to re-walk the whole roster for each summary.
+    expect(rosterReads).toBeLessThan(agentCount);
+    expect(summaries.map((summary) => summary.heartbeat)).toEqual(
+      summaries.map((summary) => resolveHeartbeatSummaryForAgent(plain, summary.agentId)),
+    );
+    expect(summaries.find((summary) => summary.agentId === "agent-7")?.heartbeat).toMatchObject({
+      enabled: true,
+      every: "45m",
+    });
+  });
+});
 
 describe("health and status resident session summaries", () => {
   it("counts a shared physical store once while retaining bounded per-agent windows", async () => {
@@ -178,7 +229,6 @@ describe("health and status resident session summaries", () => {
         expect(prepares).not.toHaveBeenCalled();
         reads.expectIdle();
 
-        const dirtyBackfill = observeSessionRowBackfill([mainKey]);
         replaceSessionEntrySync(
           { agentId: "main", sessionKey: mainKey },
           { sessionId: "main-primary", updatedAt: 20 },
@@ -187,7 +237,6 @@ describe("health and status resident session summaries", () => {
         const dirty = await readStatus();
         expect(dirty.byAgent[0]?.recent[0]?.entry.updatedAt).toBe(20);
         expect(prepares.mock.calls.length + reads.count()).toBeGreaterThan(0);
-        await dirtyBackfill;
         await settleProjection(projection);
 
         prepares.mockClear();

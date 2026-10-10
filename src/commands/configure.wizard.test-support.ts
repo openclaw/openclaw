@@ -320,29 +320,3 @@ export function queueWizardTestPrompts(params: {
   wizardTestMocks.clackIntro.mockResolvedValue(undefined);
   wizardTestMocks.clackOutro.mockResolvedValue(undefined);
 }
-
-export function createEnabledWebSearchConfig(
-  provider: string,
-  pluginEntry: Record<string, unknown>,
-) {
-  return (cfg: OpenClawConfig) => ({
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      web: {
-        ...cfg.tools?.web,
-        search: {
-          provider,
-          enabled: true,
-        },
-      },
-    },
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        [provider]: pluginEntry,
-      },
-    },
-  });
-}

@@ -15,10 +15,8 @@ export function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean
       return false;
     }
   }
-  const value = (name: string) => (native[name] ?? native[name.toLowerCase()])?.trim() || undefined;
-  const http = value("HTTP_PROXY");
-  const https = value("HTTPS_PROXY");
-  const all = value("ALL_PROXY");
+  const value = (name: string) => native[name] ?? native[name.toLowerCase()];
+  const [http, https, all] = names.slice(0, 3).map((name) => value(name)?.trim() || undefined);
   if (!http && !https && !all) {
     return true;
   }
@@ -29,7 +27,7 @@ export function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean
   if (
     native.REQUEST_METHOD !== undefined ||
     names.slice(0, 3).some((name) => {
-      const raw = native[name] ?? native[name.toLowerCase()];
+      const raw = value(name);
       return raw !== undefined && raw !== raw.trim();
     })
   ) {

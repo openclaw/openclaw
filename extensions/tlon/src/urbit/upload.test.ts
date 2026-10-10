@@ -17,7 +17,6 @@ const mockUploadFile = vi.mocked(uploadFile);
 const clientConfig = {
   shipUrl: "https://zod.tlon.network",
   shipName: "zod",
-  verbose: false,
   getCode: async () => "fixture-code",
 };
 

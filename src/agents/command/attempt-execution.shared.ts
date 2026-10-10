@@ -2,6 +2,10 @@
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 type PersistSessionEntryParams = {
   agentId: string;
@@ -11,7 +15,7 @@ type PersistSessionEntryParams = {
   initialEntry: SessionEntry;
   entry: SessionEntry;
   creation?: Parameters<typeof buildSessionCreationStamp>[0];
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
@@ -25,11 +29,10 @@ export async function persistAgentSession(
     { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
-      if (!context.existingEntry && shouldPersistCurrent !== true) {
-        rejectedMissingEntry = true;
-        return null;
-      }
-      if (shouldPersistCurrent === false) {
+      if (
+        (!context.existingEntry && shouldPersistCurrent !== true) ||
+        shouldPersistCurrent === false
+      ) {
         rejectedMissingEntry = !context.existingEntry;
         return null;
       }
@@ -53,7 +56,7 @@ export async function persistAgentSession(
     {
       fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
       replaceEntry: true,
-      workerGuard: { source: params.assertCommitAllowed },
+      ...sessionEntryCommitGuardOptions(params.assertCommitAllowed),
       requireWriteSuccess: params.creation !== undefined,
       onCommitted: (entry) => {
         published = true;
@@ -61,16 +64,12 @@ export async function persistAgentSession(
       },
     },
   );
-  if (rejectedMissingEntry) {
+  if (rejectedMissingEntry || !persisted) {
     delete params.sessionStore[params.sessionKey];
     return undefined;
   }
-  if (persisted) {
-    if (!published) {
-      params.sessionStore[params.sessionKey] = persisted;
-    }
-  } else {
-    delete params.sessionStore[params.sessionKey];
+  if (!published) {
+    params.sessionStore[params.sessionKey] = persisted;
   }
-  return persisted ?? undefined;
+  return persisted;
 }

@@ -1,4 +1,3 @@
-/** Collects plugin config secret refs from runtime plugin metadata. */
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -26,13 +25,11 @@ import { isRecord } from "./shared.js";
  * installed). This prevents resolution failures for SecretRefs belonging to
  * non-loadable plugins from blocking startup or preflight validation.
  */
-/** Collects SecretRef assignments from plugin-owned config contract paths. */
 export function collectPluginConfigAssignments(params: {
   /** Mutable config snapshot whose plugin config values will receive resolved secrets. */
   config: OpenClawConfig;
   /** Defaults from the source config, used while matching manifest-declared SecretInput paths. */
   defaults: SecretDefaults | undefined;
-  /** Resolver context that receives assignments and inactive-surface warnings. */
   context: ResolverContext;
   /** Optional installed plugin roots; missing IDs are treated as stale inactive config. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;

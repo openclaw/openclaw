@@ -1,14 +1,15 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
+import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -123,24 +124,29 @@ function createAdmissionFixture() {
     baseBodyTrimmedRaw: body,
     effectiveResetTriggered: false,
     isBareSessionReset: false,
-    startupAction: "new",
-    startupContextPrelude: null,
-    softResetTail: "",
     shouldInjectGroupIntro: false,
     typingMode: "never",
     isMainSession: false,
-    inboundUserContextPromptJoiner: undefined,
     terminalReplyExpectation: "optional",
     sessionEntry: entry,
     traceRunPhase: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
-    baseBodyFinal: body,
     prefixedBodyBase: body,
     hasUserBody: true,
     workspaceDir: "/tmp/workspace",
     skillsWorkspaceDir: "/tmp/workspace",
     useFastReplyRuntime: false,
     thinkingRuntime: "embedded",
-    getInboundContext: () => ({ activeGoalContext: undefined, inboundUserContext: "" }),
+    buildPromptBodies: (additions) =>
+      buildReplyPromptEnvelope({
+        ctx,
+        sessionCtx: ctx,
+        baseBody: body,
+        hasUserBody: true,
+        inboundUserContext: "",
+        isBareSessionReset: false,
+        startupAction: "new",
+        ...additions,
+      }),
     refreshInboundContextAfterAdmissionWait: async () => {},
   };
   return { context, entry, sessionKey, sessionId };
@@ -266,7 +272,8 @@ describe("prepared reply transcript identity", () => {
           ...incoming,
           run: {
             ...incoming.run,
-            sessionFile: resolveAdmittedRunSessionFile(incoming.run)!,
+            sessionFile:
+              normalizeOptionalString(incoming.run.sessionKey) ?? incoming.run.sessionFile,
           },
         };
         expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(

@@ -1,4 +1,3 @@
-/** Prepared plugin metadata handoff for runtime model normalization. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -30,10 +29,7 @@ import {
 
 export function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
-  if (!normalized || normalized === "auto" || normalized === "default") {
-    return "openclaw";
-  }
-  return normalized;
+  return !normalized || normalized === "auto" || normalized === "default" ? "openclaw" : normalized;
 }
 
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
@@ -142,14 +138,14 @@ export async function prepareModelSelectionRuntime(params: {
   let harness: AgentHarness | undefined;
   let inheritedCliRuntime: string | undefined;
   let needsRuntimeChoice = runtime.kind === "set";
+  const runtimeFacts = {
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId: params.model,
+    modelApi: selected?.api,
+    modelBaseUrl: selected?.baseUrl,
+  };
   if (!params.rawRuntime) {
-    const runtimeFacts = {
-      agentId: params.agentId,
-      provider: params.provider,
-      modelId: params.model,
-      modelApi: selected?.api,
-      modelBaseUrl: selected?.baseUrl,
-    };
     const policy = resolveAgentHarnessPolicy({ ...runtimeFacts, config: params.cfg });
     const effectiveRuntime = resolveEffectiveAgentRuntime({
       ...runtimeFacts,
@@ -198,45 +194,35 @@ export async function prepareModelSelectionRuntime(params: {
       ? runtime.runtime
       : resolveEffectiveAgentRuntime({
           cfg: params.cfg,
-          agentId: params.agentId,
-          provider: params.provider,
-          modelId: params.model,
-          modelApi: selected?.api,
-          modelBaseUrl: selected?.baseUrl,
+          ...runtimeFacts,
           sessionEntry: runtimeEntry,
         });
+  let hydratedSelection: ModelCatalogEntry | undefined;
   if (
-    params.hydrateThinkingCatalog === false ||
-    !needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
+    params.hydrateThinkingCatalog !== false &&
+    needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
   ) {
-    return {
-      status: "ready",
-      runtime,
-      catalog: [...params.catalog],
-      validateRuntimeSelection,
-      harness,
-    };
+    // The selected route owns its capabilities. A prepared default-provider row cannot
+    // supply thinking or context metadata for an explicit cross-provider selection.
+    const { loadProviderScopedThinkingCatalog } =
+      await import("../../agents/model-catalog.runtime.js");
+    const catalog = await loadProviderScopedThinkingCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      provider: params.provider,
+      model: params.model,
+      agentRuntime,
+      workspaceDir: params.workspaceDir,
+    });
+    hydratedSelection = findSelectedCatalogEntry({ ...params, catalog });
   }
-  // The selected route owns its capabilities. A prepared default-provider row cannot
-  // supply thinking or context metadata for an explicit cross-provider selection.
-  const { loadProviderScopedThinkingCatalog } =
-    await import("../../agents/model-catalog.runtime.js");
-  const catalog = await loadProviderScopedThinkingCatalog({
-    config: params.cfg,
-    agentId: params.agentId,
-    provider: params.provider,
-    model: params.model,
-    agentRuntime,
-    workspaceDir: params.workspaceDir,
-  });
-  const resolved = findSelectedCatalogEntry({ ...params, catalog });
   return {
     status: "ready",
     runtime,
     validateRuntimeSelection,
     harness,
-    catalog: resolved
-      ? [resolved, ...params.catalog.filter((entry) => entry !== selected)]
+    catalog: hydratedSelection
+      ? [hydratedSelection, ...params.catalog.filter((entry) => entry !== selected)]
       : [...params.catalog],
   };
 }

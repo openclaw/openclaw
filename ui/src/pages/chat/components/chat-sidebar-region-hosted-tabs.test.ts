@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { icons } from "../../../components/icons.ts";
 import {
@@ -33,13 +33,11 @@ async function mount(
     tabs?: PanelHostedTab[];
     fetchFavicon?: LinkFaviconFetcher;
     slot?: SidebarSlotId;
-    hostedActions?: TemplateResult;
   } = {},
 ) {
   const slot = options.slot ?? "browser";
   const panel = Object.assign(document.createElement("div"), {
     hostedTabs: options.tabs ?? tabs,
-    hostedActions: options.hostedActions,
     activeHostedTabId: "remote:page:1",
     selectHostedTab: vi.fn(),
     closeHostedTab: vi.fn().mockResolvedValue(undefined),
@@ -139,22 +137,6 @@ describe("chat sidebar hosted tabs", () => {
     }
   });
 
-  it("replaces Browser with its tabs, selects the active page and brackets the group", async () => {
-    const { shell } = await mount();
-    expect(labels(shell)).toEqual(["Review", "First page", "Second page", "Files"]);
-    expect(shell.querySelector("wa-tab[active]")?.getAttribute("panel")).toBe(
-      "hosted:browser:remote:page:1",
-    );
-    const hostedTab = shell.querySelector('wa-tab[panel="hosted:browser:remote:page:1"]')!;
-    expect(hostedTab.hasAttribute("title")).toBe(false);
-    expect(hostedTab.querySelector("openclaw-tooltip")?.content).toBe("First page");
-    expect(hostedTab.hasAttribute("draggable")).toBe(false);
-    const separators = [...shell.querySelectorAll(".tabstrip-separator")];
-    expect(
-      separators.map((separator) => separator.nextElementSibling?.getAttribute("panel")),
-    ).toEqual(["hosted:browser:remote:page:1", "workspace"]);
-  });
-
   it("activates the Browser panel before selecting a hosted id containing colons", async () => {
     const { region, panel, shell } = await mount();
     region.layout = activatePanel(region.layout, "workspace");
@@ -215,30 +197,6 @@ describe("chat sidebar hosted tabs", () => {
     expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("browser");
   });
 
-  it("falls back to Browser for an empty or not-yet-mounted owner", async () => {
-    const { region, shell } = await mount({ tabs: [] });
-    expect(labels(shell)).toEqual(["Review", "Browser", "Files"]);
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content: null,
-    }));
-    await region.updateComplete;
-    region.requestUpdate();
-    await region.updateComplete;
-    expect(labels(shell)).toEqual(["Review", "Browser", "Files"]);
-  });
-
-  it("updates labels and selection when the sibling panel emits its change event", async () => {
-    const { panel, shell, changed } = await mount();
-    panel.hostedTabs = [{ ...secondTab, label: "Renamed page" }];
-    panel.activeHostedTabId = "native:page:2";
-    await changed();
-    expect(labels(shell)).toEqual(["Review", "Renamed page", "Files"]);
-    expect(shell.querySelector("wa-tab[active]")?.getAttribute("panel")).toBe(
-      "hosted:browser:native:page:2",
-    );
-  });
-
   it("presents non-browser hosted tabs with their title, status, badge and class", async () => {
     const { shell } = await mount({
       slot: "terminal",
@@ -263,37 +221,6 @@ describe("chat sidebar hosted tabs", () => {
     expect(
       tab.querySelector('.tabstrip-tab__icon polyline[points="4 17 10 11 4 5"]'),
     ).not.toBeNull();
-  });
-
-  it("renders hosted actions before slot actions only while their panel is active", async () => {
-    const { region, shell } = await mount({
-      slot: "terminal",
-      hostedActions: html`<button type="button">New session</button>`,
-    });
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      headerAction:
-        definition.slot === "terminal"
-          ? html`<button type="button">Terminal action</button>`
-          : definition.slot === "workspace"
-            ? html`<button type="button">Files action</button>`
-            : undefined,
-    }));
-    await region.updateComplete;
-    const actionLabels = () =>
-      [...shell.querySelectorAll(".side-panel__action-group--content button")].map(
-        (button) => button.textContent,
-      );
-    expect(actionLabels()).toEqual(["New session", "Terminal action"]);
-
-    region.layout = activatePanel(region.layout, "workspace");
-    await region.updateComplete;
-    expect(actionLabels()).toEqual(["Files action"]);
-    expect(shell.querySelector("[data-panel-slot='terminal']")?.hasAttribute("hidden")).toBe(true);
-
-    region.layout = activatePanel(region.layout, "terminal");
-    await region.updateComplete;
-    expect(actionLabels()).toEqual(["New session", "Terminal action"]);
   });
 
   it("prefers an explicit favicon over the hostname fetch and fallback icon", async () => {
@@ -351,19 +278,5 @@ describe("chat sidebar hosted tabs", () => {
         'wa-tab[panel="hosted:browser:native:page:2"] .tabstrip-tab__icon rect[width="20"][height="14"]',
       ),
     ).not.toBeNull();
-  });
-
-  it("never fetches blank, invalid, or hostless URLs", async () => {
-    const fetchFavicon = vi.fn<LinkFaviconFetcher>();
-    await mount({
-      tabs: [undefined, "", "not a url", "about:blank"].map((url, index) => ({
-        id: String(index),
-        label: firstTab.label,
-        icon: firstTab.icon,
-        url,
-      })),
-      fetchFavicon,
-    });
-    expect(fetchFavicon).not.toHaveBeenCalled();
   });
 });

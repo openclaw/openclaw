@@ -177,7 +177,6 @@ export async function buildAgentSessionPatch(
       if ((error as { code?: unknown })?.code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
         throw error;
       }
-      inheritedGroup = undefined;
     }
   }
   const trustedGroup = resolveTrustedGroupMetadata({
@@ -303,9 +302,7 @@ export async function buildAgentSessionPatch(
   return {
     patch,
     spawnedBy: freshSpawnedBy,
-    groupId: nextGroup.groupId,
-    groupChannel: nextGroup.groupChannel,
-    groupSpace: nextGroup.groupSpace,
+    ...nextGroup,
     freshSessionRotatedSinceLoad,
     isNewSession: reuse.isNewSession,
     rotatedSessionId: freshRotatedSessionId,

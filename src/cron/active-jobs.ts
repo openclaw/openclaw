@@ -201,7 +201,6 @@ export type CronActiveJobMarker = {
   standingGrantAuthority?: CronStandingGrantAuthority;
   agentId?: string;
   stateIdentityKey?: string;
-  declarationKey?: string;
   generation: number;
   token: number;
   cancellation?:
@@ -299,7 +298,6 @@ export function markCronJobActive(
   opts?: {
     agentId?: string;
     stateIdentityKey?: string;
-    declarationKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
     isMessageSourceAuthorityCurrent?: () => boolean;
@@ -316,7 +314,6 @@ export function markCronJobActive(
     jobId,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.stateIdentityKey ? { stateIdentityKey: opts.stateIdentityKey } : {}),
-    ...(opts?.declarationKey ? { declarationKey: opts.declarationKey } : {}),
     ...(opts?.isMessageActionAuthorityCurrent
       ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
       : {}),
@@ -464,23 +461,6 @@ export function captureActiveCronJobAgentDeletion(
       }
     }
   };
-}
-
-/** Revokes every active run admitted from a declaration-key namespace. */
-export function requestActiveCronJobCancellationByDeclarationKeyPrefix(
-  declarationKeyPrefix: string,
-  reason: string,
-): void {
-  const state = getCronActiveJobState();
-  for (const marker of state.activeJobs.values()) {
-    if (
-      !marker.declarationKey?.startsWith(declarationKeyPrefix) ||
-      !isMarkerActiveInGeneration(marker, state.generation)
-    ) {
-      continue;
-    }
-    requestCronActiveJobMarkerCancellation(marker, reason);
-  }
 }
 
 /** Returns whether the given cron job id is currently executing in this process. */

@@ -147,19 +147,6 @@ export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: stri
   await waitForSessionMaintenance(sessionKey);
 }
 
-async function runDeferredTurnMaintenanceWorker(
-  params: DeferredTurnMaintenanceScheduleParams & { abortSignal: AbortSignal },
-): Promise<void> {
-  try {
-    await executeContextEngineMaintenance({ ...params, executionMode: "background" });
-  } catch (error) {
-    if (!isContextEngineAbortRejection(error, params.abortSignal)) {
-      params.onDeferredMaintenanceFailure?.(error);
-      log.warn("Deferred context engine maintenance failed: " + formatErrorMessage(error));
-    }
-  }
-}
-
 function scheduleDeferredTurnMaintenance(
   params: DeferredTurnMaintenanceScheduleParams,
 ): Promise<void> | undefined {
@@ -280,19 +267,30 @@ function scheduleDeferredTurnMaintenance(
       await enqueueCommandInLane(lane, () =>
         params.runInContext(() =>
           maintenance.run(() =>
-            runContextEngineMaintenanceWork(
-              () =>
-                runDeferredTurnMaintenanceWorker({
-                  ...params,
-                  abortSignal: maintenance.signal,
-                  assertActive: () => {
-                    maintenance.assertCurrent();
-                    params.assertActive?.();
-                  },
-                  sessionKey,
-                }),
-              maintenance.signal,
-            ),
+            runContextEngineMaintenanceWork(async () => {
+              const workerParams = {
+                ...params,
+                abortSignal: maintenance.signal,
+                assertActive: () => {
+                  maintenance.assertCurrent();
+                  params.assertActive?.();
+                },
+                sessionKey,
+              };
+              try {
+                await executeContextEngineMaintenance({
+                  ...workerParams,
+                  executionMode: "background",
+                });
+              } catch (error) {
+                if (!isContextEngineAbortRejection(error, workerParams.abortSignal)) {
+                  workerParams.onDeferredMaintenanceFailure?.(error);
+                  log.warn(
+                    "Deferred context engine maintenance failed: " + formatErrorMessage(error),
+                  );
+                }
+              }
+            }, maintenance.signal),
           ),
         ),
       );

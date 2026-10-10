@@ -2,6 +2,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
@@ -240,7 +241,7 @@ function runSession(): void {
       const operation = message.args[0] === "operation";
       const read = operation ? message.operation : message.auth;
       busy = true;
-      void (async () => {
+      const execute = async () => {
         if (
           !isRecord(read) ||
           typeof read.expectedIdentity !== "string" ||
@@ -285,6 +286,9 @@ function runSession(): void {
           await import("../agents/auth-profiles/sqlite-json.js");
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
         const rows = readAuthProfileRowsReadOnly(pathname);
+        if (read.artifactPreserving === true) {
+          rows.cacheable = false;
+        }
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
         function* rowFields() {
           for (const batch of jsonFieldBatches(rows)) {
@@ -294,7 +298,12 @@ function runSession(): void {
         const handle = transfers.start(rowFields(), { kinds: ["fields"] });
         activeTransfer = { requestId: id, transferId: handle.id, label: "Auth profile" };
         send(id, { type: "start", handle });
-      })().catch((error: unknown) => fail(id, error));
+      };
+      void (
+        isRecord(read) && read.artifactPreserving === true
+          ? withArtifactPreservingStateReads(execute, { agentDatabases: true })
+          : execute()
+      ).catch((error: unknown) => fail(id, error));
       return;
     }
     if (

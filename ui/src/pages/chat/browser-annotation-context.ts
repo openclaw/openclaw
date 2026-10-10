@@ -8,9 +8,5 @@ export function composeBrowserAnnotationContext(
     const context = attachment.browserAnnotation?.modelContext.trim();
     return context ? [context] : [];
   });
-  if (contexts.length === 0) {
-    return userText;
-  }
-  const annotationContext = contexts.join("\n\n");
-  return userText ? `${annotationContext}\n\n${userText}` : annotationContext;
+  return [...contexts, userText].filter(Boolean).join("\n\n");
 }

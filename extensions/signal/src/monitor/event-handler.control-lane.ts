@@ -91,7 +91,7 @@ function isSignalActiveRunControlText(text: string): boolean {
   if (isAbortRequestText(text)) {
     return true;
   }
-  const normalizedBody = normalizeCommandBody(text.trim());
+  const normalizedBody = normalizeCommandBody(text);
   const alias = maybeResolveTextAlias(normalizedBody);
   if (!alias) {
     return false;

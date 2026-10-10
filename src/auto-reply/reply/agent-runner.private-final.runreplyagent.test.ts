@@ -32,7 +32,7 @@ import { createMockTypingController } from "./test-helpers.js";
 await vi.hoisted(async () => {
   await import("./agent-runner.misc.runreplyagent.test-support.js");
 });
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 setupAgentRunnerTestHooks();
 

@@ -392,7 +392,7 @@ export function createAcpxRuntimeService(
             resolveAcpxTimerTimeoutMs(timeoutSeconds) ?? 1,
             () => {
               throw new Error(
-                `embedded acpx runtime backend startup probe timed out after ${timeoutSeconds}s`,
+                `embedded acpx runtime backend startup check timed out after ${timeoutSeconds}s`,
               );
             },
             { ref: false },
@@ -408,7 +408,7 @@ export function createAcpxRuntimeService(
         }
         ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 0]]);
         ctx.logger.warn(
-          `embedded acpx runtime backend probe failed: ${formatDoctorFailureMessage(doctorReport)}`,
+          `embedded acpx runtime backend check failed: ${formatDoctorFailureMessage(doctorReport)}`,
         );
       } catch (err) {
         if (currentRevision !== lifecycleRevision) {

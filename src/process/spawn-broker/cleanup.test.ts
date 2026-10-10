@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { createSpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("spawn broker forced shutdown", () => {
   it("retains child cleanup when a stopped broker requires forced shutdown", async () => {

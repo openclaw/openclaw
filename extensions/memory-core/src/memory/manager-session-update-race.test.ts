@@ -87,7 +87,7 @@ describe("memory session update sync", () => {
     ).toEqual([]);
   }
 
-  it("preserves the published session index when worker admission is full and retries after drain", async () => {
+  it("preserves the published session index when worker admission is full and retries after cooldown", async () => {
     const sessionId = "worker-capacity-reindex";
     const sessionKey = `agent:main:chat:${sessionId}`;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
@@ -130,6 +130,8 @@ describe("memory session update sync", () => {
     const accepted = Promise.allSettled(
       Array.from({ length: 128 }, () => capacityOwner.run(() => preparation.promise, {})),
     );
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       try {
         await expect(
@@ -147,6 +149,7 @@ describe("memory session update sync", () => {
         await closed;
         await accepted;
       }
+      clock.mockReturnValue(now + 30_000);
       await manager.sync({ reason: "retry-after-worker-overload" });
       const recovered = snapshot();
       expect(recovered.source?.hash).not.toBe(before.source?.hash);
@@ -159,6 +162,7 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
       expect(manager.status().lastSyncError).toBeUndefined();
     } finally {
+      clock.mockRestore();
       observer.close();
     }
   });

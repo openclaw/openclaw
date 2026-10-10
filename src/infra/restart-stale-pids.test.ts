@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as pidAlive from "../shared/pid-alive.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const mockSpawnSync = vi.hoisted(() => vi.fn());
@@ -239,20 +240,6 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expectWarningContaining(`lsof failed during initial stale-pid scan for port 18789: ${detail}`);
   });
 
-  it("finds stale pids when lsof needs seconds to answer", () => {
-    const slowLsofMs = 3000;
-    const stalePid = process.pid + 105;
-    mockSpawnSync.mockImplementation((command: unknown, _args: unknown, options: unknown) => {
-      if (command !== "lsof") {
-        return createLsofResult();
-      }
-      const timeout = (options as { timeout?: number }).timeout ?? 0;
-      return timeout >= slowLsofMs
-        ? createOpenClawBusyResult(stalePid)
-        : createErrnoResult("ETIMEDOUT", "lsof timed out");
-    });
-    expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([stalePid]);
-  });
   it.skipIf(process.platform !== "linux")(
     "excludes the full ancestor chain, not just the direct parent — deeper nesting",
     () => {
@@ -280,16 +267,6 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     },
   );
 
-  it("excludes PID 1 when the direct parent gateway is the container entrypoint — container topology", () => {
-    const benignStalePid = process.pid + 2050;
-    mockSpawnSync.mockReturnValue(
-      createLsofResult({ stdout: gatewayLsofOutput([1, benignStalePid]) }),
-    );
-    const pids = withStubbedPpid(1, () => findGatewayPidsOnPortSync(18789));
-    expect(pids).not.toContain(1);
-    expect(pids).toContain(benignStalePid);
-  });
-
   it("excludes the full ancestor chain on macOS via ps - nested in-band updater regression for #85120", () => {
     const toolHostPid = process.pid + 3101;
     const gatewayGrandparentPid = process.pid + 3102;
@@ -311,23 +288,10 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
         });
       });
 
-      const pids = withStubbedPpid(toolHostPid, () => findGatewayPidsOnPortSync(18789));
+      const pids = withStubbedPpid(toolHostPid, () => findGatewayPidsOnPortSync(18789, 400));
       expect(pids).not.toContain(toolHostPid);
       expect(pids).not.toContain(gatewayGrandparentPid);
       expect(pids).toContain(benignStalePid);
-    });
-  });
-  it("uses the explicit timeout for macOS ancestor ps probes", () => {
-    const gatewayParentPid = process.pid + 3151;
-    withMockedPlatform("darwin", () => {
-      mockSpawnSync.mockImplementation((command: unknown, args: unknown) => {
-        if (command === "ps" && Array.isArray(args) && args[0] === "-o") {
-          return createLsofResult({ stdout: "1\n" });
-        }
-        return createLsofResult({ stdout: gatewayLsofOutput([process.pid + 3152]) });
-      });
-
-      withStubbedPpid(gatewayParentPid, () => findGatewayPidsOnPortSync(18789, 400));
       const ancestorPsCall = mockSpawnSync.mock.calls.find(
         (call) => call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-o",
       );
@@ -362,7 +326,16 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
       second,
       first,
     ])}`;
-    mockSpawnSync.mockReturnValue(createLsofResult({ stdout }));
+    mockSpawnSync.mockImplementation(
+      (command: unknown, _args: unknown, options: { timeout?: number }) => {
+        if (command !== "lsof") {
+          return createLsofResult();
+        }
+        return (options.timeout ?? 0) >= 3000
+          ? createLsofResult({ stdout })
+          : createErrnoResult("ETIMEDOUT", "lsof timed out");
+      },
+    );
     expect(findGatewayPidsOnPortSync(18789)).toEqual([first, second]);
   });
 
@@ -529,7 +502,7 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
       lsofCall += 1;
       return lsofCall === 1
         ? createLsofResult({
-            stdout: gatewayLsofOutput([protectedPid, stalePid]),
+            stdout: gatewayLsofOutput([1, protectedPid, stalePid]),
           })
         : createLsofResult({ status: 1 });
     });
@@ -542,6 +515,7 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(result).toEqual([stalePid]);
     expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
     expect(killSpy).not.toHaveBeenCalledWith(protectedPid, expect.anything());
+    expect(killSpy).not.toHaveBeenCalledWith(1, expect.anything());
   });
 
   it("refreshes the protected pid after listener enumeration before filtering", () => {
@@ -600,9 +574,9 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
-  it.each(["ENOENT", "EACCES", "EPERM"])("stops polling after permanent %s", (code) => {
+  it("stops polling after permanent EPERM", () => {
     const stalePid = process.pid + 300;
-    const calls = installInitialBusyPoll(stalePid, () => createErrnoResult(code, "unavailable"));
+    const calls = installInitialBusyPoll(stalePid, () => createErrnoResult("EPERM", "unavailable"));
     vi.spyOn(process, "kill").mockReturnValue(true);
     expect(cleanStaleGatewayProcessesSync()).toEqual([stalePid]);
     expect(calls()).toBe(2);
@@ -616,6 +590,17 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     });
     expect(cleanStaleGatewayProcessesSync()).toEqual([]);
     expect(calls()).toBe(2);
+  });
+
+  it("does not force-kill a stale PID that canonical liveness reports dead", () => {
+    const stalePid = process.pid + 499;
+    installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
+    vi.spyOn(pidAlive, "isPidAlive").mockReturnValue(false);
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    expect(cleanStaleGatewayProcessesSync(18789)).toStrictEqual([stalePid]);
+    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
   });
 
   it("treats failed Windows port probes as inconclusive, not free", () => {

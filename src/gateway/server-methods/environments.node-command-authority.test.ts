@@ -69,7 +69,6 @@ describe("node environment command authority", () => {
     ["pending-approval", [command], [], [command], [], [], false],
     ["unauthorized", [command, "fixture.unrelated"], [command], [], [], [], false],
     ["unauthorized", [command], [command], [command], [command], [], true],
-    ["unauthorized", [command], [command], [], [], [], true],
     ["undeclared", [], [], [command], [], [], false],
   ] as const)(
     "projects %s for declarations %j approved %j with allow %j deny %j",

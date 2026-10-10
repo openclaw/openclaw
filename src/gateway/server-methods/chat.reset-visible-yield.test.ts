@@ -21,6 +21,12 @@ import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
+// Optional maintenance owns unrelated roots while this manual-RPC fixture stays open.
+vi.mock("../server-idle-task.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-idle-task.js")>()),
+  scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
+}));
+
 type ResponseInput = {
   type?: string;
   role?: string;

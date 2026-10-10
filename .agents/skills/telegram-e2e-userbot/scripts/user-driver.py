@@ -1180,15 +1180,26 @@ def cleanup_owned_group(driver, manifest_path):
     return {"ok": True, **record}
 
 
-def private_forum_identity(driver):
-    if driver.config.get("testDc") is True:
-        raise DriverError("Private production forum setup requires Telegram production.")
+# Run-owned forums are created by the Convex-leased QA user on Telegram's Test
+# Server, or by an operator's own account for private production proof. Each
+# command family refuses the other environment.
+def forum_manifest(test_server):
+    return STATE_DIR / ("owned-test-forum.json" if test_server else "owned-private-forum.json")
+
+
+def forum_identity(driver, test_server):
+    if (driver.config.get("testDc") is True) is not test_server:
+        raise DriverError(
+            "Run-owned forum setup requires Telegram's Test Server."
+            if test_server
+            else "Private production forum setup requires Telegram production."
+        )
     me = driver.client.request({"@type": "getMe"})
     if str(me["id"]) != str(driver.config.get("testerUserId")):
-        raise DriverError("Private production forum setup requires the leased QA user.")
+        raise DriverError("Forum setup requires the leased QA user.")
     sut = resolve_sut(driver.config, driver.bot_config)
     if not sut["id"] or not sut["username"]:
-        raise DriverError("Private production forum setup requires the SUT bot identity.")
+        raise DriverError("Forum setup requires the SUT bot identity.")
     return {
         "testerUserId": str(me["id"]),
         "sutBotId": str(sut["id"]),
@@ -1196,7 +1207,7 @@ def private_forum_identity(driver):
     }
 
 
-def public_private_forum_record(record):
+def public_forum_record(record):
     return {
         key: record[key]
         for key in ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
@@ -1204,17 +1215,17 @@ def public_private_forum_record(record):
     }
 
 
-def prepare_private_forum(driver, manifest_path):
-    identity = private_forum_identity(driver)
+def prepare_forum(driver, manifest_path, test_server):
+    identity = forum_identity(driver, test_server)
     if manifest_path.exists():
         raise DriverError(
-            "This lease already has a private forum record; clean it before another creation."
+            "This lease already has a forum record; clean it before another creation."
         )
     record = {
         **identity,
         "status": "creating",
-        "title": f"OpenClaw private QA {secrets.token_hex(6)}",
-        "topicTitle": f"Identity proof {secrets.token_hex(4)}",
+        "title": f"OpenClaw {'QA forum' if test_server else 'private QA'} {secrets.token_hex(6)}",
+        "topicTitle": f"{'Topic' if test_server else 'Identity'} proof {secrets.token_hex(4)}",
     }
     write_json_private(manifest_path, record)
     try:
@@ -1286,40 +1297,43 @@ def prepare_private_forum(driver, manifest_path):
         )
         record.update(status="topic-created", forumTopicId=int(topic["forum_topic_id"]))
         write_json_private(manifest_path, record)
-        invite = driver.client.request(
-            {
-                "@type": "createChatInviteLink",
-                "chat_id": int(record["groupId"]),
-                "name": "OpenClaw private qualification",
-                "expiration_date": 0,
-                "member_limit": 1,
-                "creates_join_request": False,
-            }
-        )
-        record.update(status="ready", inviteLink=invite["invite_link"], ok=True)
+        if not test_server:
+            # Private production participants join through this one-use link.
+            invite = driver.client.request(
+                {
+                    "@type": "createChatInviteLink",
+                    "chat_id": int(record["groupId"]),
+                    "name": "OpenClaw private qualification",
+                    "expiration_date": 0,
+                    "member_limit": 1,
+                    "creates_join_request": False,
+                }
+            )
+            record["inviteLink"] = invite["invite_link"]
+        record.update(status="ready", ok=True)
         write_json_private(manifest_path, record)
-        return public_private_forum_record(record)
+        return public_forum_record(record)
     except (DriverError, KeyError, TypeError, ValueError):
         record["status"] = "setup-failed"
         write_json_private(manifest_path, record)
         raise
 
 
-def cleanup_private_forum(driver, manifest_path):
+def cleanup_forum(driver, manifest_path, test_server):
     record = read_json(manifest_path)
     if not record:
         return {"ok": True, "status": "not-created"}
-    identity = private_forum_identity(driver)
+    identity = forum_identity(driver, test_server)
     if any(record.get(key) != identity[key] for key in ("testerUserId", "sutBotId")):
-        raise DriverError("Private forum cleanup record belongs to a different identity.")
+        raise DriverError("Forum cleanup record belongs to a different identity.")
     if record.get("status") == "deleted":
-        return public_private_forum_record(record)
+        return public_forum_record(record)
     group_id = record.get("groupId") or record.get("basicGroupId")
     if not group_id:
         record.pop("inviteLink", None)
         record.update(status="not-created", ok=True)
         write_json_private(manifest_path, record)
-        return public_private_forum_record(record)
+        return public_forum_record(record)
     chat = driver.client.request({"@type": "getChat", "chat_id": int(group_id)})
     membership = driver.client.request(
         {
@@ -1336,7 +1350,7 @@ def cleanup_private_forum(driver, manifest_path):
         or chat["type"].get("is_channel") is True
         or membership["status"].get("@type") != "chatMemberStatusCreator"
     ):
-        raise DriverError("The leased QA user cannot delete the private forum for all members.")
+        raise DriverError("The leased QA user cannot delete the forum for all members.")
     # The can_be_deleted projection can lag immediately after creation. The
     # creator-owned delete is authoritative; retry only its observed propagation error.
     for attempt in range(5):
@@ -1352,14 +1366,15 @@ def cleanup_private_forum(driver, manifest_path):
     record.pop("inviteLink", None)
     record.update(status="deleted", deletion=deletion, ok=True)
     write_json_private(manifest_path, record)
-    return public_private_forum_record(record)
+    return public_forum_record(record)
 
 
-def command_private_forum(args):
+def command_forum(args):
     if not os.environ.get("TELEGRAM_USER_DRIVER_STATE_DIR"):
-        raise DriverError("Private forum commands require runner-owned leased credential state.")
-    manifest = STATE_DIR / "owned-private-forum.json"
-    if args.command == "cleanup-private-forum" and not manifest.exists():
+        raise DriverError("Forum commands require runner-owned leased credential state.")
+    test_server = args.command in {"prepare-forum", "cleanup-forum"}
+    manifest = forum_manifest(test_server)
+    if args.command.startswith("cleanup-") and not manifest.exists():
         print_result({"ok": True, "status": "not-created"}, args.json, args.output)
         return
     config, bot_config = load_config()
@@ -1367,9 +1382,9 @@ def command_private_forum(args):
     if not driver.authorize(args, need_ready=False):
         raise DriverError("The leased QA user is not authorized.")
     result = (
-        prepare_private_forum(driver, manifest)
-        if args.command == "prepare-private-forum"
-        else cleanup_private_forum(driver, manifest)
+        prepare_forum(driver, manifest, test_server)
+        if args.command.startswith("prepare-")
+        else cleanup_forum(driver, manifest, test_server)
     )
     print_result(result, args.json, args.output)
 
@@ -1722,9 +1737,7 @@ def command_serve(args):
                 raise DriverError("serve command requires a string id")
             method = request.get("method")
             if method == "cleanup-private-forum":
-                result = cleanup_private_forum(
-                    driver, STATE_DIR / "owned-private-forum.json"
-                )
+                result = cleanup_forum(driver, forum_manifest(False), False)
                 write_ndjson({"type": "response", "id": request_id, "result": result})
                 continue
             if method != "send":
@@ -1812,8 +1825,8 @@ def main():
         group = command_parser(name, command_test_group)
         group.add_argument("--chat", default="")
 
-    for name in ("prepare-private-forum", "cleanup-private-forum"):
-        command_parser(name, command_private_forum)
+    for name in ("prepare-forum", "cleanup-forum", "prepare-private-forum", "cleanup-private-forum"):
+        command_parser(name, command_forum)
 
     confirm_qr = command_parser("confirm-qr", command_confirm_qr)
     confirm_qr.add_argument("--link", required=True)

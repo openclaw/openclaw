@@ -17,6 +17,7 @@ type DockDestinationOption<Dock extends string> = {
  */
 export function renderDockDestinations<Dock extends string>(params: {
   current: Dock;
+  disabled?: boolean;
   destinations: readonly DockDestinationOption<Dock>[];
   groupClass: string;
   groupLabel: string;
@@ -33,6 +34,7 @@ export function renderDockDestinations<Dock extends string>(params: {
           class=${`rail-header__action ${option.className ?? ""}`}
           type="button"
           aria-label=${option.label}
+          ?disabled=${params.disabled}
           @click=${() => params.onSelect(option.dock)}
         >
           ${option.icon}

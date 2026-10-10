@@ -66,12 +66,9 @@ enum DebugActions {
         if you received that.
         """
         let result = await VoiceWakeForwarder.forward(transcript: message)
-        switch result {
-        case .success:
-            return .success("Sent. Await reply.")
-        case let .failure(error):
+        return result.map { _ in "Sent. Await reply." }.mapError { error in
             let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-            return .failure(.message("Send failed: \(detail)"))
+            return .message("Send failed: \(detail)")
         }
     }
 

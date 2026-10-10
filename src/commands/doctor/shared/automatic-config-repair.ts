@@ -116,28 +116,23 @@ function planConfigRepair(
   const writeConfig = pluginContracts
     ? restoreDoctorConfigEnvRefs(config, prepareDoctorConfigReferenceSource(snapshot))
     : config;
-  let warnings = snapshot.warnings;
-  const runtimeConfig = withPluginContracts(() => {
+  const validation = withPluginContracts(() => {
     const validationConfig = omitDeferredPluginMigrationConfig(config, deferredPluginMigrations);
     const validated = pluginContracts
       ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, writeConfig), {
           deferredPluginMigrations,
         })
-      : { ...validateConfigObjectRaw(validationConfig), warnings };
-    warnings = validated.warnings;
+      : { ...validateConfigObjectRaw(validationConfig), warnings: snapshot.warnings };
     const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
       validationConfig,
       validationConfig,
     );
-    return validated.ok && issues.length === 0
-      ? deferredPluginMigrations?.length
-        ? validated.config
-        : config
-      : null;
+    return validated.ok && issues.length === 0 ? validated : null;
   });
-  if (!runtimeConfig) {
+  if (!validation) {
     return null;
   }
+  const runtimeConfig = deferredPluginMigrations?.length ? validation.config : config;
   copyConfigResolutionFactsThroughRewrite(snapshot.sourceConfig, runtimeConfig);
   setDeferredPluginMigrationConfigFacts(config, deferredPluginMigrations);
   return {
@@ -150,7 +145,7 @@ function planConfigRepair(
       resolved: config,
       runtimeConfig,
       config: runtimeConfig,
-      warnings,
+      warnings: validation.warnings,
       valid: true,
       issues: [],
       legacyIssues: [],
@@ -170,10 +165,7 @@ export function planAutomaticConfigRepair(
  * Full plugin-contract validation belongs to Doctor's repair plan.
  */
 export function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
-  if (snapshot.valid) {
-    return snapshot;
-  }
-  return planConfigRepair(snapshot, false)?.snapshot;
+  return snapshot.valid ? snapshot : planConfigRepair(snapshot, false)?.snapshot;
 }
 
 /** Commits a planned repair against the exact snapshot admitted by its caller. */

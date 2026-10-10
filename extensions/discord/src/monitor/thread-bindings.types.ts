@@ -20,8 +20,6 @@ export type ThreadBindingRecord = {
   metadata?: Record<string, unknown>;
 };
 
-export type PersistedThreadBindingRecord = ThreadBindingRecord;
-
 export type ThreadBindingManager = {
   accountId: string;
   isStopping: () => boolean;
@@ -37,11 +35,9 @@ export type ThreadBindingManager = {
     persist?: boolean;
   }) => Promise<ThreadBindingRecord | null>;
   /** @deprecated Generic SDK synchronous touch compatibility. */
-  touchThreadSync: (params: {
-    threadId: string;
-    at?: number;
-    persist?: boolean;
-  }) => ThreadBindingRecord | null;
+  touchThreadSync: (
+    params: Parameters<ThreadBindingManager["touchThread"]>[0],
+  ) => ThreadBindingRecord | null;
   bindTarget: (params: {
     assertCurrent?: () => void;
     threadId?: string | number;

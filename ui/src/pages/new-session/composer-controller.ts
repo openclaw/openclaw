@@ -195,11 +195,7 @@ export class NewSessionComposerTextareaController {
     draftOwnerKey: string,
   ) {
     const normalizedAgentId = agentId.trim();
-    if (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === normalizedAgentId &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    ) {
+    if (this.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
       return;
     }
     // The controller survives route, agent, and Gateway changes. Invalidate its
@@ -211,7 +207,11 @@ export class NewSessionComposerTextareaController {
     resetSkillMenuState(this.skillMenuState);
   }
 
-  ownsSkillCommands(client: GatewayBrowserClient, agentId: string, draftOwnerKey: string): boolean {
+  ownsSkillCommands(
+    client: GatewayBrowserClient | null,
+    agentId: string,
+    draftOwnerKey: string,
+  ): boolean {
     return (
       this.skillCommandClient === client &&
       this.skillCommandAgentId === agentId.trim() &&

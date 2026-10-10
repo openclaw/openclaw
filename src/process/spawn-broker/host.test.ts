@@ -12,6 +12,7 @@ import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/p
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 import { SpawnBrokerError } from "./protocol.js";
 
 let broker: SpawnBrokerHost | undefined;
@@ -27,7 +28,7 @@ async function start() {
   return broker;
 }
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 type BootstrapFixtureMode = "native" | "stale-ambient" | "send-throw" | "send-callback";
 

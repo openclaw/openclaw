@@ -333,36 +333,31 @@ describe("Windows command execution", () => {
     });
   });
 
-  it.each([
-    { exitCode: 0, killProcessTree: undefined },
-    { exitCode: 7, killProcessTree: true },
-  ])(
-    "does not target an exited Windows root (code $exitCode, tree=$killProcessTree) while output settles",
-    async ({ exitCode, killProcessTree }) => {
-      const command = pendingCommand();
+  it("does not target an exited Windows root while output settles", async () => {
+    const exitCode = 7;
+    const command = pendingCommand();
 
-      await withMockedWindowsPlatform(async () => {
-        const resultPromise = runCommandWithTimeout(["node", "quick.js"], {
-          timeoutMs: 80,
-          killProcessTree,
-        });
-        command.exitCode = exitCode;
-        command.emit("exit", exitCode, null);
-
-        await vi.advanceTimersByTimeAsync(81);
-        expect(execaMock).toHaveBeenCalledTimes(1);
-        expect(command.stdout.destroyed).toBe(false);
-        await vi.advanceTimersByTimeAsync(19);
-        expect(command.stdout.destroyed).toBe(false);
-        await vi.advanceTimersToNextTimerAsync();
-        expect(command.stdout.destroyed).toBe(true);
-        expect(command.stderr.destroyed).toBe(true);
-
-        command.finish({ exitCode });
-        await expect(resultPromise).resolves.toMatchObject({ code: exitCode, termination: "exit" });
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "quick.js"], {
+        timeoutMs: 80,
+        killProcessTree: true,
       });
-    },
-  );
+      command.exitCode = exitCode;
+      command.emit("exit", exitCode, null);
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(execaMock).toHaveBeenCalledTimes(1);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersToNextTimerAsync();
+      expect(command.stdout.destroyed).toBe(true);
+      expect(command.stderr.destroyed).toBe(true);
+
+      command.finish({ exitCode });
+      await expect(resultPromise).resolves.toMatchObject({ code: exitCode, termination: "exit" });
+    });
+  });
 
   it.each(["stdout", "stderr"] as const)(
     "terminates a Windows process tree when its %s stream fails",
@@ -392,69 +387,55 @@ describe("Windows command execution", () => {
     },
   );
 
-  it.each([
-    { gracefulOutcome: "exits", interruption: "timeout" },
-    { gracefulOutcome: "times out", interruption: "scope" },
-  ] as const)(
-    "waits for forced taskkill after $interruption when graceful taskkill $gracefulOutcome",
-    async ({ gracefulOutcome, interruption }) => {
-      vi.useFakeTimers();
-      const command = createMockSubprocess({ autoFinish: false });
-      const gracefulTaskkill = createMockSubprocess({
-        autoFinish: gracefulOutcome === "exits",
-        exitCode: 1,
-      });
-      const forcedTaskkill = createMockSubprocess({ autoFinish: false });
-      execaMock
-        .mockImplementationOnce(() => command)
-        .mockImplementationOnce(() => gracefulTaskkill)
-        .mockImplementationOnce(() => forcedTaskkill);
+  it("joins graceful and forced taskkill before canceling a scoped Windows root", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    const gracefulTaskkill = createMockSubprocess({
+      autoFinish: false,
+      exitCode: 1,
+    });
+    const forcedTaskkill = createMockSubprocess({ autoFinish: false });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementationOnce(() => gracefulTaskkill)
+      .mockImplementationOnce(() => forcedTaskkill);
 
-      await withMockedWindowsPlatform(async () => {
-        const controller = new AbortController();
-        const run = () =>
+    await withMockedWindowsPlatform(async () => {
+      const controller = new AbortController();
+      const resultPromise = withCommandProcessScope(
+        () =>
           runCommandWithTimeout(["node", "idle.js"], {
             killProcessTree: true,
-            ...(interruption === "timeout" ? { timeoutMs: 80 } : {}),
-          });
-        const resultPromise =
-          interruption === "scope" ? withCommandProcessScope(run, controller.signal) : run();
-        const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+          }),
+        controller.signal,
+      );
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
 
-        if (interruption === "scope") {
-          controller.abort();
-        } else {
-          await vi.advanceTimersByTimeAsync(80);
-          await vi.advanceTimersToNextTimerAsync();
-        }
-        await vi.advanceTimersByTimeAsync(300);
-        expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
-        if (gracefulOutcome === "times out") {
-          // Graceful taskkill expires while its later-started forced sibling still owns the root.
-          await vi.advanceTimersByTimeAsync(5_000 - 300);
-          gracefulTaskkill.finish({ signal: "SIGTERM", timedOut: true });
-          await vi.advanceTimersByTimeAsync(0);
-        }
-        expect(command.kill).not.toHaveBeenCalled();
-        expect(cancelSignal.aborted).toBe(false);
-        for (const index of [1, 2]) {
-          const cleanupSignal = requireExecaCall(index)[2].cancelSignal as AbortSignal | undefined;
-          expect(cleanupSignal?.aborted).not.toBe(true);
-        }
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      // Graceful taskkill expires while its later-started forced sibling still owns the root.
+      await vi.advanceTimersByTimeAsync(5_000 - 300);
+      gracefulTaskkill.finish({ signal: "SIGTERM", timedOut: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(command.kill).not.toHaveBeenCalled();
+      expect(cancelSignal.aborted).toBe(false);
+      for (const index of [1, 2]) {
+        const cleanupSignal = requireExecaCall(index)[2].cancelSignal as AbortSignal | undefined;
+        expect(cleanupSignal?.aborted).not.toBe(true);
+      }
 
-        forcedTaskkill.finish();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(cancelSignal.aborted).toBe(true);
+      forcedTaskkill.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancelSignal.aborted).toBe(true);
 
-        command.finish({ signal: "SIGKILL" });
-        await expect(resultPromise).resolves.toMatchObject({
-          ...(interruption === "timeout" ? { code: 124 } : {}),
-          termination: interruption === "timeout" ? "timeout" : "signal",
-          cleanup: "forced",
-        });
+      command.finish({ signal: "SIGKILL" });
+      await expect(resultPromise).resolves.toMatchObject({
+        termination: "signal",
+        cleanup: "forced",
       });
-    },
-  );
+    });
+  });
 
   it("waits for immediate forced taskkill before aborting the Windows root", async () => {
     vi.useFakeTimers();

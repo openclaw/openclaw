@@ -111,6 +111,16 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
   };
 }
 
+export function sameRequesterSettleRunIdentity(
+  left: SubagentRunRecord,
+  right: SubagentRunRecord,
+): boolean {
+  return isDeepStrictEqual(
+    captureRequesterSettleRunIdentity(left),
+    captureRequesterSettleRunIdentity(right),
+  );
+}
+
 /** Wake decisions retain their observed progress; retirement/presentation metadata is carried forward. */
 export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
   const wake = entry.requesterSettleWake;
@@ -251,10 +261,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     if (
       !entry ||
       (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
-      !isDeepStrictEqual(
-        captureRequesterSettleRunIdentity(entry),
-        captureRequesterSettleRunIdentity(observed),
-      ) ||
+      !sameRequesterSettleRunIdentity(entry, observed) ||
       (wake?.yieldedFinalDeliverable === true) !==
         (observed.requesterSettleWake?.yieldedFinalDeliverable === true) ||
       !wake ||

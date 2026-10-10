@@ -9,6 +9,7 @@ import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -90,7 +91,8 @@ export async function bindSubagentRunGatewayOwners(params: {
       continue;
     }
     bindGatewayContextResolver(entry, resolver);
-    subagentRuns.commitOwnership(entry);
+    // Binding an existing owner must not supersede a registration already in preparation.
+    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   }
   return isCurrent();
 }

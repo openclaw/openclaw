@@ -24,6 +24,8 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
+import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 import {
   releaseCodexAppServerBindingSubscription,
   retainCodexAppServerBindingSubscription,
@@ -322,6 +324,45 @@ export function registerSharedClientLifetimeTests(
       await expect(waitForCodexAppServerClientExit(client)).resolves.toBeUndefined();
     },
   );
+
+  it("lets cancellation end a writer handoff to a retired owner that other leases keep alive", async () => {
+    const harness = createClientHarness({ autoEmitExit: false });
+    const successor = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
+    const retired = await acquire;
+    retireSharedCodexAppServerClientIfCurrent(retired);
+    const abort = new AbortController();
+    let outcome: unknown = "pending";
+    void releaseCodexBoundLiveThread({
+      client: successor.client,
+      clientId: successor.client.getInstanceId(),
+      ownerClientId: retired.getInstanceId(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      threadId: "thread",
+      signal: abort.signal,
+    }).then(
+      () => {
+        outcome = "resolved";
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+    try {
+      // The acquisition lease still pins the retired owner, so its exit never arrives.
+      await setImmediate();
+      expect(outcome).toBe("pending");
+      abort.abort(new Error("fixture startup timed out"));
+      await setImmediate();
+      expect(outcome).toMatchObject({ message: "fixture startup timed out" });
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(retired);
+      harness.emitExit();
+      successor.client.close();
+    }
+  });
 
   it("connects catalog events at physical startup without retaining a client lease", async () => {
     const harness = createClientHarness();

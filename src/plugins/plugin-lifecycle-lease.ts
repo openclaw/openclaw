@@ -20,7 +20,8 @@ import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identi
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+export type PluginLifecycleLeaseContext = Omit<OpenClawStateLeaseContext, "assertOwned"> & {
+  assertOwned: () => void;
   databasePath: string;
   /** Original state owner; wrapper identity cannot authorize worker writes. */
   stateLease: OpenClawStateLeaseContext;
@@ -29,6 +30,23 @@ export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
 };
 
 type PluginLifecycleRefusal = { current?: { error: unknown } };
+
+// Escaped lease capabilities must not capture the operation's cache-owning activation.
+function createPluginLifecycleLeaseContext(
+  databasePath: string,
+  lease: OpenClawStateLeaseContext,
+  assertAuthority: (check: () => void) => void,
+): PluginLifecycleLeaseContext {
+  return {
+    databasePath,
+    stateLease: lease,
+    assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
+    signal: lease.signal,
+    ...(lease.renew ? { renew: () => lease.renew?.() } : {}),
+    assertOwned: () => lease.assertOwned(),
+    assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
+  };
+}
 
 type ActivePluginLifecycleLease = {
   databasePath: string;
@@ -296,15 +314,7 @@ export async function withPluginLifecycleLease<T>(
       },
       async (lease) => {
         markAcquired();
-        const pluginLease: PluginLifecycleLeaseContext = {
-          databasePath,
-          stateLease: lease,
-          assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
-          signal: lease.signal,
-          ...(lease.renew ? { renew: () => lease.renew?.() } : {}),
-          assertOwned: () => lease.assertOwned(),
-          assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
-        };
+        const pluginLease = createPluginLifecycleLeaseContext(databasePath, lease, assertAuthority);
         // Capture fresh facts only after ownership: another process may have committed while we waited.
         const cache = createPluginCache();
         const failures: unknown[] = [];

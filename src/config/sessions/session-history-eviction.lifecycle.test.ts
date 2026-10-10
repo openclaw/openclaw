@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
@@ -13,13 +18,17 @@ import * as queue from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { replaceConfigFile } from "../config.js";
+import * as diskBudget from "./disk-budget.js";
 import { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
+import * as sessionScope from "./session-accessor.sqlite-scope.js";
 import * as archivePruningOwner from "./session-history-archive-pruning.js";
 import {
   createSessionHistoryBudgetFixture,
@@ -73,6 +82,112 @@ describe("SQLite post-commit history maintenance", () => {
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
+
+  it
+    .runIf(process.platform !== "win32")
+    .for(["initial measurement", "publication writer"] as const)(
+    "refuses a replaced physical store during %s",
+    async (boundary, { signal }) => {
+      const sessionId = "publication-source-old";
+      await createHistoricalTranscript({
+        sessionKey: "agent:main:publication-source",
+        sessionId,
+        nextSessionId: "publication-source-live",
+        content: "archive the original physical generation",
+        updatedAt: 1,
+      });
+      const owner = database();
+      const replacementPath = testState.statePath("publication-replacement.sqlite");
+      const replacement = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: replacementPath,
+        env: testState.env,
+      });
+      replacement.db.exec(
+        "CREATE TABLE successor_marker (value TEXT); INSERT INTO successor_marker VALUES ('untouched');",
+      );
+      await closeOpenClawAgentDatabaseByPathAsync(replacementPath);
+      const replacementBytes = fs.readFileSync(replacementPath);
+      owner.walMaintenance.checkpoint();
+      if (boundary === "initial measurement") {
+        // No retained native handle may independently refuse the replacement first.
+        await closeOpenClawAgentDatabaseByPathAsync(owner.path);
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const run = sessionScope.runExclusiveSqliteSessionWrite;
+      let paused = false;
+      const measure = diskBudget.measureSessionPhysicalDiskUsage;
+      const measurement = vi
+        .spyOn(diskBudget, "measureSessionPhysicalDiskUsage")
+        .mockImplementation(async (pathname) => {
+          const result = await measure(pathname);
+          if (!paused && boundary === "initial measurement") {
+            paused = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
+      const writer = vi
+        .spyOn(sessionScope, "runExclusiveSqliteSessionWrite")
+        .mockImplementation(<T>(...args: Parameters<typeof run<T>>) => {
+          const [scope, operation, label, ...rest] = args;
+          return run(
+            scope,
+            async () => {
+              if (
+                !paused &&
+                boundary === "publication writer" &&
+                label === "session.archive.publish-prepare"
+              ) {
+                paused = true;
+                entered.resolve();
+                await release.promise;
+              }
+              return operation();
+            },
+            label,
+            ...rest,
+          );
+        });
+      const sweep = enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+      });
+      const heldPath = `${owner.path}.held`;
+      let replaced = false;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, sweep, `History skipped ${boundary}`),
+          signal,
+        );
+        fs.renameSync(owner.path, heldPath);
+        fs.renameSync(replacementPath, owner.path);
+        replaced = true;
+        release.resolve();
+        await expect(sweep).rejects.toThrow(/file identity changed/);
+        expect(fs.readFileSync(owner.path)).toEqual(replacementBytes);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([sweep]);
+        if (replaced) {
+          fs.renameSync(owner.path, replacementPath);
+          fs.renameSync(heldPath, owner.path);
+        }
+        writer.mockRestore();
+        measurement.mockRestore();
+      }
+      expect(sessionExists(sessionId)).toBe(boundary === "initial measurement");
+      expect(
+        database()
+          .db.prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+          .get(sessionId),
+      ).toEqual(boundary === "initial measurement" ? undefined : { published_at: null });
+      expect(readArchiveNames(sessionId)).toEqual([]);
+    },
+  );
 
   it.each([
     { operation: "delete", phase: "closed", committed: false },

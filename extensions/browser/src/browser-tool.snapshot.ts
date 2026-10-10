@@ -16,13 +16,14 @@ import {
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
 import { browserSnapshot } from "./browser/client.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -43,12 +44,16 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
 
 type BrowserExternalJsonKind = keyof typeof BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS;
 
+export function wrapBrowserExternalContent(value: string, includeWarning: boolean): string {
+  return wrapExternalContent(neutralizeMediaDirectives(value), {
+    source: "browser",
+    includeWarning,
+  });
+}
+
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
   const bounded = truncateSanitizedExternalContent(value, maxChars);
-  if (!bounded.truncated) {
-    return bounded;
-  }
-  if (marker.length > maxChars) {
+  if (!bounded.truncated || marker.length > maxChars) {
     return bounded;
   }
   const marked = truncateSanitizedExternalContent(value, Math.max(0, maxChars - marker.length));
@@ -185,13 +190,12 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
 
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
+  const { input, target, profile } = params;
   const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
@@ -249,7 +253,7 @@ export async function executeSnapshotAction(params: {
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
-    await browserSnapshot(proxyRequest ?? baseUrl, {
+    await browserSnapshot(target, {
       ...query,
       profile,
       signal: params.signal,
@@ -356,21 +360,7 @@ export async function executeSnapshotAction(params: {
       externalContent,
     });
   }
-  if (snapshot.format === "ai") {
-    if (snapshot.blockedByDialog) {
-      const wrapped = wrapBrowserExternalJson({
-        kind: "snapshot",
-        payload: {
-          ...identity,
-          ...dialogState,
-        },
-      });
-      return textResult(wrapped.wrappedText, {
-        ...wrapped.safeDetails,
-        ...identity,
-        ...dialogState,
-      });
-    }
+  if (snapshot.format === "ai" && !snapshot.blockedByDialog) {
     const boundedSnapshot = wrapBrowserExternalText({
       value: snapshot.snapshot ?? "",
       marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
@@ -388,19 +378,17 @@ export async function executeSnapshotAction(params: {
       externalContent,
     });
   }
-  {
-    const wrapped = wrapBrowserExternalJson({
-      kind: "snapshot",
-      payload: snapshot,
-    });
-    return textResult(wrapped.wrappedText, {
-      ...wrapped.safeDetails,
-      ...identity,
-      nodeCount: snapshot.nodes.length,
-      ...dialogState,
-      externalContent,
-    });
-  }
+  const wrapped = wrapBrowserExternalJson({
+    kind: "snapshot",
+    payload: snapshot.format === "ai" ? { ...identity, ...dialogState } : snapshot,
+  });
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    ...identity,
+    ...(snapshot.format === "ai"
+      ? dialogState
+      : { nodeCount: snapshot.nodes.length, ...dialogState, externalContent }),
+  });
 }
 
 /**
@@ -414,18 +402,16 @@ export async function executeSnapshotAction(params: {
 export async function appendNavigatedPageState(params: {
   result: AgentToolResult<unknown>;
   targetId?: string;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   let snapshot: AgentToolResult<unknown>;
   try {
     snapshot = await executeSnapshotAction({
       input: { targetId: params.targetId, mode: "efficient" },
-      baseUrl: params.baseUrl,
+      target: params.target,
       profile: params.profile,
-      proxyRequest: params.proxyRequest,
       signal: params.signal,
     });
   } catch (err) {
@@ -436,10 +422,7 @@ export async function appendNavigatedPageState(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
-    const reason = wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
-      source: "browser",
-      includeWarning: false,
-    });
+    const reason = wrapBrowserExternalContent(formatErrorMessage(err), false);
     return {
       ...params.result,
       content: [
@@ -451,12 +434,8 @@ export async function appendNavigatedPageState(params: {
       ],
     };
   }
-  const baseDetails =
-    params.result.details && typeof params.result.details === "object"
-      ? (params.result.details as Record<string, unknown>)
-      : {};
   return {
     content: [...params.result.content, ...snapshot.content],
-    details: { ...baseDetails, pageState: snapshot.details },
+    details: { ...asRecord(params.result.details), pageState: snapshot.details },
   };
 }

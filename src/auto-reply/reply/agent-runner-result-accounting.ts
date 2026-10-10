@@ -18,6 +18,7 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -107,10 +108,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     : undefined;
 
   const runResult = execution.result;
-  const fallbackProvider = execution.resolved.provider;
-  const fallbackModel = execution.resolved.model;
-  const fallbackExhausted = execution.fallback.exhausted;
-  const fallbackAttempts = execution.fallback.attempts;
+  const { provider: fallbackProvider, model: fallbackModel } = execution.resolved;
+  const { exhausted: fallbackExhausted, attempts: fallbackAttempts } = execution.fallback;
   const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
   const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
@@ -200,10 +199,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     requestedModel: followupRun.run.model,
     durationMs: Date.now() - runStartedAt,
     compactionCount: typeof compactions === "number" ? compactions : undefined,
-    contextTokenBudget:
-      typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
-    contextUsedTokens:
-      typeof promptTokens === "number" && Number.isFinite(promptTokens) ? promptTokens : undefined,
+    contextTokenBudget: ctxTokens,
+    contextUsedTokens: promptTokens,
     promptTokens,
     usage,
     lastCallUsage,
@@ -289,7 +286,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionStore: activeSessionStore,
     replyOperation: operation,
   });
-  await persistSessionUsageUpdate({
+  const usageCommit = await persistSessionUsageUpdate({
     agentId: latestCompaction?.target.agentId ?? followupRun.run.agentId,
     sessionStore: activeSessionStore,
     storePath: latestCompaction?.target.storePath ?? storePath,
@@ -327,6 +324,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       agentId: followupRun.run.agentId,
       providerUsed: sessionModel.provider,
       modelUsed: sessionModel.model,
+      usageCommit:
+        usageCommit?.entry.sessionId === expectedSession.sessionId &&
+        usageCommit.entry.lifecycleRevision === expectedSession.lifecycleRevision
+          ? usageCommit
+          : undefined,
     });
   }
 
@@ -458,6 +460,7 @@ export async function accountFollowupTurn(params: {
         sessionKey,
         fallbackEntry: turn.session.current(),
         expectedGeneration: accounting.expectedSession,
+        reader: getReplyOperationSessionReader(turn.operation),
       }),
     );
   }

@@ -5,7 +5,7 @@ import {
   scoreExactPathTieForTemporalDecay,
   selectHybridSearchResults,
 } from "./hybrid.js";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore } from "./keyword-query.js";
 
 type HybridInputs = Parameters<typeof mergeHybridResults>[0];
 type VectorHit = HybridInputs["vector"][number];
@@ -38,14 +38,6 @@ function keywordHit(id: string, textScore: number, details: Partial<KeywordHit> 
 }
 
 describe("memory hybrid helpers", () => {
-  it("buildFtsQuery tokenizes and AND-joins", () => {
-    expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
-    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
-    expect(buildFtsQuery("金银价格")).toBe('"金银价格"');
-    expect(buildFtsQuery("価格 2026年")).toBe('"価格" AND "2026年"');
-    expect(buildFtsQuery("   ")).toBeNull();
-  });
-
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
@@ -77,14 +69,15 @@ describe("memory hybrid helpers", () => {
       endLine: 1,
       snippet: "unrelated lexical topic",
     });
+    const vector = [
+      vectorHit("strict-first", 1, { endLine: 1, snippet: "shared semantic topic" }),
+      vectorHit("strict-later", 0.9, { endLine: 1, snippet: "shared semantic topic" }),
+    ];
     const merged = await mergeHybridResults({
       vectorWeight: 0.7,
       textWeight: 0.3,
       mmr: { enabled: true, lambda: 0.2 },
-      vector: [
-        vectorHit("strict-first", 1, { endLine: 1, snippet: "shared semantic topic" }),
-        vectorHit("strict-later", 0.9, { endLine: 1, snippet: "shared semantic topic" }),
-      ],
+      vector,
       keyword: [keyword],
     });
     expect(merged.map((entry) => entry.path)).toEqual([
@@ -96,6 +89,7 @@ describe("memory hybrid helpers", () => {
     const selected = selectHybridSearchResults({
       merged,
       keyword: [keyword],
+      vectorCandidates: vector,
       maxResults: 2,
       minScore: 0.35,
     });
@@ -121,12 +115,41 @@ describe("memory hybrid helpers", () => {
     const selected = selectHybridSearchResults({
       merged: [overlapping],
       keyword: [overlapping],
+      vectorCandidates: [overlapping],
       maxResults: 1,
       minScore: 0.35,
     });
 
     expect(selected).toEqual([overlapping]);
   });
+
+  it.each([
+    { vectorScore: -0.5, expectedPaths: ["memory/strict.md"] },
+    { vectorScore: 0, expectedPaths: ["memory/strict.md", "memory/keyword.md"] },
+    { vectorScore: 0.2, expectedPaths: ["memory/strict.md", "memory/keyword.md"] },
+  ])(
+    "fills lexical spare slots only with nonnegative completed scores ($vectorScore)",
+    async ({ vectorScore, expectedPaths }) => {
+      const vectorCandidates = [vectorHit("strict", 1)];
+      const keyword = [keywordHit("keyword", 0, { hasBodyMatch: true, rankingScore: 0.8 })];
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [...vectorCandidates, vectorHit("keyword", vectorScore)],
+        keyword,
+      });
+
+      const selected = selectHybridSearchResults({
+        merged,
+        keyword,
+        vectorCandidates,
+        maxResults: 2,
+        minScore: 0.35,
+      });
+
+      expect(selected.map((entry) => entry.path)).toEqual(expectedPaths);
+    },
+  );
 
   it("keeps null importance neutral and deterministically boosts important entries", async () => {
     const baseEntry = vectorHit("neutral", 0.8, { path: "MEMORY.md", endLine: 1 });
@@ -499,7 +522,13 @@ describe("memory hybrid helpers", () => {
       expect(merged.every((entry) => !("lexicalRank" in entry) && !("rankingScore" in entry))).toBe(
         true,
       );
-      const selected = selectHybridSearchResults({ merged, keyword, maxResults: 2, minScore: 0 });
+      const selected = selectHybridSearchResults({
+        merged,
+        keyword,
+        vectorCandidates: vectorScore === null ? [] : keyword,
+        maxResults: 2,
+        minScore: 0,
+      });
       expect(selected).toEqual(vectorScore !== null && vectorScore < 0 ? [] : merged);
     },
   );

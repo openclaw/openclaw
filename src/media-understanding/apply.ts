@@ -1,5 +1,3 @@
-// Applies media-understanding outputs to inbound message context, including
-// attachment normalization, provider execution, file text extraction, and echoing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";

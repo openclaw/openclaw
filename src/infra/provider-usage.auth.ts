@@ -136,23 +136,33 @@ function hasProviderUsageAuthEnvCredentialSource(params: {
   }
 }
 
-function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
+type ProviderApiKeyCandidatesParams = {
   state: UsageAuthState;
   providerIds: string[];
   envDirect?: Array<string | undefined>;
-}): string[] {
-  const candidates: string[] = [];
+};
+
+function prepareProviderApiKeyCandidates(params: ProviderApiKeyCandidatesParams) {
   const configKey = resolveProviderApiKeyFromConfig(params);
-  if (configKey) {
-    candidates.push(configKey);
-  }
+  const candidates = configKey ? [configKey] : [];
   if (!params.state.allowAuthProfileStore) {
+    return { candidates };
+  }
+  const store = resolveUsageAuthStore(params.state);
+  const profileIds = normalizeProviderIds(params.providerIds).flatMap((provider) =>
+    resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
+  );
+  return { candidates, store, profileIds };
+}
+
+function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(
+  params: ProviderApiKeyCandidatesParams,
+): string[] {
+  const { candidates, store, profileIds } = prepareProviderApiKeyCandidates(params);
+  if (!store) {
     return candidates;
   }
-
-  const store = resolveUsageAuthStore(params.state);
-  const credentials = normalizeProviderIds(params.providerIds)
-    .flatMap((provider) => resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }))
+  const credentials = profileIds
     .map((id) => store.profiles[id])
     .filter((profile) => profile?.type === "api_key" || profile?.type === "token");
   for (const credential of credentials) {
@@ -166,27 +176,14 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
   return normalizeUniqueStringEntries(candidates);
 }
 
-async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
-  state: UsageAuthState;
-  providerIds: string[];
-  envDirect?: Array<string | undefined>;
-}): Promise<string[]> {
-  const candidates: string[] = [];
-  const configKey = resolveProviderApiKeyFromConfig(params);
-  if (configKey) {
-    candidates.push(configKey);
-  }
-  if (!params.state.allowAuthProfileStore) {
+async function resolveProviderApiKeyCandidatesFromConfigAndStore(
+  params: ProviderApiKeyCandidatesParams,
+): Promise<string[]> {
+  const { candidates, store, profileIds } = prepareProviderApiKeyCandidates(params);
+  if (!store) {
     return candidates;
   }
-
-  const store = resolveUsageAuthStore(params.state);
-  const profileIds = dedupeProfileIds(
-    normalizeProviderIds(params.providerIds).flatMap((provider) =>
-      resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
-    ),
-  );
-  for (const profileId of profileIds) {
+  for (const profileId of dedupeProfileIds(profileIds)) {
     const credential = store.profiles[profileId];
     if (!credential || (credential.type !== "api_key" && credential.type !== "token")) {
       continue;

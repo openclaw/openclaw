@@ -256,26 +256,6 @@ export class SandboxFsPathGuard {
     return lexicalMount;
   }
 
-  private finalizePinnedEntry(params: {
-    mount: SandboxFsMount;
-    parentPath: string;
-    basename: string;
-    targetPath: string;
-    action: string;
-  }): PinnedSandboxEntry {
-    const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
-    if (relativePathEscapesContainerRoot(relativeParentPath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
-      );
-    }
-    return {
-      mountRootPath: params.mount.containerRoot,
-      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
-      basename: params.basename,
-    };
-  }
-
   private async assertGuardedPathSafety(
     target: SandboxResolvedFsPath,
     options: PathSafetyOptions,
@@ -356,14 +336,12 @@ export class SandboxFsPathGuard {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
     const parentPath = normalizeContainerPathCore(path.posix.dirname(target.containerPath));
-    const mount = this.resolveRequiredMount(parentPath, action);
-    return this.finalizePinnedEntry({
-      mount,
+    const { mountRootPath, relativePath } = this.resolvePinnedDirectory(
       parentPath,
-      basename,
-      targetPath: target.containerPath,
       action,
-    });
+      target.containerPath,
+    );
+    return { mountRootPath, relativeParentPath: relativePath, basename };
   }
 
   async resolveAnchoredSandboxEntry(
@@ -392,14 +370,12 @@ export class SandboxFsPathGuard {
     action: string,
   ): Promise<PinnedSandboxEntry> {
     const anchoredTarget = await this.resolveAnchoredSandboxEntry(target, action);
-    const mount = this.resolveRequiredMount(anchoredTarget.canonicalParentPath, action);
-    return this.finalizePinnedEntry({
-      mount,
-      parentPath: anchoredTarget.canonicalParentPath,
-      basename: anchoredTarget.basename,
-      targetPath: target.containerPath,
+    const { mountRootPath, relativePath } = this.resolvePinnedDirectory(
+      anchoredTarget.canonicalParentPath,
       action,
-    });
+      target.containerPath,
+    );
+    return { mountRootPath, relativeParentPath: relativePath, basename: anchoredTarget.basename };
   }
 
   /**
@@ -445,12 +421,18 @@ export class SandboxFsPathGuard {
     target: SandboxResolvedFsPath,
     action: string,
   ): PinnedSandboxDirectoryEntry {
-    const mount = this.resolveRequiredMount(target.containerPath, action);
-    const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
+    return this.resolvePinnedDirectory(target.containerPath, action);
+  }
+
+  private resolvePinnedDirectory(
+    containerPath: string,
+    action: string,
+    displayPath = containerPath,
+  ): PinnedSandboxDirectoryEntry {
+    const mount = this.resolveRequiredMount(containerPath, action);
+    const relativePath = path.posix.relative(mount.containerRoot, containerPath);
     if (relativePathEscapesContainerRoot(relativePath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
-      );
+      throw new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${displayPath}`);
     }
     return {
       mountRootPath: mount.containerRoot,

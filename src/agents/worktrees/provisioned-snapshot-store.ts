@@ -23,7 +23,7 @@ export function createProvisionedSnapshotWriter(
   let uncertain: { error: unknown } | undefined;
   return async (
     effect: ProvisionedSnapshotEffect,
-    assertEffectCurrent?: () => void,
+    signal: AbortSignal | undefined = authority.signal,
   ): Promise<void> => {
     if (uncertain) {
       throw uncertain.error;
@@ -44,9 +44,10 @@ export function createProvisionedSnapshotWriter(
         {
           leaseSet,
           predicates,
+          signal,
           assertCurrent: () => {
             assertCurrent?.();
-            assertEffectCurrent?.();
+            signal?.throwIfAborted();
           },
         },
       );

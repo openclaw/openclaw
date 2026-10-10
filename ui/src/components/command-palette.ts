@@ -323,7 +323,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     if (input.imageFiles?.length) {
       this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
     } else if (input.submitRequested) {
-      void this.draft.submit();
+      this.draft.submitCold();
     }
   };
 

@@ -12,6 +12,9 @@ import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import type { CronRuntimeMutationType } from "./runtime-worker.types.js";
 
+// Two handshakes leave 3s of competing writers' 5s busy budget for SQL and rollback.
+const CRON_MUTATION_ADMISSION_DEADLINE_MS = 1_000;
+
 export function createCronMutationLogger(logs: CronRunRecoveryOutcome["logs"]): Logger {
   const record = (level: keyof Logger) => (fields: unknown, message?: string) => {
     logs.push({ level, fields, message });
@@ -33,7 +36,11 @@ export function prepareCronRuntimeMutation<Type extends CronRuntimeMutationType>
   const { port1, port2 } = new MessageChannel();
   try {
     requestSqliteWorkerOperationAdmission(
-      { stage: "transaction", facts: { nonce, preparation: facts, preparationPort: port2 } },
+      {
+        stage: "transaction",
+        facts: { nonce, preparation: facts, preparationPort: port2 },
+        deadlineMs: CRON_MUTATION_ADMISSION_DEADLINE_MS,
+      },
       [port2],
     );
     // SAFETY: the private port receives only this command's host-owned policy preparation.
@@ -62,8 +69,9 @@ export function retainCronRuntimeMutationOutcome<Type extends CronRuntimeMutatio
     nonce,
     receiptAuthority: prepareCronReceiptAuthorityPublication(db),
   });
-  requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce, bytes } }, [
-    bytes.buffer,
-  ]);
+  requestSqliteWorkerOperationAdmission(
+    { stage: "commit", facts: { nonce, bytes }, deadlineMs: CRON_MUTATION_ADMISSION_DEADLINE_MS },
+    [bytes.buffer],
+  );
   return { nonce };
 }

@@ -50,8 +50,7 @@ type ListParams = {
   sessionEntries?: SessionCatalogEntrySnapshot;
   allowPartialResults?: boolean;
   nodeSnapshots?: CodexCatalogNodeSnapshots;
-  includeLocal?: boolean;
-  localHomes?: CodexCatalogHome[];
+  localHomes: Array<CodexCatalogHome | undefined>;
 };
 
 type ListStep<THost> = { done: false } | { done: true; hosts: THost[] };
@@ -218,7 +217,6 @@ class CodexCatalogListDriver {
   private prepared: PreparedList | undefined;
   private locals: LocalHost[] = [];
   private nodeHosts: CodexSessionCatalogHost[] | undefined;
-  private nodeActive = false;
   private nodeResults: Array<() => CodexSessionCatalogHost | undefined> = [];
   private readonly nodeSnapshots: CodexCatalogNodeSnapshots;
   private readonly nodeGeneration: number;
@@ -260,14 +258,10 @@ class CodexCatalogListDriver {
     }).sessionAgentId;
     const query = readGatewayParams(params.query);
     const requestedHostIds = query.hostIds ? new Set(query.hostIds) : undefined;
-    const localSources =
-      params.localHomes?.filter(
-        (source) => !requestedHostIds || requestedHostIds.has(source.hostId),
-      ) ??
-      (params.includeLocal !== false &&
-      (!requestedHostIds || requestedHostIds.has(CODEX_LOCAL_SESSION_HOST_ID))
-        ? [undefined]
-        : []);
+    const localSources = params.localHomes.filter(
+      (source) =>
+        !requestedHostIds || requestedHostIds.has(source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID),
+    );
     const diagnostics = currentCodexCatalogListDiagnostics();
     if (diagnostics) {
       diagnostics.fields.localHostCount = localSources.length;
@@ -320,7 +314,6 @@ class CodexCatalogListDriver {
       !this.localFailed &&
       this.nodeHosts !== undefined &&
       !this.nodeDiscoveryFailed &&
-      !this.nodeActive &&
       this.nodePublications.pending === 0
     );
   }
@@ -531,15 +524,13 @@ class CodexCatalogListDriver {
       return;
     }
     this.nodesStarted = true;
-    this.nodeActive = true;
     void this.readNodes().then(
       (hosts) => {
         this.nodeHosts = hosts;
-        this.nodeActive = false;
         this.checkpoint();
       },
       (error: unknown) => {
-        this.nodeActive = false;
+        this.nodeHosts = [];
         this.failure ??= { error };
         this.checkpoint();
       },
@@ -551,7 +542,7 @@ class CodexCatalogListDriver {
       return;
     }
     if (this.failure) {
-      if (!this.nodeActive) {
+      if (this.nodeHosts !== undefined) {
         this.step.reject(this.failure.error);
       }
     } else if (this.nodeHosts && this.locals.every((host) => host.value !== undefined)) {

@@ -77,6 +77,7 @@ it("selects current work before pagination and represents an isolated cron run o
     const childKey = "agent:main:subagent:child";
     const cronKey = "agent:main:cron:daily";
     const runKey = `${cronKey}:run:cron-session`;
+    const recent = Date.now() - 1_000;
     for (const [agentId, sessionKey, sessionId, updatedAt] of [
       ["main", "agent:main:local", "local-session", 40],
       ["work", "agent:work:remote", "remote-session", 30],
@@ -91,10 +92,10 @@ it("selects current work before pagination and represents an isolated cron run o
       const scope = { agentId, sessionKey };
       const entry = await upsertSessionEntryCore(scope, {
         sessionId,
-        updatedAt,
+        updatedAt: recent + updatedAt,
         visibility: "shared",
       });
-      await replaceSessionEntry(scope, { ...entry!, updatedAt });
+      await replaceSessionEntry(scope, { ...entry!, updatedAt: recent + updatedAt });
     }
     context.chatAbortControllers.set("local-run", {
       sessionKey: "agent:main:local",
@@ -592,7 +593,7 @@ it.each([false, true])(
       const result = await listSessions({
         client: identifiedClient("viewer@example.com"),
         context,
-        request: { agentId: "main", limit: 100 },
+        request: { agentId: "main", activeOnly: true, limit: 100 },
       });
       expect(readiness).toHaveBeenCalled();
       const row = result.sessions.find((session) => session.key === sessionKey);

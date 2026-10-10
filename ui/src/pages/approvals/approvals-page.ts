@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import {
   validateApprovalHistoryResult,
@@ -109,6 +109,18 @@ function resolverLabel(item: TerminalApprovalSnapshot): string {
   return item.resolver.id ? `${item.resolver.kind} · ${item.resolver.id}` : item.resolver.kind;
 }
 
+function renderEmptyRow(columns: number, label: string) {
+  return html`<tr>
+    <td colspan=${columns} class="data-table-empty-cell">
+      <div class="data-table-empty-state" role="status" aria-live="polite">${label}</div>
+    </td>
+  </tr>`;
+}
+
+function renderCell(labelKey: string, value: string | number | TemplateResult, mono = false) {
+  return html`<td class=${mono ? "mono" : nothing} data-label=${t(labelKey)}>${value}</td>`;
+}
+
 class ApprovalsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -118,8 +130,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   @state() private grantsError: string | null = null;
   @state() private revokingGrantId: string | null = null;
   @state() private nextCursor: string | null = null;
-  @state() private loading = false;
-  @state() private loadingMore = false;
+  @state() private loadKind: "reset" | "more" | null = null;
   @state() private error: string | null = null;
   @state() private connected = false;
   @state() private approvalsAccess = true;
@@ -157,7 +168,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
           return;
         }
         this.historyRefreshPending = true;
-        if (!this.loading && !this.loadingMore) {
+        if (this.loadKind === null) {
           void this.loadPage(true);
         }
       });
@@ -177,8 +188,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
 
   private resetHistory(clearData: boolean) {
     this.requestGeneration += 1;
-    this.loading = false;
-    this.loadingMore = false;
+    this.loadKind = null;
     this.historyRefreshPending = false;
     this.revokingGrantId = null;
     if (clearData) {
@@ -212,7 +222,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       snapshot.client &&
       this.approvalsAccess &&
       !this.hasLoaded &&
-      !this.loading
+      this.loadKind !== "reset"
     ) {
       void this.loadPage(true);
     }
@@ -227,8 +237,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       !this.connected ||
       !this.approvalsAccess ||
       !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
-      this.loading ||
-      this.loadingMore
+      this.loadKind !== null
     ) {
       return;
     }
@@ -239,10 +248,8 @@ class ApprovalsPage extends OpenClawLightDomElement {
     }
     if (reset) {
       this.historyRefreshPending = false;
-      this.loading = true;
-    } else {
-      this.loadingMore = true;
     }
+    this.loadKind = reset ? "reset" : "more";
     this.error = null;
     const isCurrent = () => this.isCurrentRequest(client, gateway, generation);
     try {
@@ -269,8 +276,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.loading = false;
-        this.loadingMore = false;
+        this.loadKind = null;
         if (this.historyRefreshPending) {
           void this.loadPage(true);
         }
@@ -378,25 +384,18 @@ class ApprovalsPage extends OpenClawLightDomElement {
             <tbody>
               ${
                 this.grants.length === 0
-                  ? html`
-                      <tr>
-                        <td colspan="5" class="data-table-empty-cell">
-                          <div class="data-table-empty-state" role="status" aria-live="polite">
-                            ${t("standingGrants.empty")}
-                          </div>
-                        </td>
-                      </tr>
-                    `
-                  : this.grants.map(
-                      (grant) => html`
+                  ? renderEmptyRow(5, t("standingGrants.empty"))
+                  : this.grants.map((grant) => {
+                      const revokeLabel = t(
+                        this.revokingGrantId === grant.grantId
+                          ? "standingGrants.revoking"
+                          : "standingGrants.revoke",
+                      );
+                      return html`
                         <tr>
-                          <td data-label=${t("standingGrants.columns.automation")}>
-                            ${grant.cronJobName ?? grant.cronJobId}
-                          </td>
-                          <td class="mono" data-label=${t("standingGrants.columns.command")}>
-                            ${grant.command}
-                          </td>
-                          <td data-label=${t("standingGrants.columns.uses")}>${grant.useCount}</td>
+                          ${renderCell("standingGrants.columns.automation", grant.cronJobName ?? grant.cronJobId)}
+                          ${renderCell("standingGrants.columns.command", grant.command, true)}
+                          ${renderCell("standingGrants.columns.uses", grant.useCount)}
                           <td data-label=${t("standingGrants.columns.state")} aria-live="polite">
                             ${grantStateLabel(grant, nowMs)}
                           </td>
@@ -406,27 +405,19 @@ class ApprovalsPage extends OpenClawLightDomElement {
                                 ? html`
                                     <button
                                       class="btn btn--sm"
-                                      aria-label=${`${
-                                        this.revokingGrantId === grant.grantId
-                                          ? t("standingGrants.revoking")
-                                          : t("standingGrants.revoke")
-                                      }: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
+                                      aria-label=${`${revokeLabel}: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
                                       ?disabled=${this.revokingGrantId !== null}
                                       @click=${() => void this.revokeGrant(grant.grantId)}
                                     >
-                                      ${
-                                        this.revokingGrantId === grant.grantId
-                                          ? t("standingGrants.revoking")
-                                          : t("standingGrants.revoke")
-                                      }
+                                      ${revokeLabel}
                                     </button>
                                   `
                                 : nothing
                             }
                           </td>
                         </tr>
-                      `,
-                    )
+                      `;
+                    })
               }
             </tbody>
           </table>
@@ -436,7 +427,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   }
 
   private renderTable() {
-    if (this.loading && this.items.length === 0) {
+    if (this.loadKind === "reset" && this.items.length === 0) {
       return renderSettingsLoadingSkeleton({ label: t("approvalHistory.loading") });
     }
     return html`
@@ -445,7 +436,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
           class="data-table approval-history-table settings-table--stacked"
           role="table"
           aria-labelledby="approval-history-title"
-          aria-busy=${this.loading || this.loadingMore ? "true" : "false"}
+          aria-busy=${this.loadKind !== null ? "true" : "false"}
         >
           <thead>
             <tr>
@@ -461,44 +452,28 @@ class ApprovalsPage extends OpenClawLightDomElement {
           <tbody>
             ${
               this.items.length === 0
-                ? html`
-                    <tr>
-                      <td colspan="7" class="data-table-empty-cell">
-                        <div class="data-table-empty-state" role="status" aria-live="polite">
-                          ${
-                            this.error || !this.hasLoaded
-                              ? t("approvalHistory.unknown")
-                              : t("approvalHistory.empty")
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  `
+                ? renderEmptyRow(
+                    7,
+                    t(
+                      this.error || !this.hasLoaded
+                        ? "approvalHistory.unknown"
+                        : "approvalHistory.empty",
+                    ),
+                  )
                 : this.items.map(
                     (item) => html`
                       <tr>
-                        <td data-label=${t("approvalHistory.columns.resolved")}>
-                          ${formatDateTimeMs(item.resolvedAtMs, { dateStyle: "medium", timeStyle: "short" })}
-                        </td>
-                        <td data-label=${t("approvalHistory.columns.kind")}>
-                          ${t(APPROVAL_KIND_LABELS[item.presentation.kind])}
-                        </td>
-                        <td class="mono" data-label=${t("approvalHistory.columns.request")}>
-                          ${requestLabel(item)}
-                        </td>
-                        <td data-label=${t("approvalHistory.columns.decision")}>
-                          ${t(APPROVAL_STATUS_LABELS[item.status])} ·
-                          ${t("decision" in item && item.decision ? APPROVAL_DECISION_LABELS[item.decision] : "approvalHistory.notApplicable")}
-                        </td>
-                        <td data-label=${t("approvalHistory.columns.reason")}>
-                          ${t(APPROVAL_REASON_LABELS[item.reason])}
-                        </td>
-                        <td class="mono" data-label=${t("approvalHistory.columns.source")}>
-                          ${sourceLabel(item)}
-                        </td>
-                        <td class="mono" data-label=${t("approvalHistory.columns.resolver")}>
-                          ${resolverLabel(item)}
-                        </td>
+                        ${renderCell("approvalHistory.columns.resolved", formatDateTimeMs(item.resolvedAtMs, { dateStyle: "medium", timeStyle: "short" }))}
+                        ${renderCell("approvalHistory.columns.kind", t(APPROVAL_KIND_LABELS[item.presentation.kind]))}
+                        ${renderCell("approvalHistory.columns.request", requestLabel(item), true)}
+                        ${renderCell(
+                          "approvalHistory.columns.decision",
+                          html`${t(APPROVAL_STATUS_LABELS[item.status])} ·
+                          ${t("decision" in item && item.decision ? APPROVAL_DECISION_LABELS[item.decision] : "approvalHistory.notApplicable")}`,
+                        )}
+                        ${renderCell("approvalHistory.columns.reason", t(APPROVAL_REASON_LABELS[item.reason]))}
+                        ${renderCell("approvalHistory.columns.source", sourceLabel(item), true)}
+                        ${renderCell("approvalHistory.columns.resolver", resolverLabel(item), true)}
                       </tr>
                     `,
                   )
@@ -512,9 +487,12 @@ class ApprovalsPage extends OpenClawLightDomElement {
           ${
             this.nextCursor
               ? html`
-                  <button ?disabled=${this.loadingMore} @click=${() => void this.loadPage(false)}>
+                  <button
+                    ?disabled=${this.loadKind === "more"}
+                    @click=${() => void this.loadPage(false)}
+                  >
                     ${
-                      this.loadingMore
+                      this.loadKind === "more"
                         ? t("approvalHistory.loadingMore")
                         : t("approvalHistory.loadMore")
                     }

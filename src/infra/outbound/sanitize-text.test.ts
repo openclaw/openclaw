@@ -18,13 +18,23 @@ describe("sanitizeForPlainText", () => {
     ["<p><br></p>", "\n\n"],
     ["before<b>\r\n</b>after", "before\r\nafter"],
     ["<vendor:note>one</vendor:note><vendor.note>two</vendor.note>", "onetwo"],
-    ["Ping <users/abc> for access", "Ping  for access"],
+    ["Ping <users/abc> for access", "Ping <users/abc> for access"],
     ["See <https://example.com/path?q=1> now", "See https://example.com/path?q=1 now"],
     ["<mailto:a/b@example.com|Contact Support>", "Contact Support"],
     ["<https://example.com/a.pdf|   >", ""],
     ["Support <support@example.com>", "Support <support@example.com>"],
     ["Usage: /btw [side question]", "Usage: /btw [side question]"],
     ["a\n\n\nb", "a\n\nb"],
+    [
+      "Run git checkout <branch-name> then npm install <package>. Generic List<String> and Map<K, V>.",
+      "Run git checkout <branch-name> then npm install <package>. Generic List<String> and Map<K, V>.",
+    ],
+    [
+      "/model <provider/model> (change with /think <level>)",
+      "/model <provider/model> (change with /think <level>)",
+    ],
+    ["a < b > c and x<5", "a < b > c and x<5"],
+    ["<script>alert(1)</script><br><b>x</b>", "alert(1)\n*x*"],
   ])("sanitizes %s", (input, expected) => {
     expect(sanitizeForPlainText(input)).toBe(expected);
   });

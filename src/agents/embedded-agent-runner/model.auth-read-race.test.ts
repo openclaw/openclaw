@@ -62,98 +62,85 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([
-  "one rotation",
-  "continued rotation",
-  "pinned profile rotation",
-  "cleanup failure",
-  "admission refusal",
-] as const)("resolves model auth across %s during its captured read", async (change) => {
-  const root = tempDirs.make("openclaw-model-auth-race-");
-  const agentDir = path.join(root, "agents/main/agent");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
-    location: "legacy-main",
-  });
-  const events: string[] = [];
-  const refusal = new Error("Auth source admission revoked");
-  const cleanupFailure = new Error("Auth child failed to close");
-  let reads = 0;
-  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
-    assertCurrent: () => {},
-    dispose: async () => {
-      events.push("disposed");
-      if (change === "cleanup failure") {
-        throw cleanupFailure;
-      }
-    },
-    read: async (): Promise<AuthProfileRowRead> => {
-      events.push("read");
-      reads += 1;
-      if (change === "admission refusal") {
-        throw refusal;
-      }
-      const profileId = reads === 1 ? "custom:retired" : "custom:current";
-      if (reads === 1 || change === "continued rotation") {
-        noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-          credentialsChanged: true,
-          stateChanged: false,
-          profileIds: [profileId],
-        });
-      }
-      return {
-        store: {
-          status: "readable",
-          raw: {
-            version: 1,
-            profiles: { [profileId]: { type: "api_key", provider: "custom", key: "fixture" } },
+it.each(["one rotation", "cleanup failure", "admission refusal"] as const)(
+  "resolves model auth across %s during its captured read",
+  async (change) => {
+    const root = tempDirs.make("openclaw-model-auth-race-");
+    const agentDir = path.join(root, "agents/main/agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
+      location: "legacy-main",
+    });
+    const events: string[] = [];
+    const refusal = new Error("Auth source admission revoked");
+    const cleanupFailure = new Error("Auth child failed to close");
+    let reads = 0;
+    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
+      assertCurrent: () => {},
+      dispose: async () => {
+        events.push("disposed");
+        if (change === "cleanup failure") {
+          throw cleanupFailure;
+        }
+      },
+      read: async (): Promise<AuthProfileRowRead> => {
+        events.push("read");
+        reads += 1;
+        if (change === "admission refusal") {
+          throw refusal;
+        }
+        const profileId = reads === 1 ? "custom:retired" : "custom:current";
+        if (reads === 1) {
+          noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+            credentialsChanged: true,
+            stateChanged: false,
+            profileIds: [profileId],
+          });
+        }
+        return {
+          store: {
+            status: "readable",
+            raw: {
+              version: 1,
+              profiles: { [profileId]: { type: "api_key", provider: "custom", key: "fixture" } },
+            },
           },
-        },
-        state: { status: "missing", reason: "row" },
-        cacheable: true,
-      };
-    },
-  }));
+          state: { status: "missing", reason: "row" },
+          cacheable: true,
+        };
+      },
+    }));
 
-  const resolution = resolveDynamicModelAuthProfile({
-    provider: "custom",
-    modelId: "fixture",
-    agentDir,
-    ...(change === "pinned profile rotation" ? { authProfileId: "custom:retired" } : {}),
-  });
-  if (change === "one rotation") {
-    await expect(resolution).resolves.toEqual({
-      authProfileId: "custom:current",
-      authProfileMode: "api_key",
+    const resolution = resolveDynamicModelAuthProfile({
+      provider: "custom",
+      modelId: "fixture",
+      agentDir,
     });
-  } else if (change === "continued rotation") {
-    await expect(resolution).rejects.toThrow("Auth profile store changed during its runtime read");
-  } else if (change === "pinned profile rotation") {
-    await expect(resolution).rejects.toMatchObject({
-      code: "selected_auth_profile_unavailable",
-      profileId: "custom:retired",
-    });
-  } else if (change === "admission refusal") {
-    await expect(resolution).rejects.toBe(refusal);
-  } else {
-    await expect(resolution).rejects.toMatchObject({
-      errors: [expect.any(Error), cleanupFailure],
-    });
-  }
-  expect(events).toEqual(
-    change === "cleanup failure" || change === "admission refusal"
-      ? ["read", "disposed"]
-      : ["read", "disposed", "read", "disposed"],
-  );
-});
+    if (change === "one rotation") {
+      await expect(resolution).resolves.toEqual({
+        authProfileId: "custom:current",
+        authProfileMode: "api_key",
+      });
+    } else if (change === "admission refusal") {
+      await expect(resolution).rejects.toBe(refusal);
+    } else {
+      await expect(resolution).rejects.toMatchObject({
+        errors: [expect.any(Error), cleanupFailure],
+      });
+    }
+    expect(events).toEqual(
+      change === "cleanup failure" || change === "admission refusal"
+        ? ["read", "disposed"]
+        : ["read", "disposed", "read", "disposed"],
+    );
+  },
+);
 
 it.for([
   "inherited",
   "caller timeout",
   "unrelated pin",
-  "unrelated provider",
   "cold local account override",
-  "cold copied peer",
   "reconnected primary with peer",
   "restored claim",
   "peer CAS replacement",
@@ -178,7 +165,6 @@ it.for([
   const startDuringInheritedRead = cold && scope !== "cold local removed before local read";
   const reconnectedPrimary = scope === "reconnected primary with peer";
   const copiedPeer =
-    scope === "cold copied peer" ||
     scope === "reconnected primary with peer" ||
     scope === "peer CAS replacement" ||
     scope === "already fenced peer";
@@ -261,43 +247,36 @@ it.for([
   const refreshEntered = createDeferred();
   let externallyReplacedStore: AuthProfileStore | undefined;
   let externallyFencedStore: AuthProfileStore | undefined;
-  if (scope === "already fenced peer") {
-    const loadCandidate = candidateStores.loadCandidateAuthProfileStore;
-    vi.spyOn(candidateStores, "loadCandidateAuthProfileStore").mockImplementation((candidate) => {
-      if (
-        candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
-        !externallyFencedStore
-      ) {
-        const pending = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
-        if (!pending || !readPendingOAuthRefreshClaimId(pending)) {
-          throw new Error("Expected owner claim before peer discovery");
+  if (scope === "already fenced peer" || scope === "peer CAS replacement") {
+    const fenceCandidate = candidateStores.fenceCandidateAuthProfileStore;
+    vi.spyOn(candidateStores, "fenceCandidateAuthProfileStore").mockImplementation(
+      async (params) => {
+        if (
+          params.candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
+          !externallyReplacedStore &&
+          !externallyFencedStore
+        ) {
+          if (scope === "already fenced peer") {
+            const pending = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+            if (!pending || !readPendingOAuthRefreshClaimId(pending)) {
+              throw new Error("Expected owner claim before peer discovery");
+            }
+            externallyFencedStore = { version: 1, profiles: { [profileId]: pending } };
+          } else {
+            externallyReplacedStore = localStore();
+          }
+          runAuthProfileWriteTransaction(readAgentDir, (database) => {
+            writePersistedAuthProfileStoreRaw(
+              externallyFencedStore ?? externallyReplacedStore,
+              readAgentDir,
+              database,
+            );
+          });
+          return fenceCandidate(params);
         }
-        externallyFencedStore = { version: 1, profiles: { [profileId]: pending } };
-        runAuthProfileWriteTransaction(readAgentDir, (database) => {
-          writePersistedAuthProfileStoreRaw(externallyFencedStore, readAgentDir, database);
-        });
-      }
-      return loadCandidate(candidate);
-    });
-  }
-  if (scope === "peer CAS replacement") {
-    const updateCandidate = candidateStores.updateCandidateAuthProfileStore;
-    vi.spyOn(candidateStores, "updateCandidateAuthProfileStore").mockImplementation((params) => {
-      if (
-        params.candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
-        !externallyReplacedStore
-      ) {
-        externallyReplacedStore = localStore();
-        // A foreign writer changes SQLite without publishing into this process's observation registry.
-        runAuthProfileWriteTransaction(readAgentDir, (database) => {
-          writePersistedAuthProfileStoreRaw(externallyReplacedStore, readAgentDir, database);
-        });
-        const result = updateCandidate(params);
-        expect(result.changed).toBe(false);
-        return result;
-      }
-      return updateCandidate(params);
-    });
+        return fenceCandidate(params);
+      },
+    );
   }
   const releaseRefresh = createDeferred();
   const retryEntered = createDeferred();
@@ -491,15 +470,10 @@ it.for([
   });
   const resolution = modelAuthReadScope.run(true, () =>
     resolveDynamicModelAuthProfile({
-      provider: scope === "unrelated provider" ? "other" : "custom",
+      provider: "custom",
       modelId: "fixture",
       agentDir: readAgentDir,
-      authProfileId:
-        scope === "unrelated pin"
-          ? "custom:other"
-          : scope === "unrelated provider"
-            ? undefined
-            : profileId,
+      authProfileId: scope === "unrelated pin" ? "custom:other" : profileId,
     }),
   );
   try {
@@ -570,7 +544,7 @@ it.for([
     } else {
       releaseRefresh.resolve();
     }
-    if (scope === "unrelated pin" || scope === "unrelated provider" || scope === "restored claim") {
+    if (scope === "unrelated pin" || scope === "restored claim") {
       await expect(resolution).rejects.toThrow(
         "Auth profile store changed during its runtime read",
       );

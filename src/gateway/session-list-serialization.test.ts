@@ -9,7 +9,12 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
-import { listSessions, requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  initializeSessionReadContext,
+  listSessions,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
+import * as listFilters from "./session-list-filters.js";
 import { withCurrentSessionListRows } from "./session-list-read-result.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -17,6 +22,67 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const alice = roleClient("view", "cold-alice");
+    const bob = roleClient("view", "cold-bob");
+    const rows = 130;
+    for (let index = 0; index < rows; index++) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:cold-${index}` },
+        {
+          sessionId: `cold-${index}`,
+          updatedAt: index + 1,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: alice.authenticatedUserProfile!.profileId,
+          },
+          visibility: index === rows - 1 ? "draft" : "shared",
+        },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    try {
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.withSelectionPreparation(async () => {
+        await projection.prepareSelection();
+        const filter = vi.spyOn(listFilters, "filterSessionEntries");
+        const read = (client: typeof alice, limit = 100) =>
+          listSessions({
+            context,
+            client,
+            acceptsSerializedJson: true,
+            request: { limit, rowMode: "compact" },
+          });
+        const results = await Promise.all(
+          Array.from({ length: 6 }, (_, index) => read({ ...alice, connId: `reconnect-${index}` })),
+        );
+        expect(results[0]!.sessions).toHaveLength(100);
+        expect(results[0]!.totalCount).toBe(rows);
+        expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
+        expect(filter).toHaveBeenCalledTimes(1);
+        for (const result of results) {
+          expect(result.sessions).toEqual(results[0]!.sessions);
+          expect(result.owners).toBe(results[0]!.owners);
+        }
+        const other = await read(bob);
+        expect(other.totalCount).toBe(rows - 1);
+        expect(other.sessions[0]!.sessionId).toBe("cold-128");
+        expect(other.owners).not.toBe(results[0]!.owners);
+        expect((await read(alice, 1)).sessions).toHaveLength(1);
+        expect(filter).toHaveBeenCalledTimes(3);
+      });
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
 
 it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {
   const start = 1_800_000_000_000;

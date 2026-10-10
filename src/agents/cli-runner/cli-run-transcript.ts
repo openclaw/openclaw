@@ -12,6 +12,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -45,6 +46,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -154,7 +156,7 @@ export async function persistCliAssistantTranscript(params: {
     return { owned: false };
   }
   try {
-    const idempotencyKey = `cli-assistant:${runParams.runId}`;
+    const idempotencyKey = cliAssistantItemId(runParams.runId);
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -249,6 +251,7 @@ function captureCliBlockFallbackWrite(
   expectedEntry: InternalSessionEntry,
 ) {
   const identity = { ...target };
+  const incognito = captureIncognitoSessionBinding(identity);
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const readScope = { ...identity, env } satisfies SessionTranscriptReadScope;
@@ -257,6 +260,34 @@ function captureCliBlockFallbackWrite(
     sessionKey: identity.sessionKey,
     sessionTarget: identity,
   });
+  if (incognito) {
+    const { actor } = incognito;
+    const claim = actor.sessions.captureCurrent(identity.sessionKey);
+    const cliWriter = getCliHistoryWriter({ ...identity, storePath: actor.path });
+    const { lifecycleRevision, activeWriterRunId } = expectedEntry;
+    const assertCurrent = () => {
+      assertOwnedWrite();
+      cliWriter?.assertCurrent();
+      incognito.admissionSignal?.throwIfAborted();
+      actor.assertCurrent();
+      claim.assertCurrent();
+      const current = actor.sessions.readSteering(identity.sessionKey);
+      if (
+        !current ||
+        current.sessionId !== identity.sessionId ||
+        current.lifecycleRevision !== lifecycleRevision ||
+        current.activeWriterRunId !== activeWriterRunId ||
+        (fence?.expectedLifecycleRevision !== undefined &&
+          current.lifecycleRevision !== fence.expectedLifecycleRevision) ||
+        (fence?.expectedWriterRunId !== undefined &&
+          current.activeWriterRunId !== fence.expectedWriterRunId)
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    };
+    assertCurrent();
+    return { readScope: { ...identity, storePath: actor.path }, assertCurrent };
+  }
   const { normalizedKey } = resolveSessionEntrySelection(readScope, { readOnly: true });
   let source: SessionEntryReadSource | undefined;
   const captured = loadExactSessionEntryCandidates({

@@ -497,15 +497,8 @@ export async function executeNodeHostCommand(
               invokeWaitMs: target.invokeWaitMs,
               invoke: buildNodeSystemRunInvoke({
                 target,
-                command: prepared.argv,
-                rawCommand: prepared.rawCommand,
-                cwd: prepared.cwd,
-                agentId: prepared.agentId,
-                sessionKey: prepared.sessionKey,
-                turnSourceChannel: params.turnSourceChannel,
-                turnSourceTo: params.turnSourceTo,
-                turnSourceAccountId: params.turnSourceAccountId,
-                turnSourceThreadId: params.turnSourceThreadId,
+                prepared,
+                request: params,
                 approved: approvalSource ? undefined : approvedByAsk,
                 approvalDecision: approvalSource
                   ? null
@@ -516,8 +509,6 @@ export async function executeNodeHostCommand(
                 approvalSource,
                 runId: approvalId,
                 suppressNotifyOnExit: true,
-                notifyOnExit: params.notifyOnExit,
-                systemRunPlan: prepared.plan,
               }),
               scopes: APPROVED_NODE_INVOKE_SCOPES,
               signal: params.signal,
@@ -601,21 +592,12 @@ export async function executeNodeHostCommand(
   params.signal?.throwIfAborted();
   const invoke = buildNodeSystemRunInvoke({
     target,
-    command: prepared.argv,
-    rawCommand: prepared.rawCommand,
-    cwd: prepared.cwd,
-    agentId: prepared.agentId,
-    sessionKey: prepared.sessionKey,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
+    prepared,
+    request: params,
     approved: inlineApprovalSource ? undefined : inlineApprovedByAsk,
     approvalDecision: inlineApprovalSource ? null : inlineApprovalDecision,
     approvalSource: inlineApprovalSource,
     runId: inlineApprovalId,
-    notifyOnExit: params.notifyOnExit,
-    systemRunPlan: prepared.plan,
   });
   await assertCurrentNodeGatewayPolicyAllowsDispatch({
     request: params,

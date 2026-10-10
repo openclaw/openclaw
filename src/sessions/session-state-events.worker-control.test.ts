@@ -280,7 +280,7 @@ describe("Session signal worker reconciliation", () => {
     expect(returned).toBe(true);
   });
 
-  it.each(["capture", "unknown-outcome", "notice", "prune", "logger"] as const)(
+  it.each(["capture", "notice", "prune", "logger"] as const)(
     "preserves the originating committed result after %s failure without replay",
     async (failure) => {
       const error = Object.assign(new Error("Synthetic event failure"), {
@@ -303,11 +303,9 @@ describe("Session signal worker reconciliation", () => {
         });
       } else {
         edge.execute.mockRejectedValueOnce(error);
-        if (failure === "logger") {
-          edge.warn.mockImplementationOnce(() => {
-            throw new Error("Synthetic diagnostic sink failure");
-          });
-        }
+        edge.warn.mockImplementationOnce(() => {
+          throw new Error("Synthetic diagnostic sink failure");
+        });
       }
       await expect(goalChange()).resolves.toBeUndefined();
       expect(

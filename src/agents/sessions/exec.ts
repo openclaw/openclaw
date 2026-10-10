@@ -54,15 +54,12 @@ function appendCapturedOutput(
 ): OutputCapture {
   const combined = `${current.text}${chunk}`;
   const overflowChars = Math.max(0, combined.length - maxOutputChars);
-  if (overflowChars === 0) {
-    return {
-      text: combined,
-      truncatedChars: current.truncatedChars,
-    };
-  }
-  const nextText = truncateTail
-    ? sliceUtf16Safe(combined, overflowChars)
-    : sliceUtf16Safe(combined, 0, maxOutputChars);
+  const nextText =
+    overflowChars === 0
+      ? combined
+      : truncateTail
+        ? sliceUtf16Safe(combined, overflowChars)
+        : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
     text: nextText,
     truncatedChars: current.truncatedChars + combined.length - nextText.length,
@@ -147,11 +144,19 @@ export async function execCommand(
         const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
         const truncateOutput = options?.maxOutputChars !== undefined;
         let outputLimitExceeded: "stdout" | "stderr" | undefined;
-        const markOutputLimitExceeded = (stream: "stdout" | "stderr") => {
-          if (!truncateOutput && !outputLimitExceeded) {
+        const captureOutput = (stream: "stdout" | "stderr", chunk: string): boolean => {
+          const before = captures[stream].truncatedChars;
+          captures[stream] = appendCapturedOutput(
+            captures[stream],
+            chunk,
+            maxOutputChars,
+            truncateOutput,
+          );
+          if (!truncateOutput && captures[stream].truncatedChars > before && !outputLimitExceeded) {
             outputLimitExceeded = stream;
-            killProcess();
+            return true;
           }
+          return false;
         };
         const finish = async (code: number) => {
           if (settled) {
@@ -166,20 +171,7 @@ export async function execCommand(
           }
           await termination.settle();
           for (const stream of ["stdout", "stderr"] as const) {
-            const before = captures[stream].truncatedChars;
-            captures[stream] = appendCapturedOutput(
-              captures[stream],
-              decoders[stream].flush(),
-              maxOutputChars,
-              truncateOutput,
-            );
-            if (
-              !truncateOutput &&
-              captures[stream].truncatedChars > before &&
-              !outputLimitExceeded
-            ) {
-              outputLimitExceeded = stream;
-            }
+            captureOutput(stream, decoders[stream].flush());
           }
           if (outputLimitExceeded) {
             captures.stderr = appendCapturedOutput(
@@ -208,15 +200,8 @@ export async function execCommand(
             if (!acceptingOutput) {
               return;
             }
-            const before = captures[stream].truncatedChars;
-            captures[stream] = appendCapturedOutput(
-              captures[stream],
-              decodeCapturedOutput(decoders[stream], data),
-              maxOutputChars,
-              truncateOutput,
-            );
-            if (captures[stream].truncatedChars > before) {
-              markOutputLimitExceeded(stream);
+            if (captureOutput(stream, decodeCapturedOutput(decoders[stream], data))) {
+              killProcess();
             }
           });
         }

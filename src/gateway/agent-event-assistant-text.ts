@@ -4,6 +4,7 @@ type AssistantTextInput = {
   text?: string;
   delta?: string;
   itemId?: string;
+  occurrenceId?: string;
   replace?: boolean;
   replaceable?: boolean;
   managedMediaUrls?: string[];
@@ -107,6 +108,10 @@ export function resolveAssistantTextInput(data: unknown): AssistantTextInput | u
     text: typeof record.text === "string" ? record.text : undefined,
     delta: typeof record.delta === "string" ? record.delta : undefined,
     itemId: typeof record.itemId === "string" && record.itemId ? record.itemId : undefined,
+    occurrenceId:
+      typeof record.occurrenceId === "string" && record.occurrenceId
+        ? record.occurrenceId
+        : undefined,
     replace: record.replace === true,
     replaceable: record.replaceable === true,
     ...(Array.isArray(record.managedMediaUrls)

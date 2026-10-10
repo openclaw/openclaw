@@ -405,17 +405,6 @@ async function mountPath(logPath: string, hostPath: string, guestPath: string, r
   await retryMultipassCommand(logPath, ["mount", hostPath, guestPath], retryLabel, 5);
 }
 
-async function transferLiveProviderConfig(plan: QaMultipassPlan) {
-  if (!plan.hostLiveProviderConfigPath || !plan.guestLiveProviderConfigPath) {
-    return;
-  }
-  await runMultipassCommand(plan.hostLogPath, [
-    "transfer",
-    plan.hostLiveProviderConfigPath,
-    `${plan.vmName}:${plan.guestLiveProviderConfigPath}`,
-  ]);
-}
-
 async function tryCopyGuestBootstrapLog(plan: QaMultipassPlan) {
   try {
     await runMultipassCommand(plan.hostLogPath, [
@@ -504,7 +493,13 @@ export async function runQaMultipass(
         "codex-home mount",
       );
     }
-    await transferLiveProviderConfig(plan);
+    if (plan.hostLiveProviderConfigPath && plan.guestLiveProviderConfigPath) {
+      await runMultipassCommand(plan.hostLogPath, [
+        "transfer",
+        plan.hostLiveProviderConfigPath,
+        `${plan.vmName}:${plan.guestLiveProviderConfigPath}`,
+      ]);
+    }
     await runMultipassCommand(plan.hostLogPath, [
       "transfer",
       hostTransferScriptPath,

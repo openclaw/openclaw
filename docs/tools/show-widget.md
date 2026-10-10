@@ -30,7 +30,7 @@ In Control UI sessions, a Canvas widget can also be pinned to the session dashbo
 
 For browser embedding, the wrapper document injects six small host bridges around the widget code:
 
-- A size reporter posts the rendered content height to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
+- A size reporter posts the rendered content height, including child margins and floats, to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
 - A host bridge defines a global `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. `sendPrompt(text)` is the fire-and-forget form of `openclaw.prompt.send`. Inline chat prompts retain their private message channel. Dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
 - An error reporter captures uncaught script and event-handler exceptions and unhandled promise rejections. It sends at most three distinct messages per document load, with messages capped at 500 UTF-16 units, source basenames at 200, and optional integer line and column numbers. The Control UI shows a notice and forwards one report per document and chat session per page load to the Gateway as a session wake event, with an additional shared limit of 10 reports per key per 60 seconds (up to 100 tracked keys). Reports are forwarded to the agent only for widgets rendered within ten minutes of their message. Older restored history shows the notice without waking the agent. If the session already has an active run, the event stays queued and the immediate wake retries until the session lane is free, so the model sees it on its next available turn. The wake turn runs without the originating client capabilities, so `show_widget` can be unavailable there. The report asks the model to reply with the corrected code and show it on the next turn. Native apps do not report runtime errors yet.
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables. It does this on load and again on every theme change.
@@ -243,6 +243,7 @@ elements. This works in inline previews, pinned dashboards, and native panels.
 Small embedded `data:` clips and generated `blob:` media are also supported.
 Include playback controls so the user can start playback when the browser blocks
 autoplay. The format must be supported by the browser or native web view.
+In Control UI chat and pinned dashboards, the native video controls support fullscreen.
 
 ```html
 <video controls playsinline preload="auto" src="https://example.com/video.mp4"></video>

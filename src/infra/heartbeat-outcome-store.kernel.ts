@@ -28,6 +28,7 @@ export function persistHeartbeatOutcomeInDatabase(
   if (!owner) {
     return;
   }
+  const { session_key: _sessionKey, ...replacement } = values;
   executeSqliteQuerySync(
     db,
     agentDb
@@ -35,19 +36,9 @@ export function persistHeartbeatOutcomeInDatabase(
       .values(values)
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
-          run_session_key: values.run_session_key,
-          outcome: values.outcome,
-          summary: values.summary,
-          response_reason: values.response_reason,
-          priority: values.priority,
-          next_check: values.next_check,
-          task_names_json: values.task_names_json,
-          wake_source: values.wake_source,
-          wake_reason: values.wake_reason,
-          occurred_at: values.occurred_at,
+          ...replacement,
           context_run_id: null,
           context_claimed_at: null,
-          updated_at: values.updated_at,
         }),
       ),
   );

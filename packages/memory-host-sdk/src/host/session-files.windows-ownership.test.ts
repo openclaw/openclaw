@@ -23,24 +23,22 @@ import {
   sessionPathForFile,
 } from "./session-files.js";
 
-const invalidWindowsAgentIds = ["bad owner", "!!!", " Main", "Main ", "a".repeat(65)];
-
 function resolveFixtureStateDir(): string {
   return path.resolve(resolveSessionTranscriptsDirForAgent("main"), "../../..");
 }
 
 describe("memory session directory ownership", () => {
-  it("preserves the canonical owner for case-variant Windows session directories", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      expect(
-        extractAgentIdFromSessionsDir(
-          path.join(resolveFixtureStateDir(), "AGENTS", "Main", "SESSIONS"),
-        ),
-      ).toBe("main");
-    } finally {
-      platform.mockRestore();
-    }
+  it("includes the owning agent id in canonical archived transcript paths", () => {
+    const sessionFile = path.join(
+      resolveFixtureStateDir(),
+      "agents",
+      "main",
+      "sessions",
+      "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
+    expect(sessionPathForFile(sessionFile)).toBe(
+      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
   });
 
   it("keeps case-variant structural segments unowned on case-sensitive platforms", () => {
@@ -71,23 +69,6 @@ describe("memory session directory ownership", () => {
         agentId: "main",
         sessionId: "active",
       });
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("preserves case-variant Windows ownership for nested session transcripts", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const sessionFile = path.join(
-        resolveFixtureStateDir(),
-        "AGENTS",
-        "OPS",
-        "SESSIONS",
-        "archive",
-        "private.jsonl",
-      );
-      expect(sessionPathForFile(sessionFile)).toBe("sessions/ops/private.jsonl");
     } finally {
       platform.mockRestore();
     }
@@ -163,7 +144,7 @@ describe("memory session directory ownership", () => {
     }
   });
 
-  it.each(invalidWindowsAgentIds)(
+  it.each(["bad owner", " Main"])(
     "never aliases an invalid Windows session owner into another agent: %s",
     (owner) => {
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");

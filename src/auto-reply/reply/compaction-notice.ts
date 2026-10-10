@@ -8,6 +8,7 @@ export type CompactionNoticePhase =
   | "end"
   | "incomplete"
   | "skipped"
+  | "context_bounded"
   | "memory_flush_degraded";
 
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
@@ -16,6 +17,8 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+  context_bounded:
+    "⚠️ Continuing with bounded recent context. Older history outside that window is omitted for this turn; resend any earlier details needed for your request. Full history remains saved.",
 };
 
 export function formatCompactionModelRef(provider?: string, model?: string): string {

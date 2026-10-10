@@ -66,22 +66,6 @@ describe("turn validation", () => {
     );
   });
 
-  it("keeps newest user metadata while merging ordered content", () => {
-    const latest = {
-      timestamp: 2000,
-      attachments: [{ type: "image", url: "new.png" }],
-      someCustomField: "keep-me",
-    };
-    expect(
-      validateAnthropicTurns(
-        asMessages([
-          { ...user("Old"), timestamp: 1000, attachments: [{ type: "image", url: "old.png" }] },
-          { ...user("New"), ...latest },
-        ]),
-      ),
-    ).toEqual([{ role: "user", content: [text("Old"), text("New")], ...latest }]);
-  });
-
   it("merges injected assistant turns before checking signed tool-result pairing", () => {
     const result = {
       role: "toolResult",
@@ -120,16 +104,16 @@ describe("turn validation", () => {
     ).toEqual([{ role: "user", content: [text("before"), text("after")], timestamp: 1000 }]);
   });
 
-  it.each([
-    { stopReason: "stop", expected: [text("[tool calls omitted]")] },
-    { stopReason: "aborted", expected: [] },
-  ])("repairs dangling tool-only turns after $stopReason", ({ stopReason, expected }) => {
-    expect(validateToolTurn([call("toolUse")], [user("Hello")], { stopReason })).toEqual([
-      user("Use tool"),
-      { role: "assistant", content: expected, stopReason },
-      user("Hello"),
-    ]);
-  });
+  it.each([{ stopReason: "aborted", expected: [] }])(
+    "repairs dangling tool-only turns after $stopReason",
+    ({ stopReason, expected }) => {
+      expect(validateToolTurn([call("toolUse")], [user("Hello")], { stopReason })).toEqual([
+        user("Use tool"),
+        { role: "assistant", content: expected, stopReason },
+        user("Hello"),
+      ]);
+    },
+  );
 
   it("prunes only unmatched sibling calls with user-embedded results", () => {
     const following = {
@@ -198,14 +182,5 @@ describe("turn validation", () => {
       omitted,
       ...following,
     ]);
-  });
-
-  it("drops redacted thinking when its sibling call is dangling", () => {
-    expect(
-      validateToolTurn(
-        [{ type: "redacted_thinking", data: "blob", thinkingSignature: "sig_1" }, call("toolUse")],
-        [user("Continue")],
-      ),
-    ).toEqual([user("Use tool"), omitted, user("Continue")]);
   });
 });

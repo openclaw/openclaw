@@ -250,6 +250,54 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(sockets).toHaveLength(2);
   });
 
+  it.each(["auto", "websocket", "websocket-cached"] as const)(
+    "leaves mid-stream connection expiry to transcript recovery over %s",
+    async (transport) => {
+      const { sockets, send, close } = installWebSocket((socket) => {
+        message(socket, {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "message", id: "msg_partial", role: "assistant", content: [] },
+        });
+        message(socket, {
+          type: "response.output_text.delta",
+          output_index: 0,
+          content_index: 0,
+          delta: "Already visible.",
+        });
+        message(socket, {
+          type: "error",
+          error: {
+            code: "websocket_connection_limit_reached",
+            message: "Responses websocket connection limit reached (60 minutes).",
+          },
+        });
+      });
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await run({ sessionId: "mid-stream-expiry", transport });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        content: [{ type: "text", text: "Already visible." }],
+        errorCode: "ERR_WEBSOCKET_TRANSPORT",
+        diagnostics: [
+          {
+            type: "provider_transport_failure",
+            details: { eventsEmitted: true, phase: "after_message_stream_start" },
+          },
+        ],
+      });
+      expect(result.errorMessage).toContain("Responses websocket connection limit reached");
+      expect(isTransientNetworkError({ code: result.errorCode })).toBe(true);
+      expect(sockets).toHaveLength(1);
+      expect(send).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledWith(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends the selected service tier from simple completions", async () => {
     expect(await simplePayload({ serviceTier: "priority" })).toMatchObject({
       service_tier: "priority",

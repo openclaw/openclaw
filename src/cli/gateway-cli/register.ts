@@ -116,6 +116,20 @@ function parseDaysOption(raw: unknown): number {
   return 30;
 }
 
+async function printGatewayResult(
+  json: boolean | undefined,
+  result: unknown,
+  render: (rich: boolean) => string[] | Promise<string[]>,
+): Promise<void> {
+  if (json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  for (const line of await render(isRich())) {
+    defaultRuntime.log(line);
+  }
+}
+
 async function renderCostUsageSummaryAsync(
   summary: CostUsageSummary,
   days: number,
@@ -366,14 +380,7 @@ async function writeSupportExportFromCli(opts: {
     },
     readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
   });
-  if (opts.json) {
-    defaultRuntime.writeJson(result);
-    return;
-  }
-  const rich = isRich();
-  for (const line of renderSupportExportResult(result, rich)) {
-    defaultRuntime.log(line);
-  }
+  await printGatewayResult(opts.json, result, (rich) => renderSupportExportResult(result, rich));
 }
 
 export function registerGatewayCli(program: Command) {
@@ -516,14 +523,9 @@ export function registerGatewayCli(program: Command) {
             ...(agentId ? { agentId } : {}),
             ...(opts.allAgents ? { agentScope: "all" } : {}),
           })) as CostUsageSummary;
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(summary);
-            return;
-          }
-          const rich = isRich();
-          for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
-            defaultRuntime.log(line);
-          }
+          await printGatewayResult(rpcOpts.json, summary, (rich) =>
+            renderCostUsageSummaryAsync(summary, days, rich),
+          );
         }, "Gateway usage cost failed"),
       ),
   );
@@ -637,26 +639,24 @@ export function registerGatewayCli(program: Command) {
               );
             }
             const snapshot = selectDiagnosticStabilitySnapshot(result.bundle.snapshot, query);
-            if (rpcOpts.json) {
-              defaultRuntime.writeJson({
+            await printGatewayResult(
+              rpcOpts.json,
+              {
                 path: result.path,
                 mtimeMs: result.mtimeMs,
                 bundle: {
                   ...result.bundle,
                   snapshot,
                 },
-              });
-              return;
-            }
-            const rich = isRich();
-            for (const line of renderStabilityBundleSummary({
-              bundle: result.bundle,
-              path: result.path,
-              rich,
-              snapshot,
-            })) {
-              defaultRuntime.log(line);
-            }
+              },
+              (rich) =>
+                renderStabilityBundleSummary({
+                  bundle: result.bundle,
+                  path: result.path,
+                  rich,
+                  snapshot,
+                }),
+            );
             return;
           }
 
@@ -669,14 +669,9 @@ export function registerGatewayCli(program: Command) {
               ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
             },
           );
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          for (const line of renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich)) {
-            defaultRuntime.log(line);
-          }
+          await printGatewayResult(rpcOpts.json, result, (rich) =>
+            renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich),
+          );
         }, "Gateway stability failed"),
       ),
   );

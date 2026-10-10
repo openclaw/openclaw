@@ -3,10 +3,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
 import { CodexCatalogPersistence, type CodexCatalogState } from "./session-catalog-index-state.js";
-import {
-  CodexCatalogProjections,
-  projectCodexCatalogThread,
-} from "./session-catalog-projection.js";
+import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { CodexCatalogProjections } from "./session-catalog-projection.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
 
 describe("resident catalog bounded bookkeeping", () => {
@@ -29,7 +27,16 @@ describe("resident catalog bounded bookkeeping", () => {
       path: "/" + "p".repeat(4096),
       source: "cli",
     });
-    await expect(projectCodexCatalogThread(thread)).rejects.toThrow("rollout path");
+    const index = new CodexCatalogIndex({
+      homeId: "oversized-notification-path",
+      assertCurrent: () => {},
+      readNative: async () => ({ rows: [] }),
+    });
+    try {
+      await expect(index.upsertThread(thread)).rejects.toThrow("rollout path");
+    } finally {
+      await index.close();
+    }
   });
 
   it("invalidates an overflowing persistence backlog without dropping admitted writes", async () => {

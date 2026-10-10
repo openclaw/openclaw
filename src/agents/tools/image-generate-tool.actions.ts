@@ -33,20 +33,17 @@ function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider)
       `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}${modelLimits.length > 0 ? " depending on model" : ""}`,
     );
   }
-  if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
-    caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
-  }
-  if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
-    caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
-  }
-  if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
-    caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
-  }
-  if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
-    caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
-  }
-  if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
-    caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
+  const { geometry, output } = provider.capabilities;
+  for (const [label, values, separator] of [
+    ["resolutions", geometry?.resolutions, "/"],
+    ["sizes", geometry?.sizes, ", "],
+    ["aspect ratios", geometry?.aspectRatios, ", "],
+    ["formats", output?.formats, "/"],
+    ["backgrounds", output?.backgrounds, "/"],
+  ] as const) {
+    if (values?.length) {
+      caps.push(`${label} ${values.join(separator)}`);
+    }
   }
   return caps.join("; ");
 }
@@ -60,14 +57,9 @@ export function createImageGenerateListActionResult(params: {
   authProfileStoreSource?: boolean;
 }): MediaGenerateActionResult {
   return createMediaGenerateProviderListActionResult({
+    ...params,
     kind: "image_generation",
-    providers: params.providers,
     emptyText: "No image-generation providers are registered.",
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
     listModes: (provider) => ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])],
     summarizeCapabilities: summarizeImageGenerationCapabilities,
     formatAuthHint: (provider) =>

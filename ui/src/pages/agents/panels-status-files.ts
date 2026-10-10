@@ -25,23 +25,10 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
+import { renderAgentPanelAction } from "./panel-ui.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
-type ChannelSummaryEntry = {
-  id: string;
-  label: string;
-  accounts: ChannelAccountSnapshot[];
-};
-
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot, id: string) {
-  const meta = snapshot.channelMeta?.find((entry) => entry.id === id);
-  if (meta?.label) {
-    return meta.label;
-  }
-  return snapshot.channelLabels?.[id] ?? id;
-}
-
-function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): ChannelSummaryEntry[] {
+function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null) {
   if (!snapshot) {
     return [];
   }
@@ -52,7 +39,9 @@ function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): Channel
   ]);
   return Array.from(ids, (id) => ({
     id,
-    label: resolveChannelLabel(snapshot, id),
+    label:
+      snapshot.channelMeta?.find((entry) => entry.id === id)?.label ||
+      (snapshot.channelLabels?.[id] ?? id),
     accounts: snapshot.channelAccounts?.[id] ?? [],
   }));
 }
@@ -124,9 +113,7 @@ export function renderAgentChannels(params: {
         description: html`${t("agents.channels.subtitle")}
         ${t("agents.channels.lastRefresh", { time: lastSuccessLabel })}`,
         actions: html`
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? t("common.refreshing") : t("common.refresh")}
-          </button>
+          ${renderAgentPanelAction(params.loading ? t("common.refreshing") : t("common.refresh"), params.loading, params.onRefresh)}
         `,
       },
       entries.length === 0
@@ -214,32 +201,29 @@ export function renderAgentCron(params: {
         title: t("agents.cronPanel.schedulerTitle"),
         description: t("agents.cronPanel.schedulerSubtitle"),
         actions: html`
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? t("common.refreshing") : t("common.refresh")}
-          </button>
+          ${renderAgentPanelAction(params.loading ? t("common.refreshing") : t("common.refresh"), params.loading, params.onRefresh)}
         `,
       },
       html`
-        ${renderSettingsRow({
-          title: t("common.enabled"),
-          control: renderSettingsValue(
-            params.status
-              ? params.status.enabled
-                ? t("common.yes")
-                : t("common.no")
-              : t("common.na"),
-          ),
-        })}
-        ${renderSettingsRow({
-          title: t("agents.cronPanel.jobs"),
-          control: renderSettingsValue(params.scopedTotal ?? t("common.na")),
-        })}
-        ${renderSettingsRow({
-          title: t("agents.cronPanel.nextWake"),
-          control: renderSettingsValue(
-            formatNextRun(params.status?.enabled === false ? null : params.scopedNextWakeAtMs),
-          ),
-        })}
+        ${(
+          [
+            [
+              t("common.enabled"),
+              params.status
+                ? params.status.enabled
+                  ? t("common.yes")
+                  : t("common.no")
+                : t("common.na"),
+            ],
+            [t("agents.cronPanel.jobs"), params.scopedTotal ?? t("common.na")],
+            [
+              t("agents.cronPanel.nextWake"),
+              formatNextRun(params.status?.enabled === false ? null : params.scopedNextWakeAtMs),
+            ],
+          ] as const
+        ).map(([title, value]) =>
+          renderSettingsRow({ title, control: renderSettingsValue(value) }),
+        )}
       `,
     )}
     ${renderSettingsSection(
@@ -273,13 +257,7 @@ export function renderAgentCron(params: {
                   >
                     ${t("agents.cronPanel.edit")}
                   </a>
-                  <button
-                    class="btn btn--sm"
-                    ?disabled=${!params.canRunNow}
-                    @click=${() => params.onRunNow(job.id)}
-                  >
-                    ${t("agents.cronPanel.runNow")}
-                  </button>
+                  ${renderAgentPanelAction(t("agents.cronPanel.runNow"), !params.canRunNow, () => params.onRunNow(job.id))}
                 `,
               });
             })}

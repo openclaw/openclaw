@@ -134,42 +134,32 @@ function applyNumericInputState(
   }
 }
 
-function createScalarValueCommitter(
-  { value, path, onPatch }: Pick<ConfigNodeRenderParams, "value" | "path" | "onPatch">,
-  renderedValue: string,
-  revalidate: (target: HTMLInputElement) => void,
-) {
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  return (target: HTMLInputElement, candidate: unknown, skipUnchanged = false): boolean => {
-    if (skipUnchanged && configValuesEqual(patchedValue, candidate)) {
-      return true;
-    }
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
-    }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
-  };
-}
-
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
 ): TemplateResult {
-  const { schema, value, path, hints, disabled, inputType } = params;
+  return renderScalarInput(params, false);
+}
+
+export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResult {
+  return renderScalarInput({ ...params, inputType: "number" }, true);
+}
+
+function renderScalarInput(
+  params: ConfigNodeRenderParams & { inputType: "text" | "number" },
+  stepped: boolean,
+): TemplateResult {
+  const { schema, value, path, hints, disabled, inputType, onPatch } = params;
   const hint = hintForPath(path, hints);
   const field = resolveConfigFieldPresentation(params);
   const { label, helpId } = field;
   const errorId = configFieldId(path, "scalar-error");
-  const sensitiveState = getSensitiveRenderState(params);
-  const isStructuredSecretRef = isSecretRefObject(value);
+  const sensitiveState = stepped ? undefined : getSensitiveRenderState(params);
+  const isStructuredSecretRef = !stepped && isSecretRefObject(value);
   const rawAvailable = params.rawAvailable ?? true;
-  const masked = sensitiveState.isMasked;
+  const masked = sensitiveState?.isMasked;
   const effectiveRedacted =
-    (sensitiveState.isRedacted && !masked) ||
-    sensitiveState.sentinelRedacted ||
+    (sensitiveState?.isRedacted && !masked) ||
+    sensitiveState?.sentinelRedacted ||
     isStructuredSecretRef;
   const placeholder = effectiveRedacted
     ? isStructuredSecretRef
@@ -182,20 +172,22 @@ export function renderTextInput(
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-        : ""));
+        : stepped
+          ? nothing
+          : ""));
   const displayValue = effectiveRedacted
     ? ""
-    : isRecord(value)
+    : !stepped && isRecord(value)
       ? jsonValue(value)
       : (value ?? (params.compact ? schema.default : undefined) ?? "");
   const effectiveValue = value !== undefined ? value : schema.default;
   const initialBranch = scalarValueBranch(effectiveValue);
   const effectiveInputType = masked
     ? "password"
-    : sensitiveState.isSensitive && !effectiveRedacted
+    : sensitiveState?.isSensitive && !effectiveRedacted
       ? "text"
       : inputType;
-  const isPhonePresentation = hint?.presentation === "phone-number";
+  const isPhonePresentation = !stepped && hint?.presentation === "phone-number";
   const phonePresentation =
     isPhonePresentation && !effectiveRedacted && !masked && typeof value === "string"
       ? formatInternationalPhoneNumberForDisplay(value, i18n.getLocale())
@@ -207,12 +199,14 @@ export function renderTextInput(
     "scalar-identity",
   );
   const renderedValue = formatConfigValueText(displayValue);
-  const presentationIdentity = [
-    effectiveRedacted ? "redacted" : "visible",
-    effectiveInputType,
-    isPhonePresentation ? "phone" : "plain",
-    isStructuredSecretRef ? (rawAvailable ? "secret-raw" : "secret-file") : "scalar",
-  ].join(":");
+  const presentationIdentity = stepped
+    ? "number"
+    : [
+        effectiveRedacted ? "redacted" : "visible",
+        effectiveInputType,
+        isPhonePresentation ? "phone" : "plain",
+        isStructuredSecretRef ? (rawAvailable ? "secret-raw" : "secret-file") : "scalar",
+      ].join(":");
   const textInputState = (raw: string, editHint: ScalarEditHint) => {
     const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
     const valid = isSupportedConfigValueValid(schema, candidate);
@@ -223,178 +217,72 @@ export function renderTextInput(
     };
   };
   const revalidate = (target: HTMLInputElement) => {
-    if (effectiveRedacted) {
-      setControlValidity(target, "");
-      return;
-    }
-    if (inputType === "number") {
-      setControlValidity(target, resolveNumericInputState(target, params).message);
-      return;
-    }
     setControlValidity(
       target,
-      textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
+      effectiveRedacted
+        ? ""
+        : inputType === "number"
+          ? resolveNumericInputState(target, params).message
+          : textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
-  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
+  const commitScalarValue = (
+    target: HTMLInputElement,
+    candidate: unknown,
+    skipUnchanged = false,
+  ) => {
+    if (skipUnchanged && configValuesEqual(patchedValue, candidate)) {
+      return true;
+    }
+    if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
+      return true;
+    }
+    target.value = renderedValue;
+    revalidate(target);
+    return false;
+  };
 
-  const commitChange = (target: HTMLInputElement) => {
+  const commitChange = (target: HTMLInputElement, allowClear = true) => {
     if (effectiveRedacted) {
       return;
     }
     // Change follows input on blur; only a newly normalized value needs another patch.
     const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
     if (inputType === "number") {
-      applyNumericInputState(target, resolveNumericInputState(target, params), commit);
+      const state = resolveNumericInputState(target, params);
+      if (stepped && state.parsed !== undefined) {
+        state.parsed = normalizeNumericValue(state.parsed, schema);
+        state.message = numericConstraintMessage(state.parsed, schema);
+        target.value = formatConfigValueText(state.parsed);
+      }
+      if (setControlValidity(target, state.message) && (allowClear || state.parsed !== undefined)) {
+        commit(state.parsed);
+      }
       return;
     }
     const editHint = beginScalarEdit(target, initialBranch);
     const raw = target.value;
     const rawState = textInputState(raw, editHint);
-    if (!rawState.message && !isPhonePresentation) {
-      setControlValidity(target, "");
-      commit(rawState.candidate);
-      finishScalarEdit(target);
-      return;
+    let nextState = rawState;
+    if (rawState.message || isPhonePresentation) {
+      const normalized = raw.trim();
+      nextState = textInputState(normalized, editHint);
+      if (!nextState.message) {
+        target.value = normalized;
+      }
     }
-    const normalized = raw.trim();
-    const normalizedState = textInputState(normalized, editHint);
-    if (normalizedState.message) {
-      setControlValidity(target, rawState.message);
-      finishScalarEdit(target);
-      return;
+    setControlValidity(target, nextState.message ? rawState.message : "");
+    if (!nextState.message) {
+      commit(nextState.candidate);
     }
-    target.value = normalized;
-    setControlValidity(target, "");
-    commit(normalizedState.candidate);
     finishScalarEdit(target);
   };
 
-  const inputControl = html`
-    <input
-      ${ref((element) => {
-        syncScalarEditIdentity(element, controlPathKey, presentationIdentity);
-        syncScalarInputIdentity(
-          element,
-          controlIdentity,
-          sourceIdentity,
-          controlPathKey,
-          presentationIdentity,
-          renderedValue,
-          revalidate,
-        );
-      })}
-      type=${effectiveInputType}
-      class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
-      aria-label=${label}
-      aria-describedby=${[helpId, errorId].filter(Boolean).join(" ")}
-      aria-invalid="false"
-      placeholder=${placeholder}
-      .value=${renderedValue}
-      ?disabled=${disabled}
-      ?readonly=${effectiveRedacted}
-      @click=${() => {
-        if (
-          !masked &&
-          sensitiveState.isRedacted &&
-          !isStructuredSecretRef &&
-          params.onToggleSensitivePath
-        ) {
-          params.onToggleSensitivePath(path);
-        }
-      }}
-      @input=${(event: Event) => {
-        if (effectiveRedacted) {
-          return;
-        }
-        const target = event.target as HTMLInputElement;
-        if (params.commitOnBlur) {
-          beginScalarEdit(target, initialBranch);
-          revalidate(target);
-          return;
-        }
-        if (inputType === "number") {
-          applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
-            commitScalarValue(target, candidate),
-          );
-          return;
-        }
-        const state = textInputState(target.value, beginScalarEdit(target, initialBranch));
-        if (setControlValidity(target, state.message)) {
-          commitScalarValue(target, state.candidate);
-        }
-      }}
-      @change=${(event: Event) => {
-        if (!params.commitOnBlur && inputType !== "number") {
-          // SAFETY: Lit binds this handler directly to the native input.
-          commitChange(event.target as HTMLInputElement);
-        }
-      }}
-      @blur=${(event: FocusEvent) => {
-        // SAFETY: Lit binds this handler directly to the native input.
-        const target = event.target as HTMLInputElement;
-        if (params.commitOnBlur && target.value !== renderedValue) {
-          commitChange(target);
-        }
-        finishScalarEdit(target);
-      }}
-    />
-  `;
-  const revealToggle = isStructuredSecretRef
-    ? nothing
-    : renderSensitiveToggleButton({
-        path,
-        state: sensitiveState,
-        disabled,
-        onToggleSensitivePath: params.onToggleSensitivePath,
-      });
-  const wrappedInput = wrapSensitiveControl(
-    inputControl,
-    revealToggle,
-    sensitiveState.isSensitiveField && params.onToggleSensitivePath !== undefined,
-  );
-  const presentedInput = isPhonePresentation
-    ? html`
-        <span class="settings-phone-presentation">
-          ${wrappedInput}
-          ${
-            phonePresentation
-              ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
-              : nothing
-          }
-        </span>
-      `
-    : wrappedInput;
-  return renderFieldRow({
-    ...field,
-    defaultDescription:
-      effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
-    control: presentedInput,
-    errorId,
-  });
-}
-
-export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch } = params;
-  const field = resolveConfigFieldPresentation(params);
-  const { label, helpId } = field;
-  const errorId = configFieldId(path, "scalar-error");
-  const displayValue = value ?? (params.compact ? schema.default : undefined) ?? "";
-  const effectiveValue = value !== undefined ? value : schema.default;
-  const constraints = numericInputConstraints(schema);
-  const numericStep = typeof constraints.step === "number" ? constraints.step : 1;
-  const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
-  const sourceIdentity = params.sourceIdentity ?? value;
-  const controlPathKey = configFieldId(
-    path.filter((segment) => typeof segment === "string"),
-    "scalar-identity",
-  );
-  const renderedValue = formatConfigValueText(displayValue);
-  const revalidate = (target: HTMLInputElement) => {
-    setControlValidity(target, resolveNumericInputState(target, params).message);
-  };
-  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
-
+  const constraints = stepped ? numericInputConstraints(schema) : undefined;
+  const numericStep = typeof constraints?.step === "number" ? constraints.step : 1;
   // Touch devices and some browsers hide native number spinners; keep explicit
   // adjust buttons so schema-sized edits stay possible without typing.
   const step = (direction: -1 | 1) => {
@@ -420,99 +308,135 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         >
           ${direction < 0 ? "−" : "+"}
         </button>`;
-  const control = html`
-    ${renderStepButton(-1)}
+
+  const inputControl = html`
     <input
-      ${ref((element) =>
+      ${ref((element) => {
+        if (!stepped) {
+          syncScalarEditIdentity(element, controlPathKey, presentationIdentity);
+        }
         syncScalarInputIdentity(
           element,
           controlIdentity,
           sourceIdentity,
           controlPathKey,
-          "number",
+          presentationIdentity,
           renderedValue,
           revalidate,
-        ),
-      )}
-      type="number"
-      class="settings-input"
+        );
+      })}
+      type=${effectiveInputType}
+      class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
       aria-label=${label}
       aria-describedby=${[helpId, errorId].filter(Boolean).join(" ")}
       aria-invalid="false"
-      placeholder=${
-        hintForPath(path, hints)?.placeholder ??
-        (schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : nothing)
-      }
-      min=${constraints.min ?? nothing}
-      max=${constraints.max ?? nothing}
-      step=${constraints.step}
+      placeholder=${placeholder}
+      min=${constraints?.min ?? nothing}
+      max=${constraints?.max ?? nothing}
+      step=${constraints?.step ?? nothing}
       .value=${renderedValue}
       ?disabled=${disabled}
-      @keydown=${(event: KeyboardEvent) => {
-        // Compact inputs display the default as their value, so native stepping
-        // owns the current draft; only placeholder defaults need manual stepping.
+      ?readonly=${effectiveRedacted}
+      @click=${() => {
         if (
-          !params.compact &&
-          value === undefined &&
-          effectiveValue !== undefined &&
-          (event.key === "ArrowUp" || event.key === "ArrowDown")
+          !masked &&
+          sensitiveState?.isRedacted &&
+          !isStructuredSecretRef &&
+          params.onToggleSensitivePath
         ) {
-          event.preventDefault();
-          step(event.key === "ArrowUp" ? 1 : -1);
+          params.onToggleSensitivePath(path);
         }
       }}
+      @keydown=${
+        stepped
+          ? (event: KeyboardEvent) => {
+              // Placeholder defaults need manual stepping; compact inputs expose their effective value.
+              if (
+                !params.compact &&
+                value === undefined &&
+                effectiveValue !== undefined &&
+                (event.key === "ArrowUp" || event.key === "ArrowDown")
+              ) {
+                event.preventDefault();
+                step(event.key === "ArrowUp" ? 1 : -1);
+              }
+            }
+          : undefined
+      }
       @input=${(event: Event) => {
+        if (effectiveRedacted) {
+          return;
+        }
         const target = event.target as HTMLInputElement;
         if (params.commitOnBlur) {
+          if (!stepped) {
+            beginScalarEdit(target, initialBranch);
+          }
           revalidate(target);
           return;
         }
-        applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
-          commitScalarValue(target, candidate),
-        );
+        if (inputType === "number") {
+          applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+            commitScalarValue(target, candidate),
+          );
+          return;
+        }
+        const state = textInputState(target.value, beginScalarEdit(target, initialBranch));
+        if (setControlValidity(target, state.message)) {
+          commitScalarValue(target, state.candidate);
+        }
       }}
       @change=${(event: Event) => {
-        if (params.commitOnBlur) {
-          return;
-        }
-        const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, params);
-        if (state.parsed === undefined) {
-          setControlValidity(target, state.message);
-          return;
-        }
-        const normalized = normalizeNumericValue(state.parsed, schema);
-        target.value = formatConfigValueText(normalized);
-        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
-          commitScalarValue(target, normalized, true);
+        if (!params.commitOnBlur && (stepped || inputType !== "number")) {
+          // SAFETY: Lit binds this handler directly to the native input.
+          commitChange(event.target as HTMLInputElement, !stepped);
         }
       }}
       @blur=${(event: FocusEvent) => {
-        // SAFETY: Lit binds this handler directly to the native number input.
+        // SAFETY: Lit binds this handler directly to the native input.
         const target = event.target as HTMLInputElement;
-        if (!params.commitOnBlur || target.value === renderedValue) {
-          return;
+        if (params.commitOnBlur && target.value !== renderedValue) {
+          commitChange(target);
         }
-        const state = resolveNumericInputState(target, params);
-        if (state.parsed !== undefined) {
-          state.parsed = normalizeNumericValue(state.parsed, schema);
-          state.message = numericConstraintMessage(state.parsed, schema);
-          target.value = formatConfigValueText(state.parsed);
+        if (!stepped) {
+          finishScalarEdit(target);
         }
-        applyNumericInputState(target, state, (candidate) =>
-          commitScalarValue(target, candidate, true),
-        );
       }}
     />
-    ${renderStepButton(1)}
   `;
-
+  const revealToggle =
+    !sensitiveState || isStructuredSecretRef
+      ? nothing
+      : renderSensitiveToggleButton({
+          path,
+          state: sensitiveState,
+          disabled,
+          onToggleSensitivePath: params.onToggleSensitivePath,
+        });
+  const wrappedInput = wrapSensitiveControl(
+    inputControl,
+    revealToggle,
+    sensitiveState?.isSensitiveField && params.onToggleSensitivePath !== undefined,
+  );
+  const presentedInput = isPhonePresentation
+    ? html`
+        <span class="settings-phone-presentation">
+          ${wrappedInput}
+          ${
+            phonePresentation
+              ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
+              : nothing
+          }
+        </span>
+      `
+    : wrappedInput;
   return renderFieldRow({
     ...field,
-    defaultDescription: renderSchemaDefaultDescription(schema, value),
-    control,
+    defaultDescription:
+      effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
+    control: stepped
+      ? html`${renderStepButton(-1)}${inputControl}${renderStepButton(1)}`
+      : presentedInput,
     errorId,
   });
 }

@@ -122,46 +122,36 @@ export async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
-  const candidateForEntry = ({
-    agentId,
-    entry,
-    sessionKey,
-  }: ReturnType<typeof listSessionCatalogEntries>[number]): AdoptionCandidate | undefined => {
-    const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
-    const marker = readCodexSupervisionMarker(entry);
-    if (
-      !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
-      !marker ||
-      entry.initializationPending === true ||
-      entry.agentHarnessId !== "codex" ||
-      entry.modelSelectionLocked !== true
-    ) {
-      return undefined;
-    }
-    const sessionId = entry.sessionId?.trim();
-    if (!sessionId) {
-      return undefined;
-    }
-    return {
-      agentId,
-      sessionKey,
-      sessionKeyRest,
-      sessionId,
-      marker,
-      identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-    };
-  };
   function* candidates() {
-    for (const entry of listSessionCatalogEntries({
+    for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       config: params.config ?? {},
       runtime: params.runtime,
       sessionEntries: params.sessionEntries,
     })) {
-      const candidate = candidateForEntry(entry);
-      if (candidate) {
-        yield candidate;
+      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
+      const marker = readCodexSupervisionMarker(entry);
+      if (
+        !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
+        !marker ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true
+      ) {
+        continue;
       }
+      const sessionId = entry.sessionId?.trim();
+      if (!sessionId) {
+        continue;
+      }
+      yield {
+        agentId,
+        sessionKey,
+        sessionKeyRest,
+        sessionId,
+        marker,
+        identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+      };
     }
   }
   const collect = async (

@@ -19,6 +19,8 @@ type WorkerConversation = {
 /** A conversation never outlives the pool task or crosses worker generations. */
 export type WorkerTaskChannel = {
   consumeInput: () => void;
+  /** One-way observations do not acknowledge input or participate in request/reply ownership. */
+  notify: (value: unknown) => void;
   request: (
     value: unknown,
     transferList?: readonly Transferable[],
@@ -182,6 +184,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         : undefined;
       const channel: WorkerTaskChannel | undefined = message.interactive
         ? {
+            notify: (value) => {
+              control.throwIfCancelled();
+              port.postMessage({ status: "notification", taskId: task.taskId, value });
+            },
             consumeInput: () =>
               port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
             request: (value, transferList) => {

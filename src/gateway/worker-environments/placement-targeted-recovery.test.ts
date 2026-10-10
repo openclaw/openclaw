@@ -152,7 +152,7 @@ describe("targeted worker placement recovery", () => {
       },
     });
     const active = await harness.service.dispatch(REQUEST);
-    placements.beginPlacementMove({
+    await placements.beginPlacementMove({
       sessionId: active.sessionId,
       source: {
         generation: active.generation,
@@ -196,7 +196,7 @@ describe("targeted worker placement recovery", () => {
         ownerEpoch: sourceIdentity.ownerEpoch,
         executionMode: "remote-exec",
       });
-      const begun = placements.beginPlacementMove({
+      const begun = await placements.beginPlacementMove({
         sessionId: active.sessionId,
         source: {
           generation: active.generation,
@@ -211,7 +211,7 @@ describe("targeted worker placement recovery", () => {
         ownerEpoch: sourceIdentity.ownerEpoch,
         expectedGeneration: begun.placement.generation,
       });
-      placements.completePlacementMoveSourceToLocal({
+      await placements.completePlacementMoveSourceToLocal({
         operationId: begun.intent.operationId,
         sessionId: active.sessionId,
         expectedGeneration: reconciling.generation,

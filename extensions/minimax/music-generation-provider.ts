@@ -13,18 +13,15 @@ import {
   createProviderOperationTimeoutError,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertMinimaxBaseResp,
-  DEFAULT_MINIMAX_MEDIA_BASE_URL,
   normalizeMinimaxHexAudio,
   fetchMinimaxResponse,
-  resolveMinimaxMediaBaseUrl,
+  resolveMinimaxMediaRequestConfig,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
 } from "./media-provider-runtime.js";
@@ -207,7 +204,9 @@ async function readStreamingTrack(
   };
 }
 
-function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider {
+export function buildMinimaxMusicGenerationProvider(
+  providerId = "minimax",
+): MusicGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
@@ -254,18 +253,11 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         label: "MiniMax music generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMediaBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
-          provider: providerId,
+        resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          apiKey: auth.apiKey,
           capability: "audio",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg.models?.providers?.[providerId]?.request,
-          ),
         });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const jsonHeaders = new Headers(headers);
@@ -371,12 +363,4 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       }
     },
   };
-}
-
-export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
-  return buildMinimaxMusicProvider("minimax");
-}
-
-export function buildMinimaxPortalMusicGenerationProvider(): MusicGenerationProvider {
-  return buildMinimaxMusicProvider("minimax-portal");
 }

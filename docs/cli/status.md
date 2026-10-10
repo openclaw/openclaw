@@ -38,7 +38,9 @@ Status starts one monotonic check deadline when the command begins. Local readin
 
 When no matching Gateway service or live foreground owner exists and its port is
 free, status checks directly instead of waiting for a Gateway startup. Local-only
-agent environments therefore report an unavailable Gateway promptly. Observed startup
+agent environments therefore report an unavailable Gateway promptly. A listener positively
+identified as another process reports a port conflict with diagnostic guidance instead
+of waiting for the readiness budget. Unknown listener attribution keeps startup grace. Observed startup
 migrations retain startup grace across the handoff to Gateway ownership; unverifiable
 ownership also retains that grace. Lock and native process inspection consume the
 same remaining check allowance.
@@ -69,6 +71,9 @@ Gateway runtime is stale after Node upgrade: child workers are using <path>, whi
 ```
 
 The check does not restart the Gateway. Run `openclaw gateway restart` after the warning.
+Exec and stdio MCP command relays can use the stable Homebrew Node path when the
+old executable is gone. Workers that require the Gateway's exact runtime still
+need a restart; a failed supervisor or broker launch reports the same warning.
 
 `--deep` and `--all` also show delivery queue warnings for dead-lettered messages
 and pressured inbound lanes. These warnings include pending, claimed, and blocked

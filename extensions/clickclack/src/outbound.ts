@@ -137,20 +137,15 @@ function createOutboundContext(params: {
   assertDirectAdapterHandoff?: () => void;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const assertDirectAdapterHandoff = params.assertDirectAdapterHandoff;
   const client = createClickClackClient({
     baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
-    beforeRequest: assertDirectAdapterHandoff,
+    beforeRequest: params.assertDirectAdapterHandoff,
   });
   return { account, client };
 }
 
-/**
- * Sends visible text to a normalized ClickClack target and returns the created
- * message id, or undefined when sanitization removes all content.
- */
 export async function sendClickClackText(params: {
   cfg: CoreConfig;
   accountId?: string | null;

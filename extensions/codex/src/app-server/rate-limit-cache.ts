@@ -89,20 +89,13 @@ export function readRecentCodexRateLimits(
 
 function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject): JsonObject {
   const currentEnvelope = isJsonObject(current) ? current : undefined;
-  const currentPrimary =
-    currentEnvelope && isJsonObject(currentEnvelope.rateLimits)
-      ? currentEnvelope.rateLimits
-      : undefined;
-  const currentByLimitId =
-    currentEnvelope && isJsonObject(currentEnvelope.rateLimitsByLimitId)
-      ? currentEnvelope.rateLimitsByLimitId
-      : undefined;
+  const currentPrimary = readObjectField(currentEnvelope, "rateLimits");
+  const currentByLimitId = readObjectField(currentEnvelope, "rateLimitsByLimitId");
   const limitId = readLimitId(update);
   const currentPrimaryLimitId = currentPrimary ? readLimitId(currentPrimary) : undefined;
   const currentForLimit =
-    (currentByLimitId && isJsonObject(currentByLimitId[limitId])
-      ? currentByLimitId[limitId]
-      : undefined) ?? (currentPrimaryLimitId === limitId ? currentPrimary : undefined);
+    readObjectField(currentByLimitId, limitId) ??
+    (currentPrimaryLimitId === limitId ? currentPrimary : undefined);
   const merged: JsonObject = { ...update, limitId };
   // Rolling updates serialize unavailable account metadata as null. Preserve
   // only those sparse fields; window and reached-state nulls remain authoritative.
@@ -153,4 +146,8 @@ function readRateLimitIds(value: JsonValue): string[] {
 function readLimitId(snapshot: JsonObject): string {
   const value = snapshot.limitId;
   return typeof value === "string" && value.trim() ? value.trim() : "codex";
+}
+
+function readObjectField(value: JsonObject | undefined, key: string): JsonObject | undefined {
+  return value && isJsonObject(value[key]) ? value[key] : undefined;
 }

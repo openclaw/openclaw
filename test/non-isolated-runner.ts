@@ -282,9 +282,7 @@ type EmbeddedRunStateForTest = {
   modelSwitchRequests?: Map<unknown, unknown>;
 };
 
-type ReplyRunWaiter = {
-  finish?: (ended: boolean) => void;
-};
+type ReplyRunWaiter = (ended: boolean) => void;
 
 type ReplyRunOperation = {
   abortForRestart?: () => void;
@@ -292,7 +290,6 @@ type ReplyRunOperation = {
 
 type ReplyRunStateForTest = {
   activeRunsByKey?: Map<unknown, ReplyRunOperation>;
-  activeSessionIdsByKey?: Map<unknown, unknown>;
   activeKeysBySessionId?: Map<unknown, unknown>;
   waitKeysBySessionId?: Map<unknown, unknown>;
   waitersByKey?: Map<unknown, Set<ReplyRunWaiter>>;
@@ -358,7 +355,7 @@ function resetOpenClawGlobalRunState(): void {
   for (const waiters of replyRunState?.waitersByKey?.values() ?? []) {
     for (const waiter of waiters) {
       cleanupActions.push(() => {
-        waiter.finish?.(false);
+        waiter(false);
       });
     }
   }
@@ -380,7 +377,6 @@ function resetOpenClawGlobalRunState(): void {
   embeddedRunState?.modelSwitchRequests?.clear();
 
   replyRunState?.activeRunsByKey?.clear();
-  replyRunState?.activeSessionIdsByKey?.clear();
   replyRunState?.activeKeysBySessionId?.clear();
   replyRunState?.waitKeysBySessionId?.clear();
   replyRunState?.waitersByKey?.clear();

@@ -81,7 +81,7 @@ extension View {
                 self
                     .font(OpenClawType.subheadSemiBold)
                     .buttonStyle(.glassProminent)
-                    .tint(tint ?? OpenClawBrand.accent)
+                    .tint(tint ?? OpenClawBrand.accentFill)
             } else {
                 self
                     .font(OpenClawType.subheadSemiBold)
@@ -92,7 +92,7 @@ extension View {
             self
                 .font(OpenClawType.subheadSemiBold)
                 .buttonStyle(.borderedProminent)
-                .tint(tint ?? OpenClawBrand.accent)
+                .tint(tint ?? OpenClawBrand.accentFill)
         } else {
             self
                 .font(OpenClawType.subheadSemiBold)
@@ -405,7 +405,7 @@ struct OpenClawToggleIndicator: View {
 
     var body: some View {
         Capsule()
-            .fill(self.isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
+            .fill(self.isOn ? OpenClawBrand.accentFill : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: self.isOn ? .trailing : .leading) {
                 Circle()
@@ -476,36 +476,26 @@ struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)
+        let presentation = GatewayStatusBuilder.build(appModel: self.appModel).statusPresentation
+        OpenClawStatusBadge(label: .verbatim(presentation.title), tone: presentation.tone)
             .accessibilityLabel(
                 String(
                     format: String(localized: "Gateway %@"),
-                    self.title))
+                    presentation.title))
     }
+}
 
-    private var title: String {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
+extension GatewayDisplayState {
+    var statusPresentation: (title: String, tone: OpenClawStatusTone) {
+        switch self {
         case .connected:
-            String(localized: "Online")
+            (String(localized: "Online"), .ok)
         case .connecting:
-            String(localized: "Connecting")
+            (String(localized: "Connecting"), .accent)
         case .error:
-            String(localized: "Attention")
+            (String(localized: "Attention"), .warn)
         case .disconnected:
-            String(localized: "Offline")
-        }
-    }
-
-    private var tone: OpenClawStatusTone {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected:
-            .ok
-        case .connecting:
-            .accent
-        case .error:
-            .warn
-        case .disconnected:
-            .muted
+            (String(localized: "Offline"), .muted)
         }
     }
 }

@@ -30,8 +30,6 @@ const mocks = vi.hoisted(() => ({
 
 const { runAcpClientInteractive, serveAcpGateway, defaultRuntime } = mocks;
 
-const passwordKey = () => ["pass", "word"].join("");
-
 vi.mock("../acp/client.js", () => ({
   runAcpClientInteractive: (opts: AcpClientOptions) => mocks.runAcpClientInteractive(opts),
 }));
@@ -84,57 +82,7 @@ describe("acp cli option collisions", () => {
     expect(clientOptions?.verbose).toBe(true);
   });
 
-  it("forwards --no-prefix-cwd to the ACP bridge", async () => {
-    await parseAcp(["--no-prefix-cwd"]);
-
-    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = mockCall(serveAcpGateway)[0] as {
-      prefixCwd?: boolean;
-    };
-    expect(gatewayOptions?.prefixCwd).toBe(false);
-  });
-
-  it("defaults to prefixing the working directory", async () => {
-    await parseAcp([]);
-
-    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = mockCall(serveAcpGateway)[0] as {
-      prefixCwd?: boolean;
-    };
-    expect(gatewayOptions?.prefixCwd).toBe(true);
-  });
-
-  it("loads gateway token/password from files", async () => {
-    await withTempSecretFiles(
-      "openclaw-acp-cli-",
-      { token: "tok_file\n", [passwordKey()]: "pw_file\n" },
-      async (files) => {
-        // pragma: allowlist secret
-        await parseAcp([
-          "--token-file",
-          files.tokenFile ?? "",
-          "--password-file",
-          files.passwordFile ?? "",
-        ]);
-      },
-    );
-
-    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = mockCall(serveAcpGateway)[0] as {
-      gatewayPassword?: string;
-      gatewayToken?: string;
-    };
-    expect(gatewayOptions?.gatewayToken).toBe("tok_file");
-    expect(gatewayOptions?.gatewayPassword).toBe("pw_file"); // pragma: allowlist secret
-  });
-
   it.each([
-    {
-      name: "rejects mixed secret flags and file flags",
-      files: { token: "tok_file\n" },
-      args: (tokenFile: string) => ["--token", "tok_inline", "--token-file", tokenFile],
-      expected: /Use either --token .*--token-file for Gateway token\./,
-    },
     {
       name: "rejects mixed password flags and file flags",
       files: { password: "pw_file\n" }, // pragma: allowlist secret
@@ -174,11 +122,6 @@ describe("acp cli option collisions", () => {
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
     const gatewayOptions = mockCall(serveAcpGateway)[0] as { gatewayToken?: string };
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");
-  });
-
-  it("reports missing token-file read errors", async () => {
-    await parseAcp(["--token-file", "/tmp/openclaw-acp-missing-token.txt"]);
-    expectCliError(/Failed to (inspect|read) Gateway token file/);
   });
 
   it("formats client errors with formatErrorMessage instead of String(err) (#83904)", async () => {

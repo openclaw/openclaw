@@ -83,6 +83,7 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
           enabled: true,
           capacity: { total: 2, available: 2 },
           ...(capturedExecPolicy ? { capturedExecPolicy: true } : {}),
+          promptContext: 1,
         },
       },
       client,

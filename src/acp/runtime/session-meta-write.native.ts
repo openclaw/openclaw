@@ -145,7 +145,7 @@ export async function upsertAcpSessionMetaNative(params: {
           env: params.env,
           now: updatedAt,
         });
-        applyAcpSessionMutation(database.db, {
+        const facts = applyAcpSessionMutation(database.db, {
           agentId: storeEntry.agentId,
           storageSessionKey,
           sessionKey: publishedSessionKey,
@@ -154,7 +154,13 @@ export async function upsertAcpSessionMetaNative(params: {
           decision,
         });
         sessionChanges.emit(
-          { agentId: storeEntry.agentId, sessionKey: publishedSessionKey },
+          {
+            agentId: storeEntry.agentId,
+            sessionKey: publishedSessionKey,
+            storePath,
+            scope: "acp",
+            facts,
+          },
           database.db,
         );
       },

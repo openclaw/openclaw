@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import { loadSelectedProviderAccountCatalog } from "../src/agents/models-config.providers.catalog-context.js";
 import { createPreparedAccountCatalogAccess } from "../src/agents/prepared-model-runtime.catalog-auth.js";
-import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createModelAccountConnectService } from "../src/gateway/model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../src/gateway/server-chat-metadata-lifecycle.js";
@@ -252,7 +252,8 @@ describe("Gateway automatic account dispatch authority", () => {
           };
           await state.writeConfig(cfg);
           if (saved) {
-            await upsertSessionEntryCore(
+            // Setup must not launch maintenance that races the later foreign SQLite writer.
+            replaceSessionEntrySync(
               { agentId: "main", sessionKey },
               {
                 sessionId: "catalog-authority-saved",
@@ -379,6 +380,7 @@ describe("Gateway automatic account dispatch authority", () => {
             request("models.list", {
               agentId: "main",
               view: "configured",
+              refresh: true,
               ...(saved ? { sessionKey } : {}),
             });
           const pending =
@@ -455,6 +457,7 @@ describe("Gateway automatic account dispatch authority", () => {
                 agentId: "main",
                 authProfileId: selected,
                 view: "configured",
+                refresh: true,
               });
               expect(pinned.mock.calls[0]?.[0]).toBe(true);
               expect(requests).toHaveLength(1);

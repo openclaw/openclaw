@@ -12,6 +12,7 @@ import {
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProjectCheckout } from "../../projects/project-checkout.js";
@@ -19,12 +20,21 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type {
+  PreparedSessionMutationFacts,
+  SessionSharingTarget,
+} from "../session-sharing-policy.js";
+import {
+  prepareSessionMutationFacts,
+  type SessionFactsRead,
+} from "../session-sharing-preparation.js";
 import {
   authorizeSessionSharingTarget,
   createSessionListEntryFilter,
+  resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import {
   beginTaskSuggestionAcceptance,
   createTaskSuggestion,
@@ -34,6 +44,7 @@ import {
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.js";
+import { withSessionMutationCommitGuard } from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 import {
@@ -53,6 +64,13 @@ import type {
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParams["mode"]>;
+
+type SuggestedTaskContext = {
+  taskId: string;
+  suggestion: TaskSuggestion;
+  options: GatewayRequestHandlerOptions;
+  agentId: string;
+};
 
 const activeAcceptances = new Map<string, Promise<TaskSuggestionAcceptanceResult>>();
 
@@ -105,14 +123,13 @@ async function captureSuggestedTaskResponse(
       };
 }
 
-async function sendSuggestedTaskPrompt(params: {
-  taskId: string;
-  suggestion: TaskSuggestion;
-  options: GatewayRequestHandlerOptions;
-  sessionKey: string;
-  agentId: string;
-  sessionId?: string;
-}): Promise<ErrorShape | undefined> {
+async function sendSuggestedTaskPrompt(
+  params: SuggestedTaskContext & {
+    sessionKey: string;
+    sessionId?: string;
+    source?: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath" | "entry">;
+  },
+): Promise<ErrorShape | undefined> {
   const chatParams = {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -121,6 +138,30 @@ async function sendSuggestedTaskPrompt(params: {
     queueMode: "steer" as const,
     idempotencyKey: `task-suggestion:${params.taskId}`,
   };
+  let sessionMutationAuthorization = params.options.sessionMutationAuthorization;
+  if (params.source) {
+    const authorization = resolveSessionMutationAuthorization({
+      client: params.options.client,
+      context: params.options.context,
+      method: "chat.send",
+      requestParams: chatParams,
+      expectedTarget: {
+        agentId: params.source.agentId,
+        sessionKey: params.source.canonicalKey,
+        storePath: params.source.storePath,
+        sessionId: params.source.entry.sessionId,
+      },
+    });
+    if (authorization.error) {
+      return authorization.error;
+    }
+    sessionMutationAuthorization = withSessionMutationCommitGuard(
+      authorization.authorization,
+      params.options.sessionMutationCommitGuard,
+      sessionMutationAuthorization?.assertCurrent,
+      sessionMutationAuthorization?.assertAdmittedInputCurrent,
+    );
+  }
   const response = await captureSuggestedTaskResponse(
     "chat.send",
     "failed to deliver suggested task",
@@ -129,21 +170,20 @@ async function sendSuggestedTaskPrompt(params: {
         ...params.options,
         req: { ...params.options.req, method: "chat.send", params: chatParams },
         params: chatParams,
+        sessionMutationAuthorization,
         respond,
       }),
   );
   return response.ok ? undefined : response.error;
 }
 
-async function createSuggestedTaskSession(params: {
-  taskId: string;
-  suggestion: TaskSuggestion;
-  options: GatewayRequestHandlerOptions;
-  agentId: string;
-  mode: Exclude<TaskSuggestionAcceptMode, "session">;
-  cloudProfileId?: string;
-  cwd?: string;
-}): Promise<TaskSuggestionAcceptanceResult> {
+async function createSuggestedTaskSession(
+  params: SuggestedTaskContext & {
+    mode: Exclude<TaskSuggestionAcceptMode, "session">;
+    cloudProfileId?: string;
+    cwd?: string;
+  },
+): Promise<TaskSuggestionAcceptanceResult> {
   const { agentId } = params;
   const cwd = params.cwd ?? params.suggestion.cwd;
   if (params.mode === "worktree") {
@@ -170,13 +210,7 @@ async function createSuggestedTaskSession(params: {
       : params.suggestion.prompt;
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
-    failSuggestedTaskSession({
-      taskId: params.taskId,
-      sessionKey: key,
-      agentId,
-      options: params.options,
-      error,
-    });
+    failSuggestedTaskSession({ ...params, sessionKey: key, error });
   const sessionResponse = await captureSuggestedTaskResponse(
     "sessions.create",
     "failed to create suggested task",
@@ -223,13 +257,7 @@ async function createSuggestedTaskSession(params: {
     if (!dispatchResponse.ok) {
       return await fail(key, dispatchResponse.error);
     }
-    const sendError = await sendSuggestedTaskPrompt({
-      taskId: params.taskId,
-      suggestion: params.suggestion,
-      options: params.options,
-      sessionKey: key,
-      agentId,
-    });
+    const sendError = await sendSuggestedTaskPrompt({ ...params, sessionKey: key });
     if (sendError) {
       return await fail(key, sendError);
     }
@@ -245,58 +273,63 @@ async function createSuggestedTaskSession(params: {
       return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
     }
   }
-  return finishSuggestedTaskAcceptance({
-    taskId: params.taskId,
-    sessionKey: key,
-    suggestion: params.suggestion,
-    options: params.options,
-  });
+  return finishSuggestedTaskAcceptance({ ...params, sessionKey: key });
 }
 
-async function deliverSuggestedTaskToSourceSession(params: {
-  taskId: string;
-  suggestion: TaskSuggestion;
-  options: GatewayRequestHandlerOptions;
-  agentId: string;
-}): Promise<TaskSuggestionAcceptanceResult> {
+async function deliverSuggestedTaskToSourceSession(
+  params: SuggestedTaskContext,
+): Promise<TaskSuggestionAcceptanceResult> {
   const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
-  let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
+  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
+  let nativeSource: ReturnType<typeof loadGatewaySessionEntryReadOnly> | undefined;
   try {
-    source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    if (captureIncognitoSessionSource({ sessionKey: params.suggestion.sessionKey, agentId })) {
+      sourceFacts = await prepareSessionMutationFacts({
+        cfg: params.options.context.getRuntimeConfig(),
+        sessionKey: params.suggestion.sessionKey,
+        agentId,
+        allowMissing: true,
+      });
+    } else {
+      nativeSource = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    }
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }
-  if (!source.entry?.sessionId) {
-    return fail(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a new session instead",
-      ),
-    );
+  try {
+    const source = sourceFacts
+      ? sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target
+      : nativeSource;
+    if (!source?.entry?.sessionId) {
+      return fail(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "source session no longer exists; start it in a new session instead",
+        ),
+      );
+    }
+    const lifecycleError = resolveSessionWorkStartError(source.canonicalKey, source.entry);
+    if (lifecycleError) {
+      return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
+    }
+    const sendError = await sendSuggestedTaskPrompt({
+      ...params,
+      source: { ...source, entry: source.entry },
+      sessionKey: params.suggestion.sessionKey,
+      sessionId: source.entry.sessionId,
+    });
+    if (sendError) {
+      return fail(sendError);
+    }
+    return finishSuggestedTaskAcceptance({
+      ...params,
+      sessionKey: params.suggestion.sessionKey,
+    });
+  } finally {
+    sourceFacts?.release();
   }
-  const lifecycleError = resolveSessionWorkStartError(source.canonicalKey, source.entry);
-  if (lifecycleError) {
-    return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
-  }
-  const sendError = await sendSuggestedTaskPrompt({
-    taskId: params.taskId,
-    suggestion: params.suggestion,
-    options: params.options,
-    sessionKey: params.suggestion.sessionKey,
-    agentId,
-    sessionId: source.entry.sessionId,
-  });
-  if (sendError) {
-    return fail(sendError);
-  }
-  return finishSuggestedTaskAcceptance({
-    taskId: params.taskId,
-    sessionKey: params.suggestion.sessionKey,
-    suggestion: params.suggestion,
-    options: params.options,
-  });
 }
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {
@@ -391,6 +424,12 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     validateTaskSuggestionsAcceptParams,
     async (options) => {
       const { params, respond } = options;
+      const respondOutcome = (outcome: TaskSuggestionAcceptanceResult) =>
+        respond(
+          outcome.ok,
+          outcome.ok ? outcome.result : undefined,
+          outcome.ok ? undefined : outcome.error,
+        );
       // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
       // clients always send local; retain this wire contract for those callers.
       const mode = params.mode ?? "worktree";
@@ -456,12 +495,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       }
       const active = activeAcceptances.get(params.taskId);
       if (active) {
-        const outcome = await active;
-        respond(
-          outcome.ok,
-          outcome.ok ? outcome.result : undefined,
-          outcome.ok ? undefined : outcome.error,
-        );
+        respondOutcome(await active);
         return;
       }
       const acceptance = beginTaskSuggestionAcceptance(params.taskId);
@@ -494,18 +528,11 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
           });
         }
         const agentId = normalizeAgentId(sourceOwner.agentId);
+        const task = { taskId: params.taskId, suggestion: acceptance.suggestion, options, agentId };
         return mode === "session"
-          ? deliverSuggestedTaskToSourceSession({
-              taskId: params.taskId,
-              suggestion: acceptance.suggestion,
-              options,
-              agentId,
-            })
+          ? deliverSuggestedTaskToSourceSession(task)
           : createSuggestedTaskSession({
-              taskId: params.taskId,
-              suggestion: acceptance.suggestion,
-              options,
-              agentId,
+              ...task,
               mode,
               cwd: params.cwd,
               ...(cloudProfileId ? { cloudProfileId } : {}),
@@ -516,12 +543,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       });
       activeAcceptances.set(params.taskId, pending);
       try {
-        const outcome = await pending;
-        respond(
-          outcome.ok,
-          outcome.ok ? outcome.result : undefined,
-          outcome.ok ? undefined : outcome.error,
-        );
+        respondOutcome(await pending);
       } finally {
         activeAcceptances.delete(params.taskId);
       }

@@ -40,19 +40,6 @@ export type SlackQaScenarioEnvironment = {
   sutWriteClient: WebClient;
 };
 
-function resolveSlackQaReplacePaths(accountId: string, channelId: string): string[] {
-  return [
-    "agents",
-    "approvals",
-    "channels.slack",
-    `channels.slack.accounts.${accountId}.allowFrom`,
-    `channels.slack.accounts.${accountId}.channels.${channelId}.users`,
-    "messages",
-    "plugins",
-    "tools",
-  ];
-}
-
 export function createSlackQaScenarioEnvironment(params: {
   accountId: string;
   channelId: string;
@@ -103,7 +90,16 @@ export function createSlackQaScenarioEnvironment(params: {
           await patchLiveQaGatewayConfig({
             gateway: input.gateway,
             patch: cfg as Record<string, unknown>,
-            replacePaths: resolveSlackQaReplacePaths(params.accountId, params.channelId),
+            replacePaths: [
+              "agents",
+              "approvals",
+              "channels.slack",
+              `channels.slack.accounts.${params.accountId}.allowFrom`,
+              `channels.slack.accounts.${params.accountId}.channels.${params.channelId}.users`,
+              "messages",
+              "plugins",
+              "tools",
+            ],
             timeoutMs: input.timeoutMs,
             waitForConfigRestartSettle: input.waitForConfigRestartSettle,
           });

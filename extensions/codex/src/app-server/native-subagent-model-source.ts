@@ -276,26 +276,23 @@ export function bindNativeChildModelAdmission(
   if (!turnId) {
     return true;
   }
+  const retainExecution = () =>
+    retainNativeModelExecution(
+      source.owner,
+      turnId,
+      evidence.childThreadId,
+      evidence.completionCustody,
+    );
   const pending = known.pendingTurns.find((entry) => entry.turnId === turnId);
   if (pending) {
     if (!pending.state || pending.state === "active") {
       pending.completionCustody ??= evidence.completionCustody?.retain();
-      pending.modelSource ??= retainNativeModelExecution(
-        source.owner,
-        turnId,
-        evidence.childThreadId,
-        evidence.completionCustody,
-      );
+      pending.modelSource ??= retainExecution();
     }
   } else if (child?.nativeTurnId === turnId) {
     if (!child.terminal && !child.settledWithoutCompletion) {
       child.completionCustody ??= evidence.completionCustody?.retain();
-      child.modelExecution ??= retainNativeModelExecution(
-        source.owner,
-        turnId,
-        evidence.childThreadId,
-        evidence.completionCustody,
-      );
+      child.modelExecution ??= retainExecution();
     }
   } else {
     return true;
@@ -344,11 +341,11 @@ export function releaseNativeParentModelSources(
 
 export function associateNativeChildInteraction(
   known: KnownChild,
-  threadId: string,
   nativeTurnId: string,
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>,
   drain: (owner: ParentOwner, turnId: string) => void,
 ): void {
+  const threadId = known.assignment.childThreadId;
   for (const [parentTurnId, pending] of admissions) {
     const interaction = pending.find(
       (evidence) =>
@@ -381,7 +378,7 @@ type ModelSourceDependencies = {
   isCurrent: (state: ParentState) => boolean;
   assertInputCurrent: (threadId: string, owner: ParentOwner) => void;
   hasPendingInput: (request: NativeModelSourceRequest) => boolean;
-  onExecutionAdmitted: (known: KnownChild, threadId: string) => void;
+  onExecutionAdmitted: (known: KnownChild) => void;
   registerChildExecution: (
     state: ParentState,
     request: NativeModelSourceRequest,
@@ -558,7 +555,7 @@ function executionOwner(
     }
   }
   if (pending?.state === "active" || child?.nativeTurnId === request.turnId) {
-    dependencies.onExecutionAdmitted(known, request.threadId);
+    dependencies.onExecutionAdmitted(known);
   }
   return modelSource.executionOwner;
 }
@@ -623,32 +620,31 @@ export async function captureNativeModelSource(
     const immediate = unqualified.filter((candidate) => candidate.turnId === request.parentTurnId);
     const waitingOwners = immediate.length > 0 ? immediate : unqualified;
     const waitingOwner = waitingOwners.length === 1 ? waitingOwners[0] : undefined;
-    if (waitingOwner) {
-      const capture = waitingOwner.modelSource?.capture();
-      let binding: NativeModelBinding | undefined;
-      try {
+    const capture = waitingOwner?.modelSource?.capture();
+    let binding: NativeModelBinding | undefined;
+    try {
+      if (waitingOwner) {
         binding = capture?.source?.bindModelExecution?.(undefined);
         if (!binding) {
           return undefined;
         }
         binding.assertCurrent();
-        await waitForModelSourceChange(
-          state,
-          request.signal ? AbortSignal.any([request.signal, binding.signal]) : binding.signal,
-        );
-      } finally {
-        binding?.release();
-        capture?.release();
+      } else if (
+        !pending &&
+        !dependencies.hasPendingInput(request) &&
+        !(observedChildTurn && parentExecution && matchingCause(parentExecution, request))
+      ) {
+        return undefined;
       }
-      continue;
+      await waitForModelSourceChange(
+        state,
+        binding && request.signal
+          ? AbortSignal.any([request.signal, binding.signal])
+          : (binding?.signal ?? request.signal),
+      );
+    } finally {
+      binding?.release();
+      capture?.release();
     }
-    if (
-      !pending &&
-      !dependencies.hasPendingInput(request) &&
-      !(observedChildTurn && parentExecution && matchingCause(parentExecution, request))
-    ) {
-      return undefined;
-    }
-    await waitForModelSourceChange(state, request.signal);
   }
 }

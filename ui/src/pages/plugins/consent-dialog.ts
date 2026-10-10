@@ -268,19 +268,19 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): Temp
           }
         `,
       )}
-      ${
-        grants.llm
-          ? renderPluginMetaRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
-          : nothing
-      }
-      ${
-        grants.subagent
+      ${(["llm", "subagent"] as const).map((key) => {
+        const overrides = grants[key];
+        return overrides
           ? renderPluginMetaRow(
-              t("pluginConsent.subagentModelOverrides"),
-              modelOverrideSummary(grants.subagent),
+              t(
+                key === "llm"
+                  ? "pluginConsent.modelOverrides"
+                  : "pluginConsent.subagentModelOverrides",
+              ),
+              modelOverrideSummary(overrides),
             )
-          : nothing
-      }
+          : nothing;
+      })}
     `,
   );
 }

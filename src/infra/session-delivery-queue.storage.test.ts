@@ -46,26 +46,15 @@ describe("session-delivery queue storage", () => {
 
   it("dedupes entries when an idempotency key is reused", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const firstId = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue after restart",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
-          idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
-        },
-        queueContext,
-      );
-      const secondId = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue after restart",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
-          idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
-        },
-        queueContext,
-      );
+      const payload = {
+        kind: "agentTurn" as const,
+        sessionKey: "agent:main:main",
+        message: "continue after restart",
+        messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+        idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
+      };
+      const firstId = await enqueueSessionDelivery(payload, queueContext);
+      const secondId = await enqueueSessionDelivery({ ...payload }, queueContext);
 
       expect(secondId).toBe(firstId);
       expect(await loadPendingSessionDeliveries(queueContext)).toHaveLength(1);

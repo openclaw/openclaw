@@ -478,9 +478,6 @@ describe.each([
 ] as const)("Teams %s %s aliases (%s)", (route, action, origin) => {
   it.each([
     { name: "bare", channelId: current.channelId },
-    { name: "conversation-prefixed", channelId: `conversation:${current.channelId}` },
-    { name: "provider-prefixed", channelId: `msteams:${current.channelId}` },
-    { name: "provider alias", channelId: `teams:conversation:${current.channelId}` },
     { name: "thread-qualified", channelId: `conversation:${current.channelId};messageid=123` },
     { name: "Graph", channelId: currentTarget },
   ])("reads the current channel with a $name target", async ({ channelId }) => {

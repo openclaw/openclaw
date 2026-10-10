@@ -19,6 +19,7 @@ import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
+import { CreationComposer, retainCreatedComposer } from "./creation-composer.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
@@ -60,11 +61,7 @@ export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
   private messageText = "";
 
-  private get messageValue(): string {
-    return this.messageText;
-  }
-
-  private set messageValue(message: string) {
+  private updateMessage(message: string) {
     if (message === this.messageText) {
       return;
     }
@@ -87,6 +84,11 @@ export class DraftSubmissionFlow {
   private readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
+  private creationComposerValue: CreationComposer | undefined;
+
+  get creationComposer(): CreationComposer | undefined {
+    return this.creationComposerValue?.canDisplay() ? this.creationComposerValue : undefined;
+  }
   readonly composerTextarea = new NewSessionComposerTextareaController();
   permissionMode: SessionCreateParams["permissionMode"];
   readonly draftPersistence: NewSessionDraftPersistence;
@@ -105,7 +107,7 @@ export class DraftSubmissionFlow {
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
-        message: this.messageValue,
+        message: this.messageText,
         mentions: this.mentionsValue,
         attachments: this.attachmentDraft.attachments,
         incognito: this.visibilityValue === "incognito",
@@ -132,7 +134,7 @@ export class DraftSubmissionFlow {
   }
 
   get message(): string {
-    return this.messageValue;
+    return this.messageText;
   }
 
   get mentions(): readonly HumanMention[] {
@@ -179,13 +181,13 @@ export class DraftSubmissionFlow {
   }
 
   setMessage(message: string, mentions?: readonly HumanMention[]) {
-    if (message !== this.messageValue) {
+    if (message !== this.messageText) {
       this.rejectedPromptError = null;
     }
     this.startedSession.current = null;
     this.mentionsValue =
-      mentions ?? updateHumanMentions(this.messageValue, message, this.mentionsValue);
-    this.messageValue = message;
+      mentions ?? updateHumanMentions(this.messageText, message, this.mentionsValue);
+    this.updateMessage(message);
     this.draftPersistence.noteUserMutation();
     this.callbacks.requestUpdate();
   }
@@ -193,7 +195,7 @@ export class DraftSubmissionFlow {
   restoreMessage(message: string, mentions: readonly HumanMention[] = []) {
     this.rejectedPromptError = null;
     this.draftPersistence.noteDraftReplaced();
-    this.messageValue = message;
+    this.updateMessage(message);
     this.mentionsValue = mentions;
     this.callbacks.requestUpdate();
   }
@@ -207,7 +209,7 @@ export class DraftSubmissionFlow {
     permissionMode?: SessionCreateParams["permissionMode"];
   }) {
     this.draftPersistence.noteDraftReplaced();
-    this.messageValue = state.message;
+    this.updateMessage(state.message);
     this.mentionsValue = state.mentions ?? [];
     this.visibilityValue = state.visibility;
     this.capabilities.restoreToolOverrides(state.toolOverrides);
@@ -285,7 +287,7 @@ export class DraftSubmissionFlow {
       gateway: this.read().context?.gateway.snapshot,
       place: this.place,
       pendingPlacement: this.pendingPlacement,
-      hasInitialTurn: Boolean(this.messageValue.trim() || this.attachmentDraft.attachments.length),
+      hasInitialTurn: Boolean(this.messageText.trim() || this.attachmentDraft.attachments.length),
       createParams,
     });
 
@@ -343,6 +345,8 @@ export class DraftSubmissionFlow {
   }
 
   resetDraft() {
+    this.creationComposerValue?.releaseDraft();
+    this.creationComposerValue = undefined;
     this.startedSession.clearSubmission();
     this.rejectedPromptError = null;
     this.sessionStartup.clear();
@@ -355,7 +359,7 @@ export class DraftSubmissionFlow {
     this.visibilityValue = "normal";
     this.capabilities.reset();
     this.permissionMode = undefined;
-    this.attachmentDraft.reset({ release: true });
+    this.attachmentDraft.reset();
     if (preservePendingPlacement) {
       if (!this.pendingPlacement.restored) {
         this.pendingPlacement.retryAllowed = false;
@@ -365,7 +369,7 @@ export class DraftSubmissionFlow {
     } else {
       this.clearPendingPlacementRecovery();
       this.draftPersistence.noteDraftReplaced();
-      this.messageValue = "";
+      this.updateMessage("");
       this.mentionsValue = [];
     }
     this.clearError();
@@ -443,6 +447,7 @@ export class DraftSubmissionFlow {
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
     let instant: InstantThreadHandoff | undefined;
+    let worktreeNameCleanup: void | Promise<void> = undefined;
     try {
       const started = this.startedSession.current;
       if (started && this.startedSession.isCurrent(context, this.place.agentId)) {
@@ -450,6 +455,22 @@ export class DraftSubmissionFlow {
         return;
       }
       this.startedSession.current = null;
+      if (
+        !background &&
+        this.callbacks.retainForHandoff &&
+        (!this.creationComposer || this.creationComposer.acceptedSessionKey)
+      ) {
+        this.creationComposerValue?.releaseDraft();
+        this.creationComposerValue = new CreationComposer(
+          context,
+          input.agentId,
+          this.visibilityValue === "incognito",
+          this.callbacks.requestUpdate,
+        );
+      }
+      if (this.creationComposer && this.visibilityValue === "incognito") {
+        this.creationComposer.incognito = true;
+      }
       const placementTarget = startup
         ? null
         : resolveDraftSessionPlacement(this.pendingPlacement, this.place);
@@ -460,7 +481,11 @@ export class DraftSubmissionFlow {
         !startup && !input.pendingPlacement,
       );
       const remoteProject =
-        !startup && !input.pendingPlacement && !placementTarget && !input.hasInitialTurn
+        !this.place.hostedEnvironment &&
+        !startup &&
+        !input.pendingPlacement &&
+        !placementTarget &&
+        !input.hasInitialTurn
           ? this.place.browser.remoteProject
           : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
@@ -495,6 +520,7 @@ export class DraftSubmissionFlow {
         agentId: input.agentId,
         retainDraft: this.callbacks.retainForHandoff,
         message: this.pendingMessage,
+        composer: this.creationComposer,
       });
       const placementCreateParams = placementTarget
         ? input.pendingPlacement
@@ -525,7 +551,7 @@ export class DraftSubmissionFlow {
       }
       const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
       if (placementTarget && !submissionPlacementRecovery) {
-        this.setPlacementRecoveryUnavailable("creating");
+        this.error = t("newSession.placementCreateFailed");
         return;
       }
       if (input.apiAttachments?.length) {
@@ -546,7 +572,7 @@ export class DraftSubmissionFlow {
       instant = beginInstant?.();
       const result = await createRequest;
       if (result && !placementTarget && result.initialRun.status !== "rejected") {
-        await input.consumeWorktreeName?.();
+        worktreeNameCleanup = input.consumeWorktreeName?.();
       }
       if (requestId !== this.submitRequestToken && !placementTarget) {
         // Leaving the view cancels navigation, not a confirmed send. Retire only
@@ -576,6 +602,8 @@ export class DraftSubmissionFlow {
           submittedRecovery: submissionPlacementRecovery,
           sessionKey: result.key,
           createdAt: submittedAt,
+          startupError:
+            result.initialRun.status === "rejected" ? result.initialRun.error : undefined,
           isRequestCurrent: () => requestId === this.submitRequestToken,
           isLifecycleCurrent: () =>
             this.read().isConnected &&
@@ -586,8 +614,17 @@ export class DraftSubmissionFlow {
             this.gateway.recoveryScope === input.recoveryScope,
           clearRecovery: () => this.clearPendingPlacementRecovery(),
           setError: (error) => this.setError(error),
-          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable("created"),
+          onRecoveryUnavailable: () => {
+            this.error = t("newSession.placementStartFailed", {
+              error: "placement recovery storage is unavailable",
+            });
+          },
           clearDraft: () => {
+            const composer = this.creationComposer;
+            if (composer) {
+              composer.accept(result);
+              retainCreatedComposer(context, result.key, composer);
+            }
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
           },
@@ -618,6 +655,7 @@ export class DraftSubmissionFlow {
         result,
         turn,
         instant,
+        composer: this.creationComposer,
         navigation: this.startedSession,
         isCurrent: () => requestId === this.submitRequestToken,
         clearDraft: (release, keepPending) => {
@@ -642,8 +680,9 @@ export class DraftSubmissionFlow {
         }
       }
     } finally {
-      if (instant) {
-        await instant.finish();
+      // Accepted preference writes outlive the draft; they must not hold chat admission.
+      if (worktreeNameCleanup || instant) {
+        await Promise.all([worktreeNameCleanup, instant?.finish()]);
       }
       if (requestId === this.submitRequestToken) {
         this.activeSubmission = null;
@@ -688,7 +727,7 @@ export class DraftSubmissionFlow {
       } else if (this.activeSubmission) {
         this.activeSubmission.phase = "accepted";
       }
-      this.messageValue = "";
+      this.updateMessage("");
       this.mentionsValue = [];
       this.draftPersistence.noteDraftReplaced();
       this.attachmentDraft.clearAfterSubmit(releasePayloads);
@@ -697,20 +736,12 @@ export class DraftSubmissionFlow {
   }
 
   disconnect() {
+    this.creationComposerValue?.releaseDraft();
     this.pendingPlacement.releaseClaim();
     this.startedSession.current = null;
     this.draftPersistence.disconnect();
-    this.attachmentDraft.reset({ release: true });
+    this.attachmentDraft.reset();
     this.composerTextarea.disconnect();
-  }
-
-  private setPlacementRecoveryUnavailable(phase: "creating" | "created") {
-    this.error =
-      phase === "creating"
-        ? t("newSession.placementCreateFailed")
-        : t("newSession.placementStartFailed", {
-            error: "placement recovery storage is unavailable",
-          });
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery | null) {

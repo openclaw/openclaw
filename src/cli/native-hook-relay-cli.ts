@@ -4,6 +4,7 @@ import {
   isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
+import { invokeRemoteNativeHookRelay } from "../agents/harness/native-hook-relay-remote-client.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
@@ -21,6 +22,7 @@ const NATIVE_HOOK_RELAY_VALUE_FLAGS = {
   "--provider": "provider",
   "--relay-id": "relayId",
   "--state-db": "stateDb",
+  "--remote-credential": "remoteCredential",
   "--generation": "generation",
   "--event": "event",
   "--pre-tool-use-unavailable": "preToolUseUnavailable",
@@ -112,34 +114,45 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     }
 
     try {
-      const remainingMs = remainingNativeHookRelayDeadlineMs(deadline);
-      const response = await withNativeHookRelayDeadline(
-        deadline,
-        invokeNativeHookRelayBridge({
-          provider,
-          relayId,
-          stateDbPath: opts.stateDb?.trim() || undefined,
-          generation,
-          event,
-          rawPayload,
-          registrationTimeoutMs: Math.min(100, remainingMs),
-          timeoutMs: remainingMs,
-        }),
-      );
-      return writeResponse(response);
-    } catch (error) {
-      if (isNativeHookRelayDeadlineError(error)) {
-        return timedOut(error);
+      if (opts.remoteCredential) {
+        // Dedicated mode never falls back to local storage or operator credentials.
+        return writeResponse(
+          await withNativeHookRelayDeadline(
+            deadline,
+            invokeRemoteNativeHookRelay(
+              opts.remoteCredential,
+              { provider, relayId, generation, event, rawPayload },
+              deadline.signal,
+            ),
+          ),
+        );
       }
-      if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        return unavailable();
+      try {
+        const remainingMs = remainingNativeHookRelayDeadlineMs(deadline);
+        const response = await withNativeHookRelayDeadline(
+          deadline,
+          invokeNativeHookRelayBridge({
+            provider,
+            relayId,
+            stateDbPath: opts.stateDb?.trim() || undefined,
+            generation,
+            event,
+            rawPayload,
+            registrationTimeoutMs: Math.min(100, remainingMs),
+            timeoutMs: remainingMs,
+          }),
+        );
+        return writeResponse(response);
+      } catch (error) {
+        if (
+          isNativeHookRelayDeadlineError(error) ||
+          isNativeHookRelayBridgeStaleRegistrationError(error)
+        ) {
+          throw error;
+        }
+        // Fall through to the gateway path for embedded/local gateway cases and
+        // older registrations that predate the direct relay bridge.
       }
-      // Fall through to the gateway path for embedded/local gateway cases and
-      // older registrations that predate the direct relay bridge.
-    }
-
-    try {
       const response = await withNativeHookRelayDeadline(
         deadline,
         callGatewayLazy<NativeHookRelayProcessResponse>({

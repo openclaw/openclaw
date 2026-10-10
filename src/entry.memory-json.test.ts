@@ -448,7 +448,7 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
             ok: true,
             result: {
               details: {
-                results: ["snapshot", "traffic", "verify", "repair", "rollback"].map((name) => ({
+                results: ["snapshot", "verify", "traffic", "repair", "rollback"].map((name) => ({
                   path: `memory/${name}.md`,
                   source: "memory",
                   vectorScore: expect.any(Number),

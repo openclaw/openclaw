@@ -357,6 +357,10 @@ If navigation or a closed page stops the batch, text output reports the action n
 
 `--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
 
+`fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
+Malformed bytes are rejected before any browser action runs. Save the input as
+UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
+
 ## State and storage
 
 Viewport + emulation:

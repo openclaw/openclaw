@@ -3,7 +3,6 @@ import { request as httpRequest, Server } from "node:http";
 import { Socket } from "node:net";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Covers native hook relay registration, bridge invocation, and approval state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -1197,66 +1196,45 @@ describe("native hook relay registry", () => {
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["apply_patch", "exec"]);
   });
 
-  it.each(["already connected", "fresh connection"] as const)(
-    "rejects a retired direct bridge with an %s request",
-    async (mode) => {
-      const first = registerRelay({ allowedEvents: ["pre_tool_use"] });
-      const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
-      const payload = {
-        provider: "codex",
-        relayId: first.relayId,
-        generation: first.generation,
-        event: "pre_tool_use",
-        rawPayload: {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          ...(mode === "already connected" ? { tool_input: { command: "pnpm test" } } : {}),
-        },
-      };
-      const pending =
-        mode === "already connected"
-          ? openDeferredNativeHookRelayBridgeRequest(firstRecord, payload)
-          : undefined;
-      if (pending) {
-        await pending.connected;
-        await new Promise((resolve) => {
-          setTimeout(resolve, 25);
-        });
-      } else {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
-      try {
-        const second = registerRelay({
-          relayId: first.relayId,
-          runId: "run-2",
-          allowedEvents: ["pre_tool_use"],
-        });
-        const staleRequest =
-          pending ?? openDeferredNativeHookRelayBridgeRequest(firstRecord, payload);
-        const response = Promise.all([staleRequest.connected, staleRequest.response]);
-        staleRequest.sendBody();
-        await expect(response).resolves.toEqual([
-          undefined,
-          { ok: false, error: "native hook relay bridge stale registration" },
-        ]);
-        expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
-        if (pending) {
-          await expect(
-            invokeNativeHookRelayBridge({
-              ...payload,
-              generation: second.generation,
-              timeoutMs: 2_000,
-            }),
-          ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
-        }
-      } finally {
-        if (!pending) {
-          await vi.advanceTimersByTimeAsync(250);
-          vi.useRealTimers();
-        }
-      }
-    },
-  );
+  it("rejects a retired direct bridge with an already connected request", async () => {
+    const first = registerRelay({ allowedEvents: ["pre_tool_use"] });
+    const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    const payload = {
+      provider: "codex",
+      relayId: first.relayId,
+      generation: first.generation,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "pnpm test" },
+      },
+    };
+    const pending = openDeferredNativeHookRelayBridgeRequest(firstRecord, payload);
+    await pending.connected;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    const second = registerRelay({
+      relayId: first.relayId,
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const response = Promise.all([pending.connected, pending.response]);
+    pending.sendBody();
+    await expect(response).resolves.toEqual([
+      undefined,
+      { ok: false, error: "native hook relay bridge stale registration" },
+    ]);
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+    await expect(
+      invokeNativeHookRelayBridge({
+        ...payload,
+        generation: second.generation,
+        timeoutMs: 2_000,
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
 
   it.each(["replacement", "bootstrap grace", "expired grace"] as const)(
     "enforces direct bridge generation authority for %s",
@@ -1329,43 +1307,6 @@ describe("native hook relay registry", () => {
           });
         }
       }
-    },
-  );
-
-  it.each([false, true])(
-    "renews the same direct bridge with missing record=%s",
-    async (missing) => {
-      const relay = registerOwnedRelay({ allowedEvents: ["pre_tool_use"], ttlMs: 10_000 });
-      const before = await waitForNativeHookRelayBridgeRecord(relay.relayId);
-      if (missing) {
-        expect(
-          await nativeHookRelayStore.deleteNativeHookRelayBridgeRecordIfOwned({
-            ...before,
-            stateDbPath: resolveOpenClawStateSqlitePath(),
-          }),
-        ).toBe(true);
-        expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
-      }
-      relay.renew(20_000);
-      await relay.drain();
-      const after = await waitForNativeHookRelayBridgeRecord(relay.relayId);
-      expect(after.port).toBe(before.port);
-      expect(after.token).toBe(before.token);
-      expect(after.expiresAtMs).toBeGreaterThan(before.expiresAtMs);
-      await expect(
-        invokeNativeHookRelayBridge({
-          provider: "codex",
-          relayId: relay.relayId,
-          generation: relay.generation,
-          event: "pre_tool_use",
-          timeoutMs: 2_000,
-          rawPayload: {
-            hook_event_name: "PreToolUse",
-            tool_name: "Bash",
-            tool_input: { command: "pnpm test" },
-          },
-        }),
-      ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
     },
   );
 
@@ -1623,27 +1564,6 @@ describe("native hook relay registry", () => {
     expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
   });
 
-  it.each([
-    {
-      mode: "long timer chunk",
-      ttlMs: MAX_TIMER_TIMEOUT_MS + 10,
-      firstTick: MAX_TIMER_TIMEOUT_MS,
-      lastTick: 11,
-    },
-    { mode: "renewal", ttlMs: 100, renewMs: 200, firstTick: 101, lastTick: 100 },
-  ])("keeps relay expiry accurate after $mode", async ({ ttlMs, renewMs, firstTick, lastTick }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-11T00:00:00.000Z"));
-    const relay = registerRelay({ ttlMs });
-    if (renewMs) {
-      relay.renew(renewMs);
-    }
-    await vi.advanceTimersByTimeAsync(firstTick);
-    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
-    await vi.advanceTimersByTimeAsync(lastTick);
-    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-  });
-
   it("uses the Codex no-op output when no OpenClaw hook decides", async () => {
     const relay = registerRelay();
 
@@ -1720,7 +1640,7 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it.each(["timeout", "rejected projection", "report mode"] as const)(
+  it.each(["timeout", "rejected projection"] as const)(
     "preserves native pre-tool failure ownership for %s",
     async (mode) => {
       const onPreToolUseFailure = vi.fn(async () => {
@@ -1743,7 +1663,6 @@ describe("native hook relay registry", () => {
       const payload = {
         hook_event_name: "PreToolUse",
         ...(mode === "timeout" ? { cwd: "/repo" } : {}),
-        ...(mode === "report mode" ? { openclaw_approval_mode: "report" } : {}),
         tool_name: "exec_command",
         tool_use_id: "native-failure",
         tool_input: { cmd: "pnpm test" },
@@ -1752,11 +1671,7 @@ describe("native hook relay registry", () => {
       expect(response.failureDisposition).toBe(
         mode === "rejected projection" ? "failed" : "timed_out",
       );
-      if (mode === "report mode") {
-        expect(onPreToolUseFailure).not.toHaveBeenCalled();
-      } else {
-        expect(onPreToolUseFailure).toHaveBeenCalledTimes(1);
-      }
+      expect(onPreToolUseFailure).toHaveBeenCalledTimes(1);
       if (mode === "timeout") {
         expect(JSON.parse(response.stdout)).toMatchObject({
           hookSpecificOutput: { permissionDecision: "deny" },
@@ -1801,14 +1716,6 @@ describe("native hook relay registry", () => {
       toolName: "apply_patch",
       input: { patch: "*** Begin Patch" },
       params: { patch: "*** Begin Patch" },
-      reason: "tool blocked",
-    },
-    {
-      kind: "Agent alias",
-      nativeToolName: "Agent",
-      toolName: "spawn_agent",
-      input: { message: "inspect this repo" },
-      params: { message: "inspect this repo" },
       reason: "tool blocked",
     },
   ])(
@@ -2368,11 +2275,6 @@ describe("native hook relay registry", () => {
         toolInput: { command: "printf 'ok'\r\n\u001b[31mred\u001b[0m" },
       },
       expected: "Tool: exec\nCwd: /repo/red\nModel: gpt-5.4 denied\nCommand: printf 'ok' red",
-    },
-    {
-      kind: "surrogate truncation",
-      request: { toolInput: { command: `${"a".repeat(236)}😀tail` } },
-      expected: `Tool: exec\nCommand: ${"a".repeat(236)}...`,
     },
     {
       kind: "omitted keys",

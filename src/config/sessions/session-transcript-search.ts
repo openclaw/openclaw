@@ -51,12 +51,13 @@ import type {
   SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
+import { transcriptSearchLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
-// SQLite data_version values are comparable only on the same live connection.
+// Local mutation revisions are comparable only on the same live connection.
 const searchConnections = new WeakMap<DatabaseSync, string>();
 
 function readSearchRevision(database: DatabaseSync): string | undefined {
@@ -74,7 +75,7 @@ function readSearchRevision(database: DatabaseSync): string | undefined {
         unregister();
       });
     }
-    return `${connection}:${revision.schema.revision}:${revision.dataVersion}:${revision.mutationRevision}`;
+    return `${connection}:${revision.schema.revision}:${revision.writeRevision}:${revision.mutationRevision}`;
   });
 }
 
@@ -235,39 +236,41 @@ export async function searchSessionTranscripts(
     sessionKeys: params.sessionKeys?.slice(),
   };
   let statusOwnerFailure: { error: unknown } | undefined;
-  const finish = async (
-    { found, revision, ...result }: SessionTranscriptSearchReadResult,
-    isCurrent: (revision: string) => boolean | Promise<boolean>,
+  const readIndexStatus = async (
     assertCurrent?: () => void,
-  ): Promise<SessionTranscriptSearchResult> => {
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    signal?.throwIfAborted();
     assertCurrent?.();
     let indexing: boolean;
     try {
-      if (found && statusOwnerFailure) {
+      if (statusOwnerFailure) {
         throw statusOwnerFailure.error;
       }
-      indexing = found && (await readSessionTranscriptIndexStatus(options, assertCurrent));
+      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent, signal);
     } catch {
       // Writable maintenance failure must not discard an authorized read-only result.
+      signal?.throwIfAborted();
       assertCurrent?.();
-      return { ...result, indexing: true };
+      return true;
     }
+    signal?.throwIfAborted();
     assertCurrent?.();
     if (indexing) {
       startSessionTranscriptIndexReconcile(options);
     }
-    const current = !found || (!indexing && revision !== undefined && (await isCurrent(revision)));
-    assertCurrent?.();
-    return {
-      ...result,
-      indexing: !current || isSessionTranscriptIndexReconcileRunning(options),
-    };
+    return indexing;
   };
   if (isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)) {
     // Process-local SQLite cannot cross the worker boundary without changing its lifetime.
-    return finish(searchSessionTranscriptsReadOnlySync(request, options), (revision) =>
-      isSessionTranscriptSearchCurrentSync(revision, options),
-    );
+    const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(request, options);
+    const indexing = found && (await readIndexStatus());
+    const current =
+      !found ||
+      (!indexing &&
+        revision !== undefined &&
+        isSessionTranscriptSearchCurrentSync(revision, options));
+    return { ...result, indexing: !current || isSessionTranscriptIndexReconcileRunning(options) };
   }
   let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
@@ -280,13 +283,20 @@ export async function searchSessionTranscripts(
     } catch (error) {
       statusOwnerFailure = { error };
     }
-    return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-      return await finish(
-        await owner.searchTranscripts(request),
-        (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
-        owner.assertCurrent,
-      );
-    });
+    return await withSessionHistoryWorkerDatabase(
+      options,
+      async (owner) => {
+        const result = await owner.searchTranscripts(request, (signal) =>
+          readIndexStatus(owner.assertCurrent, signal),
+        );
+        owner.assertCurrent();
+        return {
+          ...result,
+          indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
+        };
+      },
+      transcriptSearchLane,
+    );
   } finally {
     await execution?.release();
   }

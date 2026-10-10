@@ -343,6 +343,32 @@ class DevicesPage extends OpenClawLightDomElement {
     }
   }
 
+  private runAdminTask(task: (pageState: DevicesPageDataState) => unknown) {
+    if (this.canAdmin) {
+      void this.runPageTask(task);
+    }
+  }
+
+  private bindNode(nodeId: string | null, agentId?: string) {
+    if (!this.canAdmin) {
+      return;
+    }
+    const config = this.context.runtimeConfig;
+    const target =
+      agentId === undefined
+        ? { path: [] }
+        : config.agentEntry(agentId, { ensure: Boolean(nodeId) });
+    if (!target) {
+      return;
+    }
+    const path = [...target.path, "tools", "exec", "node"];
+    if (nodeId) {
+      config.patchForm(path, nodeId);
+    } else {
+      config.removeFormValue(path);
+    }
+  }
+
   private ensureInitialData() {
     const pageState = this.pageState;
     if (!pageState.connected || !pageState.client || !this.routeDataInitialized) {
@@ -465,6 +491,29 @@ class DevicesPage extends OpenClawLightDomElement {
         }));
   }
 
+  // Retargeting discards the draft for the target being left, so a dirty form
+  // asks first. Cancelling restores nothing because nothing is written until the
+  // operator confirms: the target, the form, the scope and the dirty flag are
+  // still the ones the selector was rendered from, and the re-render puts the
+  // selector itself back on that target.
+  private async changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
+    const devices = this.pageState;
+    if (devices.execApprovalsDirty && !(await this.dialogs.confirmExecApprovalsDiscard())) {
+      this.requestUpdate();
+      return;
+    }
+    if (this.pageState !== devices) {
+      return;
+    }
+    this.execApprovalsTarget = kind;
+    this.execApprovalsTargetNodeId = nodeId;
+    devices.execApprovalsSnapshot = null;
+    devices.execApprovalsForm = null;
+    devices.execApprovalsDirty = false;
+    devices.execApprovalsSelectedAgent = null;
+    this.requestUpdate();
+  }
+
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
     return this.execApprovalsTarget === "node" && this.execApprovalsTargetNodeId
       ? { kind: "node", nodeId: this.execApprovalsTargetNodeId }
@@ -548,72 +597,30 @@ class DevicesPage extends OpenClawLightDomElement {
           onDeviceRename: (device) => void this.dialogs.editAlias(device),
           onLoadConfig: () => void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
           onLoadExecApprovals: () =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) =>
-                  loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-                )
-              : undefined,
-          onBindDefault: (nodeId) => {
-            if (!this.canAdmin) {
-              return;
-            }
-            if (nodeId) {
-              this.context.runtimeConfig.patchForm(["tools", "exec", "node"], nodeId);
-            } else {
-              this.context.runtimeConfig.removeFormValue(["tools", "exec", "node"]);
-            }
-          },
-          onBindAgent: (agentId, nodeId) => {
-            if (!this.canAdmin) {
-              return;
-            }
-            const target = this.context.runtimeConfig.agentEntry(agentId, {
-              ensure: Boolean(nodeId),
-            });
-            if (!target) {
-              return;
-            }
-            const path = [...target.path, "tools", "exec", "node"];
-            if (nodeId) {
-              this.context.runtimeConfig.patchForm(path, nodeId);
-            } else {
-              this.context.runtimeConfig.removeFormValue(path);
-            }
-          },
+            this.runAdminTask((pageState) =>
+              loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+            ),
+          onBindDefault: (nodeId) => this.bindNode(nodeId),
+          onBindAgent: (agentId, nodeId) => this.bindNode(nodeId, agentId),
           onSaveBindings: () => {
             if (this.canAdmin) {
               void this.context.runtimeConfig.save();
             }
           },
-          onExecApprovalsTargetChange: (kind, nodeId) => {
-            this.execApprovalsTarget = kind;
-            this.execApprovalsTargetNodeId = nodeId;
-            devices.execApprovalsSnapshot = null;
-            devices.execApprovalsForm = null;
-            devices.execApprovalsDirty = false;
-            devices.execApprovalsSelectedAgent = null;
-            this.requestUpdate();
-          },
+          onExecApprovalsTargetChange: (kind, nodeId) =>
+            void this.changeExecApprovalsTarget(kind, nodeId),
           onExecApprovalsSelectAgent: (agentId) => {
             devices.execApprovalsSelectedAgent = agentId;
             this.requestUpdate();
           },
           onExecApprovalsPatch: (path, value) =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) =>
-                  updateExecApprovalsFormValue(pageState, path, value),
-                )
-              : undefined,
+            this.runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
           onExecApprovalsRemove: (path) =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path))
-              : undefined,
+            this.runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
           onSaveExecApprovals: () =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) =>
-                  saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-                )
-              : undefined,
+            this.runAdminTask((pageState) =>
+              saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+            ),
         }),
       )}
     `;

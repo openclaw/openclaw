@@ -50,14 +50,6 @@ type DavePassthroughSdk = {
   };
 };
 
-export function createVoiceReceiveRecoveryState(): VoiceReceiveRecoveryState {
-  return {
-    decryptFailureCount: 0,
-    lastDecryptFailureAt: 0,
-    decryptRecoveryInFlight: false,
-  };
-}
-
 function isAbortLikeReceiveError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;

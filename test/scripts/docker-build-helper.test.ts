@@ -2577,7 +2577,7 @@ docker_e2e_docker_run_cmd run demo
       expect(script, path).toContain("openclaw_e2e_enable_openclaw_cli_timeout");
     }
     expect(readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8")).toContain(
-      'openclaw_e2e_run_command node "$baseline_entry" onboard',
+      'openclaw_release_onboard "$PORT" openclaw_e2e_run_command node "$baseline_entry"',
     );
   });
 
@@ -2633,7 +2633,7 @@ outer
       );
       expect(script, path).toContain('rm -rf "$scenario_tmp"');
       expect(script, path).toContain(
-        'MOCK_REQUEST_LOG="$scenario_tmp/' +
+        `MOCK_REQUEST_LOG${label === "npm-onboard-channel-agent" ? "=" : " "}"$scenario_tmp/` +
           (label === "npm-onboard-channel-agent"
             ? "mock-openai-requests.jsonl"
             : "openai-requests.jsonl") +
@@ -2643,7 +2643,7 @@ outer
         expect(script, path).toContain('LOG_DIR="$scenario_tmp/logs"');
       }
       if (label === "release-user-journey" || label === "release-upgrade-user-journey") {
-        expect(script, path).toContain('CLICKCLACK_STATE="$scenario_tmp/clickclack.json"');
+        expect(script, path).toContain('CLICKCLACK_STATE "$scenario_tmp/clickclack.json"');
       }
       expect(script, path).not.toMatch(/\/tmp\/openclaw-release-[\w-]+\.(?:log|json|err|txt)/u);
       expect(script, path).not.toContain("/tmp/openclaw-mock-openai-requests.jsonl");
@@ -5167,6 +5167,8 @@ export async function sha256File(file) {
       copyFileSync(file, join(root, file));
     }
     mkdirSync(join(root, "packages/normalization-core/src"), { recursive: true });
+    mkdirSync(join(root, "packages/llm-core/src"), { recursive: true });
+    copyFileSync("packages/llm-core/src/types.ts", join(root, "packages/llm-core/src/types.ts"));
     const tarball = join(root, "candidate.tgz");
     writeFileSync(tarball, "synthetic package admission fixture");
     const registry = join(root, "registry");
@@ -5325,8 +5327,13 @@ process.exit(73);
       for (const match of body.matchAll(/source "\$[0-9A-Z_]+_LIB_DIR\/([^"]+)"/gu)) {
         requirements.push(join(dirname(file), match[1] ?? ""));
       }
-      for (const match of body.matchAll(/from "(\.\.?\/[^"]+)"/gu)) {
-        requirements.push(join(dirname(file), match[1] ?? ""));
+      // Type-only imports are erased at runtime, so they need no copied file.
+      for (const match of body.matchAll(
+        /(?:^|\n)(?:import|export)(\s+type\b)?[^;]*?from "(\.\.?\/[^"]+)"/gu,
+      )) {
+        if (!match[1]) {
+          requirements.push(join(dirname(file), match[2] ?? ""));
+        }
       }
       for (const match of body.matchAll(/\bnode (scripts\/[^\s"']+\.(?:mjs|ts))/gu)) {
         requirements.push(match[1] ?? "");

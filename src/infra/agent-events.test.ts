@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
+  type AgentAssistantSourceReceipt,
   type AgentEventPayload,
   type AgentEventRuntimePayload,
   captureAgentRunLifecycleGeneration,
   emitAgentAuditEvent,
   emitAgentEventIfCurrent,
+  emitAgentEventWithAssistantSourceIfCurrent,
   emitAgentEventForOwner,
   emitAgentRunOutputTokens,
   getAgentEventLifecycleGeneration,
@@ -243,6 +245,12 @@ test("rejects inherited stale ownership and cannot reclaim the admitted replacem
   withAgentRunLifecycleGeneration(oldGeneration, () => {
     expect(captureAgentRunLifecycleGeneration("descendant")).toBe(oldGeneration);
     emit("run");
+    expect(
+      emitAgentEventWithAssistantSourceIfCurrent(
+        { runId: "run", stream: "assistant", data: { text: "stale" } },
+        {},
+      ),
+    ).toBe(false);
   });
   claimAgentRunContext("run", { sessionKey: "new-session", lifecycleGeneration });
   registerAgentRunContext("run", {
@@ -345,11 +353,35 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   });
   const received: AgentEventRuntimePayload[] = [];
   onAgentRuntimeEvent((event) => received.push(event));
-  emit("run", "assistant", { text: "private" }, { sessionKey: "main" });
+  const data = { text: "private" };
+  const assistantSource: AgentAssistantSourceReceipt = {};
+  const assistantProjection = { itemId: "item", text: "display", replace: false };
+  emitAgentEventWithAssistantSourceIfCurrent(
+    { runId: "run", stream: "assistant", data, sessionKey: "main" },
+    assistantSource,
+    assistantProjection,
+  );
+  const native = {
+    runId: "run",
+    stream: "assistant",
+    data,
+    sessionKey: "main",
+    assistantSource,
+    assistantProjection,
+  };
+  emitAgentEventIfCurrent(native);
   emit("run", "lifecycle", { phase: "start", startedAt: 1_234 }, { sessionKey: "main" });
   emit("run", "lifecycle", { phase: "error" });
-  expect(received.map((event) => event.sessionKey)).toEqual([undefined, "main", "main"]);
-  const event = received[1]!;
+  expect(received.map((event) => event.sessionKey)).toEqual([undefined, undefined, "main", "main"]);
+  expect(received[0]?.assistantSource).toBe(assistantSource);
+  expect(received[0]?.assistantProjection).toBe(assistantProjection);
+  expect({ ...received[0] }).not.toHaveProperty("assistantSource");
+  expect({ ...received[0] }).not.toHaveProperty("assistantProjection");
+  expect(received[1]?.assistantSource).toBeUndefined();
+  expect(received[1]?.assistantProjection).toBeUndefined();
+  expect({ ...received[1] }).not.toHaveProperty("assistantSource");
+  expect({ ...received[1] }).not.toHaveProperty("assistantProjection");
+  const event = received[2]!;
   expect(event).toMatchObject({
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     projectSessionLifecycle: false,
@@ -576,4 +608,39 @@ test("retains independent nested cursors while new callbacks join both emissions
     "new-run:outer",
     "new-global:outer",
   ]);
+});
+
+test("captures runtime delivery before listeners and independently for nested emissions", () => {
+  let owner = {};
+  const seen: string[] = [];
+  const capture = () => {
+    const original = owner;
+    return () => owner === original;
+  };
+  onAgentEvent((event) => {
+    if (event.data.text === "outer") {
+      owner = {};
+      onAgentRuntimeEvent((next) => seen.push(`late:${String(next.data.text)}`), capture);
+      emit("run", "lifecycle", { phase: "end", text: "inner" });
+    }
+  });
+  onAgentRuntimeEvent((event) => seen.push(`original:${String(event.data.text)}`), capture);
+  emit("run", "lifecycle", { phase: "end", text: "outer" });
+  expect(seen).toEqual(["original:inner", "late:inner"]);
+});
+
+test.each(["capture", "delivery"])("isolates runtime %s failures from other listeners", (phase) => {
+  const blocked = vi.fn();
+  const seen = captureEvents();
+  onAgentRuntimeEvent(blocked, () => {
+    const fail = () => {
+      throw new Error("retired registration");
+    };
+    return phase === "capture" ? fail() : fail;
+  });
+  const later = captureEvents();
+  expect(emit("run")).toBe(true);
+  expect(blocked).not.toHaveBeenCalled();
+  expect(seen).toHaveLength(1);
+  expect(later).toHaveLength(1);
 });

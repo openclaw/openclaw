@@ -25,18 +25,35 @@ const delivery = vi.hoisted(() => ({
 vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../infra/sqlite-worker-operation-admission.js")>();
+  const originals = new WeakMap<
+    Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0],
+    Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0]
+  >();
   return {
     ...actual,
     createSqliteWorkerOperationAdmission: (
       ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
-    ) =>
-      new Proxy(actual.createSqliteWorkerOperationAdmission(...args), {
+    ) => {
+      const original = actual.createSqliteWorkerOperationAdmission(...args);
+      const proxy = new Proxy(original, {
         get(target, key, receiver) {
           return (key === "committed" && delivery.hideReceipt) ||
             (key === "settlement" && delivery.hideSettlement)
             ? undefined
             : Reflect.get(target, key, receiver);
         },
+      });
+      originals.set(proxy, original);
+      return proxy;
+    },
+    observeSqliteWorkerCommittedFacts: (
+      admission: Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0],
+      observer: Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[1],
+    ) =>
+      actual.observeSqliteWorkerCommittedFacts(originals.get(admission) ?? admission, (receipt) => {
+        if (!delivery.loseIntentResult && !delivery.loseRevocationResult) {
+          observer(receipt);
+        }
       }),
   };
 });

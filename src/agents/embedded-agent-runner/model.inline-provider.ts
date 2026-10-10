@@ -59,10 +59,7 @@ export function sanitizeModelHeaders(headers: unknown): Record<string, string> |
   }
   const next: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (typeof headerValue !== "string") {
-      continue;
-    }
-    if (isSecretRefHeaderValueMarker(headerValue)) {
+    if (typeof headerValue !== "string" || isSecretRefHeaderValueMarker(headerValue)) {
       // Catalog/runtime model records are inspectable. Secret-ref markers are resolved later during
       // auth setup, so inline provider discovery must not expose them as literal headers.
       continue;
@@ -81,15 +78,11 @@ function isLegacyFoundryVisionModelCandidate(params: {
     return false;
   }
   const normalizedCandidates = [params.modelId, params.modelName]
-    .filter((value): value is string => typeof value === "string")
     .map((value) => normalizeOptionalLowercaseString(value))
     .filter((value): value is string => Boolean(value));
   return normalizedCandidates.some(
     (candidate) =>
-      candidate.startsWith("gpt-") ||
-      candidate.startsWith("o1") ||
-      candidate.startsWith("o3") ||
-      candidate.startsWith("o4") ||
+      ["gpt-", "o1", "o3", "o4"].some((prefix) => candidate.startsWith(prefix)) ||
       candidate === "computer-use-preview",
   );
 }

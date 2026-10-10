@@ -66,6 +66,7 @@ function deviceProof(
       enabled: true as const,
       capacity: { total: 2, available },
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands,
   };

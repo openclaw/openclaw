@@ -60,7 +60,6 @@ class McpServersCard extends OpenClawLightDomElement {
 
   @property() docsUrl = "https://docs.openclaw.ai/tools/mcp";
 
-  @state() private rows: McpServerSummary[] | null = null;
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
@@ -78,7 +77,7 @@ class McpServersCard extends OpenClawLightDomElement {
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
         const generation = this.feedbackGeneration;
-        this.syncRows();
+        this.requestUpdate();
         void runtimeConfig.ensureLoaded().catch((error: unknown) => {
           if (
             generation !== this.feedbackGeneration ||
@@ -92,7 +91,7 @@ class McpServersCard extends OpenClawLightDomElement {
             text: formatUiError(error),
           };
         });
-        const unsubscribe = runtimeConfig.subscribe(() => this.syncRows());
+        const unsubscribe = runtimeConfig.subscribe(() => this.requestUpdate());
         return () => {
           // Async config work belongs to one connected source. Retire its UI
           // feedback before a replacement source or retained card can reuse it.
@@ -120,11 +119,6 @@ class McpServersCard extends OpenClawLightDomElement {
     this.login.reset();
     this.subscriptions.clear();
     super.disconnectedCallback();
-  }
-
-  private syncRows() {
-    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    this.rows = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
   }
 
   private mutationBlockedReason(): string | null {
@@ -181,7 +175,6 @@ class McpServersCard extends OpenClawLightDomElement {
       this.message = { kind: "error", text: result.error };
       return false;
     }
-    this.syncRows();
     this.message = { kind: "success", text: options.successText };
     return true;
   }
@@ -305,7 +298,9 @@ class McpServersCard extends OpenClawLightDomElement {
 
   override render() {
     const blockedReason = this.mutationBlockedReason();
-    const rows = this.rows;
+    const rows = summarizeMcpServers(
+      resolveEditableSnapshotConfig(this.context?.runtimeConfig.state.configSnapshot),
+    );
     const body = !rows
       ? renderSettingsLoadingSkeleton({ rows: 2 })
       : rows.length === 0

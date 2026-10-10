@@ -14,6 +14,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
+import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
 import {
   emitChildProcessSpawnSample,
   recordChildProcessSpawn,
@@ -186,7 +187,7 @@ describe("child-process spawn diagnostics", () => {
     checkSuccessfulSpawns,
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
     "counts successful broker requests once without counting the broker transport",
     async () => {
       const host = createSpawnBrokerHost();

@@ -20,7 +20,7 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
-import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.test-support.js";
 import * as threadOwnership from "./app-server/thread-ownership.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";

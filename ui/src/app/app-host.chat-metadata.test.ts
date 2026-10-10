@@ -80,9 +80,9 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
       current().opts.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
-        payload: { modelCatalogChanged: false, authChanged: false },
+        payload: { modelCatalogChanged: false, authChanged: false, commandsChanged: false },
       });
-      expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
+      expect(peekChatMetadata(client, { agentId: "main" })).toEqual({ commands: [] });
       await read();
     }
     expect
@@ -120,13 +120,14 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
 });
 
 it.each([
-  { mode: "automatic", hidden: false, reject: false, replacementFails: false },
-  { mode: "automatic", hidden: true, reject: true, replacementFails: false },
-  { mode: "explicit", hidden: false, reject: false, replacementFails: true },
-  { mode: "picker", hidden: false, reject: false, replacementFails: false },
+  { mode: "automatic", hidden: false, reject: false, replacementFails: false, revision: undefined },
+  { mode: "automatic", hidden: true, reject: true, replacementFails: false, revision: undefined },
+  { mode: "explicit", hidden: false, reject: false, replacementFails: true, revision: undefined },
+  { mode: "picker", hidden: false, reject: false, replacementFails: false, revision: undefined },
+  { mode: "picker", hidden: false, reject: false, replacementFails: false, revision: "changed" },
 ])(
-  "preserves cold catalog demand across a matching session event ($mode, hidden: $hidden, rejection: $reject, replacement failure: $replacementFails)",
-  async ({ mode, hidden, reject, replacementFails }) => {
+  "preserves cold catalog demand across a matching session event ($mode, revision: $revision, hidden: $hidden, rejection: $reject, replacement failure: $replacementFails)",
+  async ({ mode, hidden, reject, replacementFails, revision }) => {
     const pendingCatalog = createDeferred<ModelCatalogResult>();
     const fresh = { id: "fresh", name: "Fresh model", provider: "example" };
     let catalogReads = 0;
@@ -164,7 +165,14 @@ it.each([
       expect(catalogReads).toBe(1);
       shell.handleGatewayEvent({
         event: "sessions.changed",
-        payload: { key: state.sessionKey, agentId: "main", reason: "message" },
+        payload: {
+          key: state.sessionKey,
+          agentId: "main",
+          reason: "message",
+          ...(revision
+            ? { session: { key: state.sessionKey, sessionModelRevision: revision } }
+            : {}),
+        },
       });
       presented = !hidden;
       if (reject) {
@@ -466,7 +474,6 @@ it("rebinds global chat metadata immediately on agent selection and follows late
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("chat.metadata", {
         agentId: "main",
-        sessionKey: "global",
         includeModels: false,
       }),
     );
@@ -523,7 +530,11 @@ describe("session command metadata events", () => {
     "refreshes only the matching $agentId/$key scope",
     async ({ key, eventKey, otherKey, agentId }) => {
       vi.useFakeTimers();
-      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+      const request = vi.fn().mockResolvedValue({
+        commands: [],
+        models: [],
+        sessionModelRevision: "initial-selection",
+      });
       const client = { request } as unknown as GatewayBrowserClient;
       const hello = {
         ...gatewayHelloForMethods([]),
@@ -572,6 +583,7 @@ describe("session command metadata events", () => {
           { key: eventKey, agentId, reason: "message" },
         ]) {
           shell.handleGatewayEvent({ event: "sessions.changed", payload });
+          await vi.advanceTimersByTimeAsync(0);
           if (payload.key === "agent:work:not-open") {
             for (const state of states) {
               expect(
@@ -586,6 +598,9 @@ describe("session command metadata events", () => {
         expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
           before,
         );
+        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
+          catalogsBefore,
+        );
         shell.handleGatewayEvent({
           event: "sessions.changed",
           payload: { key: eventKey, agentId, reason },
@@ -593,14 +608,9 @@ describe("session command metadata events", () => {
         await vi.advanceTimersByTimeAsync(2_500);
         await vi.waitFor(() =>
           expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
-            before + 1,
+            before,
           ),
         );
-        expect(request.mock.calls.findLast(([method]) => method === "chat.metadata")?.[1]).toEqual({
-          agentId,
-          sessionKey: key,
-          includeModels: false,
-        });
         expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
           catalogsBefore + 1,
         );

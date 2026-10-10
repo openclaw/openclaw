@@ -96,10 +96,33 @@ type MSTeamsMessageTarget = {
   messageId: string;
 };
 
-export async function getMessageMSTeams(params: MSTeamsMessageTarget) {
-  const token = await resolveGraphToken(params.cfg);
+async function resolveGraphMessageContext(
+  params: Pick<MSTeamsMessageTarget, "cfg" | "to">,
+  options?: { preferDelegated?: boolean },
+) {
+  const token = await resolveGraphToken(params.cfg, options);
   const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  return { token, conversationId, ...resolveConversationPath(conversationId) };
+}
+
+async function resolveGraphPinContext(
+  params: Pick<MSTeamsMessageTarget, "cfg" | "to">,
+  operation: "modify" | "list",
+) {
+  const context = await resolveGraphMessageContext(params);
+  if (context.kind === "channel") {
+    throw new Error(
+      (operation === "list"
+        ? "Listing pinned messages is not supported for channels on Graph v1.0. "
+        : "Pin/unpin is not supported for channel messages on Graph v1.0. ") +
+        "Only chat conversations support pinned messages.",
+    );
+  }
+  return context;
+}
+
+export async function getMessageMSTeams(params: MSTeamsMessageTarget) {
+  const { token, basePath } = await resolveGraphMessageContext(params);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessage>({ token, path });
   return {
@@ -113,16 +136,7 @@ export async function getMessageMSTeams(params: MSTeamsMessageTarget) {
 export async function pinMessageMSTeams(
   params: MSTeamsMessageTarget,
 ): Promise<{ ok: true; pinnedMessageId?: string }> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
-
-  if (conv.kind === "channel") {
-    throw new Error(
-      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
-        "Only chat conversations support pinned messages.",
-    );
-  }
+  const { token, conversationId, basePath } = await resolveGraphPinContext(params, "modify");
 
   // Graph API expects message@odata.bind with the full message resource URI
   const body = {
@@ -130,7 +144,7 @@ export async function pinMessageMSTeams(
   };
   const result = await mutateGraphJson<{ id?: string }>({
     token,
-    path: `${conv.basePath}/pinnedMessages`,
+    path: `${basePath}/pinnedMessages`,
     method: "POST",
     body,
   });
@@ -147,16 +161,8 @@ type UnpinMessageMSTeamsParams = {
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
-  if (conv.kind === "channel") {
-    throw new Error(
-      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
-        "Only chat conversations support pinned messages.",
-    );
-  }
-  const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
+  const { token, basePath } = await resolveGraphPinContext(params, "modify");
+  const path = `${basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
 }
@@ -169,18 +175,9 @@ type ListPinsMSTeamsParams = {
 const LIST_PINS_MAX_PAGES = 10;
 
 export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
+  const { token, basePath } = await resolveGraphPinContext(params, "list");
 
-  if (conv.kind === "channel") {
-    throw new Error(
-      "Listing pinned messages is not supported for channels on Graph v1.0. " +
-        "Only chat conversations support pinned messages.",
-    );
-  }
-
-  const path = `${conv.basePath}/pinnedMessages?$expand=message`;
+  const path = `${basePath}/pinnedMessages?$expand=message`;
   const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
     [];
 
@@ -240,9 +237,7 @@ async function mutateMessageReaction(
   operation: "setReaction" | "unsetReaction",
 ): Promise<{ ok: true }> {
   const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
-  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { token, basePath } = await resolveGraphMessageContext(params, { preferDelegated: true });
   await mutateGraphJson<unknown>({
     token,
     path: `${basePath}/messages/${encodeURIComponent(params.messageId)}/${operation}`,
@@ -266,9 +261,7 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
  * Uses Graph v1.0 (reactions are included in the message resource).
  */
 export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { token, basePath } = await resolveGraphMessageContext(params);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
@@ -341,9 +334,7 @@ function matchesSearchSender(message: GraphMessage, from: string | undefined): b
  * locally without widening the read to the account's global message index.
  */
 export async function searchMessagesMSTeams(params: SearchMessagesMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { token, basePath } = await resolveGraphMessageContext(params);
 
   const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;
   const top = Number.isFinite(rawLimit)

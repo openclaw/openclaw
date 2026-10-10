@@ -357,15 +357,6 @@ export function runtimeAuthSharedOwnerRebound(
     : !isDeepStrictEqual(previous, next);
 }
 
-export function runtimeAuthCredentialState(
-  entries: Iterable<[string, RuntimeAuthProfileStore]>,
-): Array<readonly [string, AuthProfileStore["profiles"]]> {
-  return Array.from(entries)
-    .filter(([, store]) => Object.keys(store.profiles).length > 0)
-    .map(([key, store]) => [key, store.profiles] as const)
-    .toSorted(([left], [right]) => left.localeCompare(right));
-}
-
 /** Model metadata follows credentials and availability, never rotation bookkeeping. */
 export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
   return {
@@ -434,18 +425,16 @@ export function pruneAuthProfileStoreReferences(
         ),
       )
     : undefined;
-  store.runtimePersistedProfileIds = store.runtimePersistedProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
+  for (const field of [
+    "runtimePersistedProfileIds",
+    "runtimeLocalProfileIds",
+    "runtimeExternalProfileIds",
+  ] as const) {
+    store[field] = store[field]?.filter((profileId) => keptProfileIds.has(profileId)).toSorted();
+  }
   if (store.runtimePersistedProfileIds?.length === 0) {
     store.runtimePersistedProfileIds = undefined;
   }
-  store.runtimeLocalProfileIds = store.runtimeLocalProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
-  store.runtimeExternalProfileIds = store.runtimeExternalProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
   setRuntimeExternalCliProfileIds(
     store,
     getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),

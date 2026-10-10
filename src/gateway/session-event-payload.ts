@@ -79,12 +79,12 @@ export function buildGatewaySessionSnapshot(params: {
     space: sessionRow.space,
     chatType: sessionRow.chatType,
     origin: sessionRow.origin,
-    conversationLink: sessionRow.conversationLink,
     archived: sessionRow.archived ?? false,
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
     pinned: sessionRow.pinned ?? false,
+    sidebarRoot: sessionRow.sidebarRoot ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
     snoozedUntil: sessionRow.snoozedUntil ?? null,
     snoozedAt: sessionRow.snoozedAt ?? null,
@@ -111,6 +111,8 @@ export function buildGatewaySessionSnapshot(params: {
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
+    communication: sessionRow.communication ?? null,
+    effectiveCommunication: sessionRow.effectiveCommunication,
     permissionModePending: sessionRow.permissionModePending ?? false,
     ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
       ? { sessionRoot: sessionRow.sessionRoot }

@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { publishSqliteCommittedState } from "../../infra/sqlite-post-commit.js";
 import {
   createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -19,11 +21,11 @@ import {
 } from "./prepared-environment-store.js";
 import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
+import { readWorkerEnvironmentReceipt } from "./store-receipt.js";
 import { normalizeCredentialHash, requireWorkerEnvironmentString } from "./store-validation.js";
 import type { WorkerEnvironmentWorkerOperations } from "./store-worker-contract.js";
 import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 import type {
-  WorkerEnvironmentFacts,
   WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentMutationMethods,
   WorkerEnvironmentPruneCursor,
@@ -32,7 +34,6 @@ import type {
 
 export type {
   PreparedEnvironmentPlacementBinding,
-  PreparedEnvironmentSelection,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
 export type { WorkerEnvironmentTransitionPatch } from "./store-write-types.js";
@@ -41,18 +42,6 @@ type Input<Method extends keyof WorkerEnvironmentMutationMethods> = Parameters<
   WorkerEnvironmentMutationMethods[Method]
 >[0];
 type Operations = WorkerEnvironmentWorkerOperations;
-
-// Native receipts originate in this store's worker; a failed result delivery still owns its facts.
-function isInventoryFacts(value: unknown): value is WorkerEnvironmentFacts {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.ids) &&
-    value.ids.every((id) => typeof id === "string") &&
-    Array.isArray(value.environments) &&
-    Array.isArray(value.credentials) &&
-    Array.isArray(value.attachments)
-  );
-}
 
 function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmission {
   return (
@@ -126,17 +115,24 @@ export async function createWorkerEnvironmentStore(
         assertActive();
         const revision = owner.nextSequence();
         const facts = await snapshot(recovery.ids);
-        owner.install(facts, revision, false);
-        owner.release(recovery.token);
-        if (
-          recovery.revocationId &&
-          !facts.credentials.some(
-            (credential) => credential.environmentId === recovery.revocationId,
-          )
-        ) {
-          owner.publishCredentialRevoked(recovery.revocationId);
-        }
-        sessionChanges.emit({ all: true, scope: "worker-environments" });
+        publishSqliteCommittedState({
+          installFacts() {
+            owner.install(facts, revision, false);
+            owner.release(recovery.token);
+          },
+          installProjection() {
+            if (
+              recovery.revocationId &&
+              !facts.credentials.some(
+                (credential) => credential.environmentId === recovery.revocationId,
+              )
+            ) {
+              owner.publishCredentialRevoked(recovery.revocationId);
+            }
+          },
+          invalidate: () => owner.close(),
+          notify: () => sessionChanges.emit({ all: true, scope: "worker-environments" }),
+        });
       } catch (error) {
         throw new AggregateError(
           [recovery.error, error],
@@ -148,7 +144,7 @@ export async function createWorkerEnvironmentStore(
   }
   function mutate<Key extends keyof Operations>(
     type: Key,
-    input: Operations[Key]["input"],
+    input: Omit<Operations[Key]["input"], "publicationIncarnation">,
     assertCurrent: () => void = () => {},
     revocationId?: string,
   ): Promise<Operations[Key]["output"]["result"]> {
@@ -156,7 +152,11 @@ export async function createWorkerEnvironmentStore(
     if (closing) {
       throw new Error("Worker environment inventory is closing");
     }
-    const captured = structuredClone({ ...input, nowMs: options.now?.() });
+    const captured = structuredClone({
+      ...input,
+      nowMs: options.now?.(),
+      publicationIncarnation: owner.incarnation,
+    });
     const operation = owner.enqueue(async () => {
       await reconcilePending();
       const token = {};
@@ -164,6 +164,7 @@ export async function createWorkerEnvironmentStore(
       let commitSequence: number | undefined;
       let committedIds: readonly string[] = [];
       let revocationPublished = false;
+      let installed = false;
       const publishRevocation = () => {
         if (revocationId === undefined || revocationPublished) {
           return;
@@ -176,21 +177,45 @@ export async function createWorkerEnvironmentStore(
           assertActive();
           assertCurrent();
         });
+      const install = (receipt: unknown) => {
+        if (installed) {
+          return;
+        }
+        if (!isRecord(receipt) || commitSequence === undefined) {
+          throw new Error("Worker environment mutation has no commit admission");
+        }
+        context.admission.assertCurrent();
+        const facts = readWorkerEnvironmentReceipt(
+          receipt.publication,
+          { identity: context.admission.identity.key, incarnation: owner.incarnation },
+          committedIds,
+        );
+        const revision = commitSequence;
+        publishSqliteCommittedState({
+          installFacts() {
+            owner.install(facts, revision, false);
+            owner.release(token);
+            installed = true;
+          },
+          invalidate() {
+            owner.close();
+            installed = true;
+          },
+          installProjection: publishRevocation,
+          notify() {
+            if (receipt.changed === true) {
+              sessionChanges.emit({ all: true, scope: "worker-environments" });
+            }
+          },
+        });
+      };
       check();
       try {
         return await runOpenClawStateWorkerOperation(
           context,
           async (scope) => {
             const receipt = await scope.execute({ type, input: captured });
-            if (commitSequence === undefined) {
-              throw new Error("Worker environment mutation has no commit admission");
-            }
-            owner.install(receipt.facts, commitSequence, false);
-            owner.release(token);
-            publishRevocation();
-            if (receipt.changed) {
-              sessionChanges.emit({ all: true, scope: "worker-environments" });
-            }
+            install(receipt);
             return receipt.result;
           },
           {
@@ -217,6 +242,7 @@ export async function createWorkerEnvironmentStore(
                 }
                 stage = "commit";
               });
+              observeSqliteWorkerCommittedFacts(admission, ({ facts }) => install(facts));
               return { nativeLocations: [pathname], admission };
             },
           },
@@ -226,18 +252,15 @@ export async function createWorkerEnvironmentStore(
         const settlement = admission?.settlement;
         const committedReceipt = nativeCommit ?? settlement?.committed;
         const committed = committedReceipt?.facts;
-        if (
-          isRecord(committed) &&
-          isInventoryFacts(committed.facts) &&
-          commitSequence !== undefined
-        ) {
-          owner.install(committed.facts, commitSequence, false);
-          owner.release(token);
-          publishRevocation();
-          if (committed.changed === true) {
-            sessionChanges.emit({ all: true, scope: "worker-environments" });
+        if (!installed && committed) {
+          try {
+            install(committed);
+          } catch {
+            // Malformed coverage cannot turn omitted keys into deletion facts.
           }
-        } else if (
+        }
+        if (
+          !installed &&
           commitSequence !== undefined &&
           !(settlement?.kind === "completed" && !committedReceipt)
         ) {

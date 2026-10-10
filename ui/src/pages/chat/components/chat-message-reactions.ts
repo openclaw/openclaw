@@ -36,13 +36,10 @@ export function ownReactionEmoji(
 }
 
 function reactorsLabel(reaction: MessageReactionSummary, userId: string | null | undefined) {
+  const you = t("chat.reactions.you");
   const names = reaction.identities
-    .map((identity) =>
-      identity.id === userId ? t("chat.reactions.you") : (identity.label ?? identity.id),
-    )
-    .toSorted(
-      (a, b) => Number(b === t("chat.reactions.you")) - Number(a === t("chat.reactions.you")),
-    );
+    .map((identity) => (identity.id === userId ? you : (identity.label ?? identity.id)))
+    .toSorted((a, b) => Number(b === you) - Number(a === you));
   const shown = names.slice(0, TOOLTIP_NAME_LIMIT).join(", ");
   const hidden = names.length - Math.min(names.length, TOOLTIP_NAME_LIMIT);
   return t("chat.reactions.reactedWith", {

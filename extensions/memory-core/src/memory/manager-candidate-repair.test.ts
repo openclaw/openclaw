@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
@@ -97,17 +95,9 @@ describe("automatic candidates during provenance repair", () => {
             }),
           );
         }
-        // Queue a read behind both lookups on the single retrieval worker. Their
-        // public promises must then settle without releasing the repair gate.
-        await runMemoryIndexState({
-          agentId: "main",
-          databasePath: expectDefined(upgraded.status().dbPath, "memory database path"),
-        });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(completed).toBe(2);
+        // Both public lookups must complete while the repair is still gated.
         expect(await Promise.all(candidates)).toEqual([[], []]);
+        expect(completed).toBe(2);
         await batchEntered.promise;
         signal.throwIfAborted();
         expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);

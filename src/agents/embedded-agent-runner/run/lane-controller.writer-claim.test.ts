@@ -5,7 +5,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
@@ -17,6 +17,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../../agent-harness-completion-recovery.js";
 import {
@@ -195,48 +196,6 @@ describe("embedded run durable writer admission", () => {
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
   });
 
-  it("silently replaces a persisted claim whose prior run is no longer live", async () => {
-    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
-      activeWriterRunId: "completed-run",
-      lifecycleRevision,
-      sessionId,
-      updatedAt: 1,
-    } as InternalSessionEntry);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-
-    // Cold admission registers its native lease; observe the warmed claim mutation separately.
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "completed-run" });
-    const sql = observeHostDataSql();
-    try {
-      await claimAgentSessionWriter({
-        agentId: "main",
-        prompt: "next turn",
-        runId: "run-next",
-        sessionId,
-        sessionKey,
-        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-        timeoutMs: 30_000,
-        workspaceDir: "/tmp",
-      });
-      expect(
-        sql.queries.filter((query) =>
-          /session_nodes|session_entry_snapshots|session_participants|session_windows|\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-
-    expect(warn).not.toHaveBeenCalled();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "run-next" });
-  });
-
   it("silently replaces a stopped prior writer while keeping stale transcript writes fenced", async () => {
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-stopped",
@@ -365,27 +324,23 @@ describe("embedded run durable writer admission", () => {
         assertSourceCurrent,
       );
       const admittedRunContext = await prepared.admit("embedded");
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const sameStoreQueriesInGrants: string[] = [];
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          createAdmission((request, grant) => {
-            const sql = observeHostDataSql();
-            try {
-              callback(request, grant);
-            } finally {
-              sameStoreQueriesInGrants.push(
-                ...sql.queries.filter((query) =>
-                  /\bsession_(?:nodes|windows|participants)\b/.test(query),
-                ),
-              );
-              sql.restore();
-            }
-            if (revoke) {
-              sourceCurrent = false;
-            }
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, callback) => {
+        const sql = observeHostDataSql();
+        try {
+          callback(request, grant);
+        } finally {
+          sameStoreQueriesInGrants.push(
+            ...sql.queries.filter((query) =>
+              /\bsession_(?:nodes|windows|participants)\b/.test(query),
+            ),
+          );
+          sql.restore();
+        }
+        if (revoke) {
+          sourceCurrent = false;
+        }
+      });
       try {
         const result = claimAgentSessionWriter({
           ...scope,
@@ -440,7 +395,7 @@ describe("embedded run durable writer admission", () => {
         lifecycleEvents.push(event);
       }
     });
-    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
+    vi.spyOn(sessionEntryWriter, "applySessionEntryOperation").mockRejectedValueOnce(
       new Error("replacement claim conflict"),
     );
     let params: RunEmbeddedAgentParams & { sessionFile: string } = {

@@ -172,11 +172,10 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
   private openReference() {
     this.referenceSubmitted = false;
     const value = this.inspection;
-    if (value?.kind === "reference") {
-      this.reference = { ...value.ref };
-    } else {
-      this.reference = { source: "env", provider: "default", id: "" };
-    }
+    this.reference =
+      value?.kind === "reference"
+        ? { ...value.ref }
+        : { source: "env", provider: "default", id: "" };
     this.dialogOpen = true;
   }
 
@@ -198,31 +197,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       this.context.gateway === gateway &&
       gateway.isCurrent(connection) &&
       JSON.stringify([this.context.pluginId, this.field.path]) === owner;
-    this.saving = true;
-    this.referenceSubmitted ||= this.dialogOpen;
-    this.error = "";
-    try {
-      const acknowledged = await this.context.onCommit(this.field.path, value);
-      if (!current()) {
-        return;
-      }
-      if (acknowledged) {
-        this.referenceSubmitted = false;
-        this.dialogOpen = false;
-        this.literal = "";
-        await this.inspect();
-      } else {
-        this.error = this.context.saveError || t("pluginsPage.credentials.saveFailed");
-      }
-    } catch (error) {
-      if (current()) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (current()) {
-        this.saving = false;
-      }
-    }
+    return this.commitOrDiscardReference(current, value);
   }
 
   private async cancelReference() {
@@ -242,18 +217,41 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       connection !== null &&
       gateway.isCurrent(connection) &&
       this.fieldIdentity === owner;
-    this.cancelling = true;
+    return this.commitOrDiscardReference(current, undefined);
+  }
+
+  private async commitOrDiscardReference(
+    current: () => boolean,
+    value: string | SecretRef | undefined,
+  ) {
+    const pending = value === undefined ? "cancelling" : "saving";
+    this[pending] = true;
+    if (value !== undefined) {
+      this.referenceSubmitted ||= this.dialogOpen;
+      this.error = "";
+    }
     try {
-      const discarded = await this.context.onDiscard();
+      const acknowledged = await (value === undefined
+        ? this.context.onDiscard()
+        : this.context.onCommit(this.field.path, value));
       if (!current()) {
         return;
       }
-      if (discarded) {
+      if (acknowledged) {
         this.referenceSubmitted = false;
         this.dialogOpen = false;
+        if (value !== undefined) {
+          this.literal = "";
+        }
         await this.inspect();
       } else {
-        this.error = this.context.saveError || t("configView.discardUnconfirmed");
+        this.error =
+          this.context.saveError ||
+          t(
+            value === undefined
+              ? "configView.discardUnconfirmed"
+              : "pluginsPage.credentials.saveFailed",
+          );
       }
     } catch (error) {
       if (current()) {
@@ -261,7 +259,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       }
     } finally {
       if (current()) {
-        this.cancelling = false;
+        this[pending] = false;
       }
     }
   }
@@ -308,28 +306,19 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                     ${credentialSources.map((source) => html`<option value=${source} ?selected=${source === this.reference.source}>${t(`pluginsPage.credentials.sources.${source}`)}</option>`)}
                   </select></label
                 >
-                <label
-                  >${t("pluginsPage.credentials.provider")}<input
-                    class="settings-input"
-                    .value=${this.reference.provider}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, provider: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
-                <label
-                  >${t("pluginsPage.credentials.identifier")}<input
-                    class="settings-input"
-                    .value=${this.reference.id}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, id: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
+                ${(["provider", "id"] as const).map(
+                  (key) => html`<label
+                    >${t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}<input
+                      class="settings-input"
+                      .value=${this.reference[key]}
+                      ?disabled=${blocked}
+                      @input=${(event: Event) => {
+                        if (event.currentTarget instanceof HTMLInputElement) {
+                          this.reference = { ...this.reference, [key]: event.currentTarget.value };
+                        }
+                      }}
+                  /></label>`,
+                )}
                 <p class="muted">${t(`pluginsPage.credentials.help.${this.reference.source}`)}</p>
                 ${this.inspection?.kind === "reference" && this.inspection.unresolved ? html`<p class="callout warn">${t("pluginsPage.credentials.unresolved")}</p>` : nothing}
               `

@@ -5,6 +5,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { heartbeatLog } from "./heartbeat-log.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
@@ -726,6 +727,41 @@ describe("heartbeat wake settlement", () => {
   function setHandler(handler: Parameters<typeof setRuntimeHeartbeatWakeHandler>[0]) {
     disposeHandler = setRuntimeHeartbeatWakeHandler(handler);
   }
+
+  it.each([false, true])("logs terminal wake failures with a waiter=%s", async (wait) => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(heartbeatLog, "error").mockImplementation(() => {});
+    const failure = { status: "failed" as const, reason: "synthetic target unavailable" };
+    const handler = vi.fn().mockResolvedValue(failure);
+    setHandler(handler);
+    const request = {
+      source: "exec-event" as const,
+      intent: "event" as const,
+      reason: "exec-event",
+      agentId: "main",
+      sessionKey: "agent:main:wake-failure",
+      coalesceMs: 0,
+    };
+    const result = wait ? requestHeartbeatAndWait(request) : requestHeartbeat(request);
+
+    await vi.runAllTimersAsync();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      "session event wake failed; no wake retry scheduled",
+      {
+        source: "exec-event",
+        intent: "event",
+        agentId: "main",
+        sessionKey: "agent:main:wake-failure",
+        wakeReason: "exec-event",
+        error: failure.reason,
+      },
+    );
+    if (wait) {
+      expect(await result).toEqual(failure);
+    }
+  });
 
   it.each(["absent", "queued", "running"])(
     "settles a waiter with an unavailable handler when %s",

@@ -231,6 +231,8 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
     Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
 
+    Session retention skips agents with pending or completed deletion while continuing maintenance for healthy agents. Pending deletion cleanup remains owned by the agent deletion operation.
+
   </Accordion>
   <Accordion title="Legacy store migration">
     `openclaw doctor --fix` imports supported `jobs-quarantine.json` sidecars into SQLite and archives the originals with a `.migrated` suffix. Retired `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` inputs remain unchanged: install OpenClaw `2026.9.7`, run its Doctor, then upgrade to the latest version. See the [retention policy](/gateway/doctor/config-migrations#retention-policy). Malformed SQLite job rows remain recoverable in quarantine while valid jobs keep running.

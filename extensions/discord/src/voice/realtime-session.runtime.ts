@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   registerRealtimeVoiceSelection,
   type RealtimeVoiceCloseDisposition,
@@ -203,7 +204,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     if (this.warmSession === session) {
-      this.params.onTerminalError(error instanceof Error ? error : new Error(String(error)));
+      this.params.onTerminalError(toStringifiedError(error));
       return;
     }
     for (const speaker of this.sessions) {
@@ -411,25 +412,20 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private async connectCandidate(
     session: DiscordRealtimeSpeakerSession,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<void> {
-    signal?.throwIfAborted();
-    let abort: (() => void) | undefined;
+    signal.throwIfAborted();
+    const cancelled = createDeferred<never>();
+    const abort = () => {
+      void this.closeSpeaker(session);
+      cancelled.reject(toErrorObject(signal.reason, "Discord voice change cancelled"));
+    };
     try {
-      await Promise.race([
-        session.connect(),
-        new Promise<never>((_resolve, reject) => {
-          abort = () => {
-            void this.closeSpeaker(session);
-            reject(toErrorObject(signal?.reason, "Discord voice change cancelled"));
-          };
-          signal?.addEventListener("abort", abort, { once: true });
-        }),
-      ]);
+      const connecting = session.connect();
+      signal.addEventListener("abort", abort, { once: true });
+      await Promise.race([connecting, cancelled.promise]);
     } finally {
-      if (abort) {
-        signal?.removeEventListener("abort", abort);
-      }
+      signal.removeEventListener("abort", abort);
     }
   }
 

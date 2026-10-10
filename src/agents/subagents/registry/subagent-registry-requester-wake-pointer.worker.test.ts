@@ -1,10 +1,11 @@
 import { expect, it, vi } from "vitest";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -51,31 +52,19 @@ it("publishes a selected requester wake before an overlapping row mutation plans
     const releaseWake = createDeferredCore();
     const ackReached = createDeferredCore();
     const releaseAck = createDeferredCore();
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    const held = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((owner, run, options) =>
-        execute(
-          owner,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                  wakeReached.resolve();
-                  await releaseWake.promise;
-                }
-                const receipt = await scope.execute(command, executeOptions);
-                if (command.type === "subagents.persistChanges") {
-                  ackReached.resolve();
-                  await releaseAck.promise;
-                }
-                return receipt;
-              },
-            }),
-          options,
-        ),
-      );
-    const wake = mutateRequesterSettleWakeBatch({
+    const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+        wakeReached.resolve();
+        await releaseWake.promise;
+      }
+      const receipt = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        ackReached.resolve();
+        await releaseAck.promise;
+      }
+      return receipt;
+    });
+    const wake = mutateRequesterCompletionBatch({
       entries: [selected],
       operation: {
         kind: "transition",
@@ -170,26 +159,14 @@ it("keeps a known requester wake commit across an immutable row publication", as
     }
     const ackReached = createDeferredCore();
     const releaseAck = createDeferredCore();
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    const held = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((owner, run, options) =>
-        execute(
-          owner,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                const receipt = await scope.execute(command, executeOptions);
-                if (command.type === "subagents.persistChanges") {
-                  ackReached.resolve();
-                  await releaseAck.promise;
-                }
-                return receipt;
-              },
-            }),
-          options,
-        ),
-      );
+    const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const receipt = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        ackReached.resolve();
+        await releaseAck.promise;
+      }
+      return receipt;
+    });
     const owner = captureOpenClawStateWorkerContext();
     const publication = mutateSubagentRuns(
       [entry.runId],

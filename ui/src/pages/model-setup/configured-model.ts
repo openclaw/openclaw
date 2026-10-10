@@ -105,27 +105,12 @@ function renderModelSetupFailure(status: string, error: string): TemplateResult 
   `;
 }
 
-function configuredModelDetail(candidate: Candidate | undefined, modelRef: string): string {
-  const name = modelRef.slice(modelRef.indexOf("/") + 1);
-  const detail = candidate?.detail.trim();
-  if (!detail || candidate?.kind === "existing-model") {
-    return name;
-  }
-  return detail.toLowerCase().includes(name.toLowerCase()) ? detail : `${name} · ${detail}`;
-}
-
-function verificationButtonLabel(verify: ModelSetupVerifyState): string {
-  switch (verify.phase) {
-    case "checking":
-      return t("modelSetup.verify.checkingButton");
-    case "failed":
-      return t("modelSetup.verify.retry");
-    case "ok":
-      return t("modelSetup.verify.checkAgain");
-    default:
-      return t("modelSetup.verify.button");
-  }
-}
+const VERIFICATION_BUTTON_LABELS = {
+  checking: "modelSetup.verify.checkingButton",
+  failed: "modelSetup.verify.retry",
+  ok: "modelSetup.verify.checkAgain",
+  idle: "modelSetup.verify.button",
+};
 
 export function renderConfiguredModel(props: {
   result: SystemAgentSetupDetectResult;
@@ -148,7 +133,14 @@ export function renderConfiguredModel(props: {
         )
       : undefined;
   const providerLabel = providerId ? providerDisplayLabel(providerId) : displayRef;
-  const detail = configuredModelDetail(configuredCandidate, displayRef);
+  const name = displayRef.slice(displayRef.indexOf("/") + 1);
+  const detail = configuredCandidate?.detail.trim();
+  const description =
+    !detail || configuredCandidate?.kind === "existing-model"
+      ? name
+      : detail.toLowerCase().includes(name.toLowerCase())
+        ? detail
+        : `${name} · ${detail}`;
 
   return html`
     <section class="settings-section model-setup__current" data-verify-phase=${props.verify.phase}>
@@ -164,7 +156,7 @@ export function renderConfiguredModel(props: {
           }
           <div class="model-setup__current-copy">
             <strong>${providerLabel}</strong>
-            <div class="muted">${detail}</div>
+            <div class="muted">${description}</div>
             ${
               props.verify.phase === "checking"
                 ? html`<div class="model-setup__testing" role="status">
@@ -195,7 +187,7 @@ export function renderConfiguredModel(props: {
                   ?disabled=${props.actionsDisabled}
                   @click=${props.onVerify}
                 >
-                  ${verificationButtonLabel(props.verify)}
+                  ${t(VERIFICATION_BUTTON_LABELS[props.verify.phase])}
                 </button>`
               : nothing
           }

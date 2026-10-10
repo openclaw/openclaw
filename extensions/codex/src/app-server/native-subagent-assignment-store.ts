@@ -20,29 +20,22 @@ export function createNativeSubagentAssignmentStore(params: {
       throw new Error("Native assignment binding is no longer current.");
     }
   };
+  const mutate =
+    (
+      kind: "record-native-subagent-assignment" | "consume-native-subagent-assignment",
+    ): CodexNativeSubagentAssignmentStore["record"] =>
+    (assignment, assertSourceCurrent) =>
+      bindingStore.mutate(identity, { kind, owner, assignment }, () => {
+        assertCurrent();
+        assertSourceCurrent();
+      });
   return {
     assertCurrent,
     read: () => {
       assertCurrent();
       return bindingStore.readNativeSubagentAssignments?.(identity, owner) ?? [];
     },
-    record: (assignment, assertSourceCurrent) =>
-      bindingStore.mutate(
-        identity,
-        { kind: "record-native-subagent-assignment", owner, assignment },
-        () => {
-          assertCurrent();
-          assertSourceCurrent();
-        },
-      ),
-    consume: (assignment, assertSourceCurrent) =>
-      bindingStore.mutate(
-        identity,
-        { kind: "consume-native-subagent-assignment", owner, assignment },
-        () => {
-          assertCurrent();
-          assertSourceCurrent();
-        },
-      ),
+    record: mutate("record-native-subagent-assignment"),
+    consume: mutate("consume-native-subagent-assignment"),
   };
 }

@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
@@ -172,27 +172,12 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function isBlockedContainerCommand(argv: string[]): boolean {
-  if (resolveCliArgvInvocation(["node", "openclaw", ...argv]).primary === "update") {
-    return true;
-  }
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return false;
-    }
-    if (arg === "--update") {
-      return true;
-    }
-    const consumedRootOption = consumeRootOptionToken(argv, i);
-    if (consumedRootOption > 0) {
-      i += consumedRootOption - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return false;
-    }
-  }
-  return false;
+  const invocationArgv = ["node", "openclaw", ...argv];
+  return (
+    resolveCliArgvInvocation(invocationArgv).primary === "update" ||
+    // A shorthand is blocked even when malformed root options hide the rewritten primary.
+    rewriteUpdateFlagArgv(invocationArgv) !== invocationArgv
+  );
 }
 
 export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult {

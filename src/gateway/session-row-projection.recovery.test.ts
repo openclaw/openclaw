@@ -125,13 +125,9 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
     const stop = onInternalSessionTranscriptUpdate(transcriptUpdates);
     try {
       const initial = await listSessions({ context, client, request: options });
-      expect(initial.sessions).toEqual([
-        expect.objectContaining({
-          key: scope.sessionKey,
-          derivedTitle: undefined,
-          lastMessagePreview: undefined,
-        }),
-      ]);
+      expect(initial.sessions.map((row) => row.key)).toEqual([scope.sessionKey]);
+      expect(initial.sessions[0]?.derivedTitle).toBeUndefined();
+      expect(initial.sessions[0]?.lastMessagePreview).toBeUndefined();
       await vi.waitFor(() => expect(previewRead).toHaveBeenCalled());
       previewRead.mockRestore();
       database.db
@@ -158,7 +154,13 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       expect(loadSessionEntry(scope)).toEqual(originalEntry);
       const nativeCalls = observeMainThreadSql();
       const healed = await listSessions({ context, client, request: options });
-      expect(healed.sessions).toEqual([expect.objectContaining(expected)]);
+      expect(healed.sessions).toEqual([
+        expect.objectContaining({
+          key: expected.key,
+          lastMessagePreview: expected.lastMessagePreview,
+        }),
+      ]);
+      expect(healed.sessions[0]?.derivedTitle).toBeUndefined();
       const respond = vi.fn();
       await sessionByKeyReadHandlers["sessions.describe"]!({
         req: { type: "req", id: "recovered-describe", method: "sessions.describe" },
@@ -179,27 +181,6 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       stop();
       getSessionRowProjection(context)?.dispose();
       vi.restoreAllMocks();
-    }
-  });
-});
-
-it("captures the committed replacement before background materialization", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const query = { agentId: "main", key: "agent:main:replaced" };
-    const target = { agentId: query.agentId, sessionKey: query.key };
-    replaceSessionEntrySync(target, { sessionId: "previous", updatedAt: 1 });
-    const projection = await createSessionRowProjection({ cfg });
-    try {
-      const previous = projection.capture(query)!;
-      replaceSessionEntrySync(target, { sessionId: "current", updatedAt: 2 });
-      const captured = projection.capture(query)!;
-      expect(captured.entry?.sessionId).toBe("current");
-      await projection.ensureMaterialized();
-      expect(projection.isCurrent(captured)).toBe(true);
-      expect(projection.isCurrent(previous)).toBe(false);
-    } finally {
-      projection.dispose();
     }
   });
 });

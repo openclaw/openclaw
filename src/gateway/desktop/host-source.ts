@@ -151,29 +151,31 @@ async function inspectConfiguredHostDesktop(
     port,
     timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
   });
+  const unavailable = (
+    detail: string,
+    unavailableReason: NonNullable<HostDesktopInspection["unavailableReason"]>,
+    security?: string,
+  ): HostDesktopInspection => ({
+    status: {
+      enabled: true,
+      state: "unavailable",
+      port,
+      ...(security !== undefined ? { security } : {}),
+    },
+    detail,
+    unavailableReason,
+  });
   if (probe.kind === "unreachable" || probe.kind === "timeout") {
     if (params.config?.port === undefined && params.config?.managed === true) {
       if (platform !== "linux") {
-        return {
-          status: { enabled: true, state: "unavailable", port },
-          detail: managedPlatformError(platform),
-          unavailableReason: "unsupported",
-        };
+        return unavailable(managedPlatformError(platform), "unsupported");
       }
       return managedInspection(params.managedDesktop?.status() ?? { state: "unknown" });
     }
-    return {
-      status: { enabled: true, state: "unavailable", port },
-      detail: unavailableError(port, platform),
-      unavailableReason: "not-listening",
-    };
+    return unavailable(unavailableError(port, platform), "not-listening");
   }
   if (probe.kind === "not-rfb") {
-    return {
-      status: { enabled: true, state: "unavailable", port },
-      detail: nonRfbError(port),
-      unavailableReason: "not-rfb",
-    };
+    return unavailable(nonRfbError(port), "not-rfb");
   }
   const auth = classifyRfbSecurity(probe.securityTypes);
   const security =
@@ -192,11 +194,7 @@ async function inspectConfiguredHostDesktop(
     auth === "none"
       ? `unavailable: unauthenticated VNC server at 127.0.0.1:${port}; require a password-protected VncAuth server, then retry`
       : `unavailable: ${security} security is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`;
-  return {
-    status: { enabled: true, state: "unavailable", port, security },
-    detail,
-    unavailableReason: "unsupported",
-  };
+  return unavailable(detail, "unsupported", security);
 }
 
 /** Creates the host acquisition hook consumed by the source-agnostic desktop registry. */

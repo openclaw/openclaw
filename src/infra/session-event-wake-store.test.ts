@@ -7,8 +7,14 @@ import { publishSystemEventStoreConfig } from "../config/sessions/session-store-
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  captureExecRequestOwners,
+  readExecRequestOwners,
+  withExecRequestOwners,
+  withExecRequestTurn,
+} from "./exec-request-context.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import type { HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
+import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
 import {
   requestSessionEventWake,
   requestSessionEventWakeAndWait,
@@ -186,6 +192,89 @@ describe("session wake physical store ownership", () => {
       );
       expect(peekSystemEventEntries(target.sessionKey)).toEqual([]);
       expect(peekSystemEventEntries(handoff.sessionKey)).toEqual([]);
+    });
+  });
+
+  it("hands an active exec notification to a replacement handler without canceling its request", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      vi.useFakeTimers();
+      const store = path.join(env.OPENCLAW_STATE_DIR!, "same.sqlite");
+      publishSystemEventStoreConfig({ session: { store } });
+      const identity = { ...target, runId: "original-exec-request" };
+      const owner = await withExecRequestTurn({ identity }, async () =>
+        expectDefined(captureExecRequestOwners(identity)?.[0], "original exec owner"),
+      );
+      const notification = expectDefined(
+        enqueueSystemEventEntry(
+          "Exec completed (retained-command, code 0) :: Result still needs delivery",
+          withExecRequestOwners({ sessionKey: target.sessionKey }, [owner]),
+        ),
+        "queued exec completion",
+      );
+      let retiredTurn: Promise<HeartbeatRunResult> | undefined;
+      const retired = vi.fn((request: HeartbeatWakeRequest, signal: AbortSignal) => {
+        const sessionKey = expectDefined(request.sessionKey, "original notification session");
+        const events = peekSystemEventEntries(sessionKey);
+        retiredTurn = withExecRequestTurn(
+          {
+            identity: { ...target, runId: "retired-completion-turn" },
+            owners: events.flatMap((event) => readExecRequestOwners(event) ?? []),
+            abortSignal: signal,
+          },
+          async () => {
+            await new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            return { status: "skipped" as const, reason: "preempted" };
+          },
+        );
+        return retiredTurn;
+      });
+      const delivered: SystemEvent[] = [];
+      const replacement = vi.fn((request: HeartbeatWakeRequest, signal: AbortSignal) => {
+        const sessionKey = expectDefined(request.sessionKey, "replacement notification session");
+        const events = peekSystemEventEntries(sessionKey);
+        return withExecRequestTurn(
+          {
+            identity: { ...target, runId: "replacement-completion-turn" },
+            owners: events.flatMap((event) => readExecRequestOwners(event) ?? []),
+            abortSignal: signal,
+          },
+          async () => {
+            delivered.push(...drainSystemEventEntries(sessionKey));
+            return { status: "ran" as const, durationMs: 1 };
+          },
+        );
+      });
+      dispose = setSessionEventWakeHandler(retired);
+      const pending = requestSessionEventWakeAndWait({
+        ...target,
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        coalesceMs: 0,
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(retired).toHaveBeenCalledOnce();
+        dispose = setSessionEventWakeHandler(replacement);
+        await retiredTurn;
+        expect(retired.mock.calls[0]?.[1].aborted).toBe(true);
+        expect(owner.signal.aborted).toBe(false);
+        expect(peekSystemEventEntries(target.sessionKey)).toEqual([notification]);
+
+        await vi.advanceTimersByTimeAsync(250);
+        await expect(pending).resolves.toMatchObject({ status: "ran" });
+        expect(replacement).toHaveBeenCalledOnce();
+        expect(delivered).toEqual([notification]);
+        expect(owner.signal.aborted).toBe(false);
+        expect(peekSystemEventEntries(target.sessionKey)).toEqual([]);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(replacement).toHaveBeenCalledOnce();
+      } finally {
+        dispose?.();
+        await retiredTurn;
+      }
     });
   });
 });

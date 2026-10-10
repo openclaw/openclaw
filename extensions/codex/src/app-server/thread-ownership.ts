@@ -152,7 +152,7 @@ export async function rollbackCodexAppServerBindingSubscription(
 
 /** Releases only the physical client and native thread recorded by the displaced binding owner. */
 export async function releaseCodexAppServerBindingSubscription(
-  binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId">,
+  binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId" | "conversationIncognito">,
   options: {
     allowUntracked?: boolean;
     assertCurrent?: () => void;
@@ -184,7 +184,7 @@ export async function releaseCodexAppServerBindingSubscription(
         `Codex thread ${binding.threadId} has an active run; stop it before changing its owner.`,
       );
     }
-    if (!options.allowUntracked) {
+    if (!options.allowUntracked && binding.conversationIncognito !== true) {
       return;
     }
     const unsubscribed = await unsubscribeCodexThreadBestEffort(clientLease.client, {
@@ -268,12 +268,11 @@ export async function retireCodexConversationThreadBinding(params: {
             });
           }
         } catch (restorationError) {
-          const recoveryError = new AggregateError(
+          throw new AggregateError(
             [error, restorationError],
             `Codex conversation detachment failed and native thread ${current.threadId} could not be restored; run /codex resume ${current.threadId} to recover it`,
             { cause: restorationError },
           );
-          throw recoveryError;
         }
         throw error;
       }

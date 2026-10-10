@@ -1,15 +1,32 @@
+import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { identity, type Query, type Row } from "./session-row-projection-record.js";
+import {
+  identity,
+  isPreparedSessionRowDatabaseFacts,
+  type PreparedSessionRowDatabaseFacts,
+  type Query,
+  type Row,
+} from "./session-row-projection-record.js";
 
 const TRANSCRIPT_REFRESH_WINDOW_MS = 1_000;
+
+function transcriptIndependentFacts(row: Row) {
+  const facts = row.retainedDatabaseFacts;
+  return isPreparedSessionRowDatabaseFacts(facts) &&
+    facts.entry === row.storedEntry &&
+    !readSessionActivitySummary(facts.entry)
+    ? facts
+    : undefined;
+}
 
 /** Transcript notifications share the projection's lifetime and exact row generations. */
 export function createSessionRowProjectionTranscriptUpdates(params: {
   matching: (query: Query, kind?: string) => Row[];
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
-  refresh: (id: string) => void;
+  invalidate: (id: string) => void;
+  refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts) => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
   let disposed = false;
@@ -27,13 +44,14 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
         return;
       }
       windows.delete(id);
-      if (disposed || params.read(id)?.generation !== generation) {
+      const row = params.read(id);
+      if (disposed || !row || row.generation !== generation) {
         return;
       }
       if (window.pending) {
         // The trailing edge starts the next window, bounding sustained streams too.
         startWindow(id, generation);
-        params.refresh(id);
+        params.refresh(id, transcriptIndependentFacts(row));
       }
     }, TRANSCRIPT_REFRESH_WINDOW_MS);
     timer.unref();
@@ -54,14 +72,22 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
     }
     for (const row of found) {
       const id = identity(row);
+      params.invalidate(id);
       const pending = row.pendingDatabaseFacts !== undefined;
-      // Revoke reusable and in-flight watermarks even when presentation is throttled.
-      row.retainedDatabaseFacts = undefined;
+      const retained =
+        row.storedEntry?.sessionId === change.sessionId &&
+        (update.lifecycleRevision === undefined ||
+          row.storedEntry.lifecycleRevision === update.lifecycleRevision)
+          ? transcriptIndependentFacts(row)
+          : undefined;
+      // Only summary-bearing facts contain a transcript watermark. Keep unrelated
+      // committed facets while still revoking every in-flight transcript snapshot.
+      row.retainedDatabaseFacts = retained;
       row.databaseFactsRevision++;
       // Accepted snapshots must lose their watermark before cold-row or throttle
       // suppression; an exact read may resume before the next refresh window.
       if (pending) {
-        params.refresh(id);
+        params.refresh(id, retained);
       }
       if (row.entry?.archivedAt !== undefined && !row.materialized) {
         continue;
@@ -75,7 +101,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       // Transcript watermarks and previews are row-local. Relationships, inherited model
       // settings, and subagent activity change through their own sessionChanges publications.
       if (!cold && !pending) {
-        params.refresh(id);
+        params.refresh(id, retained);
       }
     }
   });

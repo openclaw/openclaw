@@ -4,7 +4,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 export type ProcessCommand =
-  | { argv: string[]; serviceMarker?: string; uid?: number }
+  | { argv: string[]; executable?: string; serviceMarker?: string; uid?: number }
   | { argvUnavailable: true; uid: number };
 
 type GroupMember = {

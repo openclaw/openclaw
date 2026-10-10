@@ -363,6 +363,77 @@ describe("sidebar child snapshot freshness", () => {
     }
   });
 
+  it("keeps a complete child window healthy while deletion is pending and after confirmation", async () => {
+    const removed = { ...child, sessionId: "removed-child" };
+    const kept = {
+      ...child,
+      key: "agent:worker:kept",
+      sessionId: "kept-child",
+      label: "Kept child",
+    };
+    let children = [removed, kept];
+    const parent = {
+      ...parentRow,
+      sessionId: "parent-session",
+      childSessions: children.map((row) => row.key),
+    };
+    const deletion = deferred<{ ok: true; deleted: boolean }>();
+    const childList = vi.fn(() => ({
+      ...result(children),
+      totalCount: children.length,
+      hasMore: false,
+    }));
+    const gatewayHarness = createGatewayHarness(
+      createTestGatewayClient((method, params) => {
+        if (method === "sessions.delete") {
+          return deletion.promise;
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.list") {
+          return (params as { spawnedBy?: string }).spawnedBy ? childList() : result([parent]);
+        }
+        return {};
+      }),
+    );
+    const sessions = createTestSessionCapability(gatewayHarness.gateway);
+    await sessions.refresh({ force: true });
+    const { sidebar, provider } = await mountSidebar(gatewayHarness.gateway, sessions);
+    let removal: Promise<unknown> | undefined;
+    try {
+      sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
+      await sidebar.sessionData.loadChildSessions(parentKey);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2);
+      removal = sessions.delete(removed.key, { expectedSessionId: removed.sessionId });
+      childList.mockClear();
+      await sessions.refreshList(childSessionListQuery(parentKey));
+      await sidebar.sessionData.loadChildSessions(parentKey);
+      await sidebar.updateComplete;
+      expect(childList).toHaveBeenCalledOnce();
+      expect(sidebar.sessionData.childSessionErrorsByParent.has(parentKey)).toBe(false);
+      expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
+      expect(sidebar.textContent).toContain(kept.label);
+
+      children = [kept];
+      deletion.resolve({ ok: true, deleted: true });
+      await removal;
+      await sessions.refreshList(childSessionListQuery(parentKey));
+      await sidebar.sessionData.loadChildSessions(parentKey);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.childSessionErrorsByParent.has(parentKey)).toBe(false);
+      expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
+    } finally {
+      deletion.resolve({ ok: true, deleted: false });
+      await removal;
+      provider.remove();
+      sessions.dispose();
+    }
+  });
+
   it("keeps incomplete child windows dormant until explicit retry", async () => {
     const { harness, sidebar, publishChildChanged, expand, retry } = await mountParent();
     harness.list.mockResolvedValue({ ...result([child]), totalCount: 2, hasMore: false });

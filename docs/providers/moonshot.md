@@ -153,7 +153,7 @@ onboarding.
                   max: "max",
                 },
                 input: ["text", "image", "video"],
-                cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+                cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 },
                 contextWindow: 1048576,
                 maxTokens: 1048576,
               },
@@ -319,6 +319,12 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 ```
 
 ## Advanced configuration
+
+Moonshot automatically caches matching prompt prefixes. Kimi K3 uses a five-minute
+cache by default and reports cache writes separately from cache reads. OpenClaw's
+default cost estimate prices those writes at $3 per million tokens and cache reads
+at $0.30 per million tokens. See
+[Kimi context caching](https://platform.kimi.ai/docs/guide/context-caching).
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">

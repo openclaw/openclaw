@@ -417,6 +417,7 @@ export interface ToolDefinition<
   | "parameters"
   | "outputSchema"
   | "prepareArguments"
+  | "async"
 > {
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;

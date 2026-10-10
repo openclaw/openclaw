@@ -33,8 +33,9 @@ import {
 } from "./matrix/client/url-validation.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
-import { isMatrixRoomId } from "./matrix/target-ids.js";
+import { isMatrixInviteAutoJoinTarget, isMatrixRoomId } from "./matrix/target-ids.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
+import { finishMatrixSetupAfterConfigWrite } from "./setup-core.js";
 import { createMatrixSetupDmPolicy } from "./setup-dm-policy.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";
 
@@ -52,10 +53,6 @@ const matrixInviteAutoJoinOptions: Array<{
 
 function isMatrixInviteAutoJoinPolicy(value: string): value is MatrixInviteAutoJoinPolicy {
   return value === "allowlist" || value === "always" || value === "off";
-}
-
-function isMatrixInviteAutoJoinTarget(entry: string): boolean {
-  return entry === "*" || isMatrixRoomId(entry) || (entry.startsWith("#") && entry.includes(":"));
 }
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
@@ -228,10 +225,9 @@ async function configureMatrixInviteAutoJoin(params: {
       ].join("\n"),
       "Matrix invite auto-join",
     );
-    return setMatrixAutoJoin(params.cfg, policy, [], accountId);
   }
 
-  if (policy === "always") {
+  if (policy !== "allowlist") {
     return setMatrixAutoJoin(params.cfg, policy, [], accountId);
   }
 
@@ -613,40 +609,29 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
       intent: "update",
     }),
   configureInteractive: async (params) => {
-    if (!params.configured) {
-      return await runMatrixConfigure({
-        ...params,
-        cfg: params.cfg as CoreConfig,
-        intent: "update",
+    let intent: MatrixConfigureIntent = "update";
+    if (params.configured) {
+      const action = await params.prompter.select({
+        message: "Matrix already configured. What do you want to do?",
+        options: [
+          { value: "update", label: "Modify settings" },
+          { value: "add-account", label: "Add account" },
+          { value: "skip", label: "Skip (leave as-is)" },
+        ],
+        initialValue: "update",
       });
-    }
-    const action = await params.prompter.select({
-      message: "Matrix already configured. What do you want to do?",
-      options: [
-        { value: "update", label: "Modify settings" },
-        { value: "add-account", label: "Add account" },
-        { value: "skip", label: "Skip (leave as-is)" },
-      ],
-      initialValue: "update",
-    });
-    if (action === "skip") {
-      return "skip";
+      if (action === "skip") {
+        return "skip";
+      }
+      intent = action === "add-account" ? "add-account" : "update";
     }
     return await runMatrixConfigure({
       ...params,
       cfg: params.cfg as CoreConfig,
-      intent: action === "add-account" ? "add-account" : "update",
+      intent,
     });
   },
-  afterConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
-    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
-    await runMatrixSetupBootstrapAfterConfigWrite({
-      previousCfg: previousCfg as CoreConfig,
-      cfg: cfg as CoreConfig,
-      accountId,
-      runtime,
-    });
-  },
+  afterConfigWritten: finishMatrixSetupAfterConfigWrite,
   dmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

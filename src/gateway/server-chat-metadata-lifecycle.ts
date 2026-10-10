@@ -18,6 +18,7 @@ export function broadcastChatMetadataChanged(
     modelSelectionChanged?: boolean;
     modelCatalogChanged?: boolean;
     authChanged?: boolean;
+    commandsChanged?: false;
   } = {},
 ): void {
   try {
@@ -89,6 +90,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
               agentId: event.agentId,
               modelCatalogChanged: true,
               authChanged: false,
+              commandsChanged: false,
             });
           }
           return;
@@ -166,6 +168,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
+          commandsChanged: false,
         });
       });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
@@ -174,7 +177,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
           const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
           selectionConfig = config;
           if (!unchanged) {
-            broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+            broadcastChatMetadataChanged(next, {
+              modelSelectionChanged: true,
+              commandsChanged: false,
+            });
           }
         }
       });
@@ -210,9 +216,23 @@ export async function createGatewayChatMetadataLifecycle(params: {
         },
       );
     },
-    read: runtime.read,
+    read: async (readParams: Parameters<typeof runtime.read>[0]) => {
+      const { ensureGatewayPreparedModelRuntimeReady } =
+        await import("../agents/prepared-model-runtime.js");
+      readParams.assertCurrent?.();
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      readParams.assertCurrent?.();
+      return await runtime.read(readParams);
+    },
     readModelsList: runtime.readModelsList,
-    readStartup: runtime.readStartup,
+    readStartup: async (readParams: Parameters<typeof runtime.readStartup>[0]) => {
+      if (readParams.readPolicy !== "ready") {
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../agents/prepared-model-runtime.js");
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      }
+      return await runtime.readStartup(readParams);
+    },
     refresh: runtime.refresh,
   };
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError } from "../../infra/errors.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
@@ -11,7 +12,9 @@ import {
   resolveManagedWorktreePathKeys,
   shouldPreserveOrphanCandidate,
 } from "./orphan-paths.js";
-import { listRegistryWorktrees } from "./registry.js";
+import { readPendingWorktrees } from "./pending-slots.js";
+import { readRegistryWorktrees } from "./registry-read.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
 import { WORKTREE_TEMPLATE_DIRECTORY } from "./template-cache.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -33,28 +36,50 @@ export async function collectRetiredWorktreeArtifacts({
   progress: WorktreeGcProgress;
   withAllocationLease: (run: (guard: WorktreeAllocationGuard) => Promise<void>) => Promise<void>;
 }): Promise<{ orphansDeleted: number; snapshotsPruned: number }> {
+  const context = captureWorktreeRunEndContext(env);
   let orphansDeleted = 0;
   let snapshotsPruned = 0;
+  const pending = await readPendingWorktrees(context.environment);
   const expired = records.filter(
     (record) => record.removedAt !== undefined && record.removedAt < expiresBefore,
   );
   const entries = await fs
-    .readdir(path.join(resolveStateDir(env), "worktrees"), { withFileTypes: true })
+    .readdir(path.join(resolveStateDir(context.environment), "worktrees"), {
+      withFileTypes: true,
+    })
     .catch(() => []);
   const hasOrphanCandidates = entries.some(
     (entry) => entry.isDirectory() && entry.name !== WORKTREE_TEMPLATE_DIRECTORY,
   );
-  if (hasOrphanCandidates || expired.length > 0) {
+  if (hasOrphanCandidates || expired.length > 0 || pending.length > 0) {
     try {
-      // Skip empty passes above; all destructive cleanup uses fresh facts under
-      // the same lease as allocation and restore, including their partial paths.
       await withAllocationLease(async (guard) => {
+        const slots = await readPendingWorktrees(context.environment);
+        for (const { record, state } of slots) {
+          if (state !== "recovering") {
+            continue;
+          }
+          progress.result.retiredCheckoutPaths.push(record.path);
+          progress.error(
+            "orphans",
+            new Error(
+              `Interrupted worktree creation retained at ${record.path}; inspect its Git registration and native processes before manual recovery`,
+            ),
+            record.id,
+          );
+        }
         if (hasOrphanCandidates) {
           try {
+            const pendingRecords = slots.map(({ record }) => record);
+            const currentRecords = await readRegistryWorktrees(context.environment, {}, context);
+            context.admission.assertCurrent();
+            guard.signal?.throwIfAborted();
+            guard.commitGuard?.();
             orphansDeleted = await reconcileOrphans(
-              env,
+              context.environment,
               getConfig,
-              listRegistryWorktrees(env),
+              [...pendingRecords, ...currentRecords],
+              pendingRecords.map((record) => record.path),
               guard,
             );
           } catch (error) {
@@ -92,11 +117,16 @@ async function reconcileOrphans(
   env: NodeJS.ProcessEnv,
   getConfig: (() => OpenClawConfig) | undefined,
   records: ManagedWorktreeRecord[],
+  pendingPaths: readonly string[],
   guard: WorktreeAllocationGuard,
 ): Promise<number> {
   const managedPaths = await resolveManagedWorktreePathKeys(records);
   if (!managedPaths) {
     return 0;
+  }
+  // Cloning briefly removes its destination; the reserved canonical path still owns its parent.
+  for (const pendingPath of pendingPaths) {
+    managedPaths.add(process.platform === "win32" ? pendingPath.toLowerCase() : pendingPath);
   }
   // Only the default state-owned area grants orphan cleanup authority. A custom
   // root can contain unrelated directories; its cleanup is registry-bound above.
@@ -151,8 +181,10 @@ async function reconcileOrphans(
       await fs.rm(candidate, { recursive: true, force: true });
       deleted += 1;
     }
-    guard.commitGuard?.();
-    await fs.rmdir(fingerprintPath).catch(() => undefined);
+    if (!pendingPaths.some((pendingPath) => isPathInside(fingerprintPath, pendingPath))) {
+      guard.commitGuard?.();
+      await fs.rmdir(fingerprintPath).catch(() => undefined);
+    }
   }
   return deleted;
 }

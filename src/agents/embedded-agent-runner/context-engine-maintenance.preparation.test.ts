@@ -28,13 +28,20 @@ vi.mock("../../context-engine/registry.js", () => ({
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
 }));
-vi.mock("../../config/sessions/session-accessor.js", () => ({ publishTranscriptUpdate: vi.fn() }));
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  publishTranscriptUpdate: vi.fn(),
+  resolveSessionTranscriptRuntimeTarget: vi.fn(),
+}));
 vi.mock("../sessions/index.js", () => ({ SessionManager: { openAsync: vi.fn() } }));
 vi.mock("../sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
 }));
 vi.mock("./transcript-rewrite.js", () => ({ rewriteTranscriptEntriesInSessionManager: vi.fn() }));
-vi.mock("./transcript-runtime-state.js", () => ({ resolveRuntimeTranscriptReadTarget: vi.fn() }));
+vi.mock("../../config/sessions/session-cold-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-cold-storage.js")>()),
+  restoreSessionColdTranscript: vi.fn(),
+}));
 vi.mock("./logger.js", () => ({ log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() } }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }),

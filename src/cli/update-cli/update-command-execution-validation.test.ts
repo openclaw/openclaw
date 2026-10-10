@@ -287,6 +287,72 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
     expect(recorded.every((entry) => entry.status === "completed")).toBe(true);
   });
 
+  it("reports Git candidate copy, startup and cleanup timing in the update result", async () => {
+    const canarySteps: UpdateStepResult[] = (
+      [
+        ["candidate-state-snapshot", 1_200],
+        ["candidate-doctor", 2_400],
+        ["candidate-gateway-startup", 308_123],
+        ["candidate-state-cleanup", 900],
+      ] as const
+    ).map(([name, durationMs]) => ({
+      name,
+      durationMs,
+      exitCode: 0,
+      command: name,
+      cwd: "/candidate",
+    }));
+    mocks.validateCanary.mockResolvedValue({
+      status: "ok",
+      phase: "readiness",
+      steps: canarySteps,
+      durationMs: 312_623,
+      logTail: [],
+    });
+    let accepted: unknown;
+    mocks.runGitUpdate.mockImplementation(
+      async ({ validateCandidate }: { validateCandidate: (root: string) => Promise<unknown> }) => {
+        accepted = await validateCandidate("/candidate");
+        return { ...successfulUpdate, mode: "git" };
+      },
+    );
+
+    const execution = await executeMutableUpdate(await bindExecutionGuards(executionParams("git")));
+
+    expect(execution?.result.status).toBe("ok");
+    expect(accepted).toEqual(canarySteps);
+  });
+
+  it("reports the post-stop activation checks as a timed step", async () => {
+    mocks.runPackageUpdate.mockImplementation(
+      async ({
+        validateCandidate,
+        beforeActivate,
+      }: {
+        validateCandidate: (root: string) => Promise<unknown>;
+        beforeActivate: () => Promise<void>;
+      }) => {
+        await validateCandidate("/candidate");
+        await beforeActivate();
+        return successfulUpdate;
+      },
+    );
+    const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>();
+
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards({
+        ...executionParams("package"),
+        shouldRestart: false,
+        progress: { onStepComplete },
+      }),
+    );
+
+    expect(execution?.result.status).toBe("ok");
+    const step = execution?.result.steps.find((entry) => entry.name === "post-stop-checks");
+    expect(step).toMatchObject({ exitCode: 0, durationMs: expect.any(Number) });
+    expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining({ ...step }));
+  });
+
   it.each([
     ["measured startup", undefined, true, undefined],
     ...(process.platform === "win32"

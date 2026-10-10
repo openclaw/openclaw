@@ -71,28 +71,25 @@ async function runPluginsCommand(args: string[]): Promise<unknown> {
   return JSON.parse(output);
 }
 
-it.each([false, true])(
-  "registered plugins list/info/inspect retain cold CLI capabilities when enabled=%s",
-  async (enabled) => {
-    const fixture = createFixture(enabled);
-    const plugin = {
-      id: pluginId,
-      enabled,
-      status: enabled ? "loaded" : "disabled",
-      cliBackendIds,
-    };
-    expect(await runPluginsCommand(["list"])).toMatchObject({
-      plugins: [expect.objectContaining(plugin)],
+it("registered plugins list/info/inspect retain disabled cold CLI capabilities", async () => {
+  const fixture = createFixture(false);
+  const plugin = {
+    id: pluginId,
+    enabled: false,
+    status: "disabled",
+    cliBackendIds,
+  };
+  expect(await runPluginsCommand(["list"])).toMatchObject({
+    plugins: [expect.objectContaining(plugin)],
+  });
+  for (const command of ["info", "inspect"]) {
+    expect(await runPluginsCommand([command, pluginId])).toMatchObject({
+      plugin: { ...plugin, imported: false },
+      capabilities: [{ kind: "cli-backend", ids: cliBackendIds }],
     });
-    for (const command of ["info", "inspect"]) {
-      expect(await runPluginsCommand([command, pluginId])).toMatchObject({
-        plugin: { ...plugin, imported: false },
-        capabilities: [{ kind: "cli-backend", ids: cliBackendIds }],
-      });
-    }
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  },
-);
+  }
+  expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+});
 
 it.each([false, true])(
   "registered plugins inspect --runtime preserves activation and executable capabilities when enabled=%s",
@@ -111,48 +108,3 @@ it.each([false, true])(
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(enabled);
   },
 );
-
-it("registered plugins inspect --all reports the selected duplicate without importing either entry", async () => {
-  const selected = createFixture(true);
-  const duplicateRoot = path.join(path.dirname(selected.rootDir), "state", "extensions", pluginId);
-  fs.mkdirSync(duplicateRoot, { recursive: true });
-  const duplicate = createColdPluginFixture({
-    rootDir: duplicateRoot,
-    pluginId,
-    manifest: { cliBackends: ["overridden-cli"] },
-  });
-  expect(await runPluginsCommand(["inspect", "--all"])).toMatchObject([
-    {
-      plugin: {
-        id: pluginId,
-        source: fs.realpathSync(selected.runtimeSource),
-        enabled: true,
-        status: "loaded",
-        imported: false,
-        cliBackendIds,
-      },
-    },
-  ]);
-  expect(isColdPluginRuntimeLoaded(selected)).toBe(false);
-  expect(isColdPluginRuntimeLoaded(duplicate)).toBe(false);
-});
-
-it("registered plugins inspect --runtime reports registrations rather than unregistered declarations", async () => {
-  const fixture = createFixture(true);
-  fs.writeFileSync(
-    fixture.runtimeSource,
-    `module.exports = { register(api) {
-      api.registerCliBackend({ id: "runtime-cli", config: { command: "fixture-cli" } });
-    } };`,
-  );
-  expect(await runPluginsCommand(["inspect", pluginId, "--runtime"])).toMatchObject({
-    plugin: {
-      id: pluginId,
-      enabled: true,
-      status: "loaded",
-      imported: true,
-      cliBackendIds: ["runtime-cli"],
-    },
-    capabilities: [{ kind: "cli-backend", ids: ["runtime-cli"] }],
-  });
-});

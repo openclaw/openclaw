@@ -74,7 +74,9 @@ describe("renderSessionHovercard", () => {
     "shows the full failure above the notepad (child: %s)",
     (childLabel) => {
       const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
-      const failed = row({ attention: { kind: "error", reason, childLabel } });
+      const failed = row({
+        attention: { kind: "error", reason, childLabel, sourceSessionKey: "agent:main:failed" },
+      });
       const container = renderCard({ row: failed, progressCard: progressCard() });
       const error = container.querySelector(".session-hovercard__error");
       expect(error?.textContent).toContain(reason);

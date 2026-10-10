@@ -5,7 +5,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
@@ -31,8 +31,8 @@ const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   tempDirs.cleanup();
   vi.unstubAllEnvs();
   setLoggerOverride(null);
@@ -278,7 +278,7 @@ describe("gateway crash-loop breaker", () => {
     expect(decision.shouldWriteStabilityBundle).toBe(false);
   });
 
-  it("records a fresh lifecycle segment before recovered channel startup", () => {
+  it("records a fresh lifecycle segment before recovered channel startup", async () => {
     const db = createLifecycleDb();
     const nowMs = 1_000_000;
     const safeModeBootId = recordGatewayBootStart(
@@ -292,7 +292,7 @@ describe("gateway crash-loop breaker", () => {
       uncleanBoots: 0,
     });
 
-    const recoveredBootId = recordGatewayCrashLoopRecovery(safeModeBootId, db.env, nowMs);
+    const recoveredBootId = await recordGatewayCrashLoopRecovery(safeModeBootId, db.env, nowMs);
 
     expect(recoveredBootId).toBeDefined();
     expect(

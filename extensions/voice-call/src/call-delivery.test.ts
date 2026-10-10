@@ -1,12 +1,15 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCallDelivery, type CallDeliveryMessage } from "./call-delivery.js";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createManagerHarness,
+  createTestStorePath,
   FakeProvider,
   registerTestManagerCleanup,
+  writeCallsToStore,
 } from "./manager.test-harness.js";
 import type { CallRecord } from "./types.js";
 
@@ -16,7 +19,10 @@ import type { CallRecord } from "./types.js";
 describe("requester call delivery", () => {
   afterEach(() => vi.useRealTimers());
 
-  async function setup(overrides: Record<string, unknown> = {}) {
+  async function setup(
+    overrides: Record<string, unknown> = {},
+    beforeDeliver?: () => Promise<void>,
+  ) {
     const config = VoiceCallConfigSchema.parse({
       reports: { enabled: true, includeTranscript: true },
       live: { transcript: false, minIntervalMs: 1000 },
@@ -30,6 +36,7 @@ describe("requester call delivery", () => {
     const delivery = createCallDelivery({
       config,
       deliver: async (message) => {
+        await beforeDeliver?.();
         messages.push(message);
       },
       summarize,
@@ -230,6 +237,65 @@ describe("requester call delivery", () => {
     expect(expectDefined(messages[0], "first delivery message").sessionKey).toBe(
       "agent:owner:telegram:direct:42",
     );
+  });
+
+  it("records interrupted live delivery without replaying its uncertain transcript batch", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sending = createDeferred<void>();
+    const release = createDeferred<void>();
+    const { manager, call, config, delivery } = await setup(
+      { reports: { enabled: false }, live: { transcript: true, minIntervalMs: 1000 } },
+      () => {
+        sending.resolve();
+        return release.promise;
+      },
+    );
+    try {
+      await speech(manager, call, "user", "First line");
+      await vi.advanceTimersByTimeAsync(1000);
+      await sending.promise;
+      const snapshot = structuredClone(
+        expectDefined(await manager.getCallFromMemoryOrStore(call.callId), "pending call"),
+      );
+      expect(snapshot.metadata?.liveTranscriptDelivery).toMatchObject({
+        status: "pending",
+        cursor: 1,
+      });
+
+      const recoveredStore = createTestStorePath();
+      await writeCallsToStore(recoveredStore, [snapshot]);
+      const restarted = registerTestManagerCleanup(new CallManager(config, recoveredStore));
+      await restarted.initialize(new FakeProvider(), "https://example.com/voice/webhook");
+      const restored = expectDefined(restarted.getCall(call.callId), "restored call");
+      expect(restored.metadata?.liveTranscriptDelivery).toMatchObject({
+        status: "failed",
+        error: "interrupted by restart",
+        cursor: 1,
+      });
+      const resumed: CallDeliveryMessage[] = [];
+      const nextDelivery = createCallDelivery({
+        config,
+        deliver: async (message) => {
+          resumed.push(message);
+        },
+        summarize: async () => "unused",
+        persist: (record) => restarted.persistDeliveryStatus(record),
+      });
+      restarted.onCallUpdated = nextDelivery.observe;
+      try {
+        await speech(restarted, restored, "user", "Second line");
+        await end(restarted, restored);
+        await nextDelivery.observe(restored);
+        expect(resumed).toHaveLength(1);
+        expect(resumed[0]?.text).toContain("Second line");
+        expect(resumed[0]?.text).not.toContain("First line");
+      } finally {
+        await nextDelivery.stop();
+      }
+    } finally {
+      release.reject(new Error("simulated process interruption"));
+      await delivery.stop();
+    }
   });
 
   it("persists the final bridge transcript before producing the terminal report", async () => {

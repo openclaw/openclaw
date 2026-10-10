@@ -52,6 +52,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     const artwork = result.theme.source === "plugin" ? result.theme.artwork : undefined;
     try {
       definition = normalizeThemeDefinition(result.definition, {
+        iconIds: Object.keys(artwork?.icons ?? {}),
         hatIds: Object.keys(artwork?.hats ?? {}),
         critterIds: Object.keys(artwork?.critters ?? {}),
       });
@@ -92,14 +93,11 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
         return;
       }
       const available = new Set<string>(result.themes.map((theme) => theme.id));
-      for (const id of definitions.keys()) {
-        if (!available.has(id)) {
-          definitions.delete(id);
-        }
-      }
-      for (const id of definitionErrors.keys()) {
-        if (!available.has(id)) {
-          definitionErrors.delete(id);
+      for (const entries of [definitions, definitionErrors]) {
+        for (const id of entries.keys()) {
+          if (!available.has(id)) {
+            entries.delete(id);
+          }
         }
       }
       rememberDefinition(result);
@@ -189,9 +187,10 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     }
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (event.event === "plugins.changed") {
-      void refresh();
-    } else if (event.event === "users.prefs.changed" && gateway.snapshot.selfUser?.id) {
+    if (
+      event.event === "plugins.changed" ||
+      (event.event === "users.prefs.changed" && gateway.snapshot.selfUser?.id)
+    ) {
       void refresh();
     }
   });

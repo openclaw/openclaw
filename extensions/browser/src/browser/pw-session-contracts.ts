@@ -17,7 +17,6 @@ export type BrowserConsoleMessage = {
   location?: { url?: string; lineNumber?: number; columnNumber?: number };
 };
 
-/** Page error captured from a Playwright page. */
 export type BrowserPageError = {
   message: string;
   name?: string;
@@ -25,7 +24,6 @@ export type BrowserPageError = {
   timestamp: string;
 };
 
-/** Network request record captured from a Playwright page. */
 export type BrowserNetworkRequest = {
   id: string;
   timestamp: string;
@@ -37,7 +35,6 @@ export type BrowserNetworkRequest = {
   failureText?: string;
 };
 
-/** Observed browser dialog record tracked for agent-visible state. */
 export type BrowserObservedDialogRecord = {
   id: string;
   type: string;
@@ -48,18 +45,13 @@ export type BrowserObservedDialogRecord = {
   closedBy?: "agent" | "armed" | "auto" | "timeout" | "remote";
 };
 
-/** Pending and recent dialog state for a page. */
-type BrowserObservedDialogState = {
-  pending: BrowserObservedDialogRecord[];
-  recent: BrowserObservedDialogRecord[];
-};
-
-/** Browser state currently observable by agent responses. */
 export type BrowserObservedState = {
-  dialogs: BrowserObservedDialogState;
+  dialogs: {
+    pending: BrowserObservedDialogRecord[];
+    recent: BrowserObservedDialogRecord[];
+  };
 };
 
-/** Raised when an action is blocked by an observed modal dialog. */
 export class BrowserObservedDialogBlockedError extends Error {
   readonly browserState: BrowserObservedState;
 
@@ -70,7 +62,6 @@ export class BrowserObservedDialogBlockedError extends Error {
   }
 }
 
-/** Type guard for observed-dialog blocked errors. */
 export function isBrowserObservedDialogBlockedError(
   err: unknown,
 ): err is BrowserObservedDialogBlockedError {
@@ -134,7 +125,6 @@ export type PageState = {
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }>;
   roleRefsMode?: "role" | "aria";
-  roleRefsFrameSelector?: string;
   roleRefsFrame?: Frame;
   /** Target-cache entry owned by the current role refs. */
   roleRefsTargetKey?: string;

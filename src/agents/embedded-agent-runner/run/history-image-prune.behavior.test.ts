@@ -35,6 +35,34 @@ function history(roles: string): AgentMessage[] {
 }
 
 describe("history image pruning boundaries", () => {
+  it("advances image cleanup in batches without changing the prefix between boundaries", () => {
+    const messages = history("U");
+    let previous = messages;
+    const cleanupTurns: number[] = [];
+    for (let completed = 1; completed <= 28; completed++) {
+      messages.push(...history("ATAU"));
+      const sourceBytes = JSON.stringify(messages);
+      const replay = pruneProcessedHistoryImages(messages) ?? messages.slice();
+      if (JSON.stringify(replay.slice(0, previous.length)) !== JSON.stringify(previous)) {
+        cleanupTurns.push(completed);
+      }
+      // Reopening the canonical transcript must derive the same projection without a cache.
+      const reopened = JSON.parse(sourceBytes) as AgentMessage[];
+      expect(pruneProcessedHistoryImages(reopened) ?? reopened).toEqual(replay);
+      expect(JSON.stringify(messages)).toBe(sourceBytes);
+      const imageUsers = replay.filter(
+        (message) =>
+          message.role === "user" &&
+          Array.isArray(message.content) &&
+          message.content.some((block) => block.type === "image"),
+      );
+      expect(imageUsers.length).toBeLessThanOrEqual(11);
+      expect(replay.slice(-13)).toEqual(messages.slice(-13));
+      previous = replay;
+    }
+    expect(cleanupTurns).toEqual([4, 12, 20, 28]);
+  });
+
   it.each([
     {
       name: "ignores an assistant before the initial tool result",

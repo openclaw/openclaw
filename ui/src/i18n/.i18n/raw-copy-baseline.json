@@ -199,13 +199,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/mcp-server-form.ts",
@@ -563,24 +556,10 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/profile/profile-hero.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/pages/search/search-results.ts",
       "text": "snippet"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/skill-workshop/view.ts",
-      "text": "v"
     },
     {
       "count": 1,

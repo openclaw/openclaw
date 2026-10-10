@@ -242,18 +242,20 @@ export async function finalizeCronRun(params: {
     result?: Partial<DispatchCronDeliveryState> & { delivery?: CronDeliveryTrace },
   ) => {
     const disposition = result?.disposition;
-    const failure = disposition?.kind === "error" ? disposition : undefined;
-    // A failed handoff wins; a non-error delivery stop must retain the run's fatal outcome.
+    const failure =
+      disposition?.kind === "error" && disposition.errorKind !== "delivery-target"
+        ? disposition
+        : undefined;
+    // Delivery-target failures cannot replace the agent's execution outcome.
     const useRunFailure = hasFatalErrorPayload && !failure;
     const runError = embeddedRunError ?? "cron isolated run returned an error payload";
     const deliveryError = disposition && useRunFailure ? undefined : result?.deliveryError;
     const deliveryDiagnosticError = deliveryError ?? failure?.error;
-    const output =
-      failure && failure.errorKind !== "delivery-target"
-        ? {}
-        : disposition && !useRunFailure
-          ? { summary: result?.summary, outputText: result?.outputText }
-          : { summary, outputText };
+    const output = failure
+      ? {}
+      : disposition && !useRunFailure
+        ? { summary: result?.summary, outputText: result?.outputText }
+        : { summary, outputText };
     return prepared.withRunSession({
       status: failure || hasFatalErrorPayload ? "error" : "ok",
       ...(failure

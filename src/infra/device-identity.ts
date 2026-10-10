@@ -1,10 +1,6 @@
 // Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
 import crypto from "node:crypto";
 import {
-  cacheProcessDeviceIdentity,
-  readProcessDeviceIdentity,
-} from "./device-identity-process-cache.js";
-import {
   assertNoPendingLegacyIdentity,
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
@@ -57,21 +53,6 @@ export function loadOrCreateDeviceIdentity(
   // before inserting so concurrent runtimes converge on one authoritative key.
   const candidate = generateStoredDeviceIdentity();
   return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, resolvedOptions));
-}
-
-/** Keep one authoritative identity stable for the lifetime of a state-dir process. */
-export function loadOrCreateProcessDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const cacheKey = `${databasePath}\0${identityKey}`;
-  const cached = readProcessDeviceIdentity(cacheKey);
-  // A process-stable identity needs no database admission on a warm read.
-  if (cached) {
-    return cached;
-  }
-  const identity = loadOrCreateDeviceIdentity({ ...options, path: databasePath, identityKey });
-  return cacheProcessDeviceIdentity(cacheKey, identity);
 }
 
 /** Load a valid persisted identity without creating or mutating SQLite state. */

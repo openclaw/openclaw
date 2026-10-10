@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { mergeUserBackgroundImages } from "./user-background.store.js";
 import { mergeUserGitHubConnection } from "./user-github-connections.js";
 import { mergeUserModelAccounts } from "./user-model-accounts.js";
 import { mergeUserPreferences } from "./user-preferences.store.js";
@@ -57,6 +58,7 @@ export function mergeUserProfiles(
   mergeUserModelAccounts(db, sourceProfileId, targetProfileId);
   mergeUserGitHubConnection(db, sourceProfileId, targetProfileId);
   for (const mergedProfileId of sourceProfileIds) {
+    mergeUserBackgroundImages(db, mergedProfileId, targetProfileId);
     mergeUserPreferences(db, mergedProfileId, targetProfileId);
   }
   const sourceEmails = executeSqliteQuerySync(

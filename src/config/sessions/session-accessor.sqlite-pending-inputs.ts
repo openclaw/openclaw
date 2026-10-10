@@ -26,8 +26,8 @@ import type {
   SessionPendingInputAuthorityFacts,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 
-export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
 export type SessionPendingInput = {
   id: string;
   runId: string;

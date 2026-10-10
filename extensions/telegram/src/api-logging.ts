@@ -13,13 +13,10 @@ type TelegramApiLoggingParams<T> = {
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-export async function withTelegramApiErrorLogging<T>({
-  operation,
-  fn,
-  runtime,
-  logger,
-  shouldLog,
-}: TelegramApiLoggingParams<T>): Promise<T> {
+export async function withTelegramApiErrorLogging<T>(
+  params: TelegramApiLoggingParams<T>,
+): Promise<T> {
+  const { operation, fn, runtime, logger, shouldLog } = params;
   try {
     return await fn();
   } catch (err) {

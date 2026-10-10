@@ -10,7 +10,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
-  resolveCommandExecApprovalRoute,
+  buildCommandExecApprovalDefaults,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -180,22 +180,28 @@ describe("private command approval requests", () => {
   );
 });
 
-describe("resolveCommandExecApprovalRoute", () => {
+describe("buildCommandExecApprovalDefaults", () => {
   it("preserves origin reviewer custody when delivery moves to a private target", () => {
-    const commandParams = buildCommandParams({} as OpenClawConfig);
+    const commandParams = buildCommandParams({});
     commandParams.ctx.ApprovalReviewerDeviceId = "  device-origin-reviewer  ";
 
     expect(
-      resolveCommandExecApprovalRoute({
-        commandParams,
-        privateApprovalTarget: {
-          channel: "telegram",
-          to: "849985193",
-          accountId: "telegram-owner-account",
-          threadId: 42,
-        },
+      buildCommandExecApprovalDefaults(commandParams, {
+        channel: "telegram",
+        to: "849985193",
+        accountId: "telegram-owner-account",
+        threadId: 42,
       }),
     ).toEqual({
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      allowBackground: true,
+      cwd: "/tmp",
+      sessionKey: "agent:main:discord:channel:1487138064806449297",
+      eventRouting: { mainKey: undefined, sessionScope: undefined },
+      notifyOnExit: undefined,
+      notifyOnExitEmptySuccess: undefined,
       messageProvider: "telegram",
       currentChannelId: "849985193",
       currentThreadTs: "42",

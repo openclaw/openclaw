@@ -102,12 +102,9 @@ export function projectRetiredModelSuccessorConfig(params: {
       }
     }
   } else if (agents.list) {
-    agents.list = agents.list.slice();
-    for (const [index, candidate] of agents.list.entries()) {
-      if (candidate === entry) {
-        agents.list[index] = { ...candidate, models: projectedModels };
-      }
-    }
+    agents.list = agents.list.map((candidate) =>
+      candidate === entry ? { ...candidate, models: projectedModels } : candidate,
+    );
   }
   return { ...cfg, agents };
 }

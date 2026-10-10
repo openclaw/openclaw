@@ -38,7 +38,6 @@ type DesktopGenerationState = {
   lastGeneration?: CodexDesktopGeneration;
   watchers?: Set<FSWatcher>;
   watchHealthy?: boolean;
-  armEpoch?: number;
   rearmPending?: boolean;
   rearmDelayMs?: number;
   context?: OpenClawPluginServiceContextV2;
@@ -98,7 +97,6 @@ export function createCodexDesktopGenerationService(
       scheduler?.beginClose();
       current.lastGeneration = current.owner?.read() ?? current.lastGeneration;
       current.owner = undefined;
-      current.armEpoch = (current.armEpoch ?? 0) + 1;
       current.context = undefined;
       current.runtime = undefined;
       current.watchHealthy = undefined;
@@ -116,8 +114,6 @@ function armWatchers(current: DesktopGenerationState): boolean {
   if (!owner || !runtime || current.watchers) {
     return false;
   }
-  const armEpoch = (current.armEpoch ?? 0) + 1;
-  current.armEpoch = armEpoch;
   const watchers = new Set<FSWatcher>();
   current.watchers = watchers;
   const candidateNames = new Set<string>(
@@ -135,7 +131,7 @@ function armWatchers(current: DesktopGenerationState): boolean {
         watchedPath,
         { recursive: watchedPath !== APPLICATIONS_PATH },
         (_eventType, filename) => {
-          if (!isCurrentArm(current, owner, watchers, armEpoch)) {
+          if (!isCurrentArm(current, owner, watchers)) {
             return;
           }
           if (
@@ -151,7 +147,7 @@ function armWatchers(current: DesktopGenerationState): boolean {
       );
       watchers.add(watcher);
       watcher.on("error", (error) => {
-        if (!isCurrentArm(current, owner, watchers, armEpoch)) {
+        if (!isCurrentArm(current, owner, watchers)) {
           return;
         }
         reportWatcherFailure(current, owner, error);
@@ -188,14 +184,8 @@ function isCurrentArm(
   current: DesktopGenerationState,
   owner: GenerationOwner,
   watchers: Set<FSWatcher>,
-  armEpoch: number,
 ): boolean {
-  return (
-    current.owner === owner &&
-    !current.context?.scheduler.signal.aborted &&
-    current.watchers === watchers &&
-    current.armEpoch === armEpoch
-  );
+  return isCurrentOwner(current, owner) && current.watchers === watchers;
 }
 
 function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner): void {
@@ -215,7 +205,7 @@ function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner):
     delayMs,
     run: async () => {
       current.rearmPending = false;
-      if (current.owner !== owner || current.context?.scheduler.signal.aborted) {
+      if (!isCurrentOwner(current, owner)) {
         return;
       }
       const wasUnhealthy = current.watchHealthy === false;
@@ -235,16 +225,12 @@ function refreshGeneration(
 ): Promise<void> {
   return refresh
     .then(() => {
-      if (
-        current.owner === owner &&
-        !current.context?.scheduler.signal.aborted &&
-        current.watchHealthy
-      ) {
+      if (isCurrentOwner(current, owner) && current.watchHealthy) {
         current.context?.serviceHealth?.clearFailure();
       }
     })
     .catch((error: unknown) => {
-      if (current.owner !== owner || current.context?.scheduler.signal.aborted) {
+      if (!isCurrentOwner(current, owner)) {
         return;
       }
       current.context?.serviceHealth?.reportFailure(error);
@@ -258,4 +244,8 @@ function closeWatchers(current: DesktopGenerationState): void {
   for (const watcher of watchers ?? []) {
     watcher.close();
   }
+}
+
+function isCurrentOwner(current: DesktopGenerationState, owner: GenerationOwner): boolean {
+  return current.owner === owner && !current.context?.scheduler.signal.aborted;
 }

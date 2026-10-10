@@ -1,17 +1,178 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import {
   beginSessionWorkAdmission,
   collectActiveSessionWorkAdmissions,
   getActiveSessionWorkAdmissionCount,
+  getCompetingSessionWorkAdmissionRelease,
   getSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
   isSessionWorkAdmissionActive,
   captureGatewaySessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
+  startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
+
+it("serializes pending owners in FIFO order without blocking other owners", async ({ signal }) => {
+  const scope = "serialized-owners.sqlite";
+  const identities = ["agent:main:serialized", "serialized-session"];
+  const owner = Symbol("serialized-command");
+  const entered = createDeferred();
+  const allowed = createDeferred();
+  const order: string[] = [];
+  const first = beginSessionWorkAdmission({
+    scope,
+    identities,
+    owner,
+    serializeOwner: true,
+    signal,
+    assertAllowed: async () => {
+      entered.resolve();
+      await allowed.promise;
+      order.push("first");
+    },
+    revalidateAllowed: () => {},
+  });
+  await withinTest(entered.promise, signal);
+  const follow = (name: string) =>
+    beginSessionWorkAdmission({
+      scope,
+      identities: [identities[1]],
+      owner,
+      serializeOwner: true,
+      signal,
+      assertAllowed: () => {
+        order.push(name);
+      },
+      revalidateAllowed: () => {},
+    });
+  const followers = [follow("second"), follow("third")] as const;
+  const passOtherOwner = async () => {
+    const lease = await beginSessionWorkAdmission({
+      scope,
+      identities,
+      owner: Symbol("independent-owner"),
+      serializeOwner: true,
+      signal,
+      assertAllowed: () => {},
+    });
+    lease.release();
+  };
+  try {
+    allowed.resolve();
+    const firstLease = await withinTest(first, signal);
+    await withinTest(passOtherOwner(), signal);
+    expect(order).toEqual(["first"]);
+    firstLease.release();
+
+    const secondLease = await withinTest(followers[0], signal);
+    await withinTest(passOtherOwner(), signal);
+    expect(order).toEqual(["first", "second"]);
+    secondLease.release();
+
+    (await withinTest(followers[1], signal)).release();
+    expect(order).toEqual(["first", "second", "third"]);
+  } finally {
+    allowed.resolve();
+    for (const attempt of [first, ...followers]) {
+      await attempt.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+    }
+  }
+});
+
+it("lets an inherited owner finish ahead of its queued successor", async ({ signal }) => {
+  const target = {
+    scope: "nested-owner.sqlite",
+    identities: ["nested-owner-session"],
+    owner: Symbol("nested-command"),
+    serializeOwner: true as const,
+    signal,
+    assertAllowed: () => {},
+  };
+  const outer = await beginSessionWorkAdmission(target);
+  const validateFollower = vi.fn();
+  const follower = beginSessionWorkAdmission({ ...target, assertAllowed: validateFollower });
+  try {
+    await withinTest(
+      outer.run(async () => {
+        const inner = await beginSessionWorkAdmission(target);
+        inner.release();
+      }),
+      signal,
+    );
+    expect(outer.isActive()).toBe(true);
+    expect(validateFollower).not.toHaveBeenCalled();
+  } finally {
+    outer.release();
+    await follower.then(
+      (lease) => lease.release(),
+      () => {},
+    );
+  }
+  expect(validateFollower).toHaveBeenCalled();
+});
+
+it.for(["caller abort", "Stop"])(
+  "cancels a pending owner wait on %s before its predecessor releases",
+  async (cancellation, { signal }) => {
+    const scope = `cancel-owner-${cancellation}.sqlite`;
+    const identities = ["cancel-owner-session"];
+    const owner = Symbol("cancel-command");
+    const controller = new AbortController();
+    const reason = createAgentRunDirectAbortError();
+    const predecessor = await beginSessionWorkAdmission({
+      scope,
+      identities,
+      owner,
+      serializeOwner: true,
+      assertAllowed: () => {},
+    });
+    const validate = vi.fn();
+    const pending = beginSessionWorkAdmission({
+      scope,
+      identities,
+      owner,
+      serializeOwner: true,
+      signal: AbortSignal.any([controller.signal, signal]),
+      assertAllowed: validate,
+    }).then(
+      (lease) => {
+        lease.release();
+        return "incorrectly admitted";
+      },
+      (error: unknown) => error,
+    );
+    try {
+      const independent = await beginSessionWorkAdmission({
+        scope,
+        identities,
+        signal,
+        assertAllowed: () => {},
+      });
+      independent.release();
+      if (cancellation === "caller abort") {
+        controller.abort(reason);
+      } else {
+        await predecessor.run(async () => {
+          const interrupted = startSessionWorkAdmissionInterruption({ scope, identities, reason });
+          await withinTest(interrupted.released, signal);
+        });
+      }
+      expect(await withinTest(pending, signal)).toBe(reason);
+      expect(validate).not.toHaveBeenCalled();
+      expect(predecessor.isActive()).toBe(true);
+    } finally {
+      controller.abort(reason);
+      predecessor.release();
+      await pending;
+    }
+  },
+);
 
 it("rejects arrivals during awaited cleanup and its final microtask, then reopens only after release", async () => {
   const scope = "hostile-await.sqlite";
@@ -107,6 +268,8 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     ).toBe(false);
     expect(isCompetingSessionWorkAdmissionActive(scope, identities)).toBe(false);
     expect(getSessionWorkAdmissionRelease({ scope, identities })).toBeUndefined();
+    const competingRelease = getCompetingSessionWorkAdmissionRelease({ scope, identities });
+    expect(competingRelease).toBeDefined();
     expect(collectActiveSessionWorkAdmissions().get(scope)).toBeUndefined();
     expect(getActiveSessionWorkAdmissionCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
@@ -114,6 +277,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
       await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
     ).toBe(true);
     expect(await pending).toBe(reason);
+    await expect(competingRelease).resolves.toBeUndefined();
     expect(interrupted).toHaveBeenCalledOnce();
     expect(interrupted).toHaveBeenCalledWith(reason);
     expect(validated).toBe(false);

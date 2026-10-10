@@ -348,16 +348,21 @@ export function repairToolUseResultPairing(
     pushUnframedRange(frame.startIndex);
     cursor = frame.endIndex;
 
-    if (!(frame.failed && options?.erroredAssistantResultPolicy === "drop")) {
+    const dropFailed = frame.failed && options?.erroredAssistantResultPolicy === "drop";
+    if (!dropFailed) {
       out.push(frame.assistant);
-      for (const occurrence of frame.occurrences) {
-        if (occurrence.result) {
-          out.push(occurrence.result);
-          continue;
+    }
+    for (const occurrence of frame.occurrences) {
+      if (dropFailed) {
+        if (occurrence.sourceResult) {
+          discarded.push({
+            message: occurrence.sourceResult,
+            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
+          });
         }
-        if (frame.failed) {
-          continue;
-        }
+      } else if (occurrence.result) {
+        out.push(occurrence.result);
+      } else if (!frame.failed) {
         const missing = makeMissingToolResult({
           toolCallId: occurrence.id,
           toolName: occurrence.name,
@@ -366,15 +371,6 @@ export function repairToolUseResultPairing(
         occurrence.result = missing;
         added.push(missing);
         out.push(missing);
-      }
-    } else {
-      for (const occurrence of frame.occurrences) {
-        if (occurrence.sourceResult) {
-          discarded.push({
-            message: occurrence.sourceResult,
-            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
-          });
-        }
       }
     }
     out.push(...frame.remainder);

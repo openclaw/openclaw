@@ -43,6 +43,7 @@ import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
 
@@ -110,6 +111,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       .watchStore(() => this.store)
       .watchStore(() => this.context?.agentSelection)
       .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.gateway);
   }
 
@@ -502,7 +504,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
                     aria-pressed=${this.destination === destination}
                     @click=${() => this.openDestination(destination)}
                   >
-                    ${t(destination === "home" ? "assistantPanel.home" : "nav.askOpenClaw")}
+                    ${destination === "home" ? t("assistantPanel.home") : askBrandLabel()}
                   </button>`
                 : nothing,
             )}

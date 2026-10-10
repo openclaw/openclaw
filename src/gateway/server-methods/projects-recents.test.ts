@@ -1,14 +1,16 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -16,6 +18,7 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../session-row-projection.js";
+import * as rowInputs from "../session-utils-row.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
 
@@ -101,7 +104,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     );
     const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
     linkEmail("source@example.test", targetProfile.id);
-    releaseCatalog = retainUserProfileCatalog();
+    releaseCatalog = (await prepareUserProfileCatalog()).release;
     const readResult = await invokeProjectMethod(
       "projects.list",
       {},
@@ -141,11 +144,16 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       await projection.ensureMaterialized();
     } while (projection.needsMaterialization);
     const workerReads = vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases");
+    const display = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation(() => {
+      throw new Error("Session display refresh is unavailable");
+    });
     try {
+      sessionChanges.emit({ all: true, scope: "catalog" });
       for (const [scope, expected] of [
         ["operator.read", readResult],
         ["operator.write", writeResult],
       ] as const) {
+        const sql = observeHostDataSql();
         expect(
           await invokeProjectMethod(
             "projects.list",
@@ -155,10 +163,16 @@ test("projects.list returns only the caller's deterministic resolved recents", a
             targetProfile.id,
             registeredProjectsHandlers,
             projection,
-          ),
+          ).finally(sql.restore),
         ).toEqual(expected);
+        expect(
+          sql.queries.filter((statement) =>
+            /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
+          ),
+        ).toEqual([]);
       }
       expect(workerReads).not.toHaveBeenCalled();
+      display.mockRestore();
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:updated-recent" },
         {
@@ -185,6 +199,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       });
       expect(workerReads).toHaveBeenCalled();
     } finally {
+      display.mockRestore();
       workerReads.mockRestore();
     }
     const tiedKeys = ["agent:main:e\u0301", "agent:main:é"] as const;

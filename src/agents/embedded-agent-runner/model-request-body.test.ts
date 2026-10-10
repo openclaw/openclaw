@@ -11,6 +11,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   markLastProviderPromptContextRejected,
   wrapStreamFnWithProviderPromptState,
@@ -135,6 +136,13 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       scopeDigest: expect.any(String),
       digest: hash("sha256", expectedWire),
       byteWeight: 614_400,
+      cachePrefix: {
+        system: hash("sha256", "{}"),
+        tools: hash("sha256", JSON.stringify({ tools: allowedTools })),
+        messages: messages.map((message) => hash("sha256", JSON.stringify(message))),
+        messageCount: 100,
+        parameters: hash("sha256", JSON.stringify(["messages", { model: model.id, stream: true }])),
+      },
     });
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 
@@ -148,4 +156,41 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   } finally {
     unsubscribe();
   }
+});
+
+it("fingerprints serialized prompt segments with bounded, content-free history metadata", () => {
+  const message = { role: "user", content: "private history content" };
+  const input = Array.from({ length: 514 }, () => message);
+  let serializations = 0;
+  const payload = {
+    instructions: {
+      toJSON() {
+        serializations += 1;
+        return "private instructions";
+      },
+    },
+    tools: [{ type: "function", name: "private_tool_name" }],
+    input,
+    private_parameter_name: "private parameter value",
+    omitted: undefined,
+  };
+  const first = prepareProviderPrompt({ payload, encode: true });
+  expect(serializations).toBe(1);
+  expect(first.cachePrefix).toEqual({
+    system: hash("sha256", '{"instructions":"private instructions"}'),
+    tools: hash("sha256", '{"tools":[{"type":"function","name":"private_tool_name"}]}'),
+    messages: Array.from({ length: 512 }, () =>
+      hash("sha256", '{"role":"user","content":"private history content"}'),
+    ),
+    messageCount: 514,
+    tail: hash("sha256", JSON.stringify([message, message])),
+    parameters: hash("sha256", '["input",{"private_parameter_name":"private parameter value"}]'),
+  });
+  expect(JSON.stringify(first.cachePrefix)).not.toContain("private");
+
+  input[513] = { ...message, content: "changed private history" };
+  const changed = prepareProviderPrompt({ payload, encode: true });
+  expect(changed.cachePrefix?.messages).toEqual(first.cachePrefix?.messages);
+  expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
+  expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
 });

@@ -179,8 +179,13 @@ suite.define(() => {
             Math.abs(editorBox!.y + editorBox!.height / 2 - (linkBox!.y + linkBox!.height / 2)),
           ).toBeLessThanOrEqual(1);
           expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
-          expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
-          expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
+          if (width < 900) {
+            expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(gripBox!.x);
+            expect(iconBox!.x + iconBox!.width).toBeLessThanOrEqual(gripBox!.x);
+          } else {
+            expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
+            expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
+          }
         },
       );
     },

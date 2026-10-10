@@ -12,11 +12,10 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: cli.MatrixCliOptions) => {
-      const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand(options, {
-        run: async () => await verification.getMatrixRoomKeyBackupStatus({ accountId, cfg }),
-        onText: (status, verbose) => {
-          cli.printAccountLabel(accountId);
+      await cli.runMatrixCliAccountCommand(options, {
+        run: async ({ accountId, cfg }) =>
+          await verification.getMatrixRoomKeyBackupStatus({ accountId, cfg }),
+        onText: (status, verbose, accountId) => {
           cli.printBackupSummary(status);
           if (verbose) {
             cli.printBackupStatus(status);
@@ -44,9 +43,8 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           rotateRecoveryKey?: boolean;
         },
       ) => {
-        const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand(options, {
-          run: async () => {
+        await cli.runMatrixCliAccountCommand(options, {
+          run: async ({ accountId, cfg }) => {
             if (options.yes !== true) {
               throw new Error(
                 `Refusing to reset Matrix room-key backup without --yes. If you accept losing unrecoverable history, re-run ${cli.formatMatrixCliCommand("verify backup reset --yes", accountId)}.`,
@@ -58,8 +56,7 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               rotateRecoveryKey: options.rotateRecoveryKey === true,
             });
           },
-          onText: (result, verbose) => {
-            cli.printAccountLabel(accountId);
+          onText: (result, verbose, accountId) => {
             console.log(`Reset success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
               console.log(`Error: ${cli.formatMatrixCliText(result.error)}`);
@@ -105,16 +102,14 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           recoveryKeyStdin?: boolean;
         },
       ) => {
-        const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand(options, {
-          run: async () =>
+        await cli.runMatrixCliAccountCommand(options, {
+          run: async ({ accountId, cfg }) =>
             await verification.restoreMatrixRoomKeyBackup({
               accountId,
               cfg,
               recoveryKey: await cli.resolveMatrixCliRecoveryKeyInput(options),
             }),
-          onText: (result, verbose) => {
-            cli.printAccountLabel(accountId);
+          onText: (result, verbose, accountId) => {
             console.log(`Restore success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
               console.log(`Error: ${cli.formatMatrixCliText(result.error)}`);
@@ -163,17 +158,15 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           forceResetCrossSigning?: boolean;
         },
       ) => {
-        const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand(options, {
-          run: async () =>
+        await cli.runMatrixCliAccountCommand(options, {
+          run: async ({ accountId, cfg }) =>
             await verification.bootstrapMatrixVerification({
               accountId,
               cfg,
               recoveryKey: await cli.resolveMatrixCliRecoveryKeyInput(options),
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
-          onText: (result, verbose) => {
-            cli.printAccountLabel(accountId);
+          onText: (result, verbose, accountId) => {
             console.log(`Bootstrap success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
               console.log(`Error: ${cli.formatMatrixCliText(result.error)}`);
@@ -226,9 +219,8 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           recoveryKeyStdin?: boolean;
         },
       ) => {
-        const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand(options, {
-          run: async () =>
+        await cli.runMatrixCliAccountCommand(options, {
+          run: async ({ accountId, cfg }) =>
             await verification.verifyMatrixRecoveryKey(
               await cli.requireMatrixCliRecoveryKeyInput({
                 recoveryKey: key,
@@ -236,8 +228,7 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               }),
               { accountId, cfg },
             ),
-          onText: (result, verbose) => {
-            cli.printAccountLabel(accountId);
+          onText: (result, verbose, accountId) => {
             if (!result.success) {
               console.error(`Verification failed: ${cli.formatMatrixCliText(result.error)}`);
             } else {

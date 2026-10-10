@@ -2,7 +2,6 @@
 
 import path from "node:path";
 import { format } from "node:util";
-// Inventories extension imports to enforce plugin SDK boundary rules.
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
@@ -159,7 +158,6 @@ const formatInventoryHuman = (mode: BoundaryMode, inventory: BoundaryEntry[]): s
     inventory,
   );
 
-/** Creates the extension boundary guard for the repository or an isolated fixture root. */
 export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: string } = {}) {
   const repoRoot = path.resolve(options.repoRoot ?? DEFAULT_REPO_ROOT);
   // Generated bundles are validated at their build owner; they are not bounded authored source.

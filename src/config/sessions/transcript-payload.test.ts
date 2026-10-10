@@ -8,6 +8,10 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import {
+  getMessageRangeReaders,
+  parseActiveTranscriptMessageRow,
+} from "./session-accessor.sqlite-projection-read.js";
+import {
   projectModelContextEventSql,
   projectModelContextNavigationSql,
   projectResetBoundaryNavigationSql,
@@ -16,6 +20,7 @@ import {
   createTranscriptEventInserter,
   prepareTranscriptPayload,
   prepareTranscriptPayloadForReuse,
+  readTranscriptPayload,
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
@@ -47,13 +52,20 @@ function insert(database: DatabaseSync, seq: number, row: TranscriptPayloadRecor
     .run(seq, row.event_json, row.event_zstd, row.event_utf8_bytes, row.navigation_json);
 }
 
-function readBody(database: DatabaseSync, seq: number): string | undefined {
+function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sql") {
+  const query = getNodeSqliteKysely<PayloadDatabase>(database)
+    .selectFrom("transcript_events as event")
+    .where("seq", "=", seq);
+  if (mode === "row") {
+    const row = executeSqliteQueryTakeFirstSync(
+      database,
+      query.select(["event.event_json", "event.event_zstd", "event.event_utf8_bytes"]),
+    );
+    return row && readTranscriptPayload(row);
+  }
   return executeSqliteQueryTakeFirstSync(
     database,
-    getNodeSqliteKysely<PayloadDatabase>(database)
-      .selectFrom("transcript_events as event")
-      .select(transcriptEventJsonSql(database, "event").as("body"))
-      .where("seq", "=", seq),
+    query.select(transcriptEventJsonSql(database, "event").as("body")),
   )?.body;
 }
 
@@ -133,6 +145,7 @@ describe("transcript payload storage boundary", () => {
         )
         .get();
       expect(readBody(target, 1)).toBe(eventJson);
+      expect(readBody(target, 1, "row")).toBe(eventJson);
       if (targetEncoding === "UTF-8") {
         expect(stored?.event_json).toBeNull();
         expect(stored?.event_zstd).toBeInstanceOf(Uint8Array);
@@ -184,7 +197,7 @@ describe("transcript payload storage boundary", () => {
       ).toBeLessThan(Buffer.byteLength(original));
       insert(database, 1, prepared);
       expect(readBody(database, 1)).toBe(original);
-      expect(readBody(database, 1)).toBe(original);
+      expect(readBody(database, 1, "row")).toBe(original);
 
       database.prepare("UPDATE transcript_events SET event_zstd = x'010203' WHERE seq = 1").run();
       const metadata = executeSqliteQueryTakeFirstSync(
@@ -199,6 +212,7 @@ describe("transcript payload storage boundary", () => {
       expect(metadata?.bytes).toBe(Buffer.byteLength(original));
       expect(metadata?.navigation).not.toContain('"data"');
       expect(() => readBody(database, 1)).toThrow();
+      expect(() => readBody(database, 1, "row")).toThrow();
     } finally {
       database.close();
     }
@@ -235,6 +249,7 @@ describe("transcript payload storage boundary", () => {
     try {
       createTable(database);
       const originals = [
+        "",
         '{"type":"custom", invalid',
         `{"type":"custom","data":"${"x".repeat(2048)}`,
         `{"type":"custom","data":${"[".repeat(1001)}0${"]".repeat(1001)}}`,
@@ -255,6 +270,7 @@ describe("transcript payload storage boundary", () => {
         });
         insert(database, seq, prepared);
         expect(readBody(database, seq)).toBe(original);
+        expect(readBody(database, seq, "row")).toBe(original);
       }
     } finally {
       database.close();
@@ -578,10 +594,53 @@ describe("transcript payload storage boundary", () => {
       for (const [seq, record] of records.entries()) {
         insert(database, seq, record);
         expect(() => readBody(database, seq)).toThrow();
+        expect(() => readBody(database, seq, "row")).toThrow();
       }
       const withBom = Buffer.from('\ufeff{"type":"custom"}');
       insert(database, records.length, compressedRecord(withBom));
       expect(readBody(database, records.length)).toBe(withBom.toString("utf8"));
+      expect(readBody(database, records.length, "row")).toBe(withBom.toString("utf8"));
+    } finally {
+      database.close();
+    }
+  });
+
+  it("materializes selected identity and compressed message rows without decoding excluded corruption", () => {
+    const database = openNodeSqliteDatabase(":memory:");
+    try {
+      createTable(database);
+      const messages = [
+        { type: "message", id: "identity", message: { role: "user", content: "identity 🦞" } },
+        {
+          type: "message",
+          id: "compressed",
+          message: { role: "assistant", content: "雪🦞".repeat(4096) },
+        },
+      ];
+      insert(database, 0, {
+        event_json: null,
+        event_zstd: Buffer.from([1, 2, 3]),
+        event_utf8_bytes: 4096,
+        navigation_json: null,
+      });
+      for (const [index, message] of messages.entries()) {
+        insert(database, index + 1, prepareTranscriptPayload(database, JSON.stringify(message)));
+      }
+      database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT DEFAULT 'selected';
+        CREATE TABLE session_transcript_active_events (
+          session_id TEXT, event_seq INTEGER, message_position INTEGER
+        );
+        INSERT INTO session_transcript_active_events VALUES ('selected', 0, 0), ('selected', 1, 1), ('selected', 2, 2)`);
+      const readers = getMessageRangeReaders({ db: database, agentId: "main", path: ":memory:" });
+      const range = { sessionId: "selected", start: 1, endExclusive: 3 };
+      const events = Array.from(readers.messages(range), parseActiveTranscriptMessageRow);
+      expect(events).toEqual(
+        messages.map((event, index) => ({ event, eventSeq: index + 1, seq: index + 2 })),
+      );
+      expect(parseActiveTranscriptMessageRow(readers.latest(range)!)).toEqual(events[1]);
+      expect(() =>
+        Array.from(readers.messages({ ...range, start: 0 }), parseActiveTranscriptMessageRow),
+      ).toThrow();
     } finally {
       database.close();
     }
@@ -606,7 +665,7 @@ describe("transcript payload storage boundary", () => {
     try {
       reader.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF");
       expect(readBody(reader, 1)).toBe(original);
-      expect(readBody(reader, 1)).toBe(original);
+      expect(readBody(reader, 1, "row")).toBe(original);
       expect(() => reader.prepare("SELECT * FROM decoded_payload").get()).toThrow();
     } finally {
       reader.close();

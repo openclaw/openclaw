@@ -5,6 +5,7 @@ import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
 import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -153,11 +154,7 @@ export async function createSlackQaTransportAdapter(
       throw new Error("Slack QA requires two distinct bots for driver and SUT.");
     }
   } catch (error) {
-    try {
-      await heartbeat.stop();
-    } finally {
-      await lease.release();
-    }
+    await releaseQaCredentialLease(lease, heartbeat);
     throw error;
   }
   let stopped = false;
@@ -213,6 +210,16 @@ export async function createSlackQaTransportAdapter(
   const activeThreadRoots = new Set<string>();
   let polling: Promise<void> | undefined;
   const e2eSessions: SlackChannelE2eSession[] = [];
+  const recordMessage = (message: SlackMessage) =>
+    recordSlackObservedMessage({
+      accountId,
+      busMessageIds,
+      logicalConversationId,
+      message,
+      messages: context.messages,
+      observedText,
+      sutUserId: sutIdentity.userId,
+    });
   const startPolling = () => {
     polling ??= (async () => {
       while (!pollingAbort.signal.aborted) {
@@ -223,15 +230,7 @@ export async function createSlackQaTransportAdapter(
             oldestTs,
           });
           for (const message of messages.toReversed()) {
-            const observedTs = await recordSlackObservedMessage({
-              accountId,
-              busMessageIds,
-              logicalConversationId,
-              message,
-              messages: context.messages,
-              observedText,
-              sutUserId: sutIdentity.userId,
-            });
+            const observedTs = await recordMessage(message);
             if (observedTs) {
               oldestTs = observedTs;
             }
@@ -243,15 +242,7 @@ export async function createSlackQaTransportAdapter(
               threadTs,
             });
             for (const message of threadMessages) {
-              await recordSlackObservedMessage({
-                accountId,
-                busMessageIds,
-                logicalConversationId,
-                message,
-                messages: context.messages,
-                observedText,
-                sutUserId: sutIdentity.userId,
-              });
+              await recordMessage(message);
             }
           }
         } catch (error) {
@@ -467,11 +458,7 @@ export async function createSlackQaTransportAdapter(
           );
         }
       } finally {
-        try {
-          await heartbeat.stop();
-        } finally {
-          await lease.release();
-        }
+        await releaseQaCredentialLease(lease, heartbeat);
       }
     },
   };

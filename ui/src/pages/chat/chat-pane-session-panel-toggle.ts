@@ -169,12 +169,17 @@ export class ChatPaneSessionPanelToggleController {
     }
     if (slot === "terminal") {
       const intent = terminalToggleIntent(event, resolveChatAgentId(owner.state));
-      const embeddedTerminal = owner.renderRoot.querySelector("openclaw-terminal-panel[embedded]");
+      const embeddedTerminal = owner.renderRoot.querySelector<
+        HTMLElementTagNameMap["openclaw-terminal-panel"]
+      >("openclaw-terminal-panel[embedded]");
       const terminalConstructor = customElements.get("openclaw-terminal-panel");
       const embeddedTerminalMounted =
         embeddedTerminal !== null &&
         terminalConstructor !== undefined &&
         embeddedTerminal instanceof terminalConstructor;
+      if (embeddedTerminalMounted) {
+        embeddedTerminal.activateTerminalHost();
+      }
       if (intent) {
         void terminalIntentQueue.queue(intent, {
           deferUntilHostChange: !embeddedTerminalMounted,

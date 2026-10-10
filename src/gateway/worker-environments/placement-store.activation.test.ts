@@ -196,7 +196,7 @@ describe("worker session placement activation", () => {
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     nowMs = 7_000;
-    store.adoptActive({
+    await store.adoptActive({
       sessionId: SESSION.sessionId,
       ...owner,
       expectedGeneration: active.generation,

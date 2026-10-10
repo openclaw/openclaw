@@ -54,10 +54,9 @@ export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPa
       return payload;
     }
     appended = true;
-    const trimmed = payload.text.trimEnd();
     return copyReplyPayloadMetadata(payload, {
       ...payload,
-      text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
+      text: `${payload.text.trimEnd()}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
     });
   });
 }

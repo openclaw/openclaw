@@ -27,11 +27,11 @@ import { hasModelFallbackStop, resolveModelFallbackError } from "./failover-erro
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
-  type LocalTurnPlacementClaim,
   type SessionPlacementAdmissionProvider,
   withLocalSessionPlacementTurnSettlement,
   withSessionPlacementTurnAdmission,
 } from "./session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "./session-placement-admission.types.js";
 
 let uninstallProvider: (() => void) | undefined;
 const assertCompactionSuccessorAllowed = () => {};

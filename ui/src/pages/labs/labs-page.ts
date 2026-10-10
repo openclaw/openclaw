@@ -37,15 +37,13 @@ class LabsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private busyFeatureId: string | null = null;
-  @state() private pendingValues: Readonly<Record<string, boolean | string>> = {};
+  @state() private pending: { featureId: string; value: boolean | string } | null = null;
   @state() private saveError: string | null = null;
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => {
-      this.busyFeatureId = null;
-      this.pendingValues = {};
+      this.pending = null;
       this.saveError = null;
     },
   });
@@ -83,14 +81,8 @@ class LabsPage extends OpenClawLightDomElement {
       configState?.connected &&
       configState.configSnapshot?.hash &&
       !configState.configLoading &&
-      this.busyFeatureId === null,
+      this.pending === null,
     );
-  }
-
-  private clearPendingValue(featureId: string) {
-    const next = { ...this.pendingValues };
-    delete next[featureId];
-    this.pendingValues = next;
   }
 
   private async updateSetting(
@@ -109,8 +101,7 @@ class LabsPage extends OpenClawLightDomElement {
     }
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
-    this.busyFeatureId = featureId;
-    this.pendingValues = { ...this.pendingValues, [featureId]: value };
+    this.pending = { featureId, value };
     this.saveError = null;
     try {
       const patched = await runtimeConfig.patch({
@@ -126,10 +117,7 @@ class LabsPage extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.clearPendingValue(featureId);
-        if (this.busyFeatureId === featureId) {
-          this.busyFeatureId = null;
-        }
+        this.pending = null;
       }
     }
   }
@@ -172,7 +160,7 @@ class LabsPage extends OpenClawLightDomElement {
 
   private renderCodeModeExecutor() {
     const config = this.codeModeConfig();
-    const pending = this.pendingValues.codeModeExecutor;
+    const pending = this.pending?.featureId === "codeModeExecutor" ? this.pending.value : undefined;
     const executor =
       typeof pending === "string" ? pending : isRecord(config) ? config.executor : null;
     return renderSettingsSelectRow({
@@ -217,7 +205,7 @@ class LabsPage extends OpenClawLightDomElement {
       });
     }
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
-    const pending = this.pendingValues[feature.id];
+    const pending = this.pending?.featureId === feature.id ? this.pending.value : undefined;
     const canToggle = this.canToggle();
     const defaultDescription = renderSettingsDefaultDescription(
       featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),

@@ -4,6 +4,7 @@ import { gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDiscordRetryRunner } from "../retry.js";
 import { serializeRequestBody } from "./rest-body.js";
 import { RateLimitError, RequestClient } from "./rest.js";
 import { createJsonResponse } from "./test-builders.test-support.js";
@@ -31,6 +32,35 @@ describe("RequestClient", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(
+    [401, 403, 404, 429, 500, 503].flatMap((status) =>
+      (["post", "patch", "delete"] as const).map((method) => ({ status, method })),
+    ),
+  )(
+    "preserves $status retry policy for $method with an unreadable error body",
+    async ({ status, method }) => {
+      const fetchSpy = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                throw new TypeError("network error");
+              },
+            }),
+            { status, headers: { "retry-after": "0" } },
+          ),
+      );
+      const client = new RequestClient("", { fetch: fetchSpy, queueRequests: false });
+      const retry = createDiscordRetryRunner({
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+      await expect(retry(() => client[method]("/channels/c1/messages/m1"))).rejects.toMatchObject({
+        status,
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(status === 429 || status >= 500 ? 2 : 1);
+    },
+  );
 
   it("defaults non-finite REST client timeouts before scheduling requests", async () => {
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {

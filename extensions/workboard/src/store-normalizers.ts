@@ -67,6 +67,7 @@ import type {
   WorkboardAttachmentInput,
   WorkboardNotificationSubscribeInput,
   WorkboardProofInput,
+  WorkboardWorkerLogInput,
 } from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
@@ -181,49 +182,11 @@ export function capText(value: string | undefined, max: number): string | undefi
 }
 
 export function normalizeStatus(value: unknown, fallback: WorkboardStatus): WorkboardStatus {
-  if (typeof value !== "string" || !value.trim()) {
-    return fallback;
-  }
-  if ((WORKBOARD_STATUSES as readonly string[]).includes(value)) {
-    return value as WorkboardStatus;
-  }
-  throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+  return normalizeEnumValue(value, WORKBOARD_STATUSES, fallback, "status");
 }
 
 export function normalizePriority(value: unknown, fallback: WorkboardPriority): WorkboardPriority {
-  if (typeof value !== "string" || !value.trim()) {
-    return fallback;
-  }
-  if ((WORKBOARD_PRIORITIES as readonly string[]).includes(value)) {
-    return value as WorkboardPriority;
-  }
-  throw new Error(`priority must be one of: ${WORKBOARD_PRIORITIES.join(", ")}.`);
-}
-
-export function normalizeLabels(value: unknown, fallback: string[] = []): string[] {
-  if (value == null) {
-    return fallback;
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("labels must be an array or comma-separated string.");
-  }
-  const labels: string[] = [];
-  for (const entry of entries) {
-    const label = normalizeOptionalString(entry);
-    if (!label || labels.includes(label)) {
-      continue;
-    }
-    if (label.length > 40) {
-      throw new Error("labels must be 40 characters or fewer.");
-    }
-    labels.push(label);
-    if (labels.length >= 12) {
-      break;
-    }
-  }
-  return labels;
+  return normalizeEnumValue(value, WORKBOARD_PRIORITIES, fallback, "priority");
 }
 
 export function normalizeStringList(value: unknown, fieldName: string, maxLength = 80): string[] {
@@ -447,8 +410,15 @@ function normalizeEnumValue<T extends string, TFallback extends T | undefined>(
   value: unknown,
   allowed: readonly T[],
   fallback: TFallback,
+  fieldName?: string,
 ): T | TFallback {
-  return typeof value === "string" && allowed.includes(value as T) ? (value as T) : fallback;
+  if (typeof value === "string" && allowed.includes(value as T)) {
+    return value as T;
+  }
+  if (fieldName && typeof value === "string" && value.trim()) {
+    throw new Error(`${fieldName} must be one of: ${allowed.join(", ")}.`);
+  }
+  return fallback;
 }
 
 export function normalizeLinkType(value: unknown, fallback: WorkboardLinkType): WorkboardLinkType {
@@ -617,6 +587,15 @@ function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog
   if (!id || !message || !createdAt) {
     return null;
   }
+  return workerLogEntry(record, message, createdAt, id);
+}
+
+export function workerLogEntry(
+  record: WorkboardWorkerLogInput,
+  message: string,
+  createdAt: number,
+  id?: string,
+): WorkboardWorkerLog {
   const level =
     record.level === "warning" || record.level === "error" || record.level === "info"
       ? record.level
@@ -624,7 +603,7 @@ function normalizeWorkerLog(record: Record<string, unknown>): WorkboardWorkerLog
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
   const runId = normalizeBoundedString(record.runId, undefined, 160, "run id");
   return {
-    id,
+    id: id ?? randomUUID(),
     level,
     message,
     createdAt,

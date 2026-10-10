@@ -241,6 +241,19 @@ with GPT-Live:
 | `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
 | `always`      | Consult before every substantive answer.                                                        |
 
+Only one native consult runs at a time per call. Replaying the same provider
+invocation within the active voice session shares its pending result. A new
+invocation receives a busy error with `started: false` and `retryable: true`,
+even when its arguments match. The realtime model should wait for the active
+consult's result before retrying, rather than polling while it runs. A native
+request also receives busy while an unrelated host-forced consult runs; only a
+matching forced question (after trimming whitespace) can share that result.
+Similar wording alone does not identify the same request.
+
+An overlapping invocation cannot replace the pending consult's caller context.
+Completing the active consult consumes only the speech it used; rejected caller
+speech remains available for retry within the existing transcript window.
+
 When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures
 remain errors; ending the phone session suppresses pending consult results.

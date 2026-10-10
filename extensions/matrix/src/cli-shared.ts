@@ -235,6 +235,24 @@ type MatrixCliCommandConfig<TResult> = {
   onTextError?: (message: string) => void;
 };
 
+export async function runMatrixCliAccountCommand<TResult>(
+  options: MatrixCliOptions,
+  config: Omit<MatrixCliCommandConfig<TResult>, "run" | "onText"> & {
+    run: (context: ReturnType<typeof resolveMatrixCliAccountContext>) => Promise<TResult>;
+    onText: (result: TResult, verbose: boolean, accountId: string) => void;
+  },
+): Promise<void> {
+  const context = resolveMatrixCliAccountContext(options.account);
+  await runMatrixCliCommand(options, {
+    ...config,
+    run: () => config.run(context),
+    onText: (result, verbose) => {
+      printAccountLabel(context.accountId);
+      config.onText(result, verbose, context.accountId);
+    },
+  });
+}
+
 export async function runMatrixCliCommand<TResult>(
   options: Pick<MatrixCliOptions, "verbose" | "json">,
   config: MatrixCliCommandConfig<TResult>,

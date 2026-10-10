@@ -33,10 +33,6 @@ export async function closeDiscordThreadSessions(params: {
   //   agent:<agentId>:discord:channel:<parentId>:thread:<threadId>
   const segmentRe = new RegExp(`:${normalizedThreadId}(?::|$)`, "i");
 
-  function sessionKeyContainsThreadId(key: string): boolean {
-    return segmentRe.test(key);
-  }
-
   // Session keys are agent-scoped (agent:<agentId>:discord:...), so the store
   // must resolve per routed agent — resolving with the channel account id
   // would target a nonexistent agent's store and silently close nothing.
@@ -53,7 +49,7 @@ export async function closeDiscordThreadSessions(params: {
       storePath,
       readOnly: true,
     })) {
-      if (!sessionKeyContainsThreadId(sessionKey)) {
+      if (!segmentRe.test(sessionKey)) {
         continue;
       }
       const deleted = await deleteSessionEntry({

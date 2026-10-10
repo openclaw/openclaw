@@ -8,6 +8,7 @@ import {
 } from "../host.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
+import { encodedModelRequestBodyStream } from "./model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
 
@@ -102,7 +103,12 @@ configureAiTransportHost({
   buildModelFetch: () => async (input, init) => {
     const response = await globalThis.fetch(input, init);
     const contentType = response.headers.get("content-type") ?? "";
-    if (!response.ok || !response.body || !contentType.includes("application/json")) {
+    if (
+      !response.ok ||
+      !response.body ||
+      !contentType.includes("application/json") ||
+      encodedModelRequestBodyStream(init?.body) === false
+    ) {
       return response;
     }
     const headers = new Headers(response.headers);

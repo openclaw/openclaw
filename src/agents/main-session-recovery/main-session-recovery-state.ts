@@ -19,6 +19,7 @@ import {
   buildMainSessionRecoverySettlementPatch,
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
+import { isMainRestartRecoveryAggregateEmptyAndUnowned } from "./main-session-recovery-empty-aggregate.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -152,6 +153,7 @@ export function hasCompletedMainSessionRecoveryOutcome(entry: SessionEntry): boo
     entry.status !== "interrupted" &&
     !isRetryableUnadoptedChatClaim(entry) &&
     !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryHarnessCompletion &&
     (entry.restartRecoveryRuns ?? []).every((run) =>
       hasRestartRecoveryTerminalRun(entry, run.runId),
     )
@@ -378,6 +380,7 @@ export function transitionMainSessionRecovery(
         state = updateRecoveryState(entry, state, { reservation: undefined });
       }
       if (
+        isMainRestartRecoveryAggregateEmptyAndUnowned(entry) ||
         isMainRestartRecoveryTerminalOnly(entry) ||
         (hasCompletedMainSessionRecoveryOutcome(entry) &&
           !state?.tombstone &&
@@ -497,16 +500,19 @@ export function transitionMainSessionRecovery(
             : state.chargedAttempts,
         reservation: undefined,
       });
+      if (isMainRestartRecoveryAggregateEmptyAndUnowned(entry)) {
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+      }
       return { kind: "applied" };
     }
-    case "validate_recovery": {
-      const conflict = validateRecoveryAdmission(entry, command);
-      return conflict ? { kind: "rejected", reason: conflict } : { kind: "recovery_validated" };
-    }
+    case "validate_recovery":
     case "admit_recovery": {
       const conflict = validateRecoveryAdmission(entry, command);
       if (conflict) {
         return { kind: "rejected", reason: conflict };
+      }
+      if (command.kind === "validate_recovery") {
+        return { kind: "recovery_validated" };
       }
       const state = entry.mainRestartRecovery!;
       updateRecoveryState(entry, state, {
@@ -589,7 +595,8 @@ export function transitionMainSessionRecovery(
       if (
         entry.sessionId === command.sessionId &&
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
-        isMainRestartRecoveryTerminalOnly(entry)
+        (isMainRestartRecoveryTerminalOnly(entry) ||
+          isMainRestartRecoveryAggregateEmptyAndUnowned(entry))
       ) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
@@ -648,22 +655,34 @@ export function transitionMainSessionRecovery(
         },
       };
     }
-    case "bind_foreground_run": {
+    case "bind_foreground_run":
+    case "release_foreground": {
       const state = entry.mainRestartRecovery;
       const claims = state?.foregroundClaims;
       if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
-      recordLifecycleFence(entry, {
-        lifecycleGeneration: command.claim.lifecycleGeneration,
-        runId: command.runId,
-      });
-      updateRecoveryState(entry, state, {
-        foregroundClaims: {
-          ...claims,
-          runIdsByClaimId: { ...claims.runIdsByClaimId, [command.claim.claimId]: command.runId },
-        },
-      });
+      if (command.kind === "bind_foreground_run") {
+        recordLifecycleFence(entry, {
+          lifecycleGeneration: command.claim.lifecycleGeneration,
+          runId: command.runId,
+        });
+      }
+      const foregroundClaims =
+        command.kind === "bind_foreground_run"
+          ? {
+              ...claims,
+              runIdsByClaimId: {
+                ...claims.runIdsByClaimId,
+                [command.claim.claimId]: command.runId,
+              },
+            }
+          : removeMainSessionRecoveryForegroundClaim(claims, command.claim.claimId);
+      if (!foregroundClaims && entry.abortedLastRun !== true) {
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+      } else {
+        updateRecoveryState(entry, state, { foregroundClaims });
+      }
       return { kind: "applied" };
     }
     case "validate_foreground": {
@@ -672,23 +691,6 @@ export function transitionMainSessionRecovery(
         ownsForegroundClaim(state, command.claim)
         ? { kind: "foreground_validated" }
         : { kind: "no_change" };
-    }
-    case "release_foreground": {
-      const state = entry.mainRestartRecovery;
-      const claims = state?.foregroundClaims;
-      if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
-        return { kind: "no_change" };
-      }
-      const foregroundClaims = removeMainSessionRecoveryForegroundClaim(
-        claims,
-        command.claim.claimId,
-      );
-      if (!foregroundClaims && entry.abortedLastRun !== true) {
-        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
-        return { kind: "applied" };
-      }
-      updateRecoveryState(entry, state, { foregroundClaims });
-      return { kind: "applied" };
     }
     case "tombstone": {
       const conflict = matchesObservation(entry, command.observation);

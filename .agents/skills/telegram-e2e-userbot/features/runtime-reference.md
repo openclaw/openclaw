@@ -120,6 +120,10 @@ an album), for reply-context and caption-command proof:
 ```
 
 Create the run-owned topic under the held lease and use its actual returned id.
+For a Test Server forum without a prepared fixture, pass `--create-forum` with
+`--scenario` instead of `--chat`: the runner creates a forum and topic, sends
+every scenario message there, deletes the forum before releasing the lease, and
+records `testForum` setup and cleanup in `summary.json`.
 The direct driver also accepts `send --forum-topic-id <id>`. TDLib 1.8.67 uses
 `topic_id: messageTopicForum` for forum topics; ordinary message threads use
 `messageTopicThread`. Inspect `topicType` and `topicId` on both the sent message
@@ -302,8 +306,8 @@ node "$TELEGRAM_E2E_SKILL_DIR/scripts/telegram-test-recover.mjs" \
   "$TELEGRAM_RETAINED_LEASE_DIR" status
 ```
 
-`status` leaves the lease held. `cleanup-group` removes a confirmed run-owned
-group and credential state before releasing it. `release` handles a retained
+`status` leaves the lease held. `cleanup` removes confirmed run-owned forums,
+groups, and credential state before releasing it. `release` handles a retained
 broker receipt only after credential state is gone. A rejected revalidation is
 a real authority stop; never use the saved session directly after it.
 

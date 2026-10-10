@@ -59,20 +59,30 @@ export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
   constructor(
-    message: string,
+    message: string | { message: string; failureFacts: UpdateFailureFact[] },
     cause: unknown,
     inspectionReason?: ServiceInspectionReason,
     code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   ) {
-    super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
+    super(
+      typeof message === "string"
+        ? inspectionReason
+          ? formatServiceInspectionReason(inspectionReason)
+          : message
+        : message.message,
+      { cause },
+    );
     this.name = "GatewayServiceUpdateOwnershipError";
-    this.failureFacts = [
-      createUpdateFailureFact({
-        check: "managed-service",
-        code: inspectionReason ?? code ?? "service-ownership-unverified",
-        message: this.message,
-      }),
-    ];
+    this.failureFacts =
+      typeof message !== "string"
+        ? message.failureFacts
+        : [
+            createUpdateFailureFact({
+              check: "managed-service",
+              code: inspectionReason ?? code ?? "service-ownership-unverified",
+              message: this.message,
+            }),
+          ];
   }
 }
 
@@ -326,6 +336,19 @@ export function readGatewayServiceStateForUpdate(
   });
 }
 
+/** Manager availability is distinct from a loaded unit; uncertain cleanup remains fatal. */
+export function isUpdateServiceManagerAvailable(inspect: Promise<boolean>): Promise<boolean> {
+  return inspect.then(
+    () => true,
+    (error: unknown) => {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      return false;
+    },
+  );
+}
+
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
 export async function readManagedGatewayServiceForUpdate(
   env: NodeJS.ProcessEnv,
@@ -349,26 +372,16 @@ export async function readManagedGatewayServiceForUpdate(
         ? { ...state, command: state.command, verdict: inspection }
         : null;
     } catch (error) {
-      if (hasCommandProcessCleanupError(error)) {
-        throw error;
-      }
       if (
-        error instanceof GatewayServiceUpdateOwnershipError &&
-        error.cause instanceof ServiceStartRefusalError
+        hasCommandProcessCleanupError(error) ||
+        (error instanceof GatewayServiceUpdateOwnershipError &&
+          error.cause instanceof ServiceStartRefusalError)
       ) {
         throw error;
       }
       if (error instanceof GatewayServiceUpdateOwnershipError && service) {
         // Probe only the invoker's manager; rejected record selectors must not route it.
-        const available = await service.isLoaded({ env }).then(
-          () => true,
-          (probeError: unknown) => {
-            if (hasCommandProcessCleanupError(probeError)) {
-              throw probeError;
-            }
-            return false;
-          },
-        );
+        const available = await isUpdateServiceManagerAvailable(service.isLoaded({ env }));
         if (available) {
           throw error;
         }

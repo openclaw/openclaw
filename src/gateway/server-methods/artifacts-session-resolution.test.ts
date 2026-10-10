@@ -65,9 +65,23 @@ describe("artifact session authorization", () => {
     const unavailable = new Error("session projection is unavailable");
     const projection: Pick<
       SessionRowProjection,
-      "ensureMaterialized" | "findBySessionId" | "sharingRevision"
+      | "ensureMaterialized"
+      | "findBySessionId"
+      | "sharingRevision"
+      | "sharingTarget"
+      | "sharingTargetState"
+      | "readSource"
+      | "readMembership"
+      | "needsMembershipPreparation"
+      | "prepareMembership"
     > = {
       sharingRevision: undefined,
+      sharingTarget: vi.fn(),
+      sharingTargetState: vi.fn(),
+      readSource: vi.fn(),
+      readMembership: vi.fn(),
+      needsMembershipPreparation: vi.fn(),
+      prepareMembership: vi.fn(),
       ensureMaterialized: vi
         .fn<SessionRowProjection["ensureMaterialized"]>()
         .mockRejectedValue(unavailable),

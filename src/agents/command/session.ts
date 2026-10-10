@@ -28,6 +28,8 @@ import {
   loadExactSessionEntryReadOnly,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -102,6 +104,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
     restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryReceiptState: undefined,
     restartRecoveryDeliveryToolCallId: undefined,
@@ -389,7 +392,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
 }
 
 function resolveSessionKeyForRequestInternal(
-  opts: SessionRequest & { createMissingSessionId: boolean },
+  opts: SessionRequest & { createMissingSessionId: boolean; prepareBoundEntry?: boolean },
 ): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -491,7 +494,16 @@ function resolveSessionKeyForRequestInternal(
   // Exclusion and lookup share the persisted locator; routing keeps the request key.
   const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
+    storeSessionKey &&
+    !isInternalSessionEffectsKey(storeSessionKey) &&
+    !(
+      opts.prepareBoundEntry &&
+      captureIncognitoSessionSource({
+        agentId: storeAgentId,
+        storePath,
+        sessionKey: storeSessionKey,
+      })
+    )
       ? loadExactSessionEntryReadOnly({
           agentId: storeAgentId,
           storePath,
@@ -578,9 +590,24 @@ export async function resolveSession(
   const {
     agentId: resolvedAgentId,
     sessionKey,
-    sessionEntry,
+    sessionEntry: routedEntry,
     storePath,
-  } = resolveSessionKeyForRequestCore(opts);
+  } = resolveSessionKeyForRequestInternal({
+    ...opts,
+    createMissingSessionId: true,
+    prepareBoundEntry: true,
+  });
+  const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
+  const sessionEntry =
+    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
+      ? await readSessionEntryReadOnlyInWorker(
+          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
+          () => {
+            opts.signal?.throwIfAborted();
+            opts.assertCurrent?.();
+          },
+        )
+      : routedEntry;
   const now = Date.now();
 
   const sessionAgentId =

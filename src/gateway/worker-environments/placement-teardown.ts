@@ -1,8 +1,15 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerMove,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 
 type PlacementTeardownStore = Pick<
   WorkerSessionPlacementStore,
@@ -12,18 +19,21 @@ type PlacementTeardownStore = Pick<
   | "transition"
 >;
 
-export function completeRecoveredWorkspaceTeardown(params: {
-  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMove">;
+export async function completeRecoveredWorkspaceTeardown(params: {
+  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMoveAsync">;
   placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
   turnClaim: WorkerSessionTurnClaim;
+  destination?: "reclaimed";
+  currentCheck?: PlacementTurnClaimCurrentCheck;
 }) {
-  const move = params.placements.getPlacementMove(params.placement.sessionId);
+  const move = await params.placements.getPlacementMoveAsync(params.placement.sessionId);
   return completeWorkerWorkspaceTeardown({
     placements: params.placements,
     turnClaim: params.turnClaim,
     environmentId: params.placement.environmentId,
     ownerEpoch: params.placement.activeOwnerEpoch,
-    operationId: move?.operationId,
+    move: params.destination === "reclaimed" ? undefined : move,
+    currentCheck: params.currentCheck,
   });
 }
 
@@ -33,9 +43,14 @@ export async function completeWorkerWorkspaceTeardown(params: {
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
-  operationId?: string;
+  move?: Pick<WorkerPlacementMoveIntent, "operationId" | "target">;
+  currentCheck?: PlacementTurnClaimCurrentCheck;
 }): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>> {
-  const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+  const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(
+    params.turnClaim,
+    undefined,
+    params.currentCheck,
+  );
   if (
     drained.state !== "draining" ||
     drained.environmentId !== params.environmentId ||
@@ -52,16 +67,28 @@ export async function completeWorkerWorkspaceTeardown(params: {
   if (reconciling.state !== "reconciling") {
     throw new Error(`Session ${params.turnClaim.sessionId} did not enter reconciliation`);
   }
-  if (params.operationId !== undefined) {
-    const completed = params.placements.completePlacementMoveSourceToLocal({
-      operationId: params.operationId,
-      sessionId: reconciling.sessionId,
-      expectedGeneration: reconciling.generation,
-    });
-    if (completed.state !== "local") {
-      throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
+  const move = params.move;
+  if (move) {
+    try {
+      const completed = await params.placements.completePlacementMoveSourceToLocal(
+        {
+          operationId: move.operationId,
+          sessionId: reconciling.sessionId,
+          expectedGeneration: reconciling.generation,
+        },
+        { assertCurrent: () => assertRequiredWorkerMove(getRuntimeConfig(), move.target) },
+      );
+      if (completed.state !== "local") {
+        throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
+      }
+      return completed;
+    } catch (error) {
+      if (!(error instanceof RequiredWorkerProfileError)) {
+        throw error;
+      }
+      // Destruction is committed, but destination admission was refused and rolled back.
+      // The existing reclaimed transition settles only this source and retires its Move.
     }
-    return completed;
   }
   const completed = await params.placements.transition({
     sessionId: reconciling.sessionId,

@@ -13,9 +13,7 @@ import {
   OutboundDeliveryQueuedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
-  SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
-  readSkillProposalRevisionChangedError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
@@ -156,23 +154,6 @@ describe("gateway error details", () => {
     expect(Value.Check(ProjectCloneErrorDetailsSchema, { ...details, cause: "unknown" })).toBe(
       false,
     );
-  });
-
-  it("validates and reads changed skill proposal revisions", () => {
-    const details = {
-      code: GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED,
-      expectedRevisionHash: "A".repeat(64),
-      currentRevisionHash: "b".repeat(64),
-    };
-
-    expect(Value.Check(SkillProposalRevisionChangedErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(readSkillProposalRevisionChangedError({ details })).toEqual(details);
-    expect(
-      readSkillProposalRevisionChangedError({
-        details: { ...details, currentRevisionHash: "not-a-sha256" },
-      }),
-    ).toBeNull();
   });
 
   it("builds a distinct forbidden missing-scope response", () => {

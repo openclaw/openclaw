@@ -577,7 +577,11 @@ export async function loadPreparedModelCatalogSnapshot(
   if (readOnly && params.providerDiscoveryProviderIds) {
     return loadScopedReadOnlyModelCatalog({ ...params, readOnly });
   }
-  return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
+  return await withPreparedModelCatalogOwnerPolicy(
+    params,
+    "exact",
+    async (owner) => (await owner.loadNativeModelCatalog?.()) ?? owner.modelCatalog,
+  );
 }
 
 export async function readPreparedModelCatalog(

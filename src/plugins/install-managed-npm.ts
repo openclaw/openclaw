@@ -86,35 +86,31 @@ function verifyInstalledNpmResolution(params: {
   expected: NpmSpecResolution;
   installed: ManagedNpmRootInstalledDependency | null;
 }): InstalledNpmResolutionVerification {
-  if (!params.installed) {
+  const { installed, expected, packageName } = params;
+  if (!installed) {
     return {
       kind: "incomplete",
-      error: `npm install did not record package-lock metadata for ${params.packageName}`,
+      error: `npm install did not record package-lock metadata for ${packageName}`,
     };
   }
-  if (params.expected.version && params.installed.version) {
-    if (params.installed.version !== params.expected.version) {
+  for (const [field, label] of [
+    ["version", "to version"],
+    ["integrity", "with integrity"],
+  ] as const) {
+    if (expected[field] && installed[field] && installed[field] !== expected[field]) {
       return {
         kind: "conflict",
-        error: `npm install resolved ${params.packageName} to version ${params.installed.version}, expected ${params.expected.version}`,
+        error: `npm install resolved ${packageName} ${label} ${installed[field]}, expected ${expected[field]}`,
       };
     }
   }
-  if (params.expected.integrity && params.installed.integrity) {
-    if (params.installed.integrity !== params.expected.integrity) {
-      return {
-        kind: "conflict",
-        error: `npm install resolved ${params.packageName} with integrity ${params.installed.integrity}, expected ${params.expected.integrity}`,
-      };
-    }
-  }
-  if (
-    (params.expected.version && !params.installed.version) ||
-    (params.expected.integrity && !params.installed.integrity)
-  ) {
+  const missing = (["version", "integrity"] as const).find(
+    (field) => expected[field] && !installed[field],
+  );
+  if (missing) {
     return {
       kind: "incomplete",
-      error: `npm install recorded incomplete package-lock metadata for ${params.packageName}: ${params.expected.version && !params.installed.version ? "version" : "integrity"} missing`,
+      error: `npm install recorded incomplete package-lock metadata for ${packageName}: ${missing} missing`,
     };
   }
   return { kind: "ok" };
@@ -344,15 +340,20 @@ export async function installPluginFromManagedNpmRoot(
         error,
       };
     }
-    let settledManagedPeerDependencies = false;
-    for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
+    for (let peerSyncPass = 0; ; peerSyncPass += 1) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
         return peerSync;
       }
       if (!peerSync.changed) {
-        settledManagedPeerDependencies = true;
         break;
+      }
+      if (peerSyncPass === 10) {
+        return {
+          ok: false,
+          error:
+            "npm install could not settle managed peer dependencies after 10 sync passes; refusing to leave a partially reconciled plugin dependency tree.",
+        };
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
       if (install.code !== 0) {
@@ -361,20 +362,6 @@ export async function installPluginFromManagedNpmRoot(
           error: `npm install failed after syncing managed peer dependencies: ${formatNpmCommandFailureOutput(install)}`,
         };
       }
-    }
-    if (!settledManagedPeerDependencies) {
-      const peerSync = await syncManagedPeerDependenciesForInstall();
-      if (!peerSync.ok) {
-        return peerSync;
-      }
-      settledManagedPeerDependencies = !peerSync.changed;
-    }
-    if (!settledManagedPeerDependencies) {
-      return {
-        ok: false,
-        error:
-          "npm install could not settle managed peer dependencies after 10 sync passes; refusing to leave a partially reconciled plugin dependency tree.",
-      };
     }
     const packageManifestResult = await readOptionalPackageManifest({
       runtime,

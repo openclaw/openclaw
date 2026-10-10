@@ -36,84 +36,77 @@ afterEach(async () => {
   await fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
-it.each([
-  { collector: true, toolsAllow: undefined },
-  { collector: true, toolsAllow: [] },
-  { collector: false, toolsAllow: undefined },
-])("constructs the real attempt collector surface %j", async ({ collector, toolsAllow }) => {
-  await addSubagentRunForTests({
-    runId,
-    childSessionKey: sessionKey,
-    collect: collector,
-    outputSchema: schema,
-  });
-  const context = buildEmbeddedAttemptToolRunContext({
-    toolsAllow,
-    swarmCollector: collector,
-    swarmOutputSchema: schema,
-  });
-  const constructedTools = createOpenClawCodingTools({
-    ...context,
-    config: {
-      agents: { entries: { main: {} } },
-      tools: { swarm: true },
-    },
-    agentId: "main",
-    modelProvider: "openai",
-    modelId: "gpt-5.6-luna",
-    disableMessageTool: true,
-    runId,
-    sessionKey,
-    workspaceDir,
-    cwd: workspaceDir,
-  });
-  const tools = applyEmbeddedAttemptToolsAllow(constructedTools, context.runtimeToolAllowlist);
-  const names = tools.map((tool) => tool.name);
-  if (toolsAllow) {
-    expect(names.toSorted()).toEqual(
-      [...toolsAllow, ...(collector ? ["structured_output"] : [])].toSorted(),
-    );
-  }
-  if (!collector) {
-    expect(names).not.toContain("structured_output");
-    if (!toolsAllow) {
-      expect(names).toEqual(expect.arrayContaining(["web_fetch", "sessions_yield"]));
+it.each([{ toolsAllow: undefined }, { toolsAllow: [] }])(
+  "constructs the real attempt collector surface %j",
+  async ({ toolsAllow }) => {
+    await addSubagentRunForTests({
+      runId,
+      childSessionKey: sessionKey,
+      collect: true,
+      outputSchema: schema,
+    });
+    const context = buildEmbeddedAttemptToolRunContext({
+      toolsAllow,
+      swarmCollector: true,
+      swarmOutputSchema: schema,
+    });
+    const constructedTools = createOpenClawCodingTools({
+      ...context,
+      config: {
+        agents: { entries: { main: {} } },
+        tools: { swarm: true },
+      },
+      agentId: "main",
+      modelProvider: "openai",
+      modelId: "gpt-5.6-luna",
+      disableMessageTool: true,
+      runId,
+      sessionKey,
+      workspaceDir,
+      cwd: workspaceDir,
+    });
+    const tools = applyEmbeddedAttemptToolsAllow(constructedTools, context.runtimeToolAllowlist);
+    const names = tools.map((tool) => tool.name);
+    if (toolsAllow) {
+      expect(names.toSorted()).toEqual([...toolsAllow, "structured_output"].toSorted());
     }
-    return;
-  }
-  for (const forbidden of ["ask_user", "sessions_send", "sessions_yield", "message"]) {
-    expect(names).not.toContain(forbidden);
-  }
-  if (!toolsAllow) {
-    expect(names).toEqual(
-      expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
+    for (const forbidden of ["ask_user", "sessions_send", "sessions_yield", "message"]) {
+      expect(names).not.toContain(forbidden);
+    }
+    if (!toolsAllow) {
+      expect(names).toEqual(
+        expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
+      );
+      const write = expectDefined(
+        tools.find((tool) => tool.name === "write"),
+        "workspace write",
+      );
+      await write.execute("collector-write", {
+        path: "result.txt",
+        content: "collector file proof",
+      });
+      const read = expectDefined(
+        tools.find((tool) => tool.name === "read"),
+        "workspace read",
+      );
+      const result = await read.execute("collector-read", { path: "result.txt" });
+      expect(result.content).toContainEqual(
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("collector file proof"),
+        }),
+      );
+    }
+    const output = expectDefined(
+      tools.find((tool) => tool.name === "structured_output"),
+      "collector output transport",
     );
-    const write = expectDefined(
-      tools.find((tool) => tool.name === "write"),
-      "workspace write",
-    );
-    await write.execute("collector-write", { path: "result.txt", content: "collector file proof" });
-    const read = expectDefined(
-      tools.find((tool) => tool.name === "read"),
-      "workspace read",
-    );
-    const result = await read.execute("collector-read", { path: "result.txt" });
-    expect(result.content).toContainEqual(
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining("collector file proof"),
-      }),
-    );
-  }
-  const output = expectDefined(
-    tools.find((tool) => tool.name === "structured_output"),
-    "collector output transport",
-  );
-  expect(output.catalogMode).toBe("direct-only");
-  const result = await output.execute("collector-result", { result: { answer: "ok" } });
-  expect(result.details).toEqual({ status: "recorded" });
-  expect(getSubagentRunByRunId(runId)?.structuredOutput).toEqual({
-    structured: { answer: "ok" },
-    invalidAttempts: 0,
-  });
-});
+    expect(output.catalogMode).toBe("direct-only");
+    const result = await output.execute("collector-result", { result: { answer: "ok" } });
+    expect(result.details).toEqual({ status: "recorded" });
+    expect(getSubagentRunByRunId(runId)?.structuredOutput).toEqual({
+      structured: { answer: "ok" },
+      invalidAttempts: 0,
+    });
+  },
+);

@@ -2,14 +2,14 @@ import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 // Managed proxy lifecycle installs Proxyline, injects process proxy env, and
 // restores inherited/direct routing when owner handles stop.
-import {
-  installGlobalProxy,
-  type ProxylineBypassPolicy,
-  type ProxylineHandle,
-  type ProxylineUndiciOptions,
+import type {
+  ProxylineBypassPolicy,
+  ProxylineHandle,
+  ProxylineUndiciOptions,
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
+import { loadProxyline } from "../proxyline-runtime.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   getActiveManagedProxyLoopbackMode,
@@ -176,7 +176,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   });
   const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
   applyProxyEnv(proxyUrl, getActiveManagedProxyLoopbackMode() ?? "gateway-only", proxyCaFile);
-  proxylineHandle = installGlobalProxy({
+  proxylineHandle = loadProxyline().installGlobalProxy({
     mode: "managed",
     proxyUrl,
     ...(proxyTls ? { proxyTls } : {}),
@@ -216,7 +216,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
 
   try {
     applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
-    proxylineHandle = installGlobalProxy({
+    proxylineHandle = loadProxyline().installGlobalProxy({
       mode: "managed",
       proxyUrl,
       ...(proxyTls ? { proxyTls } : {}),

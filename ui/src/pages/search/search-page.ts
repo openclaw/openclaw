@@ -466,6 +466,7 @@ class SearchPage extends OpenClawLightDomElement {
     const config = currentConfigObject(configState);
     const search = asNullableRecord(asNullableRecord(asNullableRecord(config?.tools)?.web)?.search);
     const providers = (result?.providers ?? []).toSorted((a, b) => a.label.localeCompare(b.label));
+    const providerOptions = providers.map(({ id, label }) => ({ value: id, label }));
     const configuredProvider = config
       ? typeof search?.provider === "string"
         ? search.provider
@@ -509,10 +510,7 @@ class SearchPage extends OpenClawLightDomElement {
                       value: configuredProvider,
                       options: [
                         { value: "", label: t("searchPage.automatic") },
-                        ...providers.map((provider) => ({
-                          value: provider.id,
-                          label: provider.label,
-                        })),
+                        ...providerOptions,
                         ...(configuredProvider &&
                         !providers.some((provider) => provider.id === configuredProvider)
                           ? [{ value: configuredProvider, label: configuredProvider }]
@@ -640,10 +638,7 @@ class SearchPage extends OpenClawLightDomElement {
                       title: t("searchPage.setupProvider"),
                       description: selectedProvider?.hint,
                       value: this.setupProvider,
-                      options: providers.map((provider) => ({
-                        value: provider.id,
-                        label: provider.label,
-                      })),
+                      options: providerOptions,
                       onChange: (provider) => {
                         this.setupProvider = provider;
                       },

@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderDialog, renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderWorkboardToast } from "../../components/toast.ts";
+import { renderWorkboardErrorToast } from "../../components/toast.ts";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -32,6 +32,7 @@ import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   formatStatusLabel,
   type WorkboardProps,
@@ -152,11 +153,9 @@ async function applySelection(
         break;
       }
       const common = {
-        host: props.host,
-        client: props.client,
+        ...workboardMutationContext(props),
         cardId,
         expectedUpdatedAt: observed.updatedAt,
-        requestUpdate: props.onRequestUpdate,
       };
       let applied = false;
       switch (action.kind) {
@@ -543,12 +542,7 @@ export function renderSelectionDialog(props: WorkboardProps) {
           </button>
         </div>
       </form>
-      ${renderWorkboardToast({
-        owner: state,
-        message: visibleError ?? "",
-        key: visibleError,
-        tone: "error",
-      })}
+      ${renderWorkboardErrorToast(state, visibleError)}
     `,
   );
 }

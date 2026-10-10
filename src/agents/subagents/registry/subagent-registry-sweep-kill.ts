@@ -190,16 +190,10 @@ export async function reconcileDurableSubagentKillIntent(params: {
             }
           },
         });
-        if ((active || hasLiveRunContext) && !aborted) {
+        if (((active || hasLiveRunContext) && !aborted) || !ownsCurrentGeneration()) {
           return false;
         }
-        if (!ownsCurrentGeneration()) {
-          return false;
-        }
-        if (!ownsSessionIncarnation()) {
-          return await completeKill(true);
-        }
-        return await completeKill(false);
+        return await completeKill(!ownsSessionIncarnation());
       },
     });
   } catch (error) {
@@ -329,10 +323,8 @@ export async function reconcileProvisionalSubagentKill(params: {
       await params.retireSupersededRun(runId, entry);
       return true;
     }
-    if (!isCurrentKill()) {
-      return false;
-    }
     if (
+      !isCurrentKill() ||
       runs.get(runId)?.killReconciliation?.taskCancellationAccepted !== true ||
       completionEndedAt < killedAt
     ) {

@@ -97,11 +97,8 @@ export async function resolveDiscordAutoThreadReplyPlan(
   });
   const autoThreadContext = params.isGuildMessage
     ? resolveDiscordAutoThreadContext({
-        agentId: params.agentId,
-        channel: params.channel,
-        parentSessionKey: params.parentSessionKey,
+        ...params,
         createdThreadId,
-        groupScope: params.groupScope,
         parentInheritanceEnabled: params.threadParentInheritanceEnabled,
       })
     : null;
@@ -111,13 +108,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
 export async function maybeCreateDiscordAutoThread(
   params: MaybeCreateDiscordAutoThreadParams,
 ): Promise<string | undefined> {
-  if (!params.isGuildMessage) {
-    return undefined;
-  }
-  if (!params.channelConfig?.autoThread) {
-    return undefined;
-  }
-  if (params.threadChannel) {
+  if (!params.isGuildMessage || !params.channelConfig?.autoThread || params.threadChannel) {
     return undefined;
   }
   if (
@@ -264,12 +255,8 @@ async function maybeRenameDiscordAutoThread(params: {
   try {
     const fallbackName = sanitizeDiscordThreadName("", params.fallbackId);
     const generated = await generateThreadTitle({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...params,
       messageText: params.sourceText,
-      modelRef: params.modelRef,
-      channelName: params.channelName,
-      channelDescription: params.channelDescription,
     });
     if (!generated) {
       return;

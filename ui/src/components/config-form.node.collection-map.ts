@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
 import {
@@ -13,7 +12,7 @@ import {
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
-  removeCollectionRow,
+  renderCollectionRemoveButton,
   renderFieldRow,
   renderJsonTextareaControl,
   type ConfigNodeRenderer,
@@ -193,22 +192,15 @@ export function renderMapField(
                         />
                       </div>
                       <div class="settings-row__control">
-                        <openclaw-tooltip .content=${t("configForm.removeEntry")}>
-                          <button
-                            type="button"
-                            class="btn btn--icon"
-                            style="width:28px;height:28px;padding:0;"
-                            aria-label=${t("configForm.removeEntry")}
-                            ?disabled=${disabled}
-                            @click=${(event: Event) => {
-                              const nextValue = { ...value };
-                              delete nextValue[key];
-                              removeCollectionRow(event, () => onPatch(path, nextValue) !== false);
-                            }}
-                          >
-                            ${icons.trash}
-                          </button>
-                        </openclaw-tooltip>
+                        ${renderCollectionRemoveButton(
+                          t("configForm.removeEntry"),
+                          disabled,
+                          () => {
+                            const nextValue = { ...value };
+                            delete nextValue[key];
+                            return onPatch(path, nextValue) !== false;
+                          },
+                        )}
                       </div>
                     </div>
                     ${

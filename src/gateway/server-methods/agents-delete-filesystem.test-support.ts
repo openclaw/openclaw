@@ -13,6 +13,17 @@ type AgentDeleteFilesystemHarness = {
     movePathToTrash: Mock<(pathname?: string) => Promise<string>>;
     fsRm: unknown;
     deleteWorkspaceState: unknown;
+    rootStat: Mock<
+      (params: { rootDir: string; relativePath: string }) => Promise<{
+        isFile: boolean;
+        isSymbolicLink: boolean;
+        mtimeMs: number;
+        nlink: number;
+        size: number;
+      }>
+    >;
+    assertAgentDeletionCurrentFinal: Mock<() => void>;
+    beginAgentDeletionFinish: Mock;
   };
   makeCall: (
     method: "agents.delete",
@@ -27,6 +38,29 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
   const { mocks, makeCall, makeFileStat, expectNotTrashed, expectTrashedWithinParent } = harness;
   describe("filesystem cleanup", () => {
     const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+    it("preserves cleanup paths when durable authority changes during filesystem preparation", async () => {
+      const retired = new Error("deletion journal was replaced");
+      const readStat = mocks.rootStat.getMockImplementation()!;
+      mocks.rootStat.mockImplementation(async (params) => {
+        const stat = await readStat(params);
+        mocks.assertAgentDeletionCurrentFinal.mockImplementation(() => {
+          throw retired;
+        });
+        return stat;
+      });
+
+      const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+      await promise;
+
+      expectRespondOk(respond, {
+        failed: expect.arrayContaining([
+          { path: "/workspace/test-agent", reason: retired.message },
+        ]),
+      });
+      expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+      expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+    });
 
     it.skipIf(process.platform === "win32")(
       "does not trash a lexical decoy for a dangling workspace symlink",

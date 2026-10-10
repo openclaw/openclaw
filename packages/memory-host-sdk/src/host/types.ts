@@ -17,7 +17,6 @@ export type MemoryEntryProvenance = {
   supersedesKey?: string;
 };
 
-/** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -50,7 +49,6 @@ export function isAutomaticMemoryEntryEligible(
   return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
 }
 
-/** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
@@ -60,7 +58,6 @@ export type MemoryEmbeddingProbeResult = {
   cacheExpiresAtMs?: number;
 };
 
-/** Progress event emitted during memory sync. */
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
@@ -99,7 +96,6 @@ export type MemorySearchRuntimeDebug = {
   };
 };
 
-/** Successful memory-file excerpt, optionally paginated/truncated. */
 type MemoryReadSuccessResult = {
   status: "ok";
   text: string;
@@ -128,7 +124,6 @@ export type LegacyMemoryReadResult = Omit<MemoryReadSuccessResult, "status"> & {
   status?: never;
 };
 
-/** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryVectorIndexState =
   | { state: "empty" }
   | { state: "complete" }
@@ -203,7 +198,7 @@ export type MemoryIndexIdentityState =
     }
   | ({ status: "mismatched"; reason: string } & (
       | {
-          code: "provenance_version" | "chunking_version";
+          code: "provenance_version" | "chunking_version" | "embedding_input_format";
           owner: "openclaw";
           // Older-chunking corpus marker: set only when every configuration-owned
           // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
@@ -213,6 +208,8 @@ export type MemoryIndexIdentityState =
           // retrieval availability; consumers must still check usable FTS before
           // treating the index as servable.
           chunkingVersionOnly?: boolean;
+          /** Older embedding format with the same corpus; requires usable FTS for retrieval. */
+          lexicalCompatible?: boolean;
         }
       | {
           code:
@@ -261,7 +258,9 @@ export function resolveMemoryIndexIdentityDiagnostic(
   }
   if (
     identity.owner === "openclaw" &&
-    (identity.code === "provenance_version" || identity.code === "chunking_version")
+    (identity.code === "provenance_version" ||
+      identity.code === "chunking_version" ||
+      identity.code === "embedding_input_format")
   ) {
     return {
       status: "mismatched",
@@ -272,6 +271,11 @@ export function resolveMemoryIndexIdentityDiagnostic(
       identity.chunkingVersionOnly === true &&
       identity.versionOrder !== "newer"
         ? { chunkingVersionOnly: true }
+        : {}),
+      ...(identity.code === "embedding_input_format" &&
+      identity.lexicalCompatible === true &&
+      identity.versionOrder !== "newer"
+        ? { lexicalCompatible: true }
         : {}),
     };
   }
@@ -373,7 +377,6 @@ export function resolveMemorySearchStaleness(
   };
 }
 
-/** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
   search(
     query: string,

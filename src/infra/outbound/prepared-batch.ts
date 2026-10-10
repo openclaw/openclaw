@@ -71,6 +71,10 @@ export function acceptedPreparedOutboundEntries(
   );
 }
 
+export function preparedOutboundPayloads(batch: PreparedOutboundBatch): ReplyPayload[] {
+  return acceptedPreparedOutboundEntries(batch).map((entry) => entry.payload);
+}
+
 export function preparedOutboundSuppressionOutcomes(
   batch: PreparedOutboundBatch,
 ): OutboundPayloadDeliveryOutcome[] {

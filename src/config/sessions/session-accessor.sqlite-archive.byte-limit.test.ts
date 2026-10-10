@@ -13,7 +13,7 @@ import { encodeSessionArchiveContent } from "./archive-compression.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { readTranscriptArchivePageInWorker } from "./session-accessor.sqlite-archive-read.js";
 import { readTranscriptArchiveRecords } from "./session-accessor.sqlite-archive-stream.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";

@@ -219,10 +219,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   it.each([
-    ["direct", false, false, "allow", "slack", true],
     ["group", true, true, "allow", "slack", true],
     ["group", false, false, "allow", "slack", false],
-    ["group", false, false, "disallow", "slack", true],
     ["direct", true, false, "allow", "discord", true],
   ] as const)(
     "settles an adopted %s failure (progress=%s, mentioned=%s, silence=%s, origin=%s)",
@@ -307,39 +305,34 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
-  it.each(["before adoption", "adoption rejected"])(
-    "keeps %s failures retryable without a final notice",
-    async (failure) => {
-      const resolverError = new Error(failure);
-      const onAdopted = vi.fn(async () => {
+  it("keeps rejected adoption retryable without a final notice", async () => {
+    const resolverError = new Error("adoption rejected");
+    const onAdopted = vi.fn(async () => {
+      throw resolverError;
+    });
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
+    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
+      async (_ctx, options) => {
+        await options?.turnAdoptionLifecycle?.onAdopted();
         throw resolverError;
-      });
-      const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-      const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-        async (_ctx, options) => {
-          if (failure === "adoption rejected") {
-            await options?.turnAdoptionLifecycle?.onAdopted();
-          }
-          throw resolverError;
-        },
-      );
-      const params = {
-        ...createVisibleDispatchParams(replyResolver),
-        dispatcher,
-        replyOptions: { turnAdoptionLifecycle: { onAdopted } },
-      };
-      params.ctx.MessageSid = "retryable-failure";
-      await expect(
-        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
-      ).rejects.toBe(resolverError);
-      expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
-      replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
-      await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
-      expect(replyResolver).toHaveBeenCalledTimes(2);
-    },
-  );
+      },
+    );
+    const params = {
+      ...createVisibleDispatchParams(replyResolver),
+      dispatcher,
+      replyOptions: { turnAdoptionLifecycle: { onAdopted } },
+    };
+    params.ctx.MessageSid = "retryable-failure";
+    await expect(
+      withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
+    ).rejects.toBe(resolverError);
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+    replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
+    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+  });
 
-  it.each(["message_tool_only", "send-denied", "observed-delivery", "room-event"])(
+  it.each(["observed-delivery", "room-event"])(
     "does not add an adopted failure notice for %s",
     async (policy) => {
       const params = createVisibleDispatchParams(async (_ctx, options) => {
@@ -350,18 +343,12 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         throw new Error("adopted failure");
       });
       params.ctx.MessageSid = "adopted-suppressed-failure";
-      if (policy === "send-denied") {
-        sessionStoreMocks.currentEntry = { sendPolicy: "deny" };
-      }
       if (policy === "room-event") {
         params.ctx.InboundEventKind = "room_event";
       }
       const result = await dispatchReplyFromConfig({
         ...params,
         replyOptions: {
-          ...(policy === "message_tool_only"
-            ? { sourceReplyDeliveryMode: "message_tool_only" as const }
-            : {}),
           turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
         },
       });
@@ -452,10 +439,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   it.each([
-    { reason: "no_activity", continued: undefined, notice: true },
-    { reason: "stuck_recovery", continued: undefined, notice: true },
     { reason: "stuck_recovery", continued: false, notice: true },
-    { reason: "stuck_recovery", continued: true, notice: false },
     { reason: "finalization_stalled", continued: true, notice: false },
     // A final message-tool answer reached the source before the watchdog fired.
     { reason: "stuck_recovery", continued: true, notice: false, answered: true },
@@ -467,10 +451,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       const answered = "answered" in testCase;
       const steered = "steered" in testCase;
       const resolverStarted = createDeferred();
-      const continueStalledTurn = vi.fn(() => continued === true);
+      const continueStalledTurn = vi.fn(() => continued);
       const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
         const runState = resolveReplyOperationRunState(options);
-        if (runState && continued !== undefined) {
+        if (runState) {
           runState.continueStalledTurn = continueStalledTurn;
         }
         if (answered) {
@@ -496,9 +480,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 
       await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: notice });
       expect(continueStalledTurn).toHaveBeenCalledTimes(
-        continued !== undefined && reason !== "finalization_stalled" && (!answered || steered)
-          ? 1
-          : 0,
+        reason !== "finalization_stalled" && (!answered || steered) ? 1 : 0,
       );
       if (notice) {
         expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({

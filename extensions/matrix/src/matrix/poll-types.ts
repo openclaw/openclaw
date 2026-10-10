@@ -1,12 +1,4 @@
-/**
- * Matrix Poll Types (MSC3381)
- *
- * Defines types for Matrix poll events:
- * - m.poll.start - Creates a new poll
- * - m.poll.response - Records a vote
- * - m.poll.end - Closes a poll
- */
-
+// Matrix polls follow MSC3381.
 import {
   M_POLL_KIND_DISCLOSED,
   type PollKind as MatrixPollKind,

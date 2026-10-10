@@ -4,6 +4,7 @@
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
 import { isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -146,13 +147,16 @@ function requiresReasoningContentReplay(modelId: string | null | undefined): boo
   return candidates.some((candidate) => REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate));
 }
 
-function mergeTranscriptPolicy(policy: ProviderReplayPolicy | undefined): TranscriptPolicy {
-  if (!policy) {
-    return DEFAULT_TRANSCRIPT_POLICY;
-  }
-
-  const merged = { ...DEFAULT_TRANSCRIPT_POLICY };
-  for (const [key, value] of Object.entries(policy)) {
+function mergeTranscriptPolicy(
+  policy: ProviderReplayPolicy | undefined,
+  modelApi: string | null | undefined,
+): TranscriptPolicy {
+  const merged = {
+    ...DEFAULT_TRANSCRIPT_POLICY,
+    // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
+    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
+  };
+  for (const [key, value] of Object.entries(policy ?? {})) {
     if (value != null) {
       Object.assign(merged, {
         [key === "applyAssistantFirstOrderingFix" ? "applyGoogleTurnOrdering" : key]: value,
@@ -228,22 +232,27 @@ export function resolveTranscriptPolicy(params: {
     modelApi: params.modelApi,
     model: params.model,
     inHistorySystemUpdates:
-      params.directApiKey === true &&
-      params.modelApi === "anthropic-messages" &&
-      isDirectAnthropicModel({ provider, baseUrl: params.model?.baseUrl }, params.env) &&
-      supportsClaudeInHistorySystemMessages({
-        id: params.modelId ?? undefined,
-        params: params.model?.params,
-      }),
+      supportsNativeOpenAIResponsesEndpoint({
+        provider,
+        api: params.modelApi ?? "",
+        baseUrl: params.model?.baseUrl,
+      }) ||
+      (params.directApiKey === true &&
+        params.modelApi === "anthropic-messages" &&
+        isDirectAnthropicModel({ provider, baseUrl: params.model?.baseUrl }, params.env) &&
+        supportsClaudeInHistorySystemMessages({
+          id: params.modelId ?? undefined,
+          params: params.model?.params,
+        })),
   };
 
-  // Once a provider adopts the replay-policy hook, replay policy should come
-  // from the plugin, not from transport-family defaults in core.
+  // Provider hooks replace the fallback and can override the shared retention default.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
   const policy = mergeTranscriptPolicy(
     buildReplayPolicy
       ? (buildReplayPolicy(context) ?? undefined)
       : buildUnownedProviderTransportReplayFallback(context),
+    params.modelApi,
   );
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;

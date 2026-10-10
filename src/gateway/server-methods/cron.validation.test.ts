@@ -3,7 +3,6 @@
 
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -17,7 +16,6 @@ import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
-import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
@@ -49,7 +47,15 @@ import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
 import {
+  registerCronCreatorSessionTests,
+  type CronCreatorSessionLookup,
+} from "./cron-creator-session.test-support.js";
+import {
   createCronTestContext,
+  expectCronSuccess,
+  expectResponseError,
+  requireCronAddPayload,
+  requireRecord,
   agentTurnCronParams,
   createCronTestInvoker,
   createCronCallerClient as callerClient,
@@ -72,19 +78,10 @@ const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
 );
 const loadGatewaySessionEntry = vi.hoisted(() =>
-  vi.fn(
-    (
-      sessionKey: string,
-    ): {
-      canonicalKey: string;
-      entry?: {
-        agentHarnessId?: unknown;
-        createdActor?: SessionCreatedActor;
-        modelSelectionLocked?: unknown;
-        sessionId?: unknown;
-      };
-    } => ({ canonicalKey: sessionKey, entry: undefined }),
-  ),
+  vi.fn((sessionKey: string): CronCreatorSessionLookup => ({
+    canonicalKey: sessionKey,
+    entry: undefined,
+  })),
 );
 const cronRunRecordsOverride = vi.hoisted(() =>
   vi.fn<
@@ -129,7 +126,9 @@ vi.mock("../session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
 }));
 
+// mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryFailurePreview: async () => undefined,
   resolveCronDeliveryPreview,
   resolveCronDeliveryPreviews,
 }));
@@ -183,41 +182,6 @@ function callerClientWithCronCreatorAuthority(grant: CronCreatorAuthorityGrant):
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function requireCronAddPayload(
-  context: ReturnType<typeof createCronContext>,
-): Record<string, unknown> {
-  const calls = context.cron.add.mock.calls as unknown as [unknown][];
-  return requireRecord(calls[0]?.[0], "cron.add payload");
-}
-
-function expectResponseError(
-  respond: ReturnType<typeof vi.fn>,
-  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
-) {
-  const call = respond.mock.calls.at(0);
-  if (!call) {
-    throw new Error("expected response call");
-  }
-  expect(call[0]).toBe(false);
-  expect(call[1]).toBeUndefined();
-  const error = requireRecord(call[2], "response error");
-  if (expected.code) {
-    expect(error.code).toBe(expected.code);
-  }
-  if (expected.messageIncludes) {
-    expect(String(error.message)).toContain(expected.messageIncludes);
-  }
-  if (expected.details) {
-    expect(error.details).toEqual(expected.details);
-  }
 }
 
 function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
@@ -1050,66 +1014,11 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("stamps the authenticated profile as private cron creator provenance", async () => {
-    const client: GatewayClient = {
-      connect: {} as GatewayClient["connect"],
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-
-    const { context, respond } = await invokeCronAdd(agentTurnCronParams(), { client });
-
-    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-    expect(options.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
-    expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
-    expectCronSuccess(respond);
-  });
-
-  it.each(["unknown"] as const)(
-    "retains %s creator provenance through agent-created cron jobs",
-    async (source) => {
-      loadGatewaySessionEntry.mockReturnValue({
-        canonicalKey: "agent:ops:main",
-        entry: {
-          sessionId: "session-ops-main",
-          createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
-        },
-      });
-      const client = callerClient("ops");
-      client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
-        inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
-      };
-
-      const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
-        client,
-      });
-
-      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-      expect(options.createdActor).toEqual({
-        type: "human",
-        source,
-        id: "profile-ada",
-        label: "Ada",
-      });
-      expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
-      expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
-      expectCronSuccess(respond);
-    },
-  );
-
-  it("rejects caller-supplied cron creator provenance", async () => {
-    const { context, respond } = await invokeCronAdd(
-      agentTurnCronParams({
-        createdActor: { type: "human", source: "profile", id: "spoofed-profile" },
-      }),
-    );
-
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, { code: "INVALID_REQUEST" });
+  registerCronCreatorSessionTests({
+    createCronContext,
+    invokeCron,
+    loadGatewaySessionEntry,
+    resolveCronDeliveryPreview,
   });
 
   it.each(["add", "update"] as const)(

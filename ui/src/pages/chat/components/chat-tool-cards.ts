@@ -199,6 +199,20 @@ export function syncToolDisclosureOverflow(event: Event): void {
   );
 }
 
+function renderToolRowLink(kind: "file" | "subagent", label: string, onOpen: () => void) {
+  return html`<button
+    class="chat-tool-row__${kind}-link"
+    type="button"
+    title=${t(kind === "file" ? "chat.toolCards.openFile" : "chat.toolCards.openSubagent")}
+    @click=${(event: MouseEvent) => {
+      event.stopPropagation();
+      onOpen();
+    }}
+  >
+    ${label}
+  </button>`;
+}
+
 function renderToolRowContent(
   card: ToolCard,
   view: ToolCallView,
@@ -234,17 +248,9 @@ function renderToolRowContent(
       <span class="chat-tool-row__verb">${verb}</span>
       ${
         workspaceFilePath && onOpenWorkspaceFile
-          ? html`<button
-              class="chat-tool-row__file-link"
-              type="button"
-              title=${t("chat.toolCards.openFile")}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                onOpenWorkspaceFile({ path: workspaceFilePath });
-              }}
-            >
-              ${target}
-            </button>`
+          ? renderToolRowLink("file", target, () =>
+              onOpenWorkspaceFile({ path: workspaceFilePath }),
+            )
           : html`<span class="chat-tool-row__target">${target}</span>`
       }
       ${stat ? renderDiffStatChips(stat) : nothing}
@@ -284,17 +290,7 @@ function renderSubagentRowContent(subagent: SpawnedSubagent, onOpen: (() => void
   return html`
     ${
       onOpen
-        ? html`<button
-            class="chat-tool-row__subagent-link"
-            type="button"
-            title=${t("chat.toolCards.openSubagent")}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              onOpen();
-            }}
-          >
-            ${subagent.label}
-          </button>`
+        ? renderToolRowLink("subagent", subagent.label, onOpen)
         : html`<span class="chat-tool-row__title">${subagent.label}</span>`
     }
     ${
@@ -479,7 +475,6 @@ export function renderToolCard(
   const expanded = opts.expanded;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
   const workspaceFilePath = toolWorkspacePath(card, view);
-  const isFileRow = Boolean(workspaceFilePath);
   const subagent = resolveSpawnedSubagent(card, opts.subagents?.subagentSessions);
   const subagentSession = subagent?.session;
   // Only a subagent the panel lists can be shown there; any other opens its session.
@@ -488,7 +483,7 @@ export function renderToolCard(
   const openSubagent =
     subagentSession && onOpenSubagent ? () => onOpenSubagent(subagentSession.key) : undefined;
   // A link inside the row needs the row's own toggle beside it, not around it.
-  const linkedRow = isFileRow ? "file" : openSubagent ? "subagent" : null;
+  const linkedRow = workspaceFilePath ? "file" : openSubagent ? "subagent" : null;
   const rowContent = html`
     <span
       class="chat-tool-msg-summary__icon"

@@ -374,46 +374,27 @@ describe("exec approvals", () => {
         ]),
       }),
     });
-    const tool = createExecTool({ host: "node", security: "allowlist", ask: "on-miss" });
-    const result = await tool.execute("call2", { command: `"${exePath}" --help` });
+    const tool = createExecTool({
+      host: "node",
+      security: "allowlist",
+      ask: "on-miss",
+      allowBackground: false,
+    });
+    const result = await tool.execute("call2", {
+      command: `"${exePath}" --help`,
+      workdir: "/Users/vv",
+      background: true,
+    });
+    expect(node.runs).toHaveLength(1);
+    expect(node.runs[0]?.cwd).toBe("/Users/vv");
+    expect(getResultText(result)).toContain(
+      "Warning: continuation options are unavailable; running synchronously.",
+    );
+    expect(getResultText(result)).toContain("ok");
     expect(result.details.status).toBe("completed");
     expect(calls).toContain("exec.approvals.node.get");
     expect(calls).toContain("node.invoke");
     expect(calls).not.toContain("exec.approval.request");
-  });
-
-  it("preserves explicit workdir for node exec", async () => {
-    const node = nodeFixture();
-    mockGateway({ "node.invoke": node.handle });
-    const tool = createExecTool({ host: "node", ask: "off", security: "full" });
-    const result = await tool.execute("call-node-cwd", {
-      command: "/bin/pwd",
-      workdir: "/Users/vv",
-    });
-    expect(result.details.status).toBe("completed");
-    expect(node.runs).toHaveLength(1);
-    const run = requireRecord(node.runs[0], "system.run params");
-    expect(Object.hasOwn(run, "cwd")).toBe(true);
-    expect(run.cwd).toBe("/Users/vv");
-  });
-
-  it("keeps the background fallback warning when node exec actually runs inline", async () => {
-    mockGateway({ "node.invoke": nodeFixture("node-ok").handle });
-    const tool = createExecTool({
-      host: "node",
-      ask: "off",
-      security: "full",
-      allowBackground: false,
-    });
-    const result = await tool.execute("call-node-background-disabled", {
-      command: "echo ok",
-      background: true,
-    });
-    expect(result.details.status).toBe("completed");
-    expect(getResultText(result)).toContain(
-      "Warning: continuation options are unavailable; running synchronously.",
-    );
-    expect(getResultText(result)).toContain("node-ok");
   });
 
   it.each(["gateway", "node"] as const)(
@@ -445,9 +426,11 @@ describe("exec approvals", () => {
         ask: "always",
         security: "full",
         approvalFollowupMode: "agent",
+        allowBackground: false,
       });
       const result = await tool.execute(`call-${host}-durable`, {
         command: `${JSON.stringify(process.execPath)} --version`,
+        background: true,
       });
       expect(result.details.status).toBe("approval-pending");
       expect(requireRecord(result.details, "result details").allowedDecisions).toEqual([
@@ -456,6 +439,8 @@ describe("exec approvals", () => {
       ]);
       expect(gatewayParams("exec.approval.request")).toHaveLength(1);
       if (host === "gateway") {
+        expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
+        expect(gatewayParams("exec.approval.request")[0]?.warningText).toBeUndefined();
         expect(getResultText(result)).toContain("Reply with: /approve ");
         expect(getResultText(result)).toContain("allow-once|deny");
         expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
@@ -509,24 +494,6 @@ describe("exec approvals", () => {
     expect(getResultText(result)).toContain("node-shell-wrapper-ok");
     expect(calls).not.toContain("exec.approval.request");
     expect(calls).not.toContain("exec.approval.waitDecision");
-  });
-
-  it("keeps unavailable continuation guidance out of pending gateway approvals", async () => {
-    mockApproval("deny");
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      security: "full",
-      allowBackground: false,
-      approvalFollowupMode: "agent",
-    });
-    const result = await tool.execute("call-gateway-background-approval", {
-      command: "echo ok",
-      background: true,
-    });
-    expect(result.details.status).toBe("approval-pending");
-    expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
-    expect(gatewayParams("exec.approval.request")[0]?.warningText).toBeUndefined();
   });
 
   it("delivers an explicitly requested agent follow-up through the original external route", async () => {

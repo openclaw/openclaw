@@ -1,7 +1,31 @@
 import { createServer, type Server } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+
+const effectGate = vi.hoisted((): { prepare: (() => Promise<void>) | undefined } => ({
+  prepare: undefined,
+}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
@@ -562,24 +586,6 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
-  it("includes quoted_message_id on a channel message when quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_q" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await client.createChannelMessage("chn_1", "ack", { quotedMessageId: "msg_root" });
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
-      body: "ack",
-      quoted_message_id: "msg_root",
-    });
-  });
-
   it("serializes retry nonces and reads persisted attachments", async () => {
     const fetchMock = vi
       .fn()
@@ -784,21 +790,6 @@ describe("ClickClack HTTP client", () => {
     ]);
   });
 
-  it("omits quoted_message_id on a channel message when not quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_p" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createTestClient(fetchMock as unknown as typeof fetch);
-
-    await client.createChannelMessage("chn_1", "hello");
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({ body: "hello" });
-  });
-
   it("includes quoted_message_id on a direct message when quoting", async () => {
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
@@ -899,23 +890,6 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
-  it("accepts an empty 204 ephemeral success response", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "placeholder",
-      fetch: fetchMock,
-    });
-
-    await expect(
-      client.publishEphemeral({
-        workspaceId: "wsp_1",
-        channelId: "chn_1",
-        type: "agent.progress",
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("aborts a stalled ephemeral request", async () => {
     vi.useFakeTimers();
     try {
@@ -1007,3 +981,58 @@ describe("createClickClackClient websocket", () => {
     expect(result.error).toMatch(/max payload/i);
   });
 });
+
+it.each([false, true])(
+  "rechecks the message caller after effect preparation (retired=%s)",
+  async (retired) => {
+    const preparing = createDeferred();
+    const prepared = createDeferred();
+    const dispatched = createDeferred();
+    const response = createDeferred<Response>();
+    const caller = new AbortController();
+    const failure = new Error("ClickClack caller retired");
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+    };
+    const fetch = vi.fn<typeof globalThis.fetch>(() => {
+      dispatched.resolve();
+      return response.promise;
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch,
+      beforeRequest: () => caller.signal.throwIfAborted(),
+    });
+    const sending = client.createChannelMessage("chn_1", "hello").then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await Promise.race([
+        preparing.promise,
+        dispatched.promise.then(() => {
+          throw new Error("dispatched before preparation");
+        }),
+      ]);
+      expect(fetch).not.toHaveBeenCalled();
+      if (retired) {
+        caller.abort(failure);
+      }
+      prepared.resolve();
+      if (!retired) {
+        await dispatched.promise;
+        caller.abort(failure);
+      }
+      response.resolve(Response.json({ message: { id: "msg_1" } }));
+      expect(await sending).toEqual(retired ? { error: failure } : { value: { id: "msg_1" } });
+      expect(fetch).toHaveBeenCalledTimes(retired ? 0 : 1);
+    } finally {
+      prepared.resolve();
+      response.resolve(Response.json({ message: { id: "msg_1" } }));
+      await sending;
+      effectGate.prepare = undefined;
+    }
+  },
+);

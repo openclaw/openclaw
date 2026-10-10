@@ -18,36 +18,23 @@ type ChannelStatusRow = {
   kind?: ChannelStatusKind;
 };
 
-function resolveChannelStatus(
-  key: string,
-  props: ChannelsProps,
-): Record<string, unknown> | undefined {
-  const channels = props.channels.channelsSnapshot?.channels;
-  return channels && Object.hasOwn(channels, key)
-    ? (asNullableRecord(channels[key]) ?? undefined)
-    : undefined;
-}
-
-function resolveDefaultChannelAccount(
-  key: string,
-  props: ChannelsProps,
-): ChannelAccountSnapshot | null {
-  const accounts = resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key);
-  const defaultAccountIds = props.channels.channelsSnapshot?.channelDefaultAccountId;
+export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
+  const snapshot = props.channels.channelsSnapshot;
+  const channels = snapshot?.channels;
+  const status =
+    channels && Object.hasOwn(channels, key)
+      ? (asNullableRecord(channels[key]) ?? undefined)
+      : undefined;
+  const accounts = resolveChannelAccounts(snapshot?.channelAccounts, key);
+  const defaultAccountIds = snapshot?.channelDefaultAccountId;
   const defaultAccountId =
     defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
-  return (
+  const defaultAccount =
     (defaultAccountId
       ? accounts.find((account) => account.accountId === defaultAccountId)
       : undefined) ??
     accounts[0] ??
-    null
-  );
-}
-
-export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
-  const status = resolveChannelStatus(key, props);
-  const defaultAccount = resolveDefaultChannelAccount(key, props);
+    null;
   const configured =
     typeof status?.configured === "boolean"
       ? status.configured
@@ -67,10 +54,7 @@ export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
 }
 
 export function formatNullableBoolean(value: boolean | null): string {
-  if (value == null) {
-    return t("common.na");
-  }
-  return value ? t("common.yes") : t("common.no");
+  return t(value == null ? "common.na" : value ? "common.yes" : "common.no");
 }
 
 /** Status kind for boolean facts: dot signals on, quiet dot signals off. */

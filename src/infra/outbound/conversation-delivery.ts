@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
+import type { ConversationAuthority } from "../../config/sessions/conversation-authority.types.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -15,6 +16,7 @@ import type {
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundHandoff } from "./deliver-contracts.js";
 import { captureConversationDeliveryTarget } from "./delivery-completion.js";
 import type { MessageActionResult } from "./message-action-contracts.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -69,34 +71,27 @@ function readMessageIdFromActionResult(
 export function resultFromExistingOperation(
   operation: ConversationDeliveryRecord,
 ): ConversationMessageDeliveryResult | undefined {
-  switch (operation.status) {
-    case "sent":
-    case "replied":
-      return {
-        deliveryStatus: "sent",
-        operation,
-        ...(operation.platformMessageId || operation.preparedMessageId
-          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
-          : {}),
-      };
-    case "queued":
-      return {
-        deliveryStatus: "queued",
-        operation,
-        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
-      };
-    case "suppressed":
-      return { deliveryStatus: "suppressed", operation };
-    case "rejected":
-      throw new ConversationDeliveryRejectedError(
-        operation.rejectionError ?? "Conversation delivery was permanently rejected",
-      );
-    case "unknown":
-      return { deliveryStatus: "unknown", operation };
-    case "created":
-      return undefined;
+  if (operation.status === "created") {
+    return undefined;
   }
-  return operation.status satisfies never;
+  if (operation.status === "rejected") {
+    throw new ConversationDeliveryRejectedError(
+      operation.rejectionError ?? "Conversation delivery was permanently rejected",
+    );
+  }
+  const deliveryStatus = operation.status === "replied" ? "sent" : operation.status;
+  const platformMessageId = deliveryStatus === "sent" ? operation.platformMessageId : undefined;
+  const preparedMessageId =
+    deliveryStatus === "sent" || deliveryStatus === "queued"
+      ? operation.preparedMessageId
+      : undefined;
+  return {
+    deliveryStatus,
+    operation,
+    ...(platformMessageId || preparedMessageId
+      ? { messageId: platformMessageId ?? preparedMessageId }
+      : {}),
+  };
 }
 
 /**
@@ -113,14 +108,17 @@ export async function sendGatewayConversationMessage(params: {
   operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
   routeFingerprint: string;
+  authority: ConversationAuthority;
   assertCurrent: () => void;
+  withDirectAdapterHandoff: OutboundHandoff;
   signal?: AbortSignal;
 }): Promise<ConversationMessageDeliveryResult> {
   const scope = params.scope;
   const conversationDeliveryTarget = captureConversationDeliveryTarget(scope);
-  const begun = params.operation
-    ? { created: false, record: params.operation }
-    : await beginConversationDeliveryOperation(
+  const record =
+    params.operation ??
+    (
+      await beginConversationDeliveryOperation(
         scope,
         {
           operationId: params.operationId,
@@ -130,18 +128,20 @@ export async function sendGatewayConversationMessage(params: {
             ? { sourceSessionKey: params.context.sourceSessionKey }
             : {}),
           message: params.message,
+          authority: params.authority,
           ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
         },
         params.assertCurrent,
-      );
+      )
+    ).record;
   params.assertCurrent();
-  const existing = resultFromExistingOperation(begun.record);
+  const existing = resultFromExistingOperation(record);
   if (existing) {
     return existing;
   }
 
   const readAuthoritativeOperation = async () =>
-    (await getConversationDeliveryOperation(scope, begun.record.operationId)) ?? begun.record;
+    (await getConversationDeliveryOperation(scope, record.operationId)) ?? record;
   try {
     const action = await runMessageAction({
       cfg: params.context.config,
@@ -165,20 +165,18 @@ export async function sendGatewayConversationMessage(params: {
       requireQueuePersistence: true,
       deliveryIntentId: buildConversationDeliveryIntentId(
         params.context.agentId,
-        begun.record.operationId,
+        record.operationId,
       ),
       deliveryCompletion: {
         kind: "conversation",
         agentId: scope.agentId,
-        operationId: begun.record.operationId,
+        operationId: record.operationId,
         storePath: scope.storePath,
         routeFingerprint: params.routeFingerprint,
       },
       conversationDeliveryTarget,
-      onDeliveryAttempt: async () => params.assertCurrent(),
-      ...(begun.record.preparedMessageId
-        ? { preparedMessageId: begun.record.preparedMessageId }
-        : {}),
+      withDirectAdapterHandoff: params.withDirectAdapterHandoff,
+      ...(record.preparedMessageId ? { preparedMessageId: record.preparedMessageId } : {}),
       ...(params.signal ? { abortSignal: params.signal } : {}),
     });
     if (action.kind !== "send") {
@@ -192,7 +190,7 @@ export async function sendGatewayConversationMessage(params: {
     }
     const messageId = readMessageIdFromActionResult(action);
     if (action.sendResult.deliveryStatus === "suppressed") {
-      const operation = await markConversationDeliverySuppressed(scope, begun.record.operationId);
+      const operation = await markConversationDeliverySuppressed(scope, record.operationId);
       return { deliveryStatus: "suppressed", operation };
     }
     if (action.sendResult.deliveryStatus !== "sent") {
@@ -200,11 +198,7 @@ export async function sendGatewayConversationMessage(params: {
         `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
       );
     }
-    const operation = await markConversationDeliverySent(
-      scope,
-      begun.record.operationId,
-      messageId,
-    );
+    const operation = await markConversationDeliverySent(scope, record.operationId, messageId);
     const confirmedMessageId =
       messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
     return {

@@ -1,3 +1,4 @@
+import "./boot-capabilities.ts";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,

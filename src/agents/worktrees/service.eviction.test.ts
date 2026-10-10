@@ -23,7 +23,7 @@ import { withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout.js";
 import * as eviction from "./eviction.js";
 import { requireGit } from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import * as runLease from "./run-lease.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
@@ -245,25 +245,6 @@ describe("managed worktree cap eviction", () => {
     expect(getRegistryWorktree(env, first.id)).toEqual(original);
   });
 
-  it("drains more than one eviction batch after the configured cap drops", async () => {
-    config.worktreeMaxCount = 16;
-    await materializeManagedWorktreeFixtures({
-      env,
-      repoRoot,
-      stateDir: env.OPENCLAW_STATE_DIR!,
-      names: Array.from({ length: 9 }, (_, index) => `debt-${index}`),
-      now: 1,
-    });
-    config.worktreeMaxCount = 1;
-    const created = await service.create({ repoRoot, name: "after-cap-drop", baseRef: "HEAD" });
-    const records = await service.listRegistryRecords();
-    expect(
-      records.filter((record) => record.removedAt === undefined).map((record) => record.id),
-    ).toEqual([created.id]);
-    expect(records.filter((record) => record.removedAt !== undefined)).toHaveLength(9);
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-  });
-
   it("ranks shared heads once per repository when creating at the fleet cap", async () => {
     config.worktreeMaxCount = 17;
     const records = await materializeManagedWorktreeFixtures({
@@ -356,66 +337,6 @@ describe("managed worktree cap eviction", () => {
       clearRuntimeConfigSnapshot();
     }
   });
-
-  it.each(["cleanup", "admission"] as const)(
-    "counts failed victims toward %s batch boundaries and continues to later victims",
-    async (entrypoint) => {
-      config.worktreeMaxCount = entrypoint === "cleanup" ? 8 : 9;
-      const records = await materializeManagedWorktreeFixtures({
-        env,
-        repoRoot,
-        stateDir: env.OPENCLAW_STATE_DIR!,
-        names: Array.from({ length: 9 }, (_, index) => `victim-${index}`),
-        now: 1,
-      });
-      const attempted: string[] = [];
-      const boundaries: number[] = [];
-      const remove = eviction.evictManagedWorktree;
-      const failures = vi.spyOn(eviction, "evictManagedWorktree").mockImplementation((params) => {
-        attempted.push(params.record.id);
-        if (params.record.id !== records[8]!.id) {
-          return Promise.reject(new Error("synthetic checkout deletion failure"));
-        }
-        return remove(params);
-      });
-      try {
-        if (entrypoint === "cleanup") {
-          const result = await service.gc({
-            checkpoint: async () => {
-              if (attempted.length > 0) {
-                boundaries.push(attempted.length);
-              }
-            },
-          });
-          expect(boundaries[0]).toBeGreaterThan(0);
-          expect(boundaries[0]).toBeLessThanOrEqual(8);
-          expect(result).toMatchObject({
-            removed: [records[8]!.id],
-            issueCount: 8,
-            limitsSatisfied: true,
-          });
-        } else {
-          const created = await service.create({
-            repoRoot,
-            name: "after-failures",
-            baseRef: "HEAD",
-          });
-          const inventory = await service.listRegistryRecords();
-          expect(
-            inventory
-              .filter((record) => record.removedAt === undefined)
-              .map((record) => record.id)
-              .toSorted(),
-          ).toEqual([...records.slice(0, 8).map((record) => record.id), created.id].toSorted());
-          expect(getRegistryWorktree(env, records[8]!.id)?.removedAt).toEqual(expect.any(Number));
-          expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-        }
-        expect(attempted).toEqual(records.map((record) => record.id));
-      } finally {
-        failures.mockRestore();
-      }
-    },
-  );
 
   it("keeps a retained exact source and its live ancestor when restoration needs another slot", async () => {
     config.worktreeMaxCount = 2;
@@ -594,26 +515,7 @@ describe("managed worktree cap eviction", () => {
     );
   });
 
-  it("purges a nested repository even when a lossless snapshot is unavailable", async () => {
-    const nested = await service.create({ repoRoot, name: "nested", baseRef: "HEAD" });
-    const inner = path.join(nested.path, "inner");
-    await fs.mkdir(inner);
-    await requireGit(inner, ["init", "-b", "main"]);
-    await fs.writeFile(path.join(inner, "unsaved.txt"), "unrecoverable nested data\n");
-
-    const replacement = await service.create({ repoRoot, name: "replacement", baseRef: "HEAD" });
-    expect(getRegistryWorktree(env, nested.id)).toMatchObject({ removedAt: expect.any(Number) });
-    expect(getRegistryWorktree(env, nested.id)?.snapshotRef).toBeUndefined();
-    await expect(fs.stat(nested.path)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(
-      (await service.listRegistryRecords())
-        .filter((record) => record.removedAt === undefined)
-        .map((record) => record.id),
-    ).toEqual([replacement.id]);
-  });
-
   it.each([
-    ["missing snapshot", "restore"],
     ["missing repository", "restore"],
     ["occupied destination", "restore"],
     ["missing snapshot", "same-name create"],

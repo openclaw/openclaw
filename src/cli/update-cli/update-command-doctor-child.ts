@@ -117,7 +117,7 @@ export async function runUpdateDoctorProcess(
       "Doctor process custody requires its result channel.",
     );
   }
-  const custody = createUpdateDoctorProcessCustody(
+  const custody = await createUpdateDoctorProcessCustody(
     context.runId,
     context.root,
     resultPath,

@@ -135,7 +135,7 @@ export async function executeWorkerTurn(
   const [github, githubPublicationAvailable] = await raceNodeWorkerOperation(
     Promise.all([
       prepareWorkerGitHubBinding(githubContext),
-      prepareGitHubPublicationAvailability(githubContext),
+      prepareGitHubPublicationAvailability({ ...githubContext, sessionTarget: turn.sessionTarget }),
     ]),
     turn.abortSignal,
   );
@@ -374,6 +374,8 @@ export async function executeWorkerTurn(
           params.environments.createGatewayTools?.({
             identity,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+            inheritedToolDenylist: capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny,
+            delegatedToolPolicyActive: Boolean(capabilityProfile.policy.delegatedToolPolicy),
             skillWorkshop,
             portalAvailable,
             prepareTools: async (adapters) => {

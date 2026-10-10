@@ -179,7 +179,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
           .value=${controller.query}
           @input=${(event: InputEvent) => {
             if (event.currentTarget instanceof HTMLInputElement) {
-              controller.search(event.currentTarget.value);
+              controller.updatePresentation({ query: event.currentTarget.value });
             }
           }}
         />
@@ -192,9 +192,9 @@ class SystemsSidebar extends OpenClawLightDomElement {
             const sort = sortOptions.find((option) => value === `sort:${option.value}`);
             const status = statusOptions.find((option) => value === `status:${option.value}`);
             if (sort) {
-              controller.setSortMode(sort.value);
+              controller.updatePresentation({ sortMode: sort.value });
             } else if (status) {
-              controller.setStatusFilter(status.value);
+              controller.updatePresentation({ statusFilter: status.value });
             }
           }}
         >

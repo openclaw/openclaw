@@ -12,6 +12,16 @@ export type ResolvedStatusSessionEntry = {
   persisted: boolean;
 };
 
+function projectStatusEntry(
+  resolved: ReturnType<typeof resolveSessionEntryCandidateTarget>,
+): ResolvedStatusSessionEntry | null {
+  if (!resolved) {
+    return null;
+  }
+  const { entry, sessionKey: key, persisted } = resolved;
+  return { entry, key, persisted };
+}
+
 export function resolveSessionStatusEntry(params: {
   agentId: string;
   alias: string;
@@ -57,15 +67,7 @@ export function resolveSessionStatusEntry(params: {
     candidateKeys: candidates,
     cfg: params.cfg,
   });
-  const project = (value: Awaited<typeof resolved>) =>
-    value
-      ? {
-          entry: value.entry,
-          key: value.sessionKey,
-          persisted: value.persisted,
-        }
-      : null;
-  return isPromiseLike(resolved) ? resolved.then(project) : project(resolved);
+  return isPromiseLike(resolved) ? resolved.then(projectStatusEntry) : projectStatusEntry(resolved);
 }
 
 /** Maps requester keys into the currently selected agent store's legacy main key shape. */
@@ -101,13 +103,7 @@ export function resolveImplicitCurrentSessionFallback(params: {
       entry: { sessionId: "", updatedAt: Date.now() },
     },
   });
-  return resolved
-    ? {
-        entry: resolved.entry,
-        key: resolved.sessionKey,
-        persisted: resolved.persisted,
-      }
-    : null;
+  return projectStatusEntry(resolved);
 }
 
 /** Lists policy-key fallbacks for implicit default-account direct status lookups. */

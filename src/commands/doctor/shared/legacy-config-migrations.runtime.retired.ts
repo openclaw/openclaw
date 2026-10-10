@@ -5,10 +5,7 @@ import {
   type LegacyConfigMigrationSpec,
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
-import {
-  hasConfigTrancheLegacyKeys,
-  migrateConfigTranche,
-} from "./legacy-config-migrations.runtime.config-tranche.js";
+import { migrateConfigTranche } from "./legacy-config-migrations.runtime.config-tranche.js";
 import {
   consolidateMediaCapabilityConfig,
   hasDiscordRealtimeVoice,
@@ -380,6 +377,24 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
   }
 }
 
+function probedMigration(
+  id: string,
+  message: string,
+  apply: LegacyConfigMigrationSpec["apply"],
+): LegacyConfigMigrationSpec {
+  return {
+    id,
+    legacyRules: [
+      rule([], message, (_value, root) => {
+        const changes: string[] = [];
+        apply(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply,
+  };
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   {
@@ -466,39 +481,21 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       }
     },
   },
-  {
-    id: "runtime.doctor-tier-eval-tranche",
-    legacyRules: [
-      rule([], "Approved tier-eval configuration surfaces were consolidated.", (_value, root) => {
-        const changes: string[] = [];
-        migrateTierEvalTranche(structuredClone(root), changes);
-        return changes.length > 0;
-      }),
-    ],
-    apply: migrateTierEvalTranche,
-  },
-  {
-    id: "runtime.final-layout-polish",
-    legacyRules: [
-      rule([], "Final layout aliases were retired.", (_value, root) => {
-        const changes: string[] = [];
-        migrateFinalLayoutRenames(structuredClone(root), changes);
-        return changes.length > 0;
-      }),
-    ],
-    apply: migrateFinalLayoutRenames,
-  },
-  {
-    id: "runtime.final-layout-kills",
-    legacyRules: [
-      rule([], "Final layout tuning knobs were retired.", (_value, root) => {
-        const changes: string[] = [];
-        migrateFinalLayoutKills(structuredClone(root), changes);
-        return changes.length > 0;
-      }),
-    ],
-    apply: migrateFinalLayoutKills,
-  },
+  probedMigration(
+    "runtime.doctor-tier-eval-tranche",
+    "Approved tier-eval configuration surfaces were consolidated.",
+    migrateTierEvalTranche,
+  ),
+  probedMigration(
+    "runtime.final-layout-polish",
+    "Final layout aliases were retired.",
+    migrateFinalLayoutRenames,
+  ),
+  probedMigration(
+    "runtime.final-layout-kills",
+    "Final layout tuning knobs were retired.",
+    migrateFinalLayoutKills,
+  ),
   {
     id: "runtime.media-models-consolidation",
     legacyRules: [
@@ -513,17 +510,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       consolidateMediaCapabilityConfig(raw, changes);
     },
   },
-  {
-    id: "runtime.config-tranche",
-    legacyRules: [
-      rule(
-        [],
-        "Presentation-only preferences and duplicate tuning options moved to canonical defaults.",
-        (_value, root) => hasConfigTrancheLegacyKeys(root),
-      ),
-    ],
-    apply: migrateConfigTranche,
-  },
+  probedMigration(
+    "runtime.config-tranche",
+    "Presentation-only preferences and duplicate tuning options moved to canonical defaults.",
+    migrateConfigTranche,
+  ),
   {
     id: "runtime.tuning-knobs-purge",
     legacyRules: [

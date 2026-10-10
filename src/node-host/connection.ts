@@ -14,6 +14,7 @@ import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_NATIVE_INFERENCE_VERSION,
+  NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeWorkerCapacitySnapshot,
@@ -104,14 +105,6 @@ export function startNodeHostConnection({
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
   >();
-  const retireOptionalPublications = () => {
-    for (const state of optionalPublicationStates.values()) {
-      if (state.retryTimer) {
-        clearTimeout(state.retryTimer);
-      }
-    }
-    optionalPublicationStates.clear();
-  };
   const retireGatewayConnection = () => {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
@@ -121,7 +114,12 @@ export function startNodeHostConnection({
       clearInterval(hostStatsTimer);
       hostStatsTimer = undefined;
     }
-    retireOptionalPublications();
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
   };
 
   const startHostStatsPublication = () => {
@@ -373,6 +371,9 @@ export function startNodeHostConnection({
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES)
                 ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT)
+                ? { promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION }
                 : {}),
               ...(prepared.nativeInferenceEnabled &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE)

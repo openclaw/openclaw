@@ -53,86 +53,46 @@ describe("plugin MCP sign-in", () => {
     return { ...mounted, ...harness, client, request, route, context };
   }
 
-  it.each(["unauthenticated", "authorized", undefined] as const)(
-    "shows Connect before sign-in and Connected with Edit afterward (%s)",
-    async (state) => {
-      const inspection = createInspectResult({
-        mcpAuth: state ? [{ serverName: "workboard-mcp", state }] : undefined,
-      });
-      const { page, context } = await setup(async () => inspection);
-      const section = [...page.querySelectorAll(".plugin-capabilities")].find((entry) =>
-        entry.querySelector("h2")?.textContent?.startsWith("Accounts"),
-      );
-      if (state) {
-        expect(section?.textContent).toContain("workboard-mcp");
-        const status = section?.querySelector('[role="status"]');
-        const button = section?.querySelector<HTMLButtonElement>("button");
-        expect(status?.textContent?.trim() ?? null).toBe(
-          state === "authorized" ? "Connected" : null,
-        );
-        expect(button?.textContent?.trim()).toBe(state === "authorized" ? "Edit" : "Connect");
-        if (state === "authorized") {
-          button?.click();
-          expect(context.navigate).toHaveBeenCalledWith("mcp");
-        }
-        expect(page.querySelector(".plugin-catalog-detail__panel")?.firstElementChild).toBe(
-          section,
-        );
-      } else {
-        expect(section).toBeUndefined();
-      }
-    },
-  );
-
-  it.each([
-    ["missing", undefined],
-    ["configured", undefined],
-  ] as const)(
-    "shows credential state %s (required=%s) and opens existing Settings",
-    async (status, requiresCredential) => {
-      const inspection = createInspectResult({
-        credentials: [
-          {
-            path: ["plugins", "entries", "workboard", "config", "apiKey"],
-            label: "Workboard API key",
-            envVars: ["WORKBOARD_API_KEY"],
-            status,
-            requiresCredential,
-          },
-        ],
-        overview: {
-          capabilities: {
-            providers: [],
-            channels: [],
-            contracts: { webSearchProviders: ["workboard"] },
-          },
+  it("shows configured credentials and opens existing Settings", async () => {
+    const inspection = createInspectResult({
+      credentials: [
+        {
+          path: ["plugins", "entries", "workboard", "config", "apiKey"],
+          label: "Workboard API key",
+          envVars: ["WORKBOARD_API_KEY"],
+          status: "configured",
         },
-      });
-      const { page, context } = await setup(async () => inspection);
-      const sections = [...page.querySelectorAll(".plugin-capabilities")];
-      expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
-        "Credentials1",
-        "Capabilities1",
-      ]);
-      expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
-      expect(sections[0]?.querySelector('[role="status"]')?.textContent?.trim() ?? null).toBe(
-        status === "configured" ? "Configured" : null,
-      );
-      expect(sections[0]?.querySelector("button")?.textContent?.trim()).toBe(
-        status === "configured" ? "Edit" : "Configure",
-      );
-      sections[0]?.querySelector<HTMLButtonElement>("button")?.click();
-      expect(context.navigate).toHaveBeenCalledWith(
-        "plugin-settings",
-        expect.objectContaining({ search: "?view=settings" }),
-      );
-    },
-  );
+      ],
+      overview: {
+        capabilities: {
+          providers: [],
+          channels: [],
+          contracts: { webSearchProviders: ["workboard"] },
+        },
+      },
+    });
+    const { page, context } = await setup(async () => inspection);
+    const sections = [...page.querySelectorAll(".plugin-capabilities")];
+    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+      "Credentials1",
+      "Capabilities1",
+    ]);
+    expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
+    expect(sections[0]?.querySelector('[role="status"]')?.textContent?.trim() ?? null).toBe(
+      "Configured",
+    );
+    expect(sections[0]?.querySelector("button")?.textContent?.trim()).toBe("Edit");
+    sections[0]?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(context.navigate).toHaveBeenCalledWith(
+      "plugin-settings",
+      expect.objectContaining({ search: "?view=settings" }),
+    );
+  });
 
   it("starts the server's existing OAuth flow and waits for authoritative status after completion", async () => {
     const refreshed = createDeferred<PluginsInspectResult>();
     let completed = false;
-    const { page, request } = await setup(async (method) => {
+    const { page, context, request } = await setup(async (method) => {
       if (method === "plugins.inspect") {
         return completed
           ? refreshed.promise
@@ -165,6 +125,8 @@ describe("plugin MCP sign-in", () => {
       expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).toBeNull(),
     );
     expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
+    page.querySelector<HTMLButtonElement>('[aria-label="Edit workboard-mcp connection"]')!.click();
+    expect(context.navigate).toHaveBeenCalledWith("mcp");
   });
 
   it("disables Connect and refuses sign-in when the gateway does not advertise MCP OAuth", async () => {

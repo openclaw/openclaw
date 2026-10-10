@@ -23,6 +23,7 @@ import {
   makeCronReceiptJob,
 } from "../cron/store/run-receipt-store.test-support.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -219,32 +220,21 @@ it.for(["save", "consume"] as const)(
         () => undefined,
       );
 
-      const run = stateWorker.runOpenClawStateWorkerOperation;
       let heldSave = false;
       const committedCommand = kind === "save" ? "cron.save" : "operatorApprovals.consumeCronGrant";
-      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-        (captured, operation, options) =>
-          run(
-            captured,
-            (scope) =>
-              operation({
-                execute: async (selected, executeOptions) => {
-                  if (selected.type === "cron.finishReceipt") {
-                    finishEntered.resolve();
-                    await releaseFinish.promise;
-                  }
-                  const result = await scope.execute(selected, executeOptions);
-                  if (selected.type === committedCommand && !heldSave) {
-                    heldSave = true;
-                    saveCommitted.resolve();
-                    await releaseSaveReply.promise;
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-      );
+      probe.command(stateWorker, async (selected, executeOptions, scope) => {
+        if (selected.type === "cron.finishReceipt") {
+          finishEntered.resolve();
+          await releaseFinish.promise;
+        }
+        const result = await scope.execute(selected, executeOptions);
+        if (selected.type === committedCommand && !heldSave) {
+          heldSave = true;
+          saveCommitted.resolve();
+          await releaseSaveReply.promise;
+        }
+        return result;
+      });
       const enroll = receiptAuthority.withCronReceiptAuthorityMutation;
       vi.spyOn(receiptAuthority, "withCronReceiptAuthorityMutation").mockImplementation(
         (captured, operation, options) => {

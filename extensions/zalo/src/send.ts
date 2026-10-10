@@ -18,7 +18,6 @@ type ZaloSendOptions = {
   cfg?: OpenClawConfig;
   mediaUrl?: string;
   caption?: string;
-  verbose?: boolean;
   proxy?: string;
   assertDirectAdapterHandoff?: () => void;
 };

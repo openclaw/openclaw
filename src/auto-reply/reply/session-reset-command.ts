@@ -14,7 +14,6 @@ import { stripMentions } from "./mentions.js";
 
 type ResolvedSessionResetCommand = {
   matchedResetTriggerLower?: string;
-  normalizedResetBody: string;
   payload?: string;
   softResetMatched: boolean;
   triggerBodyNormalized: string;
@@ -33,17 +32,9 @@ type AnchoredResetCommand = SessionResetCommandContext & {
   commandText: string;
 };
 
-function skipWhitespace(source: string, start: number): number {
+function skipWhitespace(source: string, start: number, whitespace = /\s/): number {
   let cursor = start;
-  while (/\s/.test(source[cursor] ?? "")) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function skipHorizontalWhitespace(source: string, start: number): number {
-  let cursor = start;
-  while (source[cursor] === " " || source[cursor] === "\t") {
+  while (whitespace.test(source[cursor] ?? "")) {
     cursor += 1;
   }
   return cursor;
@@ -71,9 +62,7 @@ function matchesKnownSenderPrefix(prefix: string, ctx: MsgContext): boolean {
     ctx.SenderName && senderUsername ? `${ctx.SenderName} (@${senderUsername})` : undefined,
   ];
   return candidates.some(
-    (candidate) =>
-      typeof candidate === "string" &&
-      normalizeLowercaseStringOrEmpty(candidate) === normalizedPrefix,
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedPrefix,
   );
 }
 
@@ -92,7 +81,7 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
     if (startsWithHistoryMarker(source, cursor)) {
       return undefined;
     }
-    cursor = skipHorizontalWhitespace(source, envelopeEnd + 1);
+    cursor = skipWhitespace(source, envelopeEnd + 1, /[ \t]/);
   }
 
   const lineEnd = source.indexOf("\n", cursor);
@@ -101,7 +90,7 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
   if (senderPrefixEnd !== -1 && senderPrefixEnd < effectiveLineEnd) {
     const senderPrefix = source.slice(cursor, senderPrefixEnd).trim();
     if (senderPrefix && senderPrefix.length <= 120 && matchesKnownSenderPrefix(senderPrefix, ctx)) {
-      cursor = skipHorizontalWhitespace(source, senderPrefixEnd + 1);
+      cursor = skipWhitespace(source, senderPrefixEnd + 1, /[ \t]/);
     }
   }
 
@@ -110,11 +99,10 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
 
 function stripLeadingMention(params: AnchoredResetCommand & { start: number }): number | undefined {
   const triggerLower = normalizeLowercaseStringOrEmpty(params.trigger);
-  if (
-    normalizeLowercaseStringOrEmpty(
-      params.source.slice(params.start, params.start + params.trigger.length),
-    ) === triggerLower
-  ) {
+  const matchesTriggerAt = (index: number) =>
+    normalizeLowercaseStringOrEmpty(params.source.slice(index, index + params.trigger.length)) ===
+    triggerLower;
+  if (matchesTriggerAt(params.start)) {
     return params.start;
   }
   if (!params.isGroup) {
@@ -123,10 +111,7 @@ function stripLeadingMention(params: AnchoredResetCommand & { start: number }): 
 
   let triggerStart = -1;
   for (let index = params.start; index < params.source.length; index += 1) {
-    if (
-      normalizeLowercaseStringOrEmpty(params.source.slice(index, index + params.trigger.length)) ===
-      triggerLower
-    ) {
+    if (matchesTriggerAt(index)) {
       triggerStart = index;
       break;
     }
@@ -166,9 +151,6 @@ function isRecognizedCommandSuffix(
 }
 
 function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | undefined {
-  if (params.source === "") {
-    return undefined;
-  }
   const messageStart = resolveExplicitMessageStart(params.source, params.ctx);
   if (messageStart === undefined) {
     return undefined;
@@ -182,11 +164,7 @@ function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | und
   if (params.source[payloadStart] === "@") {
     const suffixStart = payloadStart + 1;
     payloadStart = suffixStart;
-    while (
-      params.source[payloadStart] !== undefined &&
-      params.source[payloadStart] !== ":" &&
-      !/\s/.test(params.source[payloadStart] ?? "")
-    ) {
+    while (/[^:\s]/.test(params.source[payloadStart] ?? "")) {
       payloadStart += 1;
     }
     const suffix = params.source.slice(suffixStart, payloadStart);
@@ -219,12 +197,6 @@ function resolveCommandTextForSession(
   return withoutMentions.replace(/\\n/g, " ").trim();
 }
 
-function isTranscriptOnlyCommand(ctx: MsgContext, commandText: string): boolean {
-  return (
-    typeof ctx.Transcript === "string" && commandText === ctx.Transcript.replace(/\\n/g, " ").trim()
-  );
-}
-
 export function resolveSessionResetCommand(
   params: SessionResetCommandContext & {
     commandText: string;
@@ -239,7 +211,6 @@ export function resolveSessionResetCommand(
   });
   const softResetMatched = parseSoftResetCommand(normalizedResetBody).matched;
   const result = {
-    normalizedResetBody,
     softResetMatched,
     triggerBodyNormalized,
   } satisfies ResolvedSessionResetCommand;
@@ -247,7 +218,8 @@ export function resolveSessionResetCommand(
   if (
     !params.resetAuthorized ||
     softResetMatched ||
-    isTranscriptOnlyCommand(params.ctx, params.commandText)
+    (typeof params.ctx.Transcript === "string" &&
+      params.commandText === params.ctx.Transcript.replace(/\\n/g, " ").trim())
   ) {
     return result;
   }

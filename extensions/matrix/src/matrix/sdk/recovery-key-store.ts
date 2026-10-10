@@ -86,62 +86,59 @@ export class MatrixRecoveryKeyStore {
     await this.drainPendingPersistence();
   }
 
-  buildCryptoCallbacks() {
-    const getSecretStorageKey = (
-      { keys }: { keys: Record<string, unknown> },
-      _name?: string,
-    ): Promise<[string, Uint8Array<ArrayBuffer>] | null> =>
-      this.afterPersistence(async () => {
-        if (this.closed) {
-          return null;
-        }
-        const requestedKeyIds = Object.keys(keys ?? {});
-        if (requestedKeyIds.length === 0) {
-          return null;
-        }
-
-        const staged = this.resolveStagedSecretStorageKey(requestedKeyIds);
-        if (staged) {
-          return staged;
-        }
-
+  private readSecretStorageKey(
+    requestedKeys: () => string[],
+    allowCached: boolean,
+  ): Promise<[string, Uint8Array<ArrayBuffer>] | null> {
+    return this.afterPersistence(async () => {
+      if (this.closed) {
+        return null;
+      }
+      const requestedKeyIds = requestedKeys();
+      if (requestedKeyIds.length === 0) {
+        return null;
+      }
+      const staged = this.resolveStagedSecretStorageKey(requestedKeyIds);
+      if (staged) {
+        return staged;
+      }
+      if (allowCached) {
         for (const keyId of requestedKeyIds) {
           const cached = this.secretStorageKeyCache.get(keyId);
           if (cached) {
             return [keyId, new Uint8Array(cached)];
           }
         }
+      }
+      const pending = this.pendingPersistence;
+      const stored = await this.loadStoredRecoveryKey();
+      if (this.closed) {
+        return null;
+      }
+      if (pending !== this.pendingPersistence) {
+        return this.readSecretStorageKey(requestedKeys, allowCached);
+      }
+      if (!stored?.privateKeyBase64) {
+        return null;
+      }
+      const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
+      if (privateKey.length === 0) {
+        return null;
+      }
+      const keyId =
+        stored.keyId && requestedKeyIds.includes(stored.keyId) ? stored.keyId : requestedKeyIds[0];
+      if (!keyId) {
+        return null;
+      }
+      this.rememberSecretStorageKey(keyId, privateKey);
+      return [keyId, privateKey];
+    });
+  }
 
-        const pending = this.pendingPersistence;
-        const stored = await this.loadStoredRecoveryKey();
-        if (this.closed) {
-          return null;
-        }
-        if (pending !== this.pendingPersistence) {
-          return getSecretStorageKey({ keys });
-        }
-        if (!stored?.privateKeyBase64) {
-          return null;
-        }
-        const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
-        if (privateKey.length === 0) {
-          return null;
-        }
-
-        if (stored.keyId && requestedKeyIds.includes(stored.keyId)) {
-          this.rememberSecretStorageKey(stored.keyId, privateKey);
-          return [stored.keyId, privateKey];
-        }
-
-        const firstRequestedKeyId = requestedKeyIds[0];
-        if (!firstRequestedKeyId) {
-          return null;
-        }
-        this.rememberSecretStorageKey(firstRequestedKeyId, privateKey);
-        return [firstRequestedKeyId, privateKey];
-      });
+  buildCryptoCallbacks() {
     return {
-      getSecretStorageKey,
+      getSecretStorageKey: ({ keys }: { keys: Record<string, unknown> }, _name?: string) =>
+        this.readSecretStorageKey(() => Object.keys(keys ?? {}), true),
       cacheSecretStorageKey: (
         keyId: string,
         keyInfo: NonNullable<MatrixStoredRecoveryKey["keyInfo"]>,
@@ -180,48 +177,18 @@ export class MatrixRecoveryKeyStore {
   }
 
   getSecretStorageKeyCandidate(keyId: string): Promise<Uint8Array<ArrayBuffer> | null> {
-    return this.afterPersistence(async () => {
-      if (this.closed) {
-        return null;
-      }
+    // Reset validation needs staged or durable material, never an ephemeral SDK cache hit.
+    return this.readSecretStorageKey(() => {
       const normalizedKeyId = keyId.trim();
-      if (!normalizedKeyId) {
-        return null;
-      }
-      const staged = this.resolveStagedSecretStorageKey([normalizedKeyId]);
-      if (staged) {
-        return staged[1];
-      }
-      const pending = this.pendingPersistence;
-      const stored = await this.loadStoredRecoveryKey();
-      if (this.closed) {
-        return null;
-      }
-      if (pending !== this.pendingPersistence) {
-        return this.getSecretStorageKeyCandidate(keyId);
-      }
-      if (!stored?.privateKeyBase64) {
-        return null;
-      }
-      const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
-      if (privateKey.length === 0) {
-        return null;
-      }
-      this.rememberSecretStorageKey(normalizedKeyId, privateKey);
-      return privateKey;
-    });
+      return normalizedKeyId ? [normalizedKeyId] : [];
+    }, false).then((resolved) => resolved?.[1] ?? null);
   }
 
-  private resolveEncodedRecoveryKeyInput(params: {
+  stageEncodedRecoveryKey(params: {
     encodedPrivateKey: string;
     keyId?: string | null;
     keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
-  }): {
-    encodedPrivateKey: string;
-    privateKey: Uint8Array;
-    keyId: string | null;
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
-  } {
+  }): Promise<void> {
     const encodedPrivateKey = params.encodedPrivateKey.trim();
     if (!encodedPrivateKey) {
       throw new Error("Matrix recovery key is required");
@@ -236,29 +203,16 @@ export class MatrixRecoveryKeyStore {
     }
     const keyId =
       typeof params.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : null;
-    return {
-      encodedPrivateKey,
-      privateKey,
-      keyId,
-      keyInfo: params.keyInfo,
-    };
-  }
-
-  stageEncodedRecoveryKey(params: {
-    encodedPrivateKey: string;
-    keyId?: string | null;
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
-  }): Promise<void> {
-    const prepared = this.resolveEncodedRecoveryKeyInput(params);
+    const preparedKeyInfo = params.keyInfo;
     return this.enqueuePersistence(async () => {
-      const keyInfo = prepared.keyInfo ?? (await this.loadStoredRecoveryKey())?.keyInfo;
+      const keyInfo = preparedKeyInfo ?? (await this.loadStoredRecoveryKey())?.keyInfo;
       this.clearStagedCache();
       this.stagedRecoveryKey = {
         version: 1,
         createdAt: new Date().toISOString(),
-        keyId: prepared.keyId,
-        encodedPrivateKey: prepared.encodedPrivateKey,
-        privateKeyBase64: Buffer.from(prepared.privateKey).toString("base64"),
+        keyId,
+        encodedPrivateKey,
+        privateKeyBase64: Buffer.from(privateKey).toString("base64"),
         keyInfo,
       };
     });

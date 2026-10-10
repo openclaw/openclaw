@@ -67,15 +67,14 @@ export function createRfbClientMessageFilter(
   };
 
   const routePending = (forwarded: Buffer[]): string | undefined => {
+    const shouldForward = phase !== "messages" || [0, 2, 3, 150, 248].includes(pending[0] ?? -1);
     if (phase === "version") {
       if (!pending.equals(RFB_3_8_VERSION)) {
         return "unsupported RFB protocol version";
       }
-      forwarded.push(pending);
       phase = "security";
     } else if (phase === "security") {
       const securityType = pending[0];
-      forwarded.push(pending);
       if (securityType === 1) {
         phase = "clientInit";
       } else if (securityType === 2) {
@@ -84,20 +83,13 @@ export function createRfbClientMessageFilter(
         return `unsupported RFB security type ${securityType}`;
       }
     } else if (phase === "authResponse") {
-      forwarded.push(pending);
       phase = "clientInit";
     } else if (phase === "clientInit") {
       // A passive viewer must stay shared; exclusive ClientInit would disconnect the controller.
       pending[0] = 1;
-      forwarded.push(pending);
       phase = "messages";
-    } else if (
-      pending[0] === 0 ||
-      pending[0] === 2 ||
-      pending[0] === 3 ||
-      pending[0] === 150 ||
-      pending[0] === 248
-    ) {
+    }
+    if (shouldForward) {
       forwarded.push(pending);
     }
     pending = Buffer.alloc(0);

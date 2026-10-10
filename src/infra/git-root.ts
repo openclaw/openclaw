@@ -512,9 +512,6 @@ function resolveRefPath(refsBase: string, ref: string): string | null {
   if (!ref.startsWith("refs/")) {
     return null;
   }
-  if (path.isAbsolute(ref)) {
-    return null;
-  }
   if (ref.split(/[/]/).includes("..")) {
     return null;
   }

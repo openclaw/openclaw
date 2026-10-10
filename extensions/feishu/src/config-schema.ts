@@ -153,9 +153,6 @@ export const DynamicAgentCreationSchema = z
   .optional();
 
 /**
- * Feishu tools configuration.
- * Controls which tool categories are enabled.
- *
  * Dependencies:
  * - wiki requires doc (wiki content is edited via doc tools)
  * - perm can work independently but is typically used with drive
@@ -270,7 +267,7 @@ const FeishuSharedConfigShape = {
 export const FeishuAccountConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    name: z.string().optional(), // Display name for this account
+    name: z.string().optional(),
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
     encryptKey: buildSecretInputSchema().optional(),

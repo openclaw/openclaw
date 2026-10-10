@@ -4,6 +4,7 @@ import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings } from "../../app/settings.ts";
+import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -88,6 +89,7 @@ function mountPane(
   const request = createGatewayRequestMock(async () => liveResult);
   const client = createGatewayBrowserClientFixture({ request });
   return {
+    pane,
     client,
     state,
     read,
@@ -147,6 +149,33 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it("rejects transcript and progress hydration when the Gateway account changes ahead of pane state", async () => {
+    const h = mountPane();
+    const progressCard = { sessionKey, revision: 2, updatedAt: 100, markdown: "Old account" };
+    h.pane.context.gateway.snapshot.client = createGatewayBrowserClientFixture({
+      offlineRecoveryScope: "another-account",
+      recoveryScopeReady: false,
+    });
+    h.read.resolve({ ...stored, progressCard });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.chatMessages).toEqual([]);
+    expect(
+      sessionProgressCardsForGateway(h.pane.context.gateway).get({ sessionKey }),
+    ).toBeUndefined();
+  });
+
+  it("hydrates progress with the stored transcript before hello", async () => {
+    const h = mountPane();
+    const progressCard = { sessionKey, revision: 2, updatedAt: 100, markdown: "Checking results" };
+    h.read.resolve({ ...stored, progressCard });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.connected).toBe(false);
+    expect(h.state.chatMessages).toEqual(stored.messages);
+    expect(sessionProgressCardsForGateway(h.pane.context.gateway).get({ sessionKey })).toEqual(
+      progressCard,
+    );
+    expect(h.request).not.toHaveBeenCalled();
+  });
   it("issues startup with the stored cursor before rendering the hydrated snapshot", async () => {
     const h = mountPane();
     const order: string[] = [];
@@ -428,7 +457,7 @@ describe("first chat startup snapshot ordering", () => {
     const loading = h.start();
     expect(h.request).not.toHaveBeenCalled();
     record.resolve({
-      projectionVersion: 1,
+      projectionVersion: 2,
       savedAt: Date.now(),
       sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
       sessionId: stored.sessionId,
@@ -468,7 +497,7 @@ describe("first chat startup snapshot ordering", () => {
     );
     await loading;
     record.resolve({
-      projectionVersion: 1,
+      projectionVersion: 2,
       savedAt: Date.now(),
       sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
       sessionId: stored.sessionId,

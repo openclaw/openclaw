@@ -421,6 +421,17 @@ async function runGuidedOnboardingFlow(
   let persistedConfig = persistedSnapshot.valid
     ? (persistedSnapshot.sourceConfig ?? persistedSnapshot.config)
     : acknowledgedConfig;
+  const importMemories = async () => {
+    const runMemoryImport =
+      deps.runSetupMemoryImportStep ??
+      (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
+    await runMemoryImport({
+      config: persistedConfig,
+      prompter,
+      runtime,
+      ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
+    });
+  };
   if (!custodianMode) {
     if (skippedInference) {
       await prompter.note(
@@ -430,15 +441,7 @@ async function runGuidedOnboardingFlow(
       return null;
     }
     if (wantsDiscovery) {
-      const runMemoryImport =
-        deps.runSetupMemoryImportStep ??
-        (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-      await runMemoryImport({
-        config: persistedConfig,
-        prompter,
-        runtime,
-        ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
-      });
+      await importMemories();
     }
     return {
       workspace: conversationWorkspace,
@@ -623,15 +626,7 @@ async function runGuidedOnboardingFlow(
   if (wantsDiscovery && !quickstart && !setupOnly) {
     // Import destinations come from the final persisted agent workspace. Importing
     // before setup apply strands memories when first run specifies --workspace.
-    const runMemoryImport =
-      deps.runSetupMemoryImportStep ??
-      (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-    await runMemoryImport({
-      config: persistedConfig,
-      prompter,
-      runtime,
-      ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
-    });
+    await importMemories();
     const runAppRecommendations =
       deps.runAppRecommendations ??
       (await import("../wizard/setup.app-recommendations.js")).setupAppRecommendations;

@@ -1,4 +1,3 @@
-/** Renders Linux systemd availability hints for gateway service commands. */
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveDaemonContainerContext } from "./container-context.js";
 import {
@@ -12,7 +11,6 @@ type SystemdUnavailableHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
-/** Detects details that should get systemd availability repair hints. */
 export function isSystemdUnavailableDetail(detail?: string): boolean {
   return classifySystemdUnavailableDetail(detail) !== null;
 }

@@ -10,7 +10,10 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
+import {
+  consumeLiveCatalogRefresh,
+  recordLiveCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -141,11 +144,13 @@ export async function getCachedLiveCatalogValue<T>(params: {
     return await params.load(params.signal);
   }
   const key = buildLiveCatalogCacheKey(params.keyParts);
+  const refresh = consumeLiveCatalogRefresh(key);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
     // An abandoned load may ignore abort; a new caller must not inherit its cancellation.
     if (
       !existing.controller.signal.aborted &&
+      (!refresh || !existing.settled) &&
       isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
     ) {
       return await consumeLiveCatalog(existing, params.signal);

@@ -36,6 +36,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import type { StoredOutboxScopeHost } from "./app-shell-gateway.ts";
+import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -47,7 +48,7 @@ type DeletedSessionShell = {
   routeState: { routeId?: RouteId; location?: RouteLocation };
   didConsiderNativeRouteRestore: boolean;
   recoverNotFoundRoute: () => void;
-  updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
+  shellNavigation: ShellNavigationOwner;
   observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
   recoverDeletedActiveSession: () => void;
 };
@@ -746,7 +747,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       cachedMatches: [],
     } as unknown as RouterState<RouteId>;
 
-    shell.updateRouteState(selectShellRouteState(routerState));
+    shell.shellNavigation.updateRouteState(selectShellRouteState(routerState));
 
     expect(shell.activeSessionKey).toBe(mainKey);
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);

@@ -10,9 +10,9 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession } from "./index.js";
 import { makeRelayTransport } from "./index.test-support.js";
 import { closeRelaySession } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions } from "./state.js";
 
 const cfg = { agents: { entries: { main: {} } } };

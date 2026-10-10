@@ -35,7 +35,6 @@ export function resetAuthProfileUsageMocks() {
     .mockImplementation(async (store, profileId, _agentDir, consume) =>
       consume({
         observed: structuredClone(usageMocks.readFresh() ?? store),
-        inherited: false,
         record: (reduction) => usageMocks.record(store, profileId, reduction),
       }),
     );

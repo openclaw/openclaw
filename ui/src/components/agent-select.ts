@@ -128,11 +128,9 @@ export class AgentSelect extends OpenClawLightDomElement {
 
   private renderContent() {
     const selectedOption = this.options.find((option) => option.value === this.value);
-    const missingValueOption: AgentSelectOption | null =
-      !selectedOption && this.value
-        ? { value: this.value, label: this.value, agent: { id: this.value } }
-        : null;
-    const triggerOption = selectedOption ?? missingValueOption;
+    const triggerOption =
+      selectedOption ??
+      (this.value ? { value: this.value, label: this.value, agent: { id: this.value } } : null);
     const unavailable = this.disabled || (this.options.length === 0 && !this.onCreateAgent);
     const triggerLabel = triggerOption?.label ?? (this.placeholder || t("agents.noAgents"));
     const selectedBadge = selectedOption?.badge;

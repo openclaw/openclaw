@@ -118,6 +118,7 @@ describe("model-backed transcript summaries", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledOnce();
     const request = runIsolatedCompletion.mock.calls[0]![0];
     expect(request).toMatchObject({
+      purpose: "transcript-summary",
       agentId: "resident",
       authProfileId: "meeting-profile",
       outputTextPolicy: "strict-visible",

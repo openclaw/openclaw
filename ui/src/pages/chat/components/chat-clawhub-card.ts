@@ -49,24 +49,20 @@ class ChatClawHubCard extends OpenClawLightDomElement {
     },
   });
 
-  private readonly catalogIcons = new PluginIconController({
-    kind: "catalog",
-    getFetchContext: () => pluginIconFetchContext(this.context),
-    isConnected: () => this.isConnected && this.gateway.connected,
-    onUrlsChange: (urls) => {
-      this.iconUrls = urls;
-    },
-    onLoadingChange: () => this.requestUpdate(),
-  });
+  private readonly catalogIcons = this.createIconController("iconUrls");
+  private readonly pluginIcons = this.createIconController("pluginIconUrls");
 
-  private readonly pluginIcons = new PluginIconController({
-    getFetchContext: () => pluginIconFetchContext(this.context),
-    isConnected: () => this.isConnected && this.gateway.connected,
-    onUrlsChange: (urls) => {
-      this.pluginIconUrls = urls;
-    },
-    onLoadingChange: () => this.requestUpdate(),
-  });
+  private createIconController(key: "iconUrls" | "pluginIconUrls") {
+    return new PluginIconController({
+      kind: key === "iconUrls" ? "catalog" : undefined,
+      getFetchContext: () => pluginIconFetchContext(this.context),
+      isConnected: () => this.isConnected && this.gateway.connected,
+      onUrlsChange: (urls) => {
+        this[key] = urls;
+      },
+      onLoadingChange: () => this.requestUpdate(),
+    });
+  }
 
   private resetIcons(): void {
     this.catalogIcons.reset();

@@ -23,6 +23,18 @@
   padding: 0;
 }
 
+/* Touch drawers keep reordering beside the other actions, not over the leading
+   glyph or session color stripe. Reserve a real flex slot without widening rows. */
+.shell--mobile-nav .sidebar-zone-entry > .sidebar-reorder-menu {
+  align-self: flex-start;
+
+  .sidebar-reorder-trigger {
+    position: static;
+    width: 24px;
+    height: var(--sidebar-nav-row-height);
+  }
+}
+
 .sidebar-zone-entry .sidebar-reorder-trigger svg {
   flex: none;
 }

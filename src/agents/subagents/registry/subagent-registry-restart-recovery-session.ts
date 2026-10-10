@@ -46,9 +46,9 @@ export async function loadSubagentRecoverySession(params: {
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const agentId = params.entry.childAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const scope = { storePath, sessionKey, projection: "list" as const };
+  const scope = { storePath, sessionKey, agentId, projection: "list" as const };
   const { sessionEntry, currentRead } = await withSessionEntryReadOnlyInWorker(
     scope,
     () => {

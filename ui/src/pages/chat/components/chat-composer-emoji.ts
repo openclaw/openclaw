@@ -149,11 +149,9 @@ export class ComposerEmojiMenu {
       event.inputType !== "insertText" ||
       event.data !== ":" ||
       !(textarea instanceof HTMLTextAreaElement) ||
-      textarea.selectionStart !== textarea.selectionEnd
+      textarea.selectionStart !== textarea.selectionEnd ||
+      !event.cancelable
     ) {
-      return false;
-    }
-    if (!event.cancelable) {
       return false;
     }
     const caret = textarea.selectionStart;

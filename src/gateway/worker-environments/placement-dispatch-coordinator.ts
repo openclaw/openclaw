@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerDispatchPlacement,
   WorkerProvisioningDispatchPlacement,
@@ -12,6 +13,7 @@ import {
   type WorkerPlacementCancellationTarget,
 } from "./placement-target.js";
 import type { WorkerPlacementDispatchAdmission } from "./service-contract.js";
+import { ensureWorkerSessionPlacement } from "./session-placement-lifecycle.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
@@ -52,7 +54,22 @@ export function coordinateWorkerPlacementDispatch(
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
   reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
+  sessionPreparation?: Pick<
+    Parameters<typeof ensureWorkerSessionPlacement>[0],
+    "placements" | "environments" | "redispatchPlacement"
+  > & { warn: (message: string) => void },
 ): WorkerPlacementDispatchService & {
+  ensurePlacement(
+    params: Omit<
+      Parameters<typeof ensureWorkerSessionPlacement>[0],
+      | "placements"
+      | "environments"
+      | "redispatchPlacement"
+      | "dispatch"
+      | "startDispatch"
+      | "waitForInitialPlacement"
+    >,
+  ): ReturnType<typeof ensureWorkerSessionPlacement>;
   /** Lend admission while interrupting session work and waiting for its turn claim. */
   awaitTurnClaimRelease(sessionId: string, wait: () => Promise<void>): Promise<void>;
   isPlacementOperationInFlight(sessionId: string): boolean;
@@ -231,7 +248,38 @@ export function coordinateWorkerPlacementDispatch(
       })(),
     );
   };
-  return {
+  const coordinator: ReturnType<typeof coordinateWorkerPlacementDispatch> = {
+    async ensurePlacement(params) {
+      if (!sessionPreparation) {
+        throw new Error("Session placement preparation is unavailable");
+      }
+      return await ensureWorkerSessionPlacement({
+        ...sessionPreparation,
+        ...params,
+        dispatch: coordinator.dispatch,
+        waitForInitialPlacement: coordinator.waitForInitialPlacement,
+        startDispatch: async (request, onTransition, authorize, signal) => {
+          const started = createDeferredCore<WorkerDispatchPlacement>();
+          const operation = coordinator.dispatch(
+            request,
+            (placement) => {
+              started.resolve(placement);
+              onTransition?.(placement);
+            },
+            authorize,
+            signal,
+          );
+          void operation.catch((error: unknown) => {
+            try {
+              sessionPreparation.warn("Worker setup failed: " + String(error));
+            } catch {
+              /* Reporting cannot replace durable setup failure. */
+            }
+          });
+          return await Promise.race([started.promise, operation]);
+        },
+      });
+    },
     async awaitTurnClaimRelease(sessionId, wait) {
       const claimWait = { settled: Promise.resolve() };
       claimWaits.set(sessionId, claimWait);
@@ -372,9 +420,14 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) =>
+          (signal, assertSessionCurrent) =>
             runSessionOperation(request.sessionId, signal, () =>
-              service.dispatch(request, report, authorize, signal),
+              service.dispatch(
+                request,
+                report,
+                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
+                signal,
+              ),
             ),
           authorize,
           callerSignal,
@@ -437,9 +490,14 @@ export function coordinateWorkerPlacementDispatch(
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          (signal) =>
+          (signal, assertSessionCurrent) =>
             runSessionOperation(request.sessionId, signal, () =>
-              service.move(request, report, authorize, signal),
+              service.move(
+                request,
+                report,
+                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
+                signal,
+              ),
             ),
           authorize,
         );
@@ -535,10 +593,12 @@ export function coordinateWorkerPlacementDispatch(
           },
           report,
           (runRecovery) =>
-            admitDispatch(placement, async (signal) => {
+            admitDispatch(placement, async (signal, assertSessionCurrent) => {
               try {
                 signal?.throwIfAborted();
+                assertSessionCurrent?.();
                 const recovered = await runRecovery(signal);
+                assertSessionCurrent?.();
                 if (providerPending) {
                   foreground.resolve(recovered);
                 }
@@ -568,4 +628,5 @@ export function coordinateWorkerPlacementDispatch(
       return foreground.promise;
     },
   };
+  return coordinator;
 }

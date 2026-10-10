@@ -25,6 +25,7 @@ import { readTranscriptLibraryStatus } from "./status.js";
 import {
   cursorScope,
   encodeCursor,
+  iterateTranscriptExport,
   queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readTranscriptEntry,
@@ -84,6 +85,20 @@ function observeArchiveReads(
   vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
     readTranscriptLibraryEntry(database, params),
   );
+  vi.spyOn(store, "streamExport").mockImplementation(async (selector, includeNotes, consume) => {
+    const rows = iterateTranscriptExport(database, selector, includeNotes);
+    try {
+      for (let step = rows.next(); ; step = rows.next()) {
+        if (step.done) {
+          return step.value;
+        }
+        await consume([step.value]);
+      }
+    } catch (error) {
+      rows.throw(error);
+      throw error;
+    }
+  });
   vi.spyOn(store, "readSummarySnapshot").mockImplementation(async (descriptor, maxUtterances) =>
     readTranscriptSummarySnapshot(database, descriptor, maxUtterances),
   );

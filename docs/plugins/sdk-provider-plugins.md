@@ -515,6 +515,11 @@ providers:
 | `paired`  | After profile | Synthesize multiple related entries             |
 | `late`    | Last pass     | Override existing providers (wins on collision) |
 
+Within each phase, OpenClaw runs up to four catalog hooks concurrently. It waits
+for the phase to settle, then merges model rows and provider outcomes in provider
+label order. Hooks retain their individual discovery deadlines; completion order
+does not change catalog precedence.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel

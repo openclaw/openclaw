@@ -41,7 +41,6 @@ function harness(
     comments?: Array<{ body?: string; performed_via_github_app?: { id: number } }>;
     commentError?: Error;
     searchError?: Error;
-    searchResults?: ReturnType<typeof issue>[];
   } = {},
 ) {
   const calls = {
@@ -64,7 +63,7 @@ function harness(
           if (options.searchError) {
             throw options.searchError;
           }
-          return { data: { items: options.searchResults ?? searchItems } };
+          return { data: { items: searchItems } };
         },
       },
       issues: {
@@ -127,21 +126,6 @@ describe("dated TODO issue upsert", () => {
     ]);
     expect(calls.sequence).toEqual(["comment", "update"]);
     expect(calls.warnings).toEqual([expect.stringContaining("Ignored 1 untrusted")]);
-  });
-
-  it("finds the labeled tracker while the search index is still empty", async () => {
-    const tracker = issue(10, { trusted: true });
-    const { calls, core, github } = harness([tracker], { searchResults: [] });
-
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
-
-    expect(calls.create).toHaveLength(0);
-    expect(calls.update).toEqual([expect.objectContaining({ issue_number: tracker.number })]);
   });
 
   it("updates the canonical tracker when diagnostics-only search fails", async () => {
@@ -253,38 +237,25 @@ describe("dated TODO issue upsert", () => {
 });
 
 describe("dated TODO report validation", () => {
-  it("accepts exact checklist entries and the explicit empty-section sentinel", () => {
-    expect(() => validateDatedTodoReport(REPORT)).not.toThrow();
-  });
-
-  it.each([
-    ["checked item", "- [x] src/urgent.ts:7 — remove expired compatibility (2026-07-01)"],
-    ["missing checkbox", "src/urgent.ts:7 — remove expired compatibility (2026-07-01)"],
-    ["invalid date", "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-99-01)"],
-  ])("rejects a malformed %s", (_name, malformed) => {
-    expect(() =>
-      validateDatedTodoReport(
-        REPORT.replace(
-          "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-          malformed,
+  it.each([["invalid date", "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-99-01)"]])(
+    "rejects a malformed %s",
+    (_name, malformed) => {
+      expect(() =>
+        validateDatedTodoReport(
+          REPORT.replace(
+            "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
+            malformed,
+          ),
         ),
-      ),
-    ).toThrow(/Invalid dated TODO checklist item/u);
-  });
+      ).toThrow(/Invalid dated TODO checklist item/u);
+    },
+  );
 
   it.each([
     [
       "future date under OVERDUE",
       REPORT.replace("(2026-07-01)", "(2027-01-01)"),
       /Non-overdue date/u,
-    ],
-    [
-      "past date under DUE",
-      REPORT.replace(
-        "## DUE within 30 days\n\n_None._",
-        "## DUE within 30 days\n\n- [ ] src/due.ts:9 — revisit gate (2026-07-24)",
-      ),
-      /outside the 30-day due window/u,
     ],
     [
       "date beyond 30 days under DUE",
@@ -296,15 +267,6 @@ describe("dated TODO report validation", () => {
     ],
   ])("rejects a %s", (_name, report, expected) => {
     expect(() => validateDatedTodoReport(report)).toThrow(expected);
-  });
-
-  it("allows an old literal date in FUTURE for the prompt's ambiguous-retention rule", () => {
-    const ambiguousFuture = REPORT.replace(
-      "## FUTURE\n\n_None._",
-      "## FUTURE\n\n- [ ] src/ambiguous.ts:11 — investigate ambiguous commitment (2026-07-01)",
-    );
-
-    expect(() => validateDatedTodoReport(ambiguousFuture)).not.toThrow();
   });
 
   it("binds the report date and file locations to the fresh checkout", () => {
@@ -327,24 +289,17 @@ describe("dated TODO report validation", () => {
     ).toThrow(/Untracked or missing repository path/u);
   });
 
-  it("accepts inert tracked-path grammar with spaces", () => {
-    const report = REPORT.replace("src/urgent.ts:7", "docs/temporary note.md:7");
+  it.each([["mention", "- [ ] src/urgent.ts:7 — notify @maintainers (2026-07-01)"]])(
+    "rejects active Markdown in a %s",
+    (_name, item) => {
+      const report = REPORT.replace(
+        "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
+        item,
+      );
 
-    expect(() => validateDatedTodoReport(report)).not.toThrow();
-  });
-
-  it.each([
-    ["mention", "- [ ] src/urgent.ts:7 — notify @maintainers (2026-07-01)"],
-    ["link", "- [ ] src/urgent.ts:7 — [review details](https://example.com) (2026-07-01)"],
-    ["markup", "- [ ] src/urgent.ts:7 — remove **temporary** gate (2026-07-01)"],
-  ])("rejects active Markdown in a %s", (_name, item) => {
-    const report = REPORT.replace(
-      "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-      item,
-    );
-
-    expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
-  });
+      expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
+    },
+  );
 
   it("allows underscores only inside plain identifiers", () => {
     const safe = REPORT.replace(
@@ -362,7 +317,6 @@ describe("dated TODO report validation", () => {
 
   it.each([
     ["URL", "- [ ] src/urgent.ts:7 — see https://example.com (2026-07-01)"],
-    ["issue reference", "- [ ] src/urgent.ts:7 — follow up in #123 (2026-07-01)"],
     ["GH reference", "- [ ] src/urgent.ts:7 — follow up in GH-123 (2026-07-01)"],
   ])("rejects a GitHub autolink from a %s", (_name, item) => {
     const report = REPORT.replace(

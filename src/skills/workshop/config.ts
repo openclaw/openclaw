@@ -2,31 +2,23 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillsWorkshopAutonomousMode } from "../../config/types.skills.js";
 
-/** Runtime configuration for the skill workshop proposal flow. */
+/** Runtime configuration for Skill Workshop. */
 type SkillWorkshopConfig = {
   autonomous: {
     mode: SkillsWorkshopAutonomousMode;
   };
-  approvalPolicy: "pending" | "auto";
-  maxPending: number;
   maxSkillBytes: number;
 };
 
-function readInteger(value: unknown, fallback: number, min: number, max: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(Math.max(Math.trunc(value), min), max)
-    : fallback;
-}
-
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
   const raw = asNullableRecord(config?.skills?.workshop) ?? {};
-  const autonomous = asNullableRecord(raw.autonomous) ?? {};
+  const mode = asNullableRecord(raw.autonomous)?.mode;
+  const maxSkillBytes = raw.maxSkillBytes;
   return {
-    autonomous: {
-      mode: autonomous.mode === "off" || autonomous.mode === "propose" ? autonomous.mode : "auto",
-    },
-    approvalPolicy: raw.approvalPolicy === "pending" ? "pending" : "auto",
-    maxPending: readInteger(raw.maxPending, 50, 1, 200),
-    maxSkillBytes: readInteger(raw.maxSkillBytes, 40_000, 1024, 200_000),
+    autonomous: { mode: mode === "off" || mode === "auto" ? mode : "auto" },
+    maxSkillBytes:
+      typeof maxSkillBytes === "number" && Number.isFinite(maxSkillBytes)
+        ? Math.min(Math.max(Math.trunc(maxSkillBytes), 1024), 200_000)
+        : 40_000,
   };
 }

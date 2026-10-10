@@ -269,3 +269,17 @@ export function renderWorkboardToast(props: WorkboardToastProps) {
     .props=${props}
   ></openclaw-workboard-toast>`;
 }
+
+export function renderWorkboardErrorToast(
+  owner: object,
+  error: string | null | undefined,
+  options: Pick<WorkboardToastProps, "hidden"> = {},
+) {
+  return renderWorkboardToast({
+    owner,
+    message: error ?? "",
+    key: error,
+    tone: "error",
+    ...options,
+  });
+}

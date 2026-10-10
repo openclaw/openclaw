@@ -124,10 +124,9 @@ Provider fields:
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
 
-`recommendedModels` is an optional ordered shortlist of distinct model
-ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
-is reserved for picker ordering and is not yet used. It is published only in catalog
-v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
+Manifests do not author recommendations. Catalog v2 derives each provider's
+`recommendedModels` from the [curated recommended models list](/concepts/recommended-models).
+Manifests that still set `recommendedModels` load unchanged; the field is ignored.
 
 The catalog generator opts into local paired output with `--out <v1-file> --out-v2 <v2-file>`.
 It validates both bundles and prepares candidate bytes and previous-file backups
@@ -196,6 +195,8 @@ Declare retirement only from affirmative provider evidence, never from a failed 
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode/configuration#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+
+After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
 
 Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
 

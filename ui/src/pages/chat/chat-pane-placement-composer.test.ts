@@ -77,6 +77,58 @@ describe("chat placement composer presentation", () => {
   );
 
   it.each([
+    {
+      name: "current required worker inference",
+      required: "coding",
+      profile: "coding",
+      inference: "worker",
+      hidden: true,
+    },
+    {
+      name: "optional worker inference",
+      required: undefined,
+      profile: "coding",
+      inference: "worker",
+      hidden: false,
+    },
+    {
+      name: "different required profile",
+      required: "other",
+      profile: "coding",
+      inference: "worker",
+      hidden: false,
+    },
+    {
+      name: "Gateway inference",
+      required: "coding",
+      profile: "coding",
+      inference: undefined,
+      hidden: false,
+    },
+    {
+      name: "missing placement profile",
+      required: "coding",
+      profile: undefined,
+      inference: "worker",
+      hidden: false,
+    },
+  ] as const)(
+    "changes only the sync hint for $name",
+    ({ required, profile, inference, hidden }) => {
+      const row = placementSession("active");
+      Object.assign(row.placement!, { profileId: profile, inference });
+      const original = presentation(row, { workspaceResultReconciling: true });
+      const result = presentation(row, {
+        workspaceResultReconciling: true,
+        requiredWorkerInferenceProfileId: required,
+      });
+      expect(result).toEqual({ ...original, busyMessage: hidden ? null : original.busyMessage });
+      expect(result.blocksSend).toBe(false);
+      expect(result.state.kind).toBe("busy");
+    },
+  );
+
+  it.each([
     { state: "syncing", operation: "reclaimingKey", message: "Stopping session…" },
     { state: "syncing", operation: "restartingKey", message: "Restarting session…" },
     { state: "syncing", operation: "movingKey", message: "Finishing session move…" },
@@ -93,6 +145,7 @@ describe("chat placement composer presentation", () => {
     { state: "failed", operation: "placementMove", message: "Finishing session move…" },
   ] as const)("blocks sync sends during $state $operation", ({ state, message, ...scenario }) => {
     const row = placementSession(state);
+    Object.assign(row.placement!, { profileId: "coding", inference: "worker" });
     if (row.placement?.state === "failed") {
       row.placement.recoveryAction = "restart";
       row.placement.retryOnSend = true;
@@ -103,6 +156,7 @@ describe("chat placement composer presentation", () => {
     }
     const result = presentation(row, {
       workspaceResultReconciling: true,
+      requiredWorkerInferenceProfileId: "coding",
       ...(operation && operation !== "placementMove" ? { [operation]: row.key } : {}),
     });
 
@@ -110,11 +164,14 @@ describe("chat placement composer presentation", () => {
     expect(result.busyMessage).toBe(message);
   });
 
-  it("keeps an unfinished New Session submission blocked during setup", () => {
-    expect(presentation(placementSession("syncing"), { startupPending: true }).blocksSend).toBe(
-      true,
-    );
-  });
+  it.each(["provisioning", "syncing", "starting"] as const)(
+    "allows queued follow-ups while New Session setup is %s",
+    (state) => {
+      const result = presentation(placementSession(state), { startupPending: true });
+      expect(result.state.kind).toBe("setup");
+      expect(result.blocksSend).toBe(false);
+    },
+  );
 
   it.each(["local", undefined] as const)(
     "blocks a repository-only session with %s placement and offers worker dispatch",

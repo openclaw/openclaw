@@ -19,7 +19,7 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
-import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance.test-support.js";
+import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance-completion.test-support.js";
 import * as preservation from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 

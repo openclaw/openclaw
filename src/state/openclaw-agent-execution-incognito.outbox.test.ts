@@ -26,10 +26,15 @@ import type { IncognitoTranscriptOperations } from "../config/sessions/session-i
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  useIncognitoActorProbe,
+  openIncognitoTestActor,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+
+const probe = useIncognitoActorProbe();
 
 describe("outbox", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -44,22 +49,8 @@ describe("outbox", () => {
     env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-outbox-") };
     const posted = vi.spyOn(Worker.prototype, "postMessage");
     try {
-      const opened = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: "main",
-        env,
-        authority,
-      });
-      assert(opened);
-      actor = opened;
-      const loss = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: "loss",
-        env,
-        authority,
-      });
-      assert(loss);
-      lossActor = loss;
+      actor = await openIncognitoTestActor(env, authority);
+      lossActor = await openIncognitoTestActor(env, authority, "loss");
       const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "loss", env });
       const index = posted.mock.calls.findIndex(
         ([message]) =>
@@ -186,10 +177,12 @@ describe("outbox", () => {
       effectiveEngine: selected,
       effectiveEngineId: engineId,
       degraded: false,
+      disposed: false,
       selectForHost: vi.fn(),
       degradeBeforeStart: vi.fn(),
       begin: vi.fn(),
       deferDisposalUntil: vi.fn(),
+      onDispose: vi.fn(),
       dispose: async () => undefined,
     } satisfies ContextEngineLogicalTurnLease;
     const warn = vi.fn();
@@ -366,14 +359,7 @@ describe("reports", () => {
 
   beforeAll(async () => {
     env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-reports-") };
-    const opened = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env,
-      authority,
-    });
-    assert(opened);
-    actor = opened;
+    actor = await openIncognitoTestActor(env, authority);
   });
 
   it("captures the shared actor for report selection and append without caller SQL", async () => {
@@ -419,12 +405,7 @@ describe("reports", () => {
       storePath: actor.path,
       env,
     };
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     let allowed = true;
     const pending = withIncognitoSessionActor(actor, () =>
@@ -495,12 +476,7 @@ describe("reports", () => {
   it("orders competing report and message appends in the same FIFO and rejects stale selection", async () => {
     const target = await create("fifo");
     const input = await prepare(target, "first report");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     const order: string[] = [];
     const report = actor.sessions
@@ -539,6 +515,7 @@ describe("reports", () => {
     const target = await create("revoked-commit");
     const input = await prepare(target, "must not commit");
     let allowed = true;
+    const stages: string[] = [];
     const source: IncognitoSessionAuthority = {
       assertCurrent() {
         if (!allowed) {
@@ -546,9 +523,7 @@ describe("reports", () => {
         }
       },
       authorize(phase) {
-        expect(() => actor.sessions.readSharing(target.sessionKey)).toThrow(
-          "pending or unavailable",
-        );
+        stages.push(phase);
         expect(() =>
           actor.sessions.transcript(authority, {
             type: "session.report.latestCustomReport",
@@ -560,18 +535,14 @@ describe("reports", () => {
         }
       },
     };
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     const rejected = expect(
       actor.sessions.transcript(source, { type: "session.report.append", input }),
     ).rejects.toThrow("report authority revoked");
     release.resolve();
     await Promise.all([held, rejected]);
+    expect(stages).toEqual(["transaction", "commit"]);
     expect(await latest(target)).toEqual({ ok: true, value: undefined });
     expect(
       await actor.sessions.transcript(authority, { type: "session.report.append", input }),

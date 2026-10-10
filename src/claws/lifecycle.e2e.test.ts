@@ -312,10 +312,11 @@ describe("claws lifecycle cli e2e", () => {
     });
   });
 
-  it("reports and removes a Claw-created agent through plan-first lifecycle commands", async () => {
+  it("removes a Claw-created agent while the serving Gateway owns Cron receipt custody", async () => {
     const instance = await createOpenClawTestInstance({
       name: "claws-lifecycle-remove",
       env: {
+        OPENCLAW_SKIP_CRON: undefined,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         OPENCLAW_EXPERIMENTAL_CLAWS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -346,6 +347,27 @@ describe("claws lifecycle cli e2e", () => {
           "--json",
         ]);
         await instance.startGateway();
+        expect(parseJson((await run(["cron", "status", "--json"])).stdout)).toMatchObject({
+          enabled: true,
+        });
+        // A real scheduler mutation establishes custody in the separate serving process.
+        await run([
+          "cron",
+          "add",
+          "--name",
+          "retained-sibling",
+          "--every",
+          "1d",
+          "--agent",
+          "main",
+          "--session",
+          "isolated",
+          "--message",
+          "Synthetic disabled sibling",
+          "--disabled",
+          "--no-deliver",
+          "--json",
+        ]);
         const status = await run(["claws", "status", "workspace-agent", "--json"]);
         expect(parseJson(status.stdout)).toMatchObject({
           schemaVersion: "openclaw.clawStatus.v1",
@@ -376,6 +398,11 @@ describe("claws lifecycle cli e2e", () => {
           status: "complete",
           agentId: "workspace-agent",
           agentRemoved: true,
+        });
+        expect(parseJson((await run(["cron", "list", "--all", "--json"])).stdout)).toMatchObject({
+          jobs: expect.arrayContaining([
+            expect.objectContaining({ name: "retained-sibling", agentId: "main", enabled: false }),
+          ]),
         });
         const config = JSON.parse(await readFile(instance.configPath, "utf8"));
         const canonicalStateDir = await realpath(instance.stateDir);

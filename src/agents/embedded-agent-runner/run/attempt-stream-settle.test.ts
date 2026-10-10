@@ -78,7 +78,6 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       promptError: null,
       promptErrorSource: null,
       yieldAborted: false,
-      sessionIdUsed: "sess-settle-1",
     },
     readLifecycleState: () => ({
       aborted: false,
@@ -182,6 +181,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       ...input.cache,
       getObservation: () => ({
         requestIndex: 3,
+        messageCount: 5,
         broke: false,
         input: 100,
         cacheRead: 10_000,
@@ -260,7 +260,6 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         ...input.state,
         promptError,
         promptErrorSource: "prompt",
-        sessionIdUsed: target.sessionId,
       };
       const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: input.attempt,

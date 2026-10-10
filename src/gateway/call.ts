@@ -1,5 +1,3 @@
-// Gateway RPC call helper.
-// Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -27,14 +25,13 @@ import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../confi
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
-import { resolveGatewayAuth } from "./auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
@@ -415,51 +412,6 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-function resolveGatewayCallAuth(config: OpenClawConfig) {
-  return resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
-    env: process.env,
-    tailscaleMode: config.gateway?.tailscale?.mode,
-  });
-}
-
-async function ensureGatewayCallCanAuthenticate(params: {
-  opts: CallGatewayBaseOptions;
-  context: ResolvedGatewayCallContext;
-  token?: string;
-  password?: string;
-  deviceIdentity: DeviceIdentity | null;
-  deviceAuthScope?: string;
-  storedAuth?: DeviceAuthEntry | null;
-}): Promise<void> {
-  const resolvedAuth = resolveGatewayCallAuth(params.context.config);
-  const authMode = resolvedAuth.mode;
-  if (authMode !== "token" && authMode !== "password") {
-    return;
-  }
-  if (params.token || params.password || params.opts.approvalRuntimeToken) {
-    return;
-  }
-  if (resolvedAuth.allowTailscale) {
-    return;
-  }
-  const storedAuth =
-    params.storedAuth === undefined
-      ? await loadStoredOperatorDeviceAuthToken(
-          params.deviceIdentity,
-          params.deviceAuthScope,
-          params.opts.sharedStateMode,
-        )
-      : params.storedAuth;
-  if (storedAuth?.token) {
-    return;
-  }
-  throw new GatewayCredentialsRequiredError({
-    method: params.opts.method,
-    configPath: params.context.configPath,
-  });
-}
-
 export type { ExplicitGatewayAuth } from "./credentials.js";
 
 export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
@@ -553,6 +505,27 @@ export async function isImplicitLocalGatewayTarget(
   return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote";
 }
 
+function gatewayCallBootstrapOptions(
+  opts: Omit<CallGatewayBaseOptions, "method">,
+  context: ResolvedGatewayCallContext,
+) {
+  return {
+    config: context.config,
+    gatewayUrl: opts.url,
+    explicitAuth: context.explicitAuth,
+    env: process.env,
+    configPath: context.configPath,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined ||
+      opts.ignoreEnvUrlOverride === true ||
+      opts.serviceTargetUrl !== undefined,
+    localPortOverride: opts.localPortOverride,
+    explicitTlsFingerprint: opts.tlsFingerprint,
+    buildConnectionDetails: buildGatewayConnectionDetails,
+    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
+  };
+}
+
 function ensureRemoteModeUrlConfigured(params: {
   context: ResolvedGatewayCallContext;
   urlOverrideSource?: "cli" | "env";
@@ -637,17 +610,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const hasExplicitAuth = Boolean(context.explicitAuth.token || context.explicitAuth.password);
   const useStoredDeviceAuth = requestedStoredDeviceAuth && !hasExplicitAuth;
   const bootstrap = await resolveGatewayClientBootstrap({
-    config: context.config,
-    gatewayUrl: input.url,
-    explicitAuth: context.explicitAuth,
-    env: process.env,
-    configPath: context.configPath,
-    ignoreEnvUrlOverride:
-      input.localPortOverride !== undefined ||
-      input.ignoreEnvUrlOverride === true ||
-      input.serviceTargetUrl !== undefined,
-    localPortOverride: input.localPortOverride,
-    explicitTlsFingerprint: input.tlsFingerprint,
+    ...gatewayCallBootstrapOptions(input, context),
     skipImplicitAuth: useStoredDeviceAuth || input.skipImplicitAuth === true,
     ...(useStoredDeviceAuth
       ? {}
@@ -655,8 +618,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
           overrideAuthErrorHint:
             "Fix: pass --token or --password with --url (or gatewayToken in tools).",
         }),
-    buildConnectionDetails: buildGatewayConnectionDetails,
-    ...(input.serviceTargetUrl ? { serviceTargetUrl: input.serviceTargetUrl } : {}),
   });
   ensureRemoteModeUrlConfigured({
     context,
@@ -670,10 +631,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
-  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
+  const resolvedAuth = resolveGatewayAuthForConfig({
+    config: context.config,
+    env: process.env,
+    tailscaleMode: context.config.gateway?.tailscale?.mode,
+  });
+  const { clientOptions, omitDeviceIdentity, deviceIdentity } = await resolveGatewayCallDeviceAuth({
     opts: input,
     url,
-    authMode: resolveGatewayCallAuth(context.config).mode,
+    authMode: resolvedAuth.mode,
     isImplicitLocalTarget: !urlOverrideSource && !context.isRemoteMode,
     token,
     password,
@@ -726,15 +692,28 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       );
     }
   }
-  await ensureGatewayCallCanAuthenticate({
-    opts,
-    context,
-    token,
-    password,
-    deviceIdentity,
-    deviceAuthScope,
-    storedAuth,
-  });
+  if (
+    (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
+    !token &&
+    !password &&
+    !opts.approvalRuntimeToken &&
+    !resolvedAuth.allowTailscale
+  ) {
+    const availableAuth =
+      storedAuth === undefined
+        ? await loadStoredOperatorDeviceAuthToken(
+            deviceIdentity,
+            deviceAuthScope,
+            opts.sharedStateMode,
+          )
+        : storedAuth;
+    if (!availableAuth?.token) {
+      throw new GatewayCredentialsRequiredError({
+        method: opts.method,
+        configPath: context.configPath,
+      });
+    }
+  }
   try {
     await prepareGatewayClientDeviceAuth(
       {
@@ -1015,20 +994,8 @@ export async function buildGatewayProbeConnectionDetails(
   } satisfies CallGatewayBaseOptions;
   const context = await resolveGatewayCallContext(callOpts);
   const bootstrap = await resolveGatewayClientBootstrap({
-    config: context.config,
-    gatewayUrl: opts.url,
-    explicitAuth: context.explicitAuth,
-    env: process.env,
-    configPath: context.configPath,
-    ignoreEnvUrlOverride:
-      opts.localPortOverride !== undefined ||
-      opts.ignoreEnvUrlOverride === true ||
-      opts.serviceTargetUrl !== undefined,
-    localPortOverride: opts.localPortOverride,
-    explicitTlsFingerprint: opts.tlsFingerprint,
+    ...gatewayCallBootstrapOptions(opts, context),
     skipImplicitAuth: true,
-    buildConnectionDetails: buildGatewayConnectionDetails,
-    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
   });
   ensureRemoteModeUrlConfigured({
     context,
@@ -1108,21 +1075,10 @@ export async function callGateway<T = Record<string, unknown>>(
   if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
     return await callGatewayCli(opts);
   }
-  if (Array.isArray(opts.scopes)) {
-    return await callGatewayWithScopes(
-      {
-        ...opts,
-        mode: callerMode,
-        clientName: callerName,
-      },
-      opts.scopes,
-    );
-  }
-  return await callGatewayLeastPrivilege({
-    ...opts,
-    mode: callerMode,
-    clientName: callerName,
-  });
+  const input = { ...opts, mode: callerMode, clientName: callerName };
+  return Array.isArray(opts.scopes)
+    ? await callGatewayWithScopes(input, opts.scopes)
+    : await callGatewayLeastPrivilege(input);
 }
 
 export function randomIdempotencyKey() {

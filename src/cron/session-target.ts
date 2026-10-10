@@ -1,4 +1,6 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
+import { hasExplicitCronDeliveryTarget } from "./delivery-target-validation.js";
+
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
 /** Returns whether an error came from cron session target id validation. */
@@ -49,10 +51,24 @@ export function resolveCronCurrentSessionTarget(params: {
 export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;
+  sourceConversation?: { sessionKey: string };
+  payload?: { kind: string };
+  delivery?: Parameters<typeof hasExplicitCronDeliveryTarget>[0] & {
+    mode: "none" | "announce" | "webhook";
+  };
 }): string | undefined {
   const sessionTargetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   if (sessionTargetKey) {
     return sessionTargetKey;
+  }
+  if (
+    job.sessionTarget === "isolated" &&
+    job.payload?.kind === "agentTurn" &&
+    job.sourceConversation &&
+    (!job.delivery || job.delivery.mode === "announce") &&
+    !hasExplicitCronDeliveryTarget(job.delivery ?? {})
+  ) {
+    return job.sourceConversation.sessionKey;
   }
   return typeof job.sessionKey === "string" && job.sessionKey.trim()
     ? job.sessionKey.trim()

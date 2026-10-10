@@ -11,10 +11,6 @@ export type { StatusReactionController };
 export async function createWhatsAppStatusReactionController(
   params: Parameters<typeof resolveWhatsAppReactionEligibility>[0],
 ): Promise<StatusReactionController | null> {
-  if (!params.msg.event.id) {
-    return null;
-  }
-
   const statusReactionsConfig = params.cfg.messages?.statusReactions;
   if (statusReactionsConfig?.enabled !== true) {
     return null;
@@ -29,12 +25,9 @@ export async function createWhatsAppStatusReactionController(
   return createStatusReactionController({
     enabled: true,
     adapter: {
-      setReaction: async (emoji: string) => {
-        await sendReactionWhatsApp(chatId, messageId, emoji, reactionOptions);
-      },
-      clearReaction: async () => {
-        await sendReactionWhatsApp(chatId, messageId, "", reactionOptions);
-      },
+      setReaction: (emoji: string) =>
+        sendReactionWhatsApp(chatId, messageId, emoji, reactionOptions),
+      clearReaction: () => sendReactionWhatsApp(chatId, messageId, "", reactionOptions),
     },
     initialEmoji,
     emojis: undefined,

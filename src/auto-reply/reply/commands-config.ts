@@ -20,16 +20,13 @@ import { resolveChannelAccountId } from "./channel-context.js";
 import {
   commandReply,
   defineAuthorizedTextCommand,
+  renderCommandJsonBlock,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
-import {
-  AutoReplyConfigMutationError,
-  setConfigPath,
-  unsetConfigPath,
-} from "./config-mutations.js";
+import { AutoReplyConfigMutationError, mutateConfigPath } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
@@ -115,24 +112,25 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
           return commandReply(`⚠️ ${parsedPath.error}`);
         }
         const value = getConfigValueAtPath(parsedBase, parsedPath.path);
-        const rendered = JSON.stringify(value ?? null, null, 2);
-        return commandReply(`⚙️ Config ${pathRaw}:\n\`\`\`json\n${rendered}\n\`\`\``);
+        return commandReply(renderCommandJsonBlock(`⚙️ Config ${pathRaw}:`, value ?? null));
       }
-      const json = JSON.stringify(parsedBase, null, 2);
-      return commandReply(`⚙️ Config (raw):\n\`\`\`json\n${json}\n\`\`\``);
+      return commandReply(renderCommandJsonBlock("⚙️ Config (raw):", parsedBase));
     }
 
     const path = parsedWritePath ?? [];
     try {
+      const changed = await mutateConfigPath(
+        path,
+        configCommand,
+        params.command.assertOwnerCurrent,
+      );
       if (configCommand.action === "unset") {
-        const removed = await unsetConfigPath(path, params.command.assertOwnerCurrent);
         return commandReply(
-          removed
+          changed
             ? `⚙️ Config updated: ${configCommand.path} removed.`
             : `⚙️ No config value found for ${configCommand.path}.`,
         );
       }
-      await setConfigPath(path, configCommand.value, params.command.assertOwnerCurrent);
     } catch (error) {
       if (error instanceof AutoReplyConfigMutationError && error.message) {
         return commandReply(`⚠️ ${error.message}`);
@@ -169,8 +167,9 @@ export const handleDebugCommand: CommandHandler = defineAuthorizedTextCommand(
       }
       const schema = loadGatewayRuntimeConfigSchema();
       const redactedOverrides = redactConfigObject(overrides, schema.uiHints);
-      const json = JSON.stringify(redactedOverrides, null, 2);
-      return commandReply(`⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\``);
+      return commandReply(
+        renderCommandJsonBlock("⚙️ Debug overrides (memory-only):", redactedOverrides),
+      );
     }
     if (debugCommand.action === "reset") {
       resetConfigOverrides();

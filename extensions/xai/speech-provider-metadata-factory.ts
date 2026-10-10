@@ -185,17 +185,16 @@ export function createXaiSpeechProviderMetadata(
         responseFormat: responseFormat ?? base.responseFormat,
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(normalizeOptionalString(params.voiceId ?? params.voice) === undefined
-        ? {}
-        : { voiceId: normalizeOptionalString(params.voiceId ?? params.voice) }),
-      ...(normalizeXaiLanguageCode(params.language ?? params.languageCode) === undefined
-        ? {}
-        : { language: normalizeXaiLanguageCode(params.language ?? params.languageCode) }),
-      ...(normalizeXaiSpeechSpeed(params.speed) === undefined
-        ? {}
-        : { speed: normalizeXaiSpeechSpeed(params.speed) }),
-    }),
+    resolveTalkOverrides: ({ params }) => {
+      const voiceId = normalizeOptionalString(params.voiceId ?? params.voice);
+      const language = normalizeXaiLanguageCode(params.language ?? params.languageCode);
+      const speed = normalizeXaiSpeechSpeed(params.speed);
+      return {
+        ...(voiceId === undefined ? {} : { voiceId }),
+        ...(language === undefined ? {} : { language }),
+        ...(speed === undefined ? {} : { speed }),
+      };
+    },
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
       context.isProviderAuthProfileConfigured({ provider: "xai", cfg }),

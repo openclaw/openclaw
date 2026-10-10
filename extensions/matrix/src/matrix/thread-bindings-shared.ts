@@ -125,36 +125,29 @@ export function getMatrixThreadBindingManager(
   return MANAGERS_BY_ACCOUNT_ID.get(accountId)?.manager ?? null;
 }
 
-export function setMatrixThreadBindingIdleTimeoutBySessionKey(params: {
-  accountId: string;
-  targetSessionKey: string;
-  idleTimeoutMs: number;
-}): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
-  if (!manager) {
-    return [];
-  }
-  return manager.setIdleTimeoutBySessionKey(params).map((record) =>
-    toSessionBindingRecord(record, {
-      idleTimeoutMs: manager.getIdleTimeoutMs(),
-      maxAgeMs: manager.getMaxAgeMs(),
-    }),
-  );
+function createMatrixThreadBindingTimeoutSetter<
+  Params extends { accountId: string; targetSessionKey: string },
+>(update: (manager: MatrixThreadBindingManager, params: Params) => MatrixThreadBindingRecord[]) {
+  return (params: Params): SessionBindingRecord[] => {
+    const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
+    if (!manager) {
+      return [];
+    }
+    return update(manager, params).map((record) =>
+      toSessionBindingRecord(record, {
+        idleTimeoutMs: manager.getIdleTimeoutMs(),
+        maxAgeMs: manager.getMaxAgeMs(),
+      }),
+    );
+  };
 }
 
-export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
-  accountId: string;
-  targetSessionKey: string;
-  maxAgeMs: number;
-}): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
-  if (!manager) {
-    return [];
-  }
-  return manager.setMaxAgeBySessionKey(params).map((record) =>
-    toSessionBindingRecord(record, {
-      idleTimeoutMs: manager.getIdleTimeoutMs(),
-      maxAgeMs: manager.getMaxAgeMs(),
-    }),
-  );
-}
+export const setMatrixThreadBindingIdleTimeoutBySessionKey = createMatrixThreadBindingTimeoutSetter(
+  (manager, params: { accountId: string; targetSessionKey: string; idleTimeoutMs: number }) =>
+    manager.setIdleTimeoutBySessionKey(params),
+);
+
+export const setMatrixThreadBindingMaxAgeBySessionKey = createMatrixThreadBindingTimeoutSetter(
+  (manager, params: { accountId: string; targetSessionKey: string; maxAgeMs: number }) =>
+    manager.setMaxAgeBySessionKey(params),
+);

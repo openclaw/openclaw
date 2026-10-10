@@ -179,7 +179,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   if (send.status === "sent" && route && params.completion) {
     await commitDirectCronOutboundRoute({
       cfg: params.cfg,
-      runSessionKey,
+      // Notification fallback keys identify delivery, not a source session with policy.
+      runSessionKey: params.target.sessionKey?.trim() || undefined,
       delivery: delivery.resolvedTarget,
       route,
     });

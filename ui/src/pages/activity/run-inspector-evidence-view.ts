@@ -110,6 +110,24 @@ function decisionOutcomeLabel(outcome: DecisionReceiptDisplayV1["decision"]["out
   );
 }
 
+function renderReceiptBadges(receipt: DecisionReceiptDisplayV1, accessible = false) {
+  return [
+    [receipt.decision.outcome, decisionOutcomeLabel(receipt.decision.outcome), "outcomeLabel"],
+    [
+      receipt.enforcement.coverageState,
+      runInspectorCoverageLabel(receipt.enforcement.coverageState),
+      "classificationLabel",
+    ],
+  ].map(
+    ([value, label, labelKey]) => html`<span
+      class="run-inspector__receipt-badge run-inspector__receipt-badge--${value}"
+      role=${accessible ? "img" : nothing}
+      aria-label=${accessible ? `${t(`activity.runInspector.decisions.${labelKey}`)}: ${label}` : nothing}
+      >${label}</span
+    >`,
+  );
+}
+
 function renderReceiptCodes(values: readonly string[], emptyCopy: string) {
   return values.length === 0
     ? html`<p class="run-inspector__reason">${emptyCopy}</p>`
@@ -161,28 +179,7 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         <h5 id="run-inspector-receipt-outcome">
           ${t("activity.runInspector.decisions.outcomeHeading")}
         </h5>
-        <div class="run-inspector__receipt-badges">
-          <span
-            class="run-inspector__receipt-badge run-inspector__receipt-badge--${
-              receipt.decision.outcome
-            }"
-            role="img"
-            aria-label=${`${t("activity.runInspector.decisions.outcomeLabel")}: ${decisionOutcomeLabel(
-              receipt.decision.outcome,
-            )}`}
-          >
-            ${decisionOutcomeLabel(receipt.decision.outcome)}
-          </span>
-          <span
-            class="run-inspector__receipt-badge run-inspector__receipt-badge--${coverage}"
-            role="img"
-            aria-label=${`${t("activity.runInspector.decisions.classificationLabel")}: ${runInspectorCoverageLabel(
-              coverage,
-            )}`}
-          >
-            ${runInspectorCoverageLabel(coverage)}
-          </span>
-        </div>
+        <div class="run-inspector__receipt-badges">${renderReceiptBadges(receipt, true)}</div>
         <p class="run-inspector__reason">
           ${t(`activity.runInspector.coverage.${runInspectorCoverageKey(coverage)}.description`)}
         </p>
@@ -264,6 +261,9 @@ export function renderRunInspectorDecisions(
             >
               ${result.decisionDisplays.map((receipt) => {
                 const selected = selectedReceipt?.selectorId === receipt.selectorId;
+                const summary =
+                  receipt.action.summary ??
+                  `${receipt.action.family} · ${receipt.action.operation}`;
                 return html`<li>
                   <a
                     href=${activityRunInspectorSelectorHref(selector, basePath, {
@@ -272,32 +272,14 @@ export function renderRunInspectorDecisions(
                     })}
                     aria-current=${selected ? "true" : nothing}
                     aria-label=${t("activity.runInspector.decisions.inspectLabel", {
-                      summary:
-                        receipt.action.summary ??
-                        `${receipt.action.family} · ${receipt.action.operation}`,
+                      summary,
                       outcome: decisionOutcomeLabel(receipt.decision.outcome),
                       classification: runInspectorCoverageLabel(receipt.enforcement.coverageState),
                     })}
                   >
-                    <span
-                      >${
-                        receipt.action.summary ??
-                        `${receipt.action.family} · ${receipt.action.operation}`
-                      }</span
-                    >
+                    <span>${summary}</span>
                     <span class="run-inspector__receipt-badges" aria-hidden="true">
-                      <span
-                        class="run-inspector__receipt-badge run-inspector__receipt-badge--${
-                          receipt.decision.outcome
-                        }"
-                        >${decisionOutcomeLabel(receipt.decision.outcome)}</span
-                      >
-                      <span
-                        class="run-inspector__receipt-badge run-inspector__receipt-badge--${
-                          receipt.enforcement.coverageState
-                        }"
-                        >${runInspectorCoverageLabel(receipt.enforcement.coverageState)}</span
-                      >
+                      ${renderReceiptBadges(receipt)}
                     </span>
                   </a>
                 </li>`;

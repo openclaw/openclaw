@@ -638,14 +638,7 @@ export function resolveConfiguredChannelPluginIds(params: {
     return [];
   }
   const configuredChannelIds = normalizeChannelIds([
-    ...listConfiguredChannelIdsForReadOnlyScope({
-      config: params.config,
-      activationSourceConfig: params.activationSourceConfig,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      manifestRecords: params.manifestRecords,
-      discovery: params.discovery,
-    }),
+    ...listConfiguredChannelIdsForReadOnlyScope(params),
     ...listExplicitConfiguredChannelIdsForConfig(params.activationSourceConfig ?? params.config),
   ]);
   if (configuredChannelIds.length === 0) {

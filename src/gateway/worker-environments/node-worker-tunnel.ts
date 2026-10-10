@@ -62,6 +62,7 @@ import { workerWorkspaceCommandSucceeded } from "./workspace-sync-helpers.js";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_RESULT_GRACE_MS = 5_000;
 const RETRY_DELAY_MS = 100;
+const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 
 export type NodeWorkerWorkspaceBindingResolver = (binding: {
@@ -271,7 +272,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         const code = result.error?.code ?? "UNAVAILABLE";
         if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
           throw new NodeWorkerWorkspaceTransferError(
-            result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
+            boundedWorkerError(
+              result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
+              WORKSPACE_DIAGNOSTIC_MAX_CHARS,
+            ),
           );
         }
         if (
@@ -282,8 +286,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           continue;
         }
         throw new Error(
-          result.error?.message && code === "INVALID_REQUEST"
-            ? `node workspace command failed (${code}): ${result.error.message}`
+          result.error?.message
+            ? `node workspace command failed (${code}): ${boundedWorkerError(result.error.message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`
             : `node workspace command failed (${code})`,
         );
       }

@@ -145,6 +145,7 @@ type NativeHookRelayCommandOptions = {
 
 type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
+  remoteCredentialPath?: string;
 };
 
 export type InvokeNativeHookRelayParams = {
@@ -197,6 +198,8 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Explicitly expose only this registration through the token-scoped HTTP callback. */
+  enableRemoteCallback: () => { token: string };
   /** Strict policy preparation and direct publication result. */
   ready: Promise<void>;
   /** Requires current foreground authority; direct publication may use the Gateway fallback. */
@@ -259,6 +262,7 @@ export type NativeHookRelayBridgeRegistration = {
   pending: Promise<void>;
   cancelStartup: () => void;
   closing?: Promise<void>;
+  remoteEnabled?: boolean;
 };
 
 export type NativeHookRelaySharedState = {

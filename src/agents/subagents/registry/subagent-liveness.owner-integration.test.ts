@@ -45,6 +45,7 @@ import {
   isSubagentRunLive,
   isSubagentRunQueued,
   isSubagentSessionRunActive,
+  listActiveSubagentSessionKeys,
 } from "./subagent-registry-read.js";
 import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -262,6 +263,8 @@ it("retains an exact queued collector reservation without calling it executor-li
     }),
   ).toBe(true);
   const entry = await register("queued-owned", true);
+  expect(getAgentRunContext(entry.runId)).toBeUndefined();
+  expect(listActiveSubagentSessionKeys()).toEqual([entry.childSessionKey]);
   const launch = vi.fn(async () => {});
   activateSwarmRun({
     groupId: "liveness-group",
@@ -302,6 +305,7 @@ it("retains an exact queued collector reservation without calling it executor-li
   expect(updated).not.toBe(entry);
   expect(isSubagentRunQueued(entry)).toBe(true);
   expect(isSubagentRunQueued(updated)).toBe(true);
+  expect(listActiveSubagentSessionKeys()).toEqual([entry.childSessionKey]);
   expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "queued" });
   const copied = { ...updated };
   expect(isSubagentRunQueued(copied)).toBe(false);
@@ -344,6 +348,7 @@ it("retains an exact queued collector reservation without calling it executor-li
     expect(captured.countPendingDescendantRuns(parent)).toBe(0);
     expect(captured.hasDescendantRunAwaitingSettle(parent)).toBe(false);
     expect(isSubagentRunQueued(entry)).toBe(false);
+    expect(listActiveSubagentSessionKeys()).toEqual([]);
     expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "unknown" });
     expect(countActiveRunsForSession(parent, { collect: true })).toBe(0);
     const released = buildSubagentSessionListReadIndex();

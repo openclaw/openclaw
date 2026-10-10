@@ -1,5 +1,3 @@
-// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
-// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";

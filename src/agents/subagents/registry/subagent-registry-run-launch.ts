@@ -5,6 +5,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { readExecRequestOwners } from "../../../infra/exec-request-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   bindGatewayContextResolver,
@@ -27,7 +28,7 @@ import {
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation, ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
@@ -42,6 +43,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
 import {
+  createFailedQueuedRun,
   createSubagentRegistrationRecord,
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-launch-record.js";
@@ -182,8 +184,20 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.options.startSweeper();
     };
     try {
+      const queuedRegistration = registerParams.queued;
+      const settleFailedLaunch = async (error: string) => {
+        if (queuedRegistration && queuedScope) {
+          return queuedScope.settleFailedLaunch(error);
+        }
+        if (initialOutcome === "uncertain") {
+          throw initialFailure;
+        }
+        if (queuedRegistration && initialOutcome === "pending") {
+          throw new SubagentRegistryMutationRejectedError("Queued registration has not settled");
+        }
+      };
       options.retainOwnership?.(
-        registerParams.queued
+        queuedRegistration
           ? Object.freeze({
               waitForClaim: () => queuedScope?.waitForClaim(),
               waitForRetirementPublication: () => queuedScope?.waitForRetirementPublication(),
@@ -194,19 +208,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 queuedScope?.canCleanupSession() ?? canCleanupRefusedIntent(),
               canRetireReservation: () =>
                 queuedScope?.canRetireReservation() ?? canCleanupRefusedIntent(),
-              settleFailedLaunch: async (error: string) => {
-                if (queuedScope) {
-                  return queuedScope.settleFailedLaunch(error);
-                }
-                if (initialOutcome === "uncertain") {
-                  throw initialFailure;
-                }
-                if (initialOutcome === "pending") {
-                  throw new SubagentRegistryMutationRejectedError(
-                    "Queued registration has not settled",
-                  );
-                }
-              },
+              settleFailedLaunch,
             })
           : Object.freeze({
               waitForClaim: () => undefined,
@@ -235,11 +237,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                     getSubagentRunRuntimeKey(registered),
                   ),
                 ),
-              settleFailedLaunch: async () => {
-                if (initialOutcome === "uncertain") {
-                  throw initialFailure;
-                }
-              },
+              settleFailedLaunch,
             }),
       );
       authority = registerParams.collect
@@ -349,6 +347,13 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             registered = entry;
             try {
               options.assertPublicationCurrent?.();
+              bindSubagentExecRequestOwners(entry, readExecRequestOwners(options), {
+                controllerSessionKey,
+                controllerAgentId: resolveAgentIdFromSessionKey(
+                  controllerSessionKey,
+                  requesterAgentId,
+                ),
+              });
               if (authority?.operatorAuthority) {
                 subagentRuns.bindCompletionAuthority(entry, authority);
                 custodyTransferred = true;
@@ -422,8 +427,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         activated = true;
         void this.waitForSubagentCompletion(
           runId,
-          this.options.resolveSubagentWaitTimeoutMs(cfg, registerParams.runTimeoutSeconds ?? 0),
           current,
+          this.options.resolveSubagentWaitTimeoutMs(cfg, registerParams.runTimeoutSeconds ?? 0),
         );
       }
     } catch (error) {
@@ -568,14 +573,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       return false;
     }
     if (!started.terminalBeforeAcceptance) {
-      void this.waitForSubagentCompletion(
-        nextRunId,
-        this.options.resolveSubagentWaitTimeoutMs(
-          this.options.getRuntimeConfig(),
-          started.entry.runTimeoutSeconds,
-        ),
-        started.entry,
-      );
+      void this.waitForSubagentCompletion(nextRunId, started.entry);
     }
     return true;
   };
@@ -608,18 +606,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           if (current.execution.status !== "queued" || current.killReconciliation) {
             return { value: false };
           }
-          entry = structuredClone(current);
-          const endedAt = Date.now();
-          entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-          entry.execution = {
-            ...entry.execution,
-            status: "terminal",
-            endedAt,
-            outcome: { status: "error", error, endedAt },
-          };
-          entry.queuedLaunch = undefined;
-          entry.collectorLaunchCleanupPending = true;
-          entry.completion = { required: false, resultText: error, capturedAt: endedAt };
+          entry = createFailedQueuedRun(current, error);
           updateSwarmCollectorCompletion(entry, this.options.getRuntimeConfig(), prepared);
         } else {
           const endedAt = current.execution.endedAt;

@@ -31,6 +31,10 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
+  const cancel = () => {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+  };
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
@@ -71,34 +75,20 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         label: `Keep current (${channelInfo.channel})`,
         hint: channelInfo.label,
       },
-      {
-        value: "stable",
-        label: "Stable",
-        hint: "Tagged releases (npm latest)",
-      },
-      {
-        value: "extended-stable",
-        label: "Extended Stable",
-        hint: "Monthly supported release (npm extended-stable)",
-      },
-      {
-        value: "beta",
-        label: "Beta",
-        hint: "Prereleases (npm beta)",
-      },
-      {
-        value: "dev",
-        label: "Dev",
-        hint: "Git main",
-      },
+      ...(
+        [
+          ["stable", "Stable", "Tagged releases (npm latest)"],
+          ["extended-stable", "Extended Stable", "Monthly supported release (npm extended-stable)"],
+          ["beta", "Beta", "Prereleases (npm beta)"],
+          ["dev", "Dev", "Git main"],
+        ] as const
+      ).map(([value, label, hint]) => ({ value, label, hint })),
     ],
     initialValue: "keep",
   });
 
   if (typeof pickedChannel === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
@@ -122,9 +112,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         initialValue: true,
       });
       if (isCancel(ok) || !ok) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-        defaultRuntime.exit(0);
-        return;
+        return cancel();
       }
     }
   }
@@ -134,9 +122,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     initialValue: true,
   });
   if (typeof restart === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   try {

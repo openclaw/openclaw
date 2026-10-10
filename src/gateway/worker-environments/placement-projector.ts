@@ -17,6 +17,7 @@ export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "ge
   Partial<
     Pick<
       WorkerSessionPlacementStore,
+      | "getManyAsync"
       | "prepareRuntimeRefresh"
       | "getWorkspaceResultReconcilingSessionIds"
       | "getWorkspaceResultReconcilingSessionIdsAsync"

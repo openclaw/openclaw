@@ -1,4 +1,5 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
@@ -179,14 +180,30 @@ export class ShellGatewayOwner {
       });
     }
     const modelInvalidation = modelCatalogEventInvalidation(event);
+    const commandsChanged =
+      event.event !== "chat.metadata.changed" ||
+      asNullableRecord(event.payload)?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
       invalidateModelAuthStatusRequests(client);
     }
-    if (client && (modelInvalidation || event.event === "chat.metadata.changed")) {
-      invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
+    if (
+      client &&
+      (modelInvalidation || (event.event === "chat.metadata.changed" && commandsChanged))
+    ) {
+      invalidateChatMetadataStore(
+        client,
+        undefined,
+        undefined,
+        modelInvalidation ?? "preserve",
+        commandsChanged,
+      );
     }
     if (event.event === "sessions.changed") {
       this.host.recoverDeletedActiveSession();
+      return;
+    }
+    if (event.event === "agent.identity.changed") {
+      this.scheduleAgentRosterRefresh();
       return;
     }
     if (event.event === "config.changed") {
@@ -467,8 +484,13 @@ export class ShellGatewayOwner {
       },
     })
       .then((applied) => {
-        if (!applied && remainsCurrent()) {
-          context.theme.refresh();
+        if (remainsCurrent()) {
+          if (!applied) {
+            context.theme.refresh({ notify: true });
+          }
+          // Readiness releases both the shell and private-background descendants,
+          // including an unchanged profile snapshot matching the browser mirror.
+          this.host.requestUpdate();
         }
       })
       .catch((error: unknown) => {

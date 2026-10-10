@@ -248,15 +248,14 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     registry: TicketNodeRegistry,
     binding: NodeDesktopStreamBinding,
   ): Promise<boolean> => {
-    const current = registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration);
-    if (!current || current.connId !== binding.connId) {
-      return false;
-    }
-    if (!(await registry.isConnectionCurrentPairingState(binding.connId))) {
-      return false;
-    }
-    const rechecked = registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration);
-    return rechecked?.connId === binding.connId;
+    const hasCurrentConnection = () =>
+      registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration)?.connId ===
+      binding.connId;
+    return (
+      hasCurrentConnection() &&
+      (await registry.isConnectionCurrentPairingState(binding.connId)) &&
+      hasCurrentConnection()
+    );
   };
 
   async function handleUpgrade(

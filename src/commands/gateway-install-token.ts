@@ -110,12 +110,10 @@ export async function resolveGatewayInstallToken(
 ): Promise<GatewayInstallTokenResolution> {
   const cfg = options.config;
   const warnings: string[] = [];
+  const resolution = (unavailableReason?: string) => ({ unavailableReason, warnings });
 
   if (hasAmbiguousGatewayAuthModeConfig(cfg)) {
-    return {
-      unavailableReason: formatAmbiguousGatewayAuthModeReason(),
-      warnings,
-    };
+    return resolution(formatAmbiguousGatewayAuthModeReason());
   }
 
   const resolvedAuth = resolveGatewayAuth({
@@ -125,18 +123,12 @@ export async function resolveGatewayInstallToken(
   });
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (isUnsafeGatewayTailscaleNoAuth({ authMode: resolvedAuth.mode, tailscaleMode })) {
-    return {
-      unavailableReason: formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
-      warnings,
-    };
+    return resolution(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
   }
   const needsToken =
     shouldRequireGatewayTokenForInstall(cfg, options.env) && !resolvedAuth.allowTailscale;
   if (!needsToken) {
-    return {
-      unavailableReason: undefined,
-      warnings,
-    };
+    return resolution();
   }
 
   const resolvedToken = await resolveGatewayAuthToken({
@@ -170,8 +162,5 @@ export async function resolveGatewayInstallToken(
     });
   }
 
-  return {
-    unavailableReason,
-    warnings,
-  };
+  return resolution(unavailableReason);
 }

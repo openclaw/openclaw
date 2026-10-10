@@ -133,6 +133,18 @@ describe("modelCostsEqual", () => {
     expect(modelCostsEqual(undefined, EXPECTED_COST)).toBe(false);
     expect(modelCostsEqual({ ...EXPECTED_COST, output: 15 }, EXPECTED_COST)).toBe(false);
   });
+
+  it("distinguishes missing or changed tiers while accepting normalized range ends", () => {
+    const tier = { ...EXPECTED_COST, range: [100001] as [number] };
+    const cost = { ...EXPECTED_COST, tieredPricing: [tier] };
+    expect(modelCostsEqual(EXPECTED_COST, cost)).toBe(false);
+    expect(modelCostsEqual({ ...cost, tieredPricing: [{ ...tier, output: 99 }] }, cost)).toBe(
+      false,
+    );
+    expect(
+      modelCostsEqual({ ...cost, tieredPricing: [{ ...tier, range: [100001, Infinity] }] }, cost),
+    ).toBe(true);
+  });
 });
 
 describe("selectPreferredLocalModelId", () => {

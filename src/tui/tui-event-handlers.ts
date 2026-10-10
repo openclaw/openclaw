@@ -40,6 +40,8 @@ import type {
   TuiHistoryLoadResult,
 } from "./tui-types.js";
 
+const ACTIVITY_PHASES = new Set(["start", "finishing", "end", "error"]);
+
 function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
   return status === "aborted" || status === "error" || status === "timeout";
 }
@@ -71,11 +73,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     loadHistory,
     noteLocalRunId,
     isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
     isLocalBtwRunId,
     forgetLocalBtwRunId,
-    clearLocalBtwRunIds,
     localMode,
   } = context;
   const runCoordinator = new TuiSessionRunCoordinator({
@@ -123,28 +122,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     scheduleTerminalLifecycleError,
     syncSessionKey,
     terminateRun,
-  } = createTuiRunLifecycle({
-    state,
-    runCoordinator,
-    chatLog,
-    btw,
-    tui,
-    setActivityStatus,
-    refreshSessionInfo,
-    isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
-    clearLocalBtwRunIds,
-    streamingWatchdogMs: context.streamingWatchdogMs,
-    localMode,
-  });
+  } = createTuiRunLifecycle({ ...context, runCoordinator });
 
-  const handleChatEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as ChatEvent;
-    syncSessionKey();
+  const eventHandler =
+    <T extends object>(handle: (event: T) => void) =>
+    (payload: unknown) => {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      syncSessionKey();
+      handle(payload as T);
+    };
+
+  const handleChatEvent = eventHandler((evt: ChatEvent) => {
     if (!matchesSelectedTuiSession(state, evt)) {
       return;
     }
@@ -351,14 +341,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       });
     }
     tui.requestRender();
-  };
+  });
 
-  const handleSessionsChangedEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as SessionChangedEvent;
-    syncSessionKey();
+  const handleSessionsChangedEvent = eventHandler((evt: SessionChangedEvent) => {
     if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
       return;
     }
@@ -471,14 +456,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     });
     tui.requestRender();
-  };
+  });
 
-  const handleSessionMessageEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as SessionMessageEvent;
-    syncSessionKey();
+  const handleSessionMessageEvent = eventHandler((evt: SessionMessageEvent) => {
     const currentUpdatedAt = state.sessionInfo.updatedAt;
     const priorSession =
       evt.sessionId && state.currentSessionId && evt.sessionId !== state.currentSessionId;
@@ -519,14 +499,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId))) {
       void refreshSessionInfo?.();
     }
-  };
+  });
 
-  const handleAgentEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as AgentEvent;
-    syncSessionKey();
+  const handleAgentEvent = eventHandler((evt: AgentEvent) => {
     // System-injected runs (bridge-notify, webhook, cron) never go through the
     // TUI submit path, so no active/pending run id exists when their lifecycle
     // "start" arrives — leaving the status bar idle until the response lands.
@@ -638,35 +613,27 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (phase && phase !== "end" && phase !== "error" && phase !== "finishing") {
         armStreamingWatchdog(evt.runId);
       }
+      if (phase === "finishing") {
+        runCoordinator.notePostFinalizingRun(evt.runId);
+      } else if (phase === "end" || phase === "error") {
+        postFinalizingRuns.delete(evt.runId);
+      }
+      if (!canUpdateActivityStatus && ACTIVITY_PHASES.has(phase)) {
+        return;
+      }
       if (phase === "start") {
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         setActivityStatus("running");
       }
       if (phase === "finishing") {
-        runCoordinator.notePostFinalizingRun(evt.runId);
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         clearStreamingWatchdog();
         setActivityStatus("finishing context");
       }
-      let forceRender = phase === "end";
       if (phase === "end") {
-        postFinalizingRuns.delete(evt.runId);
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         if (!localMode || !isLocalRunId?.(evt.runId) || finalizedRuns.has(evt.runId)) {
           setActivityStatus("idle"); // Local chat.final proves post-turn maintenance finished.
         }
       }
       if (phase === "error") {
-        postFinalizingRuns.delete(evt.runId);
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
         if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
           const errorMessage =
@@ -678,18 +645,12 @@ export function createEventHandlers(context: EventHandlerContext) {
           scheduleTerminalLifecycleError(evt.runId, errorMessage);
         }
         setActivityStatus("error");
-        forceRender = true;
       }
-      tui.requestRender(forceRender);
+      tui.requestRender(phase === "end" || phase === "error");
     }
-  };
+  });
 
-  const handleBtwEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as BtwEvent;
-    syncSessionKey();
+  const handleBtwEvent = eventHandler((evt: BtwEvent) => {
     if (
       evt.kind !== "btw" ||
       !matchesSelectedTuiSession(state, evt) ||
@@ -703,7 +664,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     btw.showResult({ question, text, isError: evt.isError });
     tui.requestRender();
-  };
+  });
 
   const reconcileHistoryAfterGap = () => {
     reduceTuiSessionProjection(state, {

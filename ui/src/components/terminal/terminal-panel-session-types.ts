@@ -68,6 +68,7 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly sessionKey: string | null;
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
+  readonly terminalFontFamily: string;
   readonly fullscreen: boolean;
   readonly page: boolean;
   readonly routeTarget: TerminalRouteTarget;
@@ -84,8 +85,6 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   restoreTerminalPanelOpenState(): boolean;
 }
 
-export const TERMINAL_FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 export const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
 export function shellBasename(shell: string): string {

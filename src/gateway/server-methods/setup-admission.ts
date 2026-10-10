@@ -40,12 +40,11 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
   task: () => Promise<T>,
 ): Promise<T> {
   let admitted = false;
-  const admittedTask = async () => {
-    admitted = true;
-    return await task();
-  };
   try {
-    return await withSetupMigrationTargetLock(resolveStateDir(), admittedTask);
+    return await withSetupMigrationTargetLock(resolveStateDir(), async () => {
+      admitted = true;
+      return await task();
+    });
   } catch (error) {
     if (!admitted && error instanceof SetupTargetLockedError) {
       throw new SetupAdmissionBusyError(SETUP_ADMISSION_BUSY_MESSAGE);

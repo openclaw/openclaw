@@ -50,6 +50,10 @@ For an existing native desktop, the provider uses the Gateway process's desktop 
 
 The built-in tool uses the Gateway desktop from an agent run hosted by that Gateway. Remote Gateway URL/token overrides remain supported for paired node targets.
 
+Tool discovery reads declared capabilities and recorded runtime health without starting a desktop or waiting for its helper. The first computer action probes the selected Gateway and binds to the resulting live provider generation. A declared action list alone does not mean the desktop is ready.
+
+For RPC clients, `computer.status` with `probe: false` performs this passive read. `probe: true` prepares the computer and waits for readiness; omitting `probe` preserves that behavior for existing clients. Concurrent probes share preparation, and helper startup remains bounded by its one-minute timeout. Passive reads never extend the desktop's idle lifetime or retry a failed startup.
+
 ### Linux Gateway live proof
 
 From a built source checkout on Linux, install the managed desktop prerequisites plus `mousepad`, then run:

@@ -181,12 +181,9 @@ async function fetchAnthropicAdminUsage(params: {
   apiKey: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
-  now?: number;
-  periodDays?: number;
 }): Promise<ProviderUsageSnapshot> {
   const period = resolveProviderUsageDailyPeriod({
-    now: params.now ?? Date.now(),
-    periodDays: params.periodDays,
+    now: Date.now(),
     defaultPeriodDays: ANTHROPIC_USAGE_HISTORY_DAYS,
   });
   const common = {

@@ -1,7 +1,10 @@
 import fsp from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { matchesAgentLifecycleBinding } from "../../agents/agent-lifecycle-registry.js";
+import {
+  matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
+} from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
@@ -335,7 +338,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           : undefined,
       signal,
     };
-    const isConfiguredOwnerCurrent = () => {
+    const isConfiguredSelectionCurrent = () => {
       signal?.throwIfAborted();
       const config = options.getConfig();
       const configured = config.cloudWorkers?.profiles?.[record.profileId];
@@ -370,19 +373,27 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         const selected = agentIdentity ?? systemIdentity;
         const selectedSource = agentIdentity ? "agent-override" : "system-configured";
         if (
-          !matchesAgentLifecycleBinding(config, agent) ||
-          (selected
+          selected
             ? identity.source !== selectedSource ||
               !("profileId" in identity) ||
               identity.profileId !== selected.profileId
-            : identity.source !== "anonymous" && identity.source !== "system-detected")
+            : identity.source !== "anonymous" && identity.source !== "system-detected"
         ) {
           return false;
         }
       }
       return true;
     };
-    if (!isConfiguredOwnerCurrent()) {
+    if (!isConfiguredSelectionCurrent()) {
+      return undefined;
+    }
+    if (
+      "source" in project &&
+      !(await matchesAgentLifecycleBindingAsync(options.getConfig, project.source.owner.agent))
+    ) {
+      return undefined;
+    }
+    if (!isConfiguredSelectionCurrent()) {
       return undefined;
     }
     const resolved = resolveProfile(record.profileId, createOptions);
@@ -403,7 +414,11 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       return undefined;
     }
     const isProfileCurrent = () => {
-      if (!isConfiguredOwnerCurrent()) {
+      if (
+        !isConfiguredSelectionCurrent() ||
+        ("source" in project &&
+          !matchesAgentLifecycleBinding(options.getConfig(), project.source.owner.agent))
+      ) {
         return false;
       }
       const current = resolveProfile(record.profileId, createOptions);

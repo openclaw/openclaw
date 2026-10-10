@@ -38,13 +38,21 @@ type WebAwesomeSelectEvent = CustomEvent<{
   item: HTMLElement & { checked?: boolean; value?: string };
 }>;
 
+function restoreProviderTriggerAfterHide(dropdown: HTMLElement) {
+  dropdown.addEventListener(
+    "wa-after-hide",
+    () => dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true }),
+    { once: true },
+  );
+}
+
 function handleManualProviderKeydown(event: KeyboardEvent): void {
   const dropdown = event.currentTarget as HTMLElement & { open: boolean };
-  if (!dropdown.open) {
+  if (!dropdown.open || (event.key !== "Tab" && event.key !== "Escape")) {
     return;
   }
+  event.preventDefault();
   if (event.key === "Tab") {
-    event.preventDefault();
     event.stopPropagation();
     const focusTarget = event.shiftKey
       ? dropdown.querySelector<HTMLElement>('[slot="trigger"]')
@@ -55,19 +63,11 @@ function handleManualProviderKeydown(event: KeyboardEvent): void {
       once: true,
     });
     dropdown.open = false;
-    return;
+  } else {
+    // The settings-level Escape shortcut runs before Web Awesome's document
+    // listener. Claim the event here and restore the durable trigger after hide.
+    restoreProviderTriggerAfterHide(dropdown);
   }
-  if (event.key !== "Escape") {
-    return;
-  }
-  // The settings-level Escape shortcut runs before Web Awesome's document
-  // listener. Claim the event here and restore the durable trigger after hide.
-  event.preventDefault();
-  dropdown.addEventListener(
-    "wa-after-hide",
-    () => dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true }),
-    { once: true },
-  );
 }
 
 function handleManualProviderSelect(
@@ -82,11 +82,7 @@ function handleManualProviderSelect(
     return;
   }
   if (value !== currentProviderId) {
-    dropdown.addEventListener(
-      "wa-after-hide",
-      () => dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true }),
-      { once: true },
-    );
+    restoreProviderTriggerAfterHide(dropdown);
     onChange(value);
     return;
   }
@@ -106,11 +102,9 @@ function manualProviderMethod(provider: ManualProvider): string | undefined {
 }
 
 export function renderManualProviderPicker(
-  props: {
+  props: Parameters<typeof renderProviderIcon>[0] & {
     manualProviderId: string;
     actionsDisabled: boolean;
-    iconUrls: Readonly<Record<string, string>>;
-    onIconError: (url: string) => void;
     onManualProviderChange: (providerId: string) => void;
   },
   result: Pick<SystemAgentSetupDetectResult, "manualProviders">,

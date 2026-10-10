@@ -78,40 +78,30 @@ struct PushBuildConfig {
             readValue: readValue,
             key: "OpenClawPushRelayBaseURL")
         switch self.mode {
-        case .localSandbox:
+        case .localSandbox, .localProduction:
             self.transport = .direct
             self.distribution = .local
             self.relayBaseURL = nil
-            self.apnsEnvironment = .sandbox
-            self.relayProfile = .deviceSandbox
-            self.proofPolicy = .appleDevelopment
-        case .localProduction:
-            self.transport = .direct
-            self.distribution = .local
-            self.relayBaseURL = nil
-            self.apnsEnvironment = .production
-            self.relayProfile = .production
-            self.proofPolicy = .appleStrict
         case .appStore:
             self.transport = .relay
             self.distribution = .official
             self.relayBaseURL = URL(string: "https://\(Self.openClawHostedRelayHost)")!
-            self.apnsEnvironment = .production
-            self.relayProfile = .production
-            self.proofPolicy = .appleStrict
-        case .deviceSandbox:
+        case .deviceSandbox, .simulatorSandbox:
             self.transport = .relay
             self.distribution = .official
             self.relayBaseURL = relayBaseURLOverride
                 ?? URL(string: "https://\(Self.openClawSandboxRelayHost)")!
+        }
+        switch self.mode {
+        case .localProduction, .appStore:
+            self.apnsEnvironment = .production
+            self.relayProfile = .production
+            self.proofPolicy = .appleStrict
+        case .localSandbox, .deviceSandbox:
             self.apnsEnvironment = .sandbox
             self.relayProfile = .deviceSandbox
             self.proofPolicy = .appleDevelopment
         case .simulatorSandbox:
-            self.transport = .relay
-            self.distribution = .official
-            self.relayBaseURL = relayBaseURLOverride
-                ?? URL(string: "https://\(Self.openClawSandboxRelayHost)")!
             self.apnsEnvironment = .sandbox
             self.relayProfile = .simulatorSandbox
             self.proofPolicy = .internalSimulator

@@ -147,6 +147,7 @@ export function readBundledDiscoveryModeMemoized(
 /** Prepare the same machine-owned fact for synchronous metadata derivation. */
 export async function prepareBundledDiscoveryMode(
   env: NodeJS.ProcessEnv = process.env,
+  readPreparedRow?: (databasePath: string) => Promise<{ value_json: string } | undefined>,
 ): Promise<() => void> {
   const owner = getPluginCache();
   const options = resolveBundledDiscoveryOptions({ env });
@@ -186,10 +187,12 @@ export async function prepareBundledDiscoveryMode(
     if (discoveryState.memoized?.key === key) {
       value = discoveryState.memoized.value;
     } else {
-      const row = await readPluginMetadataStateRow(
-        "bundled-discovery",
-        resolveBundledDiscoveryOptions({ env }),
-      );
+      const row = readPreparedRow
+        ? await readPreparedRow(key)
+        : await readPluginMetadataStateRow(
+            "bundled-discovery",
+            resolveBundledDiscoveryOptions({ env }),
+          );
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
     if (discoveryState.generation !== generation) {

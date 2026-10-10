@@ -66,6 +66,7 @@ export function createSubagentRegistryListener(config: {
         }
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
         const context = captureOpenClawStateWorkerContext();
+        const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const assertCurrent = () => {
           assertSubagentRegistryWriteSourceCurrent(context);
           if (
@@ -76,8 +77,6 @@ export function createSubagentRegistryListener(config: {
           }
         };
         if (phase === "start") {
-          const startedAt =
-            typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
             await mutateSubagentRuns(
               [evt.runId],
@@ -122,7 +121,6 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
-        const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
         const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
           phase,

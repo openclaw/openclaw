@@ -89,13 +89,13 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
         },
       ],
     };
-    const boundary: ChatStreamSegment = { text: "", ts: 1, runId, boundaryMarker: true };
+    const segment: ChatStreamSegment = { text: "", ts: 1, runId };
     if (source === "cached") {
-      renderChatInto(container, { ...props, messages: [user], streamSegments: [boundary] });
+      renderChatInto(container, { ...props, messages: [user], streamSegments: [segment] });
     }
     renderChatInto(container, {
       ...props,
-      streamSegments: source === "segment" ? [boundary] : [],
+      streamSegments: source === "segment" ? [segment] : [],
       toolMessages:
         source === "tool"
           ? [

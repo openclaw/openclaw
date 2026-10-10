@@ -144,9 +144,8 @@ describe("Cloud worker snapshots", () => {
         "Native checkpoints are not supported by this coordinator.",
       );
       expect(unsupported.textContent).toContain("otherwise provision cold");
-      expect(unsupported.textContent).toContain("Each eligible worker retries capture");
       expect(unsupported.textContent).toContain(
-        "Crabbox configuration changes apply to the next dispatch",
+        "Capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal.",
       );
       expect(unsupported.textContent).toContain("settings.warmImage: false");
       expect(unsupported.querySelector("button")).toBeNull();

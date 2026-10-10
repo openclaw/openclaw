@@ -11,13 +11,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
-import {
-  Button,
-  Row,
-  type ButtonInteraction,
-  type CommandInteraction,
-  type ComponentData,
-} from "../internal/discord.js";
+import { Button, Row, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import type {
@@ -64,13 +58,12 @@ function parseDiscordCommandArgData(
   };
 }
 
-async function handleDiscordCommandArgInteraction(params: {
-  interaction: ButtonInteraction;
-  data: ComponentData;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}) {
+async function handleDiscordCommandArgInteraction(
+  params: DiscordCommandArgButtonParams & {
+    interaction: ButtonInteraction;
+    data: ComponentData;
+  },
+) {
   const { interaction, data, ctx } = params;
   const clearWithMessage = async (content: string) =>
     await params.safeInteractionCall("command arg update", () =>
@@ -120,59 +113,49 @@ type DiscordCommandArgButtonParams = {
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 };
 
-class DiscordCommandArgButton extends Button {
-  label: string;
-  customId: string;
-  override style: ButtonStyle;
+function createDiscordCommandArgButton(
+  params: DiscordCommandArgButtonParams & {
+    label: string;
+    customId: string;
+    style?: ButtonStyle;
+  },
+): Button {
+  return new (class extends Button {
+    label = params.label;
+    customId = params.customId;
+    override style = params.style ?? ButtonStyle.Secondary;
 
-  constructor(
-    private readonly params: DiscordCommandArgButtonParams & {
-      label: string;
-      customId: string;
-      style?: ButtonStyle;
-    },
-  ) {
-    super();
-    this.label = params.label;
-    this.customId = params.customId;
-    this.style = params.style ?? ButtonStyle.Secondary;
-  }
-
-  override async run(interaction: ButtonInteraction, data: ComponentData) {
-    await handleDiscordCommandArgInteraction({ ...this.params, interaction, data });
-  }
+    override async run(interaction: ButtonInteraction, data: ComponentData) {
+      await handleDiscordCommandArgInteraction({ ...params, interaction, data });
+    }
+  })();
 }
 
-export function buildDiscordCommandArgMenu(params: {
-  command: ChatCommandDefinition;
-  menu: {
-    arg: CommandArgDefinition;
-    choices: Array<{ value: string; label: string }>;
-    title?: string;
-  };
-  interaction: CommandInteraction;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}): { content: string; components: Row<Button>[] } {
-  const { command, menu, interaction } = params;
+export function buildDiscordCommandArgMenu(
+  params: DiscordCommandArgButtonParams & {
+    command: ChatCommandDefinition;
+    menu: {
+      arg: CommandArgDefinition;
+      choices: Array<{ value: string; label: string }>;
+      title?: string;
+    };
+    userId: string;
+  },
+): { content: string; components: Row<Button>[] } {
+  const { command, menu, userId, ...buttonContext } = params;
   const commandLabel = command.nativeName ?? command.key;
-  const userId = interaction.user?.id ?? "";
   const rows = chunkItems(menu.choices, 4).map((choices) => {
-    const buttons = choices.map(
-      (choice) =>
-        new DiscordCommandArgButton({
-          label: choice.label,
-          customId: buildDiscordCommandArgCustomId({
-            command: commandLabel,
-            arg: menu.arg.name,
-            value: choice.value,
-            userId,
-          }),
-          ctx: params.ctx,
-          safeInteractionCall: params.safeInteractionCall,
-          dispatchCommandInteraction: params.dispatchCommandInteraction,
+    const buttons = choices.map((choice) =>
+      createDiscordCommandArgButton({
+        label: choice.label,
+        customId: buildDiscordCommandArgCustomId({
+          command: commandLabel,
+          arg: menu.arg.name,
+          value: choice.value,
+          userId,
         }),
+        ...buttonContext,
+      }),
     );
     return new Row(buttons);
   });
@@ -183,7 +166,7 @@ export function buildDiscordCommandArgMenu(params: {
 export function createDiscordCommandArgFallbackButton(
   params: DiscordCommandArgButtonParams,
 ): Button {
-  return new DiscordCommandArgButton({
+  return createDiscordCommandArgButton({
     ...params,
     label: "cmdarg",
     customId: "cmdarg:seed=1",

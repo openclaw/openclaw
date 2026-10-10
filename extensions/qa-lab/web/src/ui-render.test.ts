@@ -26,7 +26,6 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     capturePayloadEventSort: "stream",
     capturePayloadExtent: "preview",
     capturePinnedLaneIds: [],
-    capturePreferredDetailView: null,
     captureProviderFilter: [],
     captureQueryPreset: "none",
     captureQueryRows: [],

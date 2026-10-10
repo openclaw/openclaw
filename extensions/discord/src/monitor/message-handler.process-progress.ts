@@ -55,16 +55,13 @@ export function createDiscordMessageProgressRuntime(params: {
   // Yield only the draft content that has a durable counterpart.
   let shouldYieldDraftCommentary = async () => false;
   let turnCommentaryVisible = false;
-  const handleAssistantMessageBoundary = () => {
-    if (draftPreview.handleAssistantMessageBoundary()) {
-      params.onTurnReset();
-    }
-  };
-
   const replyOptions: Partial<ReplyOptions> = {
+    progressRequiresReply: draftPreview.isProgressMode ? true : undefined,
     onAssistantMessageStart: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          if (draftPreview.handleAssistantMessageBoundary()) {
+            params.onTurnReset();
+          }
           return false;
         }
       : undefined,
@@ -143,8 +140,8 @@ export function createDiscordMessageProgressRuntime(params: {
     },
     onItemEvent: async (payload) => {
       if (
-        payload.kind === "preamble" &&
-        ((await shouldYieldDraftCommentary()) || abortSignal?.aborted)
+        abortSignal?.aborted ||
+        (payload.kind === "preamble" && (await shouldYieldDraftCommentary()))
       ) {
         return undefined;
       }

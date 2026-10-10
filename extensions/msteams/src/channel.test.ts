@@ -68,7 +68,7 @@ describe("msteamsPlugin", () => {
 
   it.each([
     { webhookPath: "", info: "18789/api/messages", warning: undefined },
-    { webhookPath: "/ready", info: undefined, warning: "reserved for Gateway probes" },
+    { webhookPath: "/ready", info: undefined, warning: "reserved for Gateway checks" },
   ])(
     "classifies Doctor webhook guidance for $webhookPath",
     async ({ webhookPath, info, warning }) => {

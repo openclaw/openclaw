@@ -164,15 +164,18 @@ function normalizeEntrySource(
     return { ok: false, error: 'plugin source object missing "type" or "source"' };
   }
 
-  if (kind === "path") {
-    const sourcePath = normalizeOptionalString(rec.path);
-    if (!sourcePath) {
-      return { ok: false, error: 'path source missing "path"' };
+  if (kind === "path" || kind === "url") {
+    const value = normalizeOptionalString(rec[kind]);
+    if (!value) {
+      return { ok: false, error: `${kind} source missing "${kind}"` };
     }
-    return { ok: true, source: { kind: "path", path: sourcePath } };
+    return {
+      ok: true,
+      source: kind === "path" ? { kind, path: value } : { kind, url: value },
+    };
   }
 
-  if (kind === "github" || kind === "git") {
+  if (kind === "github" || kind === "git" || kind === "git-subdir") {
     const identifier =
       kind === "github"
         ? (normalizeOptionalString(rec.repo) ?? normalizeOptionalString(rec.url))
@@ -180,53 +183,26 @@ function normalizeEntrySource(
     if (!identifier) {
       return {
         ok: false,
-        error: kind === "github" ? 'github source missing "repo"' : 'git source missing "url"',
+        error: `${kind} source missing "${kind === "github" ? "repo" : "url"}"`,
       };
     }
-    const source: MarketplaceEntrySource =
-      kind === "github" ? { kind, repo: identifier } : { kind, url: identifier };
-    return {
-      ok: true,
-      source: {
-        ...source,
-        path: normalizeOptionalString(rec.path),
-        ref:
-          normalizeOptionalString(rec.ref) ??
-          normalizeOptionalString(rec.branch) ??
-          normalizeOptionalString(rec.tag),
-      },
-    };
-  }
-
-  if (kind === "git-subdir") {
-    const url = normalizeOptionalString(rec.url) ?? normalizeOptionalString(rec.repo);
-    const sourcePath = normalizeOptionalString(rec.path) ?? normalizeOptionalString(rec.subdir);
-    if (!url) {
-      return { ok: false, error: 'git-subdir source missing "url"' };
-    }
-    if (!sourcePath) {
+    const sourcePath =
+      normalizeOptionalString(rec.path) ??
+      (kind === "git-subdir" ? normalizeOptionalString(rec.subdir) : undefined);
+    if (kind === "git-subdir" && !sourcePath) {
       return { ok: false, error: 'git-subdir source missing "path"' };
     }
-    return {
-      ok: true,
-      source: {
-        kind: "git-subdir",
-        url,
-        path: sourcePath,
-        ref:
-          normalizeOptionalString(rec.ref) ??
-          normalizeOptionalString(rec.branch) ??
-          normalizeOptionalString(rec.tag),
-      },
-    };
-  }
-
-  if (kind === "url") {
-    const url = normalizeOptionalString(rec.url);
-    if (!url) {
-      return { ok: false, error: 'url source missing "url"' };
-    }
-    return { ok: true, source: { kind: "url", url } };
+    const ref =
+      normalizeOptionalString(rec.ref) ??
+      normalizeOptionalString(rec.branch) ??
+      normalizeOptionalString(rec.tag);
+    const source: MarketplaceEntrySource =
+      kind === "github"
+        ? { kind, repo: identifier, path: sourcePath, ref }
+        : kind === "git-subdir"
+          ? { kind, url: identifier, path: sourcePath!, ref }
+          : { kind, url: identifier, path: sourcePath, ref };
+    return { ok: true, source };
   }
 
   return { ok: false, error: `unsupported plugin source kind: ${kind}` };
@@ -902,41 +878,27 @@ async function validateMarketplaceManifest(params: {
   const canonicalRootDir = await fs.realpath(params.rootDir);
   for (const plugin of params.manifest.plugins) {
     const source = plugin.source;
-    if (source.kind === "path") {
-      if (hasHttpUrlPrefix(source.path)) {
-        return {
-          ok: false,
-          error:
-            `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ` +
-            "remote marketplaces may not use HTTP(S) plugin paths",
-        };
-      }
-      if (path.isAbsolute(source.path)) {
-        return {
-          ok: false,
-          error:
-            `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ` +
-            "remote marketplaces may only use relative plugin paths",
-        };
-      }
+    let error: string | undefined;
+    if (source.kind !== "path") {
+      error = `remote marketplaces may not use ${source.kind} plugin sources`;
+    } else if (hasHttpUrlPrefix(source.path)) {
+      error = "remote marketplaces may not use HTTP(S) plugin paths";
+    } else if (path.isAbsolute(source.path)) {
+      error = "remote marketplaces may only use relative plugin paths";
+    } else {
       const resolved = await ensureInsideMarketplaceRoot(params.rootDir, source.path, {
         canonicalRootDir,
       });
       if (!resolved.ok) {
-        return {
-          ok: false,
-          error: `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ${resolved.error}`,
-        };
+        error = resolved.error;
       }
-      continue;
     }
-
-    return {
-      ok: false,
-      error:
-        `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ` +
-        `remote marketplaces may not use ${source.kind} plugin sources`,
-    };
+    if (error) {
+      return {
+        ok: false,
+        error: `invalid marketplace entry "${plugin.name}" in ${params.sourceLabel}: ${error}`,
+      };
+    }
   }
 
   return { ok: true, manifest: params.manifest };

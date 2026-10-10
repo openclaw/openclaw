@@ -11,6 +11,7 @@ import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { icons } from "./icons.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 // Preserve source offsets when case folding expands Unicode characters.
 // The pattern is literal and Lit escapes every rendered text segment.
@@ -122,7 +123,9 @@ export function renderCommandPaletteResult(
               onIconError: () => onPluginIconError?.(pluginId),
               className: "cmd-palette__plugin-icon",
             })
-          : html`<span class="nav-item__icon" aria-hidden="true">${icons[item.icon]}</span>`
+          : html`<span class="nav-item__icon" aria-hidden="true"
+              >${item.id === "panel-custodian" ? renderThemeBrandIcon() : icons[item.icon]}</span
+            >`
     }
     <span class="cmd-palette__item-copy">
       <span class="cmd-palette__item-heading">

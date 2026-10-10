@@ -5,14 +5,72 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
+import type { StateSchemaInspectionInput } from "./openclaw-state-schema-preflight.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, fork: vi.fn(actual.fork) };
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("carries cold state contracts through IPC without rebuilding or drifting their fingerprints", async () => {
+  const directory = tempDirs.make("state-schema-contract-transfer-");
+  const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
+  closeOpenClawStateDatabaseForTest();
+  const ddlLog = path.join(directory, "comparison-ddl.log");
+  const preload = path.join(directory, "observe-comparison-ddl.cjs");
+  fs.writeFileSync(ddlLog, "");
+  fs.writeFileSync(
+    preload,
+    `const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function(sql) {
+  if (this.location() === null && /CREATE TABLE/i.test(sql)) {
+    fs.appendFileSync(${JSON.stringify(ddlLog)}, 'comparison\\n');
+  }
+  return exec.call(this, sql);
+};`,
+  );
+  await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+    let schemaContracts: StateSchemaInspectionInput["schemaContracts"];
+    let firstDdl: string | undefined;
+    for (const attempt of [0, 1]) {
+      await using reader = createAgentSchemaInspectionWorker();
+      const result = await reader.inspectState(
+        {
+          pathname,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          verifyCurrentSchemaShape: true,
+          purpose: "runtime",
+          scope: "state",
+          schemaContracts,
+        },
+        undefined,
+        pathname,
+      );
+      expect(result.schemas).toEqual({ incompatible: [], indeterminate: [] });
+      const ddl = fs.readFileSync(ddlLog, "utf8");
+      if (attempt === 0) {
+        expect(result.schemaContracts?.length).toBeGreaterThan(0);
+        expect(ddl.length).toBeGreaterThan(0);
+        schemaContracts = result.schemaContracts;
+        firstDdl = ddl;
+      } else {
+        expect(ddl).toBe(firstDdl);
+      }
+    }
+  });
+});
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "agentSchemaInspection child names a native snapshot-open refusal and reuses a healthy replacement",

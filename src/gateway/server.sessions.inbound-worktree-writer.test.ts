@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -87,11 +88,13 @@ test.each([false, true])(
         await release.promise;
       },
     );
-    const originalRestore = managedWorktrees.restore.bind(managedWorktrees);
-    const restore = vi.spyOn(managedWorktrees, "restore").mockImplementation((params) => {
-      restoreEntered.resolve();
-      return originalRestore(params);
-    });
+    const originalRestore = captureMethodCall("restore")(ManagedWorktreeService.prototype);
+    const restore = vi
+      .spyOn(ManagedWorktreeService.prototype, "restore")
+      .mockImplementation(function (this: ManagedWorktreeService, params) {
+        restoreEntered.resolve();
+        return originalRestore(this, params);
+      });
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     let independent: ReturnType<typeof directSessionReq> | undefined;
     let admissionDone = false;

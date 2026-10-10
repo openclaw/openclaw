@@ -1,4 +1,3 @@
-// Microsoft Teams plugin reconstructs transport context for durable ingress replay.
 import type { MSTeamsSdkCloudOptions } from "./cloud.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import {

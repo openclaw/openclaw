@@ -42,6 +42,7 @@ function parseArguments(bytes: Buffer, pid: number): ProcessCommand {
   if (argc <= 0 || argc > bytes.length || offset <= 4) {
     throw new Error(`Invalid Darwin process arguments for PID ${pid}`);
   }
+  const executable = bytes.toString("utf8", 4, offset);
   while (offset < bytes.length && bytes[offset] === 0) {
     offset++;
   }
@@ -61,6 +62,7 @@ function parseArguments(bytes: Buffer, pid: number): ProcessCommand {
     .find((entry) => entry.startsWith("OPENCLAW_SERVICE_MARKER="));
   return {
     argv,
+    executable,
     ...(marker ? { serviceMarker: marker.slice("OPENCLAW_SERVICE_MARKER=".length) } : {}),
   };
 }

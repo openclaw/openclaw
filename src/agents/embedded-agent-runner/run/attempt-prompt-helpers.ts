@@ -48,18 +48,6 @@ type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
 const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
 const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
 
-function rememberDrainedInjections(
-  runId: string,
-  injections: PluginNextTurnInjectionRecord[],
-): void {
-  if (promptBuildDrainCache.has(runId)) {
-    promptBuildDrainCache.delete(runId);
-  } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
-    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
-  }
-  promptBuildDrainCache.set(runId, injections);
-}
-
 /** Release at run termination so active retries retain cache headroom. */
 export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
   if (runId) {
@@ -87,10 +75,16 @@ export async function resolvePromptBuildHookResult(params: {
         agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
-    rememberDrainedInjections(runId, queuedContext.queuedInjections);
+    promptBuildDrainCache.delete(runId);
+    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
+    promptBuildDrainCache.set(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
   // then prepare/heartbeat contributions, then prompt-build hooks.
+  const logHookFailure = (hookName: string) => (hookErr: unknown) => {
+    log.warn(`${hookName} hook failed: ${String(hookErr)}`);
+    return undefined;
+  };
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
       ? await params.hookRunner
@@ -102,10 +96,7 @@ export async function resolvePromptBuildHookResult(params: {
             },
             params.hookCtx,
           )
-          .catch((hookErr: unknown) => {
-            log.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
-            return undefined;
-          })
+          .catch(logHookFailure("agent_turn_prepare"))
       : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
@@ -120,10 +111,7 @@ export async function resolvePromptBuildHookResult(params: {
             },
             params.hookCtx,
           )
-          .catch((hookErr: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
-            return undefined;
-          })
+          .catch(logHookFailure("heartbeat_prompt_contribution"))
       : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
@@ -134,10 +122,7 @@ export async function resolvePromptBuildHookResult(params: {
           },
           params.hookCtx,
         )
-        .catch((hookErr: unknown) => {
-          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-          return undefined;
-        })
+        .catch(logHookFailure("before_prompt_build"))
     : undefined;
   const decisionPromptBuildFields = promptBuildResult
     ? Object.fromEntries(
@@ -156,14 +141,12 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
+  const pendingContext = [queuedContext, turnPrepareResult, heartbeatContribution];
+  const joinContext = (key: "prependContext" | "appendContext") =>
+    joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
-    hasPendingNonPromptBuildContext: Boolean(
-      queuedContext.prependContext?.trim() ||
-      queuedContext.appendContext?.trim() ||
-      turnPrepareResult?.prependContext?.trim() ||
-      turnPrepareResult?.appendContext?.trim() ||
-      heartbeatContribution?.prependContext?.trim() ||
-      heartbeatContribution?.appendContext?.trim(),
+    hasPendingNonPromptBuildContext: pendingContext.some(
+      (source) => source?.prependContext?.trim() || source?.appendContext?.trim(),
     ),
     ...(decisionPromptBuildFields && Object.keys(decisionPromptBuildFields).length > 0
       ? { decisionPromptBuildFields }
@@ -172,18 +155,8 @@ export async function resolvePromptBuildHookResult(params: {
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
       : {}),
-    prependContext: joinPresentTextSegments([
-      queuedContext.prependContext,
-      turnPrepareResult?.prependContext,
-      heartbeatContribution?.prependContext,
-      promptBuildResult?.prependContext,
-    ]),
-    appendContext: joinPresentTextSegments([
-      queuedContext.appendContext,
-      turnPrepareResult?.appendContext,
-      heartbeatContribution?.appendContext,
-      promptBuildResult?.appendContext,
-    ]),
+    prependContext: joinContext("prependContext"),
+    appendContext: joinContext("appendContext"),
     prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
     appendSystemContext: wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
   };
@@ -272,25 +245,22 @@ function sanitizeStructuredJsonValue(
     return limited;
   }
   const output: Record<string, unknown> = {};
-  let copied = 0;
-  let skipped = 0;
+  let keyCount = 0;
   for (const key in value as Record<string, unknown>) {
     if (!Object.hasOwn(value, key)) {
       continue;
     }
-    if (copied >= MAX_STRUCTURED_JSON_OBJECT_KEYS) {
-      skipped += 1;
-      continue;
+    keyCount += 1;
+    if (keyCount <= MAX_STRUCTURED_JSON_OBJECT_KEYS) {
+      output[key] = sanitizeStructuredJsonValue(
+        (value as Record<string, unknown>)[key],
+        depth + 1,
+        seen,
+      );
     }
-    output[key] = sanitizeStructuredJsonValue(
-      (value as Record<string, unknown>)[key],
-      depth + 1,
-      seen,
-    );
-    copied += 1;
   }
-  if (skipped > 0) {
-    output["__truncated"] = `${skipped} more keys`;
+  if (keyCount > MAX_STRUCTURED_JSON_OBJECT_KEYS) {
+    output["__truncated"] = `${keyCount - MAX_STRUCTURED_JSON_OBJECT_KEYS} more keys`;
   }
   seen.delete(value);
   return output;
@@ -354,8 +324,7 @@ function stringifyStructuredContentPart(part: unknown): string | undefined {
 
 function extractUserMessagePromptText(content: unknown): string | undefined {
   if (typeof content === "string") {
-    const trimmed = content.trim();
-    return trimmed || undefined;
+    return content.trim() || undefined;
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -392,12 +361,10 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
-  if (!orphanText) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
-  }
   if (
-    params.prompt.trim().length > 0 &&
-    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
+    !orphanText ||
+    (params.prompt.trim().length > 0 &&
+      shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance))
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
@@ -462,32 +429,6 @@ type AfterTurnRuntimeContextAttempt = Pick<
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 
-function resolveRuntimeContextSessionTarget(params: {
-  attempt: AfterTurnRuntimeContextAttempt;
-  activeAgentId?: string;
-}): ContextEngineSessionTarget | undefined {
-  const sessionTarget = params.attempt.sessionTarget;
-  const agentId = sessionTarget?.agentId ?? params.activeAgentId;
-  const sessionId = sessionTarget?.sessionId ?? params.attempt.sessionId;
-  const sessionKey = sessionTarget?.sessionKey ?? params.attempt.sessionKey;
-  if (
-    !agentId &&
-    !sessionId &&
-    !sessionKey &&
-    !sessionTarget?.storePath &&
-    sessionTarget?.threadId === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...(agentId ? { agentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(sessionTarget?.storePath ? { storePath: sessionTarget.storePath } : {}),
-    ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
-  };
-}
-
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
@@ -499,50 +440,41 @@ export function buildAfterTurnRuntimeContext(params: {
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
-  const sessionTarget = resolveRuntimeContextSessionTarget({
-    attempt: params.attempt,
-    activeAgentId: params.activeAgentId,
-  });
+  const target = params.attempt.sessionTarget;
+  const agentId = target?.agentId ?? params.activeAgentId;
+  const sessionId = target?.sessionId ?? params.attempt.sessionId;
+  const sessionKey = target?.sessionKey ?? params.attempt.sessionKey;
+  const sessionTarget: ContextEngineSessionTarget | undefined =
+    agentId || sessionId || sessionKey || target?.storePath || target?.threadId !== undefined
+      ? {
+          ...(agentId ? { agentId } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(target?.storePath ? { storePath: target.storePath } : {}),
+          ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
+        }
+      : undefined;
   const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
   const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
   return {
-    ...buildEmbeddedCompactionRuntimeContext({
-      sessionKey: params.attempt.sessionKey,
-      sandboxSessionKey: params.attempt.sandboxSessionKey,
-      sandboxAgentId: params.attempt.sandboxAgentId,
-      messageChannel: params.attempt.messageChannel,
-      messageProvider: params.attempt.messageProvider,
-      agentAccountId: params.attempt.agentAccountId,
-      currentChannelId: params.attempt.currentChannelId,
-      currentThreadTs: params.attempt.currentThreadTs,
-      currentMessageId: params.attempt.currentMessageId,
-      authProfileId: params.attempt.authProfileId,
-      authProfileIdSource: params.attempt.authProfileIdSource,
-      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      agentDir: params.agentDir,
-      config: params.attempt.config,
-      toolsAllow: params.attempt.toolsAllow,
-      skillsSnapshot: params.attempt.skillsSnapshot,
-      senderId: params.attempt.senderId,
-      provider: params.attempt.provider,
-      modelId: params.attempt.modelId,
-      harnessRuntime: params.attempt.agentHarnessId,
-      modelSelectionLocked: params.attempt.modelSelectionLocked,
-      thinkLevel: params.attempt.thinkLevel,
-      reasoningLevel: params.attempt.reasoningLevel,
-      bashElevated: params.attempt.bashElevated,
-      extraSystemPrompt: params.attempt.extraSystemPrompt,
-      ownerNumbers: params.attempt.ownerNumbers,
-      activeProcessSessions: listActiveProcessSessionReferences({
-        scopeKey: resolveProcessToolScopeKey({
-          sessionKey: params.attempt.sessionKey,
-          sessionId: params.attempt.sessionId,
-          agentId: params.activeAgentId,
+    ...buildEmbeddedCompactionRuntimeContext(
+      {
+        ...params.attempt,
+        runtimeAuthPlan: params.attempt.runtimePlan?.auth,
+        workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
+        agentDir: params.agentDir,
+        harnessRuntime: params.attempt.agentHarnessId,
+        activeProcessSessions: listActiveProcessSessionReferences({
+          scopeKey: resolveProcessToolScopeKey({
+            sessionKey: params.attempt.sessionKey,
+            sessionId: params.attempt.sessionId,
+            agentId: params.activeAgentId,
+          }),
         }),
-      }),
-    }),
+      },
+      "after-turn",
+    ),
     ...resolveContextEngineCapabilities({
       config: params.attempt.config,
       sessionKey: params.attempt.sessionKey,

@@ -288,30 +288,31 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       description: this.profileDescription(profile),
       control: html`
         ${statusControl}
-        <button
-          class="btn btn--sm"
-          type="button"
-          aria-label=${`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
-          ?disabled=${!canManage}
-          @click=${() => this.openEditor(profile)}
-        >
-          ${t("cloudWorkersPage.editAction")}
-        </button>
-        <button
-          class="btn btn--sm danger"
-          type="button"
-          aria-label=${`${t("common.delete")}: ${profile.id}`}
-          ?disabled=${!canManage}
-          @click=${() => void this.deleteProfile(profile)}
-        >
-          ${t("common.delete")}
-        </button>
+        ${[
+          { label: t("cloudWorkersPage.editAction"), onClick: () => this.openEditor(profile) },
+          {
+            label: t("common.delete"),
+            danger: true,
+            onClick: () => void this.deleteProfile(profile),
+          },
+        ].map(
+          (action) => html`<button
+            class=${action.danger ? "btn btn--sm danger" : "btn btn--sm"}
+            type="button"
+            aria-label=${`${action.label}: ${profile.id}`}
+            ?disabled=${!canManage}
+            @click=${action.onClick}
+          >
+            ${action.label}
+          </button>`,
+        )}
       `,
     });
   }
 
   private renderDraftInput(
     field:
+      | "id"
       | "backend"
       | "machineClass"
       | "ttl"
@@ -326,12 +327,13 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       type?: "text" | "number";
     } = {},
   ) {
+    const label = field === "id" ? "profileId" : field;
     return renderSettingsRow({
-      title: t(`cloudWorkersPage.fields.${field}`),
-      description: options.description ?? t(`cloudWorkersPage.fields.${field}Help`),
+      title: t(`cloudWorkersPage.fields.${label}`),
+      description: options.description ?? t(`cloudWorkersPage.fields.${label}Help`),
       control: html`<input
         class="settings-input mono"
-        aria-label=${t(`cloudWorkersPage.fields.${field}`)}
+        aria-label=${t(`cloudWorkersPage.fields.${label}`)}
         placeholder=${options.placeholder ?? nothing}
         type=${options.type ?? nothing}
         min=${field === "readyWorkers" ? "0" : nothing}
@@ -362,21 +364,13 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         title: editing ? t("cloudWorkersPage.editProfile") : t("cloudWorkersPage.addProfile"),
       },
       [
-        renderSettingsRow({
-          title: t("cloudWorkersPage.fields.profileId"),
-          description: t("cloudWorkersPage.fields.profileIdHelp"),
-          control: editing
-            ? renderSettingsValue(this.draft.id, { mono: true })
-            : html`<input
-                class="settings-input mono"
-                aria-label=${t("cloudWorkersPage.fields.profileId")}
-                autocomplete="off"
-                spellcheck="false"
-                .value=${this.draft.id}
-                ?disabled=${busy}
-                @input=${(event: Event) => this.patchDraft({ id: formControlValue(event) })}
-              />`,
-        }),
+        editing
+          ? renderSettingsRow({
+              title: t("cloudWorkersPage.fields.profileId"),
+              description: t("cloudWorkersPage.fields.profileIdHelp"),
+              control: renderSettingsValue(this.draft.id, { mono: true }),
+            })
+          : this.renderDraftInput("id"),
         this.renderDraftInput("backend", {
           description: html`${t("cloudWorkersPage.fields.backendHelp")}
           ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("cloudWorkersPage.providerList"))}`,

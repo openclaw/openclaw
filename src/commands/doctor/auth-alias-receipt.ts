@@ -169,31 +169,19 @@ export function recordAuthAliasMigration(params: {
           }
           const before = profiles(store.store);
           const after = profiles(store.migratedStore);
-          const normalizedFingerprint = (
-            id: string,
-            fingerprints: readonly (string | null | undefined)[],
-          ) => {
+          for (const [id, hashKey, canonicalHashKey] of [
+            [entry.from, "beforeSha256", "beforeCanonicalFieldsSha256"],
+            [entry.to, "afterSha256", "afterCanonicalFieldsSha256"],
+          ] as const) {
             const value = before[id];
-            return isRecord(value) &&
+            if (
+              isRecord(value) &&
               after[id] !== undefined &&
-              fingerprints.includes(digest(value)) &&
+              [expected[hashKey], expected[canonicalHashKey]].includes(digest(value)) &&
               digest(normalizeLegacyCredentialFields(value)) === digest(after[id])
-              ? digest(after[id])
-              : undefined;
-          };
-          const beforeCanonicalFieldsSha256 = normalizedFingerprint(entry.from, [
-            expected.beforeSha256,
-            expected.beforeCanonicalFieldsSha256,
-          ]);
-          const afterCanonicalFieldsSha256 = normalizedFingerprint(entry.to, [
-            expected.afterSha256,
-            expected.afterCanonicalFieldsSha256,
-          ]);
-          if (beforeCanonicalFieldsSha256) {
-            expected.beforeCanonicalFieldsSha256 = beforeCanonicalFieldsSha256;
-          }
-          if (afterCanonicalFieldsSha256) {
-            expected.afterCanonicalFieldsSha256 = afterCanonicalFieldsSha256;
+            ) {
+              expected[canonicalHashKey] = digest(after[id]);
+            }
           }
         }
         records.set(digest(normalized), normalized);
@@ -267,6 +255,7 @@ export function recoverAuthAliasMigration(params: {
     const sourcePaths = mapping.sources?.map((source) => source.path) ?? [];
     const archived =
       sourcePaths.length > 0 && sourcePaths.every((source) => !fs.existsSync(source));
+    let matched: boolean;
     if (archived) {
       // The import owner validates archived bytes, refreshed OAuth identity and ambiguity.
       const archive = params.archivedMappings?.get(mapping.from);
@@ -283,63 +272,60 @@ export function recoverAuthAliasMigration(params: {
           )
           .map((origin) => origin.databasePath),
       );
-      if (
+      matched =
         archive?.profileId === mapping.to &&
         verifiedStores.size > 0 &&
         [...stores].every(
           ([databasePath, entries]) =>
             entries[mapping.from] === undefined &&
             (entries[mapping.to] === undefined || verifiedStores.has(databasePath)),
-        )
-      ) {
-        const targets = matches.get(mapping.from) ?? new Set<string>();
-        targets.add(mapping.to);
-        matches.set(mapping.from, targets);
-      }
-      continue;
-    }
-    const matched =
-      mapping.credentials.every((expected) => {
-        const entries = stores.get(expected.databasePath);
-        if (!entries) {
-          return false;
-        }
-        const before = entries[mapping.from];
-        const after = entries[mapping.to];
-        return (
-          (before !== undefined &&
-            after === undefined &&
-            [expected.beforeSha256, expected.beforeCanonicalFieldsSha256].includes(
-              digest(before),
-            )) ||
-          (before === undefined &&
-            after !== undefined &&
-            [expected.afterSha256, expected.afterCanonicalFieldsSha256].includes(digest(after))) ||
-          (before === undefined &&
-            after === undefined &&
-            expected.beforeSha256 === null &&
-            mapping.sources !== undefined &&
-            mapping.sources.length > 0 &&
-            mapping.sources.every((source) => {
-              try {
-                return (
-                  createHash("sha256").update(fs.readFileSync(source.path)).digest("hex") ===
-                  source.sha256
-                );
-              } catch (error) {
-                if (isRecord(error) && error.code === "ENOENT") {
-                  return false;
-                }
-                throw error;
-              }
-            }))
         );
-      }) &&
-      [...stores].every(
-        ([databasePath, entries]) =>
-          mapping.credentials.some((entry) => entry.databasePath === databasePath) ||
-          (entries[mapping.from] === undefined && entries[mapping.to] === undefined),
-      );
+    } else {
+      matched =
+        mapping.credentials.every((expected) => {
+          const entries = stores.get(expected.databasePath);
+          if (!entries) {
+            return false;
+          }
+          const before = entries[mapping.from];
+          const after = entries[mapping.to];
+          return (
+            (before !== undefined &&
+              after === undefined &&
+              [expected.beforeSha256, expected.beforeCanonicalFieldsSha256].includes(
+                digest(before),
+              )) ||
+            (before === undefined &&
+              after !== undefined &&
+              [expected.afterSha256, expected.afterCanonicalFieldsSha256].includes(
+                digest(after),
+              )) ||
+            (before === undefined &&
+              after === undefined &&
+              expected.beforeSha256 === null &&
+              mapping.sources !== undefined &&
+              mapping.sources.length > 0 &&
+              mapping.sources.every((source) => {
+                try {
+                  return (
+                    createHash("sha256").update(fs.readFileSync(source.path)).digest("hex") ===
+                    source.sha256
+                  );
+                } catch (error) {
+                  if (isRecord(error) && error.code === "ENOENT") {
+                    return false;
+                  }
+                  throw error;
+                }
+              }))
+          );
+        }) &&
+        [...stores].every(
+          ([databasePath, entries]) =>
+            mapping.credentials.some((entry) => entry.databasePath === databasePath) ||
+            (entries[mapping.from] === undefined && entries[mapping.to] === undefined),
+        );
+    }
     if (matched) {
       const targets = matches.get(mapping.from) ?? new Set<string>();
       targets.add(mapping.to);

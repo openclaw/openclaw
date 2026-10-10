@@ -3,6 +3,7 @@ export { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-p
 export {
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
+  prepareAuthProfileProvider,
 } from "./auth-profiles/store-runtime.js";
 export {
   getSoonestCooldownExpiry,

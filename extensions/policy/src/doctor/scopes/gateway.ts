@@ -2,7 +2,11 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence, PolicyGatewayExposureEvidence } from "../../policy-state-types.js";
 import { getPolicyPath } from "../../policy-value.js";
 import { CHECK_IDS } from "../check-ids.js";
-import { policyEvidenceFinding } from "../policy-evidence-finding.js";
+import {
+  policyEvidenceFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "../policy-evidence-finding.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
 export function gatewayExposureFindings(
@@ -67,29 +71,15 @@ export function gatewayExposureFindings(
       message: (entry) => `Gateway remote posture '${entry.id}' is enabled.`,
       fixHint: "Disable remote gateway mode/config or update policy after review.",
     },
-  ] satisfies readonly {
-    path: readonly string[];
-    enabled: boolean;
-    violates: (entry: PolicyGatewayExposureEvidence) => boolean;
-    checkId: Parameters<typeof policyEvidenceFinding>[1]["checkId"];
-    message: (entry: PolicyGatewayExposureEvidence) => string;
-    fixHint: string;
-  }[];
+  ] satisfies readonly (PolicyEvidenceRule<PolicyGatewayExposureEvidence> & { enabled: boolean })[];
   // Preserve the diagnostic order used by policy attestations.
   return [
-    ...rules.flatMap((rule) => {
-      if (readPolicyBoolean(policy, ["gateway", ...rule.path]) !== rule.enabled) {
-        return [];
-      }
-      return (evidence.gatewayExposure ?? []).filter(rule.violates).map((entry) =>
-        policyEvidenceFinding(entry, {
-          checkId: rule.checkId,
-          message: rule.message(entry),
-          requirement: `oc://${policyDocName}/gateway/${rule.path.join("/")}`,
-          fixHint: rule.fixHint,
-        }),
-      );
-    }),
+    ...policyEvidenceRuleFindings(
+      evidence.gatewayExposure ?? [],
+      rules.filter((rule) => readPolicyBoolean(policy, ["gateway", ...rule.path]) === rule.enabled),
+      policyDocName,
+      "gateway",
+    ),
     ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
     ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
     ...gatewayNodeCommandFindings(policy, policyDocName, evidence),

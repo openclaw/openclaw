@@ -46,6 +46,9 @@ export function readPendingInputHistoryInDatabase(
             base.select(db.fn.count<number>("input_id").as("total")),
           )?.total ?? 0)
         : undefined;
+    if (total === 0) {
+      return { rows: [], total };
+    }
     const limit = Math.max(1, Math.min(20, Math.trunc(query.limit ?? 20)));
     let page = base.orderBy("seq", "desc").limit(limit + 1);
     if (query.before !== undefined) {

@@ -15,7 +15,9 @@ import {
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -105,6 +107,75 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
   });
 });
 
+it.each(["cancelled", "consumed", "failed"] as const)(
+  "reports a withdrawn input only after confirmed cancellation: %s",
+  async (result) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = createFixture();
+      const recorder = createUserTurnTranscriptRecorder({
+        message: message(result),
+        target: {
+          ...scope,
+          storePath: fixture.database.path,
+          sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
+        },
+      });
+      await recorder.stageApproved?.({ runId: result, assertCurrent: () => {} });
+      const pending = expectDefined(
+        (await listSessionPendingInputs(scope)).items[0],
+        "Expected accepted input",
+      );
+      expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
+      if (result === "consumed") {
+        await recorder.persistApproved();
+        expect(recorder.isPendingInputConsumed?.()).toBe(true);
+      }
+      const spy = probe.admission(admission, (request, grant, callback) => {
+        const facts = request.facts;
+        if (
+          result === "failed" &&
+          request.stage === "commit" &&
+          isRecord(facts) &&
+          isRecord(facts.publication) &&
+          isRecord(facts.publication.receipt) &&
+          facts.publication.receipt.operation === "finish"
+        ) {
+          throw new Error("Synthetic cancellation commit refused");
+        }
+        callback(request, grant);
+      });
+      try {
+        recorder.finishPendingInput?.("cancelled");
+        expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
+        if (result === "failed") {
+          await expect(recorder.waitForPendingInputSettlement?.()).rejects.toThrow(
+            "Synthetic cancellation commit refused",
+          );
+        } else {
+          await recorder.waitForPendingInputSettlement?.();
+        }
+        expect(readWithdrawnUserTurnInputId(recorder)).toBe(
+          result === "cancelled" ? pending.id : undefined,
+        );
+        expect(fixture.pending()).toEqual(
+          result === "consumed"
+            ? []
+            : [
+                expect.objectContaining({
+                  run_id: result,
+                  state: result === "failed" ? "queued" : "cancelled",
+                }),
+              ],
+        );
+      } finally {
+        spy.mockRestore();
+        recorder.finishPendingInput?.("interrupted");
+        await Promise.allSettled([recorder.waitForPendingInputSettlement?.()]);
+      }
+    });
+  },
+);
+
 it("retains cancellation disposition custody while accepted processing completion is waiting", async ({
   signal,
 }) => {
@@ -183,24 +254,19 @@ it.each(["transaction", "commit"] as const)(
       const fixture = createFixture();
       let current = true;
       let revoked = false;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              request.stage === phase &&
-              isRecord(facts) &&
-              isRecord(facts.publication) &&
-              facts.publication.kind === "pending-input-settlement-custody"
-            ) {
-              current = false;
-              revoked = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(admission, (request, grant, callback) => {
+        const facts = request.facts;
+        if (
+          request.stage === phase &&
+          isRecord(facts) &&
+          isRecord(facts.publication) &&
+          facts.publication.kind === "pending-input-settlement-custody"
+        ) {
+          current = false;
+          revoked = true;
+        }
+        callback(request, grant);
+      });
       try {
         await expect(
           fixture.stage("ended", () => {
@@ -249,26 +315,21 @@ it("refuses processing completion when the admitted lifecycle changes during the
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = createFixture();
     const receipt = await fixture.stage("stale-lifecycle", () => {}, true);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let rotated = false;
-    const spy = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          const facts = request.facts;
-          if (
-            request.stage === "transaction" &&
-            isRecord(facts) &&
-            isRecord(facts.publication) &&
-            isRecord(facts.publication.receipt) &&
-            facts.publication.receipt.operation === "complete"
-          ) {
-            rotateAgentEventLifecycleGeneration();
-            rotated = true;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const spy = probe.admission(admission, (request, grant, callback) => {
+      const facts = request.facts;
+      if (
+        request.stage === "transaction" &&
+        isRecord(facts) &&
+        isRecord(facts.publication) &&
+        isRecord(facts.publication.receipt) &&
+        facts.publication.receipt.operation === "complete"
+      ) {
+        rotateAgentEventLifecycleGeneration();
+        rotated = true;
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         receipt.completeAsync?.(buildAgentRunTerminalOutcome({ status: "ok" })),

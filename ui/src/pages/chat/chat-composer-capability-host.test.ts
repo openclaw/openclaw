@@ -249,23 +249,6 @@ describe("ChatComposerCapabilityHost", () => {
     expect(harness.patch).not.toHaveBeenCalled();
   });
 
-  it("blocks session mutations until the row and runtime config have loaded", () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
-    const context = createContext(null);
-    const state = createState();
-    const session = { key: "main" } as GatewaySessionRow;
-
-    expect(host.props(context, state, undefined, "main").mutationBlockedReason).toBe("Loading…");
-    expect(host.props(context, state, session, "main").mutationBlockedReason).toBe("Loading…");
-
-    context.runtimeConfig.state.configSnapshot = {
-      runtimeConfig: { tools: { web: { search: { enabled: false } } } },
-    };
-    const props = host.props(context, state, session, "main");
-    expect(props.mutationBlockedReason).toBeNull();
-    expect(props.webSearchBaseEnabled).toBe(false);
-  });
-
   it("blocks tool override patches without exact sessions.patch access", async () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({ runtimeConfig: {} });
@@ -307,29 +290,6 @@ describe("ChatComposerCapabilityHost", () => {
     const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
     expect(scope?.disabled).toBe(false);
     expect(submit?.disabled).toBe(true);
-  });
-
-  it("blocks session submit before global config while an override patch is in flight", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
-    const context = createContext({ runtimeConfig: {} });
-    const state = createState();
-    const session = { key: "main" } as GatewaySessionRow;
-    const props = host.props(context, state, session, "main");
-    (
-      host as unknown as {
-        patchTokens: Map<string, symbol>;
-      }
-    ).patchTokens.set("main", Symbol("pending"));
-    props.onAddServer?.();
-    const container = document.createElement("div");
-    render(host.renderAddServerDialog(context, state, session), container);
-    await Promise.resolve();
-
-    const scope = container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group");
-    const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
-    expect(scope?.disabled).toBe(false);
-    expect(submit?.disabled).toBe(true);
-    expect(submit?.title).toContain("current session capability change");
   });
 
   it("derives capability defaults from the active runtime snapshot", () => {

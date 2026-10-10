@@ -630,7 +630,7 @@ describe("bounded owned runtime inspection", () => {
     "revoked-load",
     "revoked-read",
     "claim-revoked",
-    "claim-deadline",
+    "slow-claim",
   ] as const)(
     "keeps %s authority while collecting a failed unit within the remaining budget",
     async (mode) => {
@@ -650,7 +650,7 @@ describe("bounded owned runtime inspection", () => {
         assertCurrent() {
           // Installed artifact-preserving snapshots take about 100ms; native
           // queries take a few ms. Exact claims authorize loading, not reads.
-          now += mode === "claim-deadline" ? 1600 : 100;
+          now += mode === "slow-claim" ? 1600 : 100;
           claimReads++;
           live();
           if (claimChanged) {
@@ -690,8 +690,10 @@ describe("bounded owned runtime inspection", () => {
           timeoutMs: 1500,
           loadForInspection: inspection,
         });
-        expect(runtime.status).toBe(mode === "current" ? "stopped" : "unknown");
-        expect(loaded).toBe(!["revoked-before", "claim-revoked", "claim-deadline"].includes(mode));
+        expect(runtime.status).toBe(
+          ["current", "slow-claim"].includes(mode) ? "stopped" : "unknown",
+        );
+        expect(loaded).toBe(!["revoked-before", "claim-revoked"].includes(mode));
         if (mode === "current") {
           expect(claimReads).toBeGreaterThan(0);
           expect(now).toBeLessThan(1500);

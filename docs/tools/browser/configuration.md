@@ -84,6 +84,12 @@ open, opened outside OpenClaw, or otherwise have unknown ownership. The
 sessions. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
 
+Ownership includes the agent identity: two agents using the same session key,
+such as `global`, have separate tab membership and cleanup. Legacy durable records
+without an agent-qualified identity are discarded as invalid bookkeeping when
+cleanup reads the tab store. Their tabs stay open: OpenClaw does not guess an
+owner or adopt them into another session. Close those tabs manually if needed.
+
 Periodic cleanup belongs to the Browser plugin service and continues after the
 request that first started browser control ends. Stopping or reloading that
 service cancels future sweeps and waits for active cleanup to finish.

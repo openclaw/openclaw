@@ -25,7 +25,7 @@ import {
   globalBeforeAll0,
   describe2BeforeEach0,
   requireBlockReplyHandler,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 

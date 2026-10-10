@@ -8,7 +8,6 @@ import {
 
 export type BrokerOutputOption = "pipe" | "ignore" | "inherit" | { file: string };
 
-/** The serializable execa options used by the command transport. */
 export type BrokerExecaOptions = Pick<
   Options,
   | "buffer"

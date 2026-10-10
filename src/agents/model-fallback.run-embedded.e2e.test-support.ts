@@ -73,7 +73,7 @@ export async function withModelFallbackWorkspace<T>(
     // openclaw-temp-dir: allow callback-owned roots must match canonical agent database paths
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-fallback-")),
   );
-  const agentDir = path.join(root, "agent");
+  const agentDir = path.join(root, "agents", "test", "agent");
   const workspaceDir = path.join(root, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
   await fs.mkdir(workspaceDir, { recursive: true });

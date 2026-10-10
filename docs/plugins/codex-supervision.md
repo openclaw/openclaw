@@ -124,8 +124,11 @@ treats a thread that its supervision App Server reports as `notLoaded` as
 **Stored / activity unknown**, not as idle.
 
 Apply the same opt-in on every headless node host whose sessions should appear.
-The native OpenClaw macOS app reads the same local setting when it advertises
-its Codex catalog to the paired Gateway. That paired native Mac catalog supports
+The native OpenClaw macOS app uses the local `sessionCatalog.enabled` setting
+when it advertises its Codex catalog to the paired Gateway; enabling agent-facing
+`supervision` tools is not required. An explicit `sessionCatalog.enabled: false`
+keeps the catalog disabled, including the macOS first-run default before opt-in.
+That paired native Mac catalog supports
 only the default or explicit `appServer.transport: "stdio"` with an unset or
 explicit `appServer.homeScope: "user"`. `command`, `args`, and `clearEnv` are
 honored for that stdio process. If the Mac config selects `"unix"`,

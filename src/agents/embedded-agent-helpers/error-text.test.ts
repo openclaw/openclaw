@@ -38,6 +38,19 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     );
   });
 
+  it.each(["private tool diagnostics", "HTTP 503 temporary failure"])(
+    "preserves safe tool-loop recovery guidance instead of %s",
+    (errorMessage) => {
+      const message = {
+        ...makeAssistantError(errorMessage),
+        errorCode: "openclaw_repeated_tool_error",
+      };
+      expect(formatUserFacingAssistantErrorText(message)).toBe(
+        "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.",
+      );
+    },
+  );
+
   it.each(["request timed out", "LLM request timed out."])(
     "preserves safe user-facing timeout copy for provider error %j",
     (errorMessage) => {

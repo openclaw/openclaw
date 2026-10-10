@@ -116,14 +116,8 @@ class DashboardsPage extends OpenClawLightDomElement {
       this.data,
       this.filters,
       {
-        onQueryChange: (query) => {
-          this.filters = { ...this.filters, query };
-        },
-        onOwnerChange: (ownerId) => {
-          this.filters = { ...this.filters, ownerId };
-        },
-        onSortChange: (sort) => {
-          this.filters = { ...this.filters, sort };
+        onFilterChange: (filter) => {
+          this.filters = { ...this.filters, ...filter };
         },
         onNavigate: this.context?.navigate,
       },

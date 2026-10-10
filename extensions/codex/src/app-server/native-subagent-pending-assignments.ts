@@ -69,10 +69,7 @@ export type CodexNativeSubagentAssignmentStore = {
     assignment: CodexNativeSubagentPendingAssignment,
     assertCurrent: () => void,
   ): Promise<boolean>;
-  consume(
-    assignment: CodexNativeSubagentPendingAssignment,
-    assertCurrent: () => void,
-  ): Promise<boolean>;
+  consume: CodexNativeSubagentAssignmentStore["record"];
 };
 
 /** Native parent rotation is not physical requester or connection adoption. */
@@ -113,23 +110,20 @@ export function mutateNativePendingAssignments(params: {
   const assignments = current?.assignments ?? [];
   const existing = assignments.find((entry) => entry.runId === assignment.runId);
   if (
-    existing &&
-    (!isDeepStrictEqual(existing.owner, assignment.owner) ||
-      existing.nativeParentThreadId !== assignment.nativeParentThreadId ||
-      existing.childThreadId !== assignment.childThreadId)
+    (existing &&
+      (!isDeepStrictEqual(existing.owner, assignment.owner) ||
+        existing.nativeParentThreadId !== assignment.nativeParentThreadId ||
+        existing.childThreadId !== assignment.childThreadId)) ||
+    (params.consume && (!existing || existing.nativeTurnId !== assignment.nativeTurnId))
   ) {
-    return { applied: false };
-  }
-  if (params.consume && (!existing || existing.nativeTurnId !== assignment.nativeTurnId)) {
     return { applied: false };
   }
   const remaining = assignments.filter((entry) => entry !== existing);
   if (!params.consume) {
-    remaining.push(
-      existing?.recordedCompletion && !assignment.recordedCompletion
-        ? { ...assignment, recordedCompletion: existing.recordedCompletion }
-        : assignment,
-    );
+    if (existing?.recordedCompletion && !assignment.recordedCompletion) {
+      assignment.recordedCompletion = existing.recordedCompletion;
+    }
+    remaining.push(assignment);
   }
   return {
     applied: true,

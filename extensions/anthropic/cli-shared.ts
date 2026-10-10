@@ -1,5 +1,8 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
+import {
+  requiresClaudeMandatoryAdaptiveThinking,
+  resolveClaudeHaiku55ModelIdentity,
+} from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
@@ -71,7 +74,10 @@ export function resolveClaudeCliThinkingEnv(
   thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
   modelId?: string,
 ): Record<string, string> | undefined {
-  if (requiresClaudeMandatoryAdaptiveThinking({ id: modelId })) {
+  if (
+    requiresClaudeMandatoryAdaptiveThinking({ id: modelId }) ||
+    (thinkingLevel !== "off" && resolveClaudeHaiku55ModelIdentity({ id: modelId }))
+  ) {
     return undefined;
   }
   switch (thinkingLevel) {

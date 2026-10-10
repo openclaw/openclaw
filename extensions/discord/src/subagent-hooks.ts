@@ -38,19 +38,12 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "subagent" || normalized === "acp") {
-    return normalized;
-  }
-  return undefined;
-}
-
 export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  const targetKind = normalizeOptionalLowercaseString(event.targetKind);
   await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: normalizeThreadBindingTargetKind(event.targetKind),
+    targetKind: targetKind === "subagent" || targetKind === "acp" ? targetKind : undefined,
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });
@@ -91,17 +84,14 @@ function resolveDiscordDeliveryTarget(
     ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
     targetKind: "subagent",
   });
-  let binding: (typeof bindings)[number] | undefined;
-  if (requesterThreadId) {
-    binding = bindings.find(
-      (entry) =>
-        entry.threadId === requesterThreadId &&
-        (!requesterAccountId || entry.accountId === requesterAccountId),
-    );
-  }
-  if (!binding && bindings.length === 1) {
-    binding = bindings[0];
-  }
+  const binding =
+    (requesterThreadId
+      ? bindings.find(
+          (entry) =>
+            entry.threadId === requesterThreadId &&
+            (!requesterAccountId || entry.accountId === requesterAccountId),
+        )
+      : undefined) ?? (bindings.length === 1 ? bindings[0] : undefined);
   if (!binding) {
     return undefined;
   }

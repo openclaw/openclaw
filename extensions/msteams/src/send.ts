@@ -134,15 +134,14 @@ function createMSTeamsSendResult(params: {
   kind: MessageReceiptPartKind;
   pendingUploadId?: string;
 }): SendMSTeamsMessageResult {
-  const platformMessageIds = [params.messageId]
-    .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown");
+  const platformMessageId = params.messageId.trim();
   return {
     messageId: params.messageId,
     conversationId: params.conversationId,
     receipt: createMSTeamsSendReceipt({
       conversationId: params.conversationId,
-      platformMessageIds,
+      platformMessageIds:
+        platformMessageId && platformMessageId !== "unknown" ? [platformMessageId] : [],
       kind: params.kind,
     }),
     ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),

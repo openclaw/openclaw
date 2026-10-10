@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageUpdateContext,
   endMessage,
@@ -76,102 +77,6 @@ describe("handleMessageUpdate text signatures", () => {
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject(
       replies.map(([value, delta]) => ({ stream: "assistant", data: { text: value, delta } })),
     );
-  });
-
-  it("treats unphased OpenAI Responses content-index changes as message boundaries", async () => {
-    const flushBlockReplyBuffer = vi.fn();
-    const onAssistantMessageStart = vi.fn();
-    const onPartialReply = vi.fn();
-    const context = createMessageUpdateContext({
-      flushBlockReplyBuffer,
-      onPartialReply,
-      state: {
-        deltaBuffer: "First block",
-        assistantStream: { raw: "First block", text: "First block" },
-        lastAssistantStreamContentIndex: 0,
-      },
-    });
-    const resetAssistantMessageState = vi.fn(() => {
-      context.state.deltaBuffer = "";
-      context.state.assistantStream = undefined;
-    });
-    context.resetAssistantMessageState = resetAssistantMessageState;
-    context.params.onAssistantMessageStart = onAssistantMessageStart;
-
-    const pending = updateMessage(context, {
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
-        type: "text_end",
-        contentIndex: 1,
-        content: "First block",
-        partial: {
-          role: "assistant",
-          content: [
-            { type: "text", text: "First block" },
-            { type: "text", text: "First block" },
-          ],
-          api: "openai-responses",
-        },
-      },
-    });
-
-    expect(flushBlockReplyBuffer.mock.calls).toEqual([
-      [{ assistantMessageIndex: 0 }],
-      [{ assistantMessageIndex: 0, final: true }],
-    ]);
-    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
-    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "First block", delta: "First block" }),
-    );
-    expect(context.blockChunker.bufferedText).toBe("First block");
-    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
-    await pending;
-  });
-
-  it.each([
-    {
-      name: "the directive accumulator has no parsed result",
-      text: "answer part A msg [[E1008]timeout] answer part B",
-      hasParsedDirectives: false,
-    },
-  ])("keeps literal final text when $name", async ({ text, hasParsedDirectives }) => {
-    const onAgentEvent = vi.fn();
-    const context = createMessageUpdateContext({
-      onAgentEvent,
-      ...(hasParsedDirectives ? {} : { consumePartialReplyDirectives: vi.fn(() => null) }),
-    });
-
-    await updateMessage(context, {
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: { type: "text_end", content: text },
-    });
-
-    expect(context.state.assistantStream?.text).toBe(text);
-    expect(firstMockArg(onAgentEvent, "final assistant event")).toMatchObject({
-      stream: "assistant",
-      data: { text },
-    });
-  });
-
-  it("keeps stripped reply directives out of later plain deltas", async () => {
-    const onAgentEvent = vi.fn();
-    const context = createMessageUpdateContext({ onAgentEvent });
-
-    for (const text of ["[[reply_to_current]]\nHello", " world"]) {
-      await updateMessage(context, createTextUpdateEvent({ type: "text_delta", text }));
-    }
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
-        stream: "assistant",
-        data: { text: "Hello", delta: "Hello" },
-      },
-      {
-        stream: "assistant",
-        data: { text: "Hello world", delta: " world" },
-      },
-    ]);
   });
 
   it("does not expose complete legacy media directives on plain deltas", async () => {
@@ -391,5 +296,71 @@ describe("commentary and flush isolation", () => {
     const pending = updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
     expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
     await pending;
+  });
+});
+
+describe("handleMessageUpdate current-source message-tool previews", () => {
+  it("holds delta-only continuation fragments and releases one full divergent snapshot", () => {
+    const state = {
+      currentSourceMessagingToolHeldPartial: undefined as string | undefined,
+      currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+    };
+
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "QA-MSTEAMS",
+        visibleDelta: "QA-MSTEAMS",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "-DM-OK",
+        visibleDelta: "-DM-OK",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS-DM-OK" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: " with more detail",
+        visibleDelta: " with more detail",
+      }),
+    ).toEqual({ hold: false, text: "QA-MSTEAMS-DM-OK with more detail" });
+    expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
+  });
+
+  it("holds automatic partial prefixes and exact duplicates after source delivery", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    await updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_duplicate",
+      }),
+    );
+    await updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: sentText,
+        id: "msg_source_duplicate",
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).not.toHaveBeenCalled();
   });
 });

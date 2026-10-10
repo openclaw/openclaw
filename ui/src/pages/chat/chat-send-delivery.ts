@@ -70,7 +70,6 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -263,6 +262,19 @@ async function sendPreparedChatMessage(
   const recoverNativeRuntime =
     allowNativeRecovery && isVisible() ? captureChatNativeRuntimeRecovery(host, route) : undefined;
   let steerSubmission: ReturnType<ChatHost["chatSubmissions"]["retain"]>;
+  const buildSubmittedUserMessage = (steerTargetRunId?: string) =>
+    buildLocalUserMessage(
+      {
+        ...prepared,
+        text: message,
+        mentions: submitted.mentions,
+        attachments,
+        createdAt: startedAt,
+        runId,
+        ...(steerTargetRunId ? { steerTargetRunId } : {}),
+      },
+      steerTargetRunId ? "complete" : undefined,
+    );
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
@@ -295,18 +307,7 @@ async function sendPreparedChatMessage(
       : expectedLeafEntryId;
     if (prepared.queueMode === "steer" && isVisible() && host.chatRunId) {
       const steerTargetRunId = host.chatRunId;
-      const projectedMessage = buildLocalUserMessage(
-        {
-          ...prepared,
-          text: message,
-          mentions: submitted.mentions,
-          attachments,
-          createdAt: startedAt,
-          runId,
-          steerTargetRunId,
-        },
-        "complete",
-      );
+      const projectedMessage = buildSubmittedUserMessage(steerTargetRunId);
       if (projectedMessage) {
         steerSubmission = host.chatSubmissions.retain({
           kind: "delivered",
@@ -325,9 +326,6 @@ async function sendPreparedChatMessage(
             scope: readChatSessionProjectionScope(host, { sessionKey, agentId: prepared.agentId }),
           },
         );
-        // The dispatched steer owns one live boundary even while custody and its
-        // transcript receipt are in flight. A retry cannot close that interval again.
-        rolloverChatStream(host, { runId: steerTargetRunId, boundaryRunId: runId });
       }
     }
     const ack = await requestChatSend(host, {
@@ -421,14 +419,7 @@ async function sendPreparedChatMessage(
           sessionKey,
           agentId: prepared.agentId,
         });
-        const projectedMessage = buildLocalUserMessage({
-          ...prepared,
-          text: message,
-          mentions: submitted.mentions,
-          attachments,
-          createdAt: startedAt,
-          runId,
-        });
+        const projectedMessage = buildSubmittedUserMessage();
         if (projectedMessage) {
           reduceChatSessionProjection(
             host,

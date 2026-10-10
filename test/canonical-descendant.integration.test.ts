@@ -75,7 +75,7 @@ import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
 } from "../src/sessions/session-state-events.js";
-import { readSessionUpstreamLink } from "../src/sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "../src/sessions/session-upstream-links.kernel.js";
 import { runSessionUpstreamMonitorTick } from "../src/sessions/session-upstream-monitor.test-support.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -1185,8 +1185,18 @@ describe("canonical descendant lifecycle through real owners", () => {
       const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(await events()).toEqual(before);
-      const link = expectDefined(readSessionUpstreamLink(key, "main"), "child link");
-      const root = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
+      const link = expectDefined(
+        readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main"),
+        "child link",
+      );
+      const root = expectDefined(
+        readSessionUpstreamLinkInDatabase(
+          openOpenClawStateDatabase().db,
+          source.sessionKey,
+          "main",
+        ),
+        "root link",
+      );
       expect(link).toMatchObject({
         threadId: root.threadId,
         upstreamRef: root.upstreamRef,
@@ -1314,8 +1324,14 @@ describe("canonical descendant lifecycle through real owners", () => {
               key.endsWith(`:${firstBinding.threadId}`),
             ),
           ).toBe(false);
-          const link = readSessionUpstreamLink(source.sessionKey, "main");
-          expect(readSessionUpstreamLink(firstKey, "main")).toMatchObject({
+          const link = readSessionUpstreamLinkInDatabase(
+            openOpenClawStateDatabase().db,
+            source.sessionKey,
+            "main",
+          );
+          expect(
+            readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, firstKey, "main"),
+          ).toMatchObject({
             threadId: link?.threadId,
             marker: { turnId: null, userMessageCount: 0 },
           });

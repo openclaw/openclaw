@@ -28,6 +28,12 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
+`/context` and `openclaw sessions list` can reuse the last verified model budget
+when catalog metadata is unavailable and the selected model and runtime still
+match. A qualifying turn refreshes this value. Current model metadata and
+configured limits take precedence; generic fallback windows and removable caps
+are not saved as verified model budgets.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
@@ -119,11 +125,12 @@ The system prompt is **OpenClaw-owned** and rendered each run. It includes:
 
 Full breakdown: [System Prompt](/concepts/system-prompt).
 
-On supported direct Anthropic API-key routes, OpenClaw keeps the stable system
-prefix pinned for the session and sends changed sections as system messages
-after the current user turn. The dynamic suffix keeps updating normally.
-Changing the route or compacting history starts a new prefix series; after a
-Gateway restart, a changed stable prefix also starts a new series.
+On supported direct Anthropic API-key routes and native OpenAI Responses routes,
+OpenClaw pins the complete system prompt for the session. Changed sections,
+including skills, workspace memory, and temporal context, arrive as instruction
+messages after the current user turn. Existing skill and memory refresh rules
+still apply. Changing the route or selected personal profile, resetting, or
+compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 

@@ -229,8 +229,7 @@ function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[])
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
     .map((entry) => parseStrictNonNegativeInteger(entry))
-    .filter((value): value is number => value !== undefined)
-    .filter((value) => value >= 0 && value < poll.options.length)
+    .filter((value): value is number => value !== undefined && value < poll.options.length)
     .map((value) => String(value));
   // Deduplicate first so repeats do not consume selection slots.
   return uniqueStrings(mapped).slice(0, maxSelections);

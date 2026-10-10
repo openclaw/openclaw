@@ -63,17 +63,13 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(
       resolve: params.self!,
     }));
   }
-  if (params.listPeersLive) {
-    adapter.listPeersLive = createRuntimeForwarder(() => ({
-      getRuntime: params.getRuntime,
-      resolve: params.listPeersLive!,
-    }));
-  }
-  if (params.listGroupsLive) {
-    adapter.listGroupsLive = createRuntimeForwarder(() => ({
-      getRuntime: params.getRuntime,
-      resolve: params.listGroupsLive!,
-    }));
+  for (const method of ["listPeersLive", "listGroupsLive"] as const) {
+    if (params[method]) {
+      adapter[method] = createRuntimeForwarder(() => ({
+        getRuntime: params.getRuntime,
+        resolve: params[method]!,
+      }));
+    }
   }
   if (params.listGroupMembers) {
     adapter.listGroupMembers = createRuntimeForwarder(() => ({

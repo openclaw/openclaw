@@ -351,7 +351,7 @@ it.each(["answered", "failed"] as const)(
 
 it("does not retire reminders on an aborted live terminal projection", () => {
   const aborted = terminal("run-2");
-  rememberLiveTerminalRun(aborted, "run-2", undefined, "aborted");
+  rememberLiveTerminalRun(aborted, "run-2", "aborted");
   expect(present([question("old", "run-1"), terminal("run-1"), aborted]).pending).toHaveLength(1);
 });
 
@@ -360,7 +360,7 @@ it("reconsiders reminders when a message-less terminal settles a published parti
   const messages = [question("old", "run-1"), partial, terminal("run-2")];
   expect(present(messages).pending).toHaveLength(1);
   // The outcome is recorded beside the already published history array.
-  rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+  rememberLiveTerminalRun(partial, "run-1", "error");
   expect(present(messages).pending).toHaveLength(0);
 });
 

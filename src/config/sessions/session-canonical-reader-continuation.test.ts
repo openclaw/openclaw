@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -23,6 +24,7 @@ import {
   readWithCanonicalSessionReaderContinuation,
   setCanonicalSqliteSessionMainKey,
 } from "./session-canonical-key.js";
+import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const healthy = "agent:main:healthy";
 const damaged = "agent:main:damaged";
@@ -37,6 +39,8 @@ function capture(database: FixtureDatabase) {
 }
 
 function corrupt(database: FixtureDatabase) {
+  // Keep the held reader receipt while seeding the unvalidated-row fixture.
+  runSqliteImmediateTransactionSync(database.db, () => seedCanonicalSessionValidation(database));
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run("{", damaged);

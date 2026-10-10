@@ -1,4 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  takeSqliteWorkerOperationAdmissionAttachment,
+  withSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -6,8 +12,12 @@ import {
   type OpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
+import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat.js";
-import { withOpenClawStateLeaseWorkerAdmission } from "./openclaw-state-lease-worker-owner.js";
+import {
+  withOpenClawStateLeaseWorkerAdmission,
+  type WorkerLeaseScope,
+} from "./openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "./openclaw-state-lease.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -56,10 +66,10 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
 }));
-vi.mock("../infra/sqlite-worker-operation-admission.js", () => ({
-  createSqliteWorkerOperationAdmission: mocks.forbidden,
-}));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   inspectDatabasePathIdentitySync: mocks.forbidden,
   readDatabasePathIdentitySync: mocks.forbidden,
 }));
@@ -83,6 +93,34 @@ function observe<T>(promise: Promise<T>) {
     },
   );
   return { outcome, settled: () => settled };
+}
+
+function publishExpiry(scope: WorkerLeaseScope, expiresAt: number): number {
+  const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+  const { admission } = scope.createAdmission({ settled: settled.promise });
+  try {
+    const attachment = withSqliteWorkerOperationAdmission(
+      { port: admission.port },
+      takeSqliteWorkerOperationAdmissionAttachment,
+    );
+    if (
+      !isRecord(attachment) ||
+      attachment.kind !== "state-lease-expiry" ||
+      !(attachment.observation instanceof SharedArrayBuffer)
+    ) {
+      throw new Error("Missing owner-bound expiry observation");
+    }
+    expect(attachment.identity).toEqual(scope.identity);
+    Atomics.store(
+      new BigInt64Array(attachment.observation),
+      leaseHeartbeatState.expiresAt,
+      BigInt(expiresAt),
+    );
+    return expiresAt;
+  } finally {
+    admission.finish();
+    settled.resolve({ kind: "completed" });
+  }
 }
 
 function fixture(
@@ -153,7 +191,7 @@ function fixture(
             scope.assertCurrent();
           }
           acquired.push(scope.identity);
-          return { kind: "acquired", expiresAt: Date.now() + leaseMs };
+          return { kind: "acquired", expiresAt: publishExpiry(scope, Date.now() + leaseMs) };
         }),
       release: (owner) =>
         owner.runLifecycle("release", async (scope) => {
@@ -290,12 +328,12 @@ describe("async lease maintenance ownership", () => {
               // The independent child renewed while the actor was denied its writer turn.
               throw busy;
             }
-            return expiresAt;
+            return publishExpiry(scope, expiresAt);
           });
         storage.verify = (owner) =>
           owner.runLifecycle("verify", async (scope) => {
             scope.assertCurrent();
-            return expiresAt;
+            return publishExpiry(scope, expiresAt);
           });
         return storage;
       });

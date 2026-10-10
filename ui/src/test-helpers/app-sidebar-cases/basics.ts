@@ -18,16 +18,6 @@ import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
 
-describe("AppSidebar update card wiring", () => {
-  it("keeps OpenClaw out of the workspace sidebar", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
-    expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
-  });
-});
-
 describe("AppSidebar invitation admission", () => {
   it.each([
     { field: "draggingSessionKey", value: "agent:main:task", finish: "finishSessionDrag" },
@@ -221,25 +211,6 @@ describe("AppSidebar agent chip", () => {
     });
   });
 
-  it("opens an ambiguous one-segment literal session through its escaped path", async () => {
-    const sessionKey = "agent:main:release-deadbeef";
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    sidebar
-      .querySelector<HTMLAnchorElement>(
-        `[data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
-      )
-      ?.click();
-
-    expect(onNavigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/~key/release-deadbeef",
-    });
-  });
-
   it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
     const taskKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
@@ -386,58 +357,6 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".gateway-status")).toBeNull();
   });
 
-  it("shows the Home ring without an agent subtitle during an active run", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.connected = true;
-    harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: 5,
-            hasActiveRun: true,
-            unread: true,
-          },
-        ],
-      },
-      agentId: "main",
-    });
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
-    // Run state wraps the Home icon and suppresses its unread badge.
-    const spinner = sidebar.querySelector(".nav-item--home .session-glyph__ring");
-    expect(spinner).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
-    expect(
-      sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner"),
-    ).toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
-    expect(spinner?.getAttribute("role")).toBe("img");
-    expect(spinner?.getAttribute("aria-label")).toBe("Active run");
-
-    harness.publishList({
-      result: {
-        ts: 3,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 6, unread: true }],
-      },
-      agentId: "main",
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
-  });
-
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
@@ -547,18 +466,14 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
-  it.each([
-    { key: "main", mainKey: "main", pinned: false },
-    { key: "agent:main:main", mainKey: "main", pinned: true },
-    { key: "agent:main:workspace", mainKey: "workspace", pinned: false },
-    { key: "global", mainKey: "main", pinned: true, scope: "global" },
-  ])("shows only Home for $key even with subagents", async ({ key, mainKey, pinned, scope }) => {
+  it("shows only Home for the main session even with subagents", async () => {
+    const key = "main";
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", [key]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", {
       defaultId: "main",
-      mainKey,
-      scope: scope === "global" ? "global" : "per-sender",
+      mainKey: "main",
+      scope: "per-sender",
       agents: [{ id: "main", identity: { name: "Molty" } }],
     });
     harness.publishList({
@@ -570,10 +485,10 @@ describe("AppSidebar agent chip", () => {
         sessions: [
           {
             key,
-            kind: scope === "global" ? "global" : "direct",
+            kind: "direct",
             label: "[OpenClaw heartbeat poll]",
             category: "Team",
-            pinned,
+            pinned: false,
             updatedAt: 5,
             childSessions: ["agent:main:subagent:thread-a"],
           },

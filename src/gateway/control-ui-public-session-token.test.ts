@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,12 +17,18 @@ const LOCATOR: PublicSessionShareLocator = {
   shareId: "a".repeat(48),
 };
 
-afterEach(() => resetSecretRedactionRegistryForTest());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetSecretRedactionRegistryForTest();
+});
 
 describe("public session share token", () => {
   it("round-trips an exact locator without exposing any identifier", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const codec = loadPublicSessionShareTokenCodec();
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      const codec = await loadPublicSessionShareTokenCodec();
+      expect(loadPublicSessionShareTokenCodec()).toBe(codec);
       const token = codec.mint(LOCATOR);
       expect(codec.resolve(token)).toEqual(LOCATOR);
       for (const identifier of Object.values(LOCATOR)) {
@@ -29,15 +36,17 @@ describe("public session share token", () => {
       }
       expect(isSecretValueRegisteredForRedaction(token)).toBe(true);
       expect(isSecretValueRegisteredForRedaction(LOCATOR.shareId)).toBe(true);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
     });
   });
 
   it("uses fresh nonces while retaining the same restart-stable identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const first = loadPublicSessionShareTokenCodec();
+      const first = await loadPublicSessionShareTokenCodec();
       const firstToken = first.mint(LOCATOR);
       const secondToken = first.mint(LOCATOR);
-      const second = loadPublicSessionShareTokenCodec();
+      const second = await loadPublicSessionShareTokenCodec();
       expect(secondToken).not.toBe(firstToken);
       expect(second.resolve(firstToken)).toEqual(LOCATOR);
       expect(second.resolve(secondToken)).toEqual(LOCATOR);
@@ -46,7 +55,7 @@ describe("public session share token", () => {
 
   it("fails closed for tampering, another installation, and malformed tokens", async () => {
     const token = await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const codec = loadPublicSessionShareTokenCodec();
+      const codec = await loadPublicSessionShareTokenCodec();
       const created = codec.mint(LOCATOR);
       const last = created.at(-1) ?? "";
       const tampered = `${created.slice(0, -1)}${last === "a" ? "b" : "a"}`;
@@ -56,21 +65,21 @@ describe("public session share token", () => {
       return created;
     });
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      expect(resolvePublicSessionShareToken(token)).toBeNull();
+      expect(await resolvePublicSessionShareToken(token)).toBeNull();
     });
   });
 
   it("does not create durable identity state from an anonymous token", async () => {
     const foreignToken = await withOpenClawTestState({ scenario: "minimal" }, async () =>
-      loadPublicSessionShareTokenCodec().mint(LOCATOR),
+      (await loadPublicSessionShareTokenCodec()).mint(LOCATOR),
     );
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      expect(resolvePublicSessionShareToken(foreignToken)).toBeNull();
-      expect(loadDeviceIdentityIfPresent()).toBeNull();
+      expect(await resolvePublicSessionShareToken(foreignToken)).toBeNull();
+      expect(await loadDeviceIdentityIfPresentAsync()).toBeNull();
 
-      const localToken = loadPublicSessionShareTokenCodec().mint(LOCATOR);
-      expect(loadDeviceIdentityIfPresent()).not.toBeNull();
-      expect(resolvePublicSessionShareToken(localToken)).toEqual(LOCATOR);
+      const localToken = (await loadPublicSessionShareTokenCodec()).mint(LOCATOR);
+      expect(await loadDeviceIdentityIfPresentAsync()).not.toBeNull();
+      expect(await resolvePublicSessionShareToken(localToken)).toEqual(LOCATOR);
     });
   });
 });

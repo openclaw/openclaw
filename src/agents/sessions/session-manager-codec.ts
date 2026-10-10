@@ -123,17 +123,10 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    // SAFETY: The reverse index stays within the canonical session entries.
-    const entry = entries[index]!;
-    if (entry.type === "reset") {
-      return null;
-    }
-    if (entry.type === "compaction") {
-      return entry;
-    }
-  }
-  return null;
+  const boundary = entries.findLast(
+    (entry) => entry.type === "reset" || entry.type === "compaction",
+  );
+  return boundary?.type === "compaction" ? boundary : null;
 }
 
 export function buildSessionContext(

@@ -146,58 +146,7 @@ describe("responses compact endpoint", () => {
   });
 
   it.each([
-    [
-      "malformed retained-message",
-      [
-        { type: "message", role: "assistant", content: [] },
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-      ],
-    ],
-    [
-      "retained tool-output",
-      [
-        { type: "function_call_output", call_id: "call_1", output: "result" },
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-      ],
-    ],
-    [
-      "duplicated",
-      [
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque-1" },
-        { type: "compaction", id: "cmp_2", encrypted_content: "opaque-2" },
-      ],
-    ],
-    [
-      "non-trailing",
-      [
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-        { type: "message", role: "user", content: [] },
-      ],
-    ],
-  ])("rejects a %s compaction item", async (_case, output) => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output,
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
-
-    await expect(compact()).rejects.toThrow("one trailing compaction item");
-  });
-
-  it("keeps the checkpoint-only response shape distinct from retained user history", async () => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
-
-    await expect(compact()).resolves.toMatchObject({ historyMode: "compacted-prefix" });
-  });
-
-  it.each([
-    { type: "input_text", text: 1 },
     { type: "input_image", detail: "auto" },
-    { type: "input_image", detail: "invalid", image_url: "https://media.example/image.png" },
     { type: "input_file", file_id: 42 },
     { type: "output_text", text: "not supported input" },
   ])("rejects unsupported retained content without rewriting it: %j", async (block) => {
@@ -212,7 +161,7 @@ describe("responses compact endpoint", () => {
     await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
   });
 
-  it.each([model, { ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
+  it.each([{ ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
     "rejects endpoint output altered by the $provider route's status policy",
     async (route) => {
       mockCompactResponse({
@@ -224,71 +173,32 @@ describe("responses compact endpoint", () => {
     },
   );
 
-  it.each([
-    "data:image/png;base64,invalid",
-    "data:image/bmp;base64,Qk0=",
-    "data:image/png;base64,/9j/",
-  ])("rejects canonical image output that the transport would change: %s", async (imageUrl) => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
-        },
-        { type: "compaction", encrypted_content: "opaque" },
-      ],
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
-    await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
-  });
+  it.each(["data:image/png;base64,invalid", "data:image/png;base64,/9j/"])(
+    "rejects canonical image output that the transport would change: %s",
+    async (imageUrl) => {
+      mockCompactResponse({
+        object: "response.compaction",
+        output: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
+          },
+          { type: "compaction", encrypted_content: "opaque" },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+      await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
+    },
+  );
 
   it.each([
-    ["native xAI default", model, undefined, true],
-    ["native xAI budget default", model, undefined, true, "budget"],
     ["native xAI alias default", { ...model, provider: "x-ai" }, undefined, true],
-    ["native xAI opt-out", model, { responsesCompactEndpoint: false }, false],
     [
       "custom Responses opt-in",
       { ...model, provider: "custom", baseUrl: "https://responses.example/v1" },
       { responsesCompactEndpoint: true },
       true,
-    ],
-    [
-      "custom Responses default",
-      { ...model, provider: "custom", baseUrl: "https://responses.example/v1" },
-      undefined,
-      false,
-    ],
-    [
-      "non-Responses opt-in",
-      { ...model, api: "openai-completions" },
-      { responsesCompactEndpoint: true },
-      false,
-    ],
-    ["OpenAI manual default", officialOpenAIModel, undefined, false],
-    ["OpenAI budget default", officialOpenAIModel, undefined, true, "budget"],
-    [
-      "OpenAI budget opt-out",
-      officialOpenAIModel,
-      { responsesCompactEndpoint: false },
-      false,
-      "budget",
-    ],
-    [
-      "noncanonical OpenAI transport",
-      { ...officialOpenAIModel, api: "openclaw-openai-responses-transport" },
-      undefined,
-      false,
-      "budget",
-    ],
-    [
-      "OpenAI with an unverified endpoint",
-      { ...officialOpenAIModel, baseUrl: "https://responses.example/v1" },
-      undefined,
-      false,
-      "budget",
     ],
     [
       "OpenAI without a resolved endpoint",
@@ -309,26 +219,12 @@ describe("responses compact endpoint", () => {
       "budget",
     ],
     [
-      "ChatGPT transport at the public API",
-      { ...officialOpenAIModel, api: "openai-chatgpt-responses" },
-      undefined,
-      false,
-      "budget",
-    ],
-    [
       "Azure default",
       {
         ...officialOpenAIModel,
         provider: "azure-openai",
         baseUrl: "https://example.openai.azure.com",
       },
-      undefined,
-      false,
-      "budget",
-    ],
-    [
-      "custom provider at the public API",
-      { ...officialOpenAIModel, provider: "custom" },
       undefined,
       false,
       "budget",

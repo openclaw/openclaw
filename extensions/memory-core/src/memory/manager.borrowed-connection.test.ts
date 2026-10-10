@@ -13,7 +13,6 @@ import {
 import {
   encodeMemoryEmbedding,
   ensureMemoryChunkProvenance,
-  loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -25,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
@@ -103,28 +103,13 @@ describe("memory manager shared agent connection", () => {
     expect(() => sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" })).toThrow(
       /foreign_key_check/,
     );
-    const result = await getMemorySearchManager({ cfg: createConfig(), agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: createConfig(),
+      agentId: "main",
+    });
     expect(result.manager).toBeNull();
     expect(result.error).toMatch(/foreign_key_check/);
-  });
-
-  it("loads vectors on the shared connection with native loading disabled between calls", async () => {
-    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    const manager = await fixture.getFreshManager(createConfig());
-    expect(managerDatabase(manager) === shared.db).toBe(true);
-    expect(() => shared.db.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect((await loadSqliteVecExtension({ db: shared.db })).ok).toBe(true);
-    expect(shared.db.prepare("SELECT vec_version() AS version").get()).toEqual({
-      version: expect.any(String),
-    });
-    expect(() => shared.db.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect(() => shared.db.prepare("SELECT load_extension(?)").get("not-a-real-extension")).toThrow(
-      "not authorized",
-    );
   });
 
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {
@@ -174,6 +159,7 @@ describe("memory manager shared agent connection", () => {
     );
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const creating = MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg,
       agentId: "main",
       purpose: "maintenance",

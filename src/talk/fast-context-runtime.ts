@@ -18,7 +18,6 @@ type Logger = {
   debug?: (message: string) => void;
 };
 
-/** Fast-context lookup policy for realtime voice consult shortcuts. */
 export type RealtimeVoiceFastContextConfig = {
   enabled: boolean;
   /** Maximum memory/session hits to include in the spoken-context prompt. */
@@ -31,13 +30,11 @@ export type RealtimeVoiceFastContextConfig = {
   fallbackToConsult: boolean;
 };
 
-/** Human labels used in generated fast-context responses. */
 export type RealtimeVoiceFastContextLabels = {
   audienceLabel: string;
   contextName: string;
 };
 
-/** One context entry as the caller hears it: its corpus, location, and text. */
 type FastContextHit = { source: string; location: string; snippet: string };
 
 type FastContextLookupResult =
@@ -191,7 +188,6 @@ async function lookupFastContext(params: {
   };
 }
 
-/** Try to answer a realtime consult from fast memory/session context. */
 export async function resolveRealtimeVoiceFastContextConsult(params: {
   cfg: OpenClawConfig;
   agentId: string;

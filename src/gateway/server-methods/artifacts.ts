@@ -94,7 +94,7 @@ function artifactError(type: string, message: string, details?: Record<string, u
 async function loadArtifacts(
   query: ArtifactsListParams,
   access: ArtifactSessionAccess,
-  opts: ArtifactCollectionOptions = {},
+  opts: ArtifactCollectionOptions,
 ): Promise<{
   artifacts: ArtifactRecord[];
   sessionKey?: string;
@@ -218,7 +218,7 @@ async function runArtifactSessionOperation<T>(
 async function findArtifact(
   params: ArtifactsGetParams,
   access: ArtifactSessionAccess,
-  opts: ArtifactCollectionOptions = {},
+  opts: ArtifactCollectionOptions,
 ): Promise<ArtifactLookup> {
   if (parseTranscriptImageArtifactId(params.artifactId)) {
     return findTranscriptImageArtifact(params, access, opts.includeDownloadData !== false);

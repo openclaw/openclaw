@@ -3,10 +3,10 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
@@ -61,7 +61,7 @@ export type {
 
 export function createSessionCapability(
   gateway: SessionGateway,
-  agentSelection: SessionAgentSelection,
+  agentSelection: SelectedAgentSource,
   cacheOptions: SessionRosterCacheOptions & {
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
@@ -185,10 +185,7 @@ export function createSessionCapability(
     const annotated = swarmActivity.decorate(projected);
     // Preserve receipts before a pending intent makes another tracked copy.
     roster.observations.inherit(annotated, projected);
-    const decorated = deletions.apply(
-      mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
-      owner,
-    );
+    const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
     roster.observations.inherit(decorated, result);
     return decorated;
   };
@@ -525,7 +522,7 @@ export function createSessionCapability(
     }
   });
 
-  const stopSelection = subscribeAgentSelection(agentSelection, (nextAgentId, foreground) => {
+  const stopSelection = watchSelectedAgent(agentSelection, (nextAgentId, foreground) => {
     retirePresentation();
     notifySubscribers();
     // Selection publishes before Gateway hydration. A new connection bootstraps

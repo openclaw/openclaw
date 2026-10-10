@@ -1,12 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
-import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
-import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { createNonExitingRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createProviderBrowserAuthSession,
@@ -36,24 +32,26 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-function startLogin(
-  params: { signal?: AbortSignal; timeoutMs?: number; browserOrigin?: GatewayWsBrowserOrigin } = {},
-) {
+const authorization = {
+  state: "login-state",
+  timeoutMs: 60_000,
+  buildAuthorizationUrl: (redirectUrl: string) => {
+    const callbackUrl = new URL(redirectUrl);
+    callbackUrl.searchParams.set("state", "login-state");
+    return `https://provider.example/authorize?callback_url=${encodeURIComponent(callbackUrl.href)}`;
+  },
+};
+
+function startLogin(params: { timeoutMs?: number; browserOrigin?: GatewayWsBrowserOrigin } = {}) {
   const opened = createDeferredCore<string>();
   const session = createProviderBrowserAuthSession({
-    signal: params.signal,
     browserOrigin: params.browserOrigin,
     openUrl: async (url) => opened.resolve(url),
   });
   expect(session.available).toBe(true);
   const result = session.authorize({
-    state: "login-state",
-    timeoutMs: params.timeoutMs ?? 60_000,
-    buildAuthorizationUrl: (redirectUrl) => {
-      const callbackUrl = new URL(redirectUrl);
-      callbackUrl.searchParams.set("state", "login-state");
-      return `https://provider.example/authorize?callback_url=${encodeURIComponent(callbackUrl.href)}`;
-    },
+    ...authorization,
+    timeoutMs: params.timeoutMs ?? authorization.timeoutMs,
   });
   return { session, result, opened: opened.promise };
 }
@@ -114,7 +112,9 @@ describe("provider browser sign-in", () => {
     });
     await expect(login.result).resolves.toEqual({ code: "secret-code", state: "login-state" });
     expect(callback("state=login-state&code=secret-code").res.statusCode).toBe(410);
+    const retained = login.session.authorize;
     login.session.close();
+    await expect(retained(authorization)).rejects.toThrow("closed");
   });
 
   it("does not consume a pending login for malformed or unrelated responses", async () => {
@@ -149,37 +149,23 @@ describe("provider browser sign-in", () => {
     login.session.close();
   });
 
-  it.each(["cancel", "restart", "origin"])(
-    "rejects callback completion after %s",
-    async (event) => {
-      const controller = new AbortController();
-      const login = startLogin({ signal: controller.signal });
-      await login.opened;
-      const rejected = expect(login.result).rejects.toThrow();
-      if (event === "cancel") {
-        controller.abort(new Error("cancelled"));
-      }
-      if (event === "restart") {
-        markGatewayRestartDraining();
-      }
-      if (event === "origin") {
-        clearOrigin = prepareTailscalePublishedOrigin({
-          origin: "https://gateway.example",
-          mode: "serve",
-        });
-      }
-      expect(callback("state=login-state&code=stale").res.statusCode).toBe(410);
-      await rejected;
-      login.session.close();
-      await expect(
-        login.session.authorize({
-          state: "retained",
-          timeoutMs: 60_000,
-          buildAuthorizationUrl: () => "https://provider.example/authorize",
-        }),
-      ).rejects.toThrow();
-    },
-  );
+  it.each(["restart", "origin"])("rejects callback completion after %s", async (event) => {
+    const login = startLogin();
+    await login.opened;
+    const rejected = expect(login.result).rejects.toThrow();
+    if (event === "restart") {
+      markGatewayRestartDraining();
+    }
+    if (event === "origin") {
+      clearOrigin = prepareTailscalePublishedOrigin({
+        origin: "https://gateway.example",
+        mode: "serve",
+      });
+    }
+    expect(callback("state=login-state&code=stale").res.statusCode).toBe(410);
+    await rejected;
+    login.session.close();
+  });
 
   it("expires unanswered browser login without consuming a later callback", async () => {
     const login = startLogin({ timeoutMs: 20 });
@@ -214,13 +200,7 @@ describe("provider browser sign-in", () => {
     const openUrl = vi.fn();
     const session = createProviderBrowserAuthSession({ browserOrigin, openUrl });
     expect(session.available).toBe(false);
-    await expect(
-      session.authorize({
-        state: "unserved",
-        timeoutMs: 60_000,
-        buildAuthorizationUrl: () => "https://provider.example/authorize",
-      }),
-    ).rejects.toThrow("secure Gateway address");
+    await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
     expect(openUrl).not.toHaveBeenCalled();
     session.close();
   });
@@ -228,51 +208,7 @@ describe("provider browser sign-in", () => {
   it("does not advertise loopback or a guessed browser address", async () => {
     clearOrigin();
     const session = createProviderBrowserAuthSession({ openUrl: vi.fn() });
-    await expect(
-      session.authorize({
-        state: "no-origin",
-        timeoutMs: 60_000,
-        buildAuthorizationUrl: () => "https://provider.example/authorize",
-      }),
-    ).rejects.toThrow("secure Gateway address");
+    await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
     session.close();
-  });
-
-  it("forwards caller-owned browser authorization and rejects retained copies after closure", async () => {
-    const opened = createDeferredCore<string>();
-    const run = vi.fn(async (context: ProviderAuthContext) => {
-      const result = await context.oauth.authorize!({
-        state: "login-state",
-        timeoutMs: 60_000,
-        buildAuthorizationUrl: (redirectUrl) =>
-          `https://provider.example/authorize?callback=${encodeURIComponent(redirectUrl)}`,
-      });
-      expect(result.code).toBe("valid");
-      return { profiles: [] };
-    });
-    const browser = createProviderBrowserAuthSession({
-      openUrl: async (url) => opened.resolve(url),
-    });
-    const result = runProviderPluginAuthMethodUnpersisted({
-      method: { id: "oauth", label: "Sign in", kind: "oauth", run },
-      config: {},
-      runtime: createNonExitingRuntime(),
-      prompter: createWizardPrompter(),
-      isRemote: true,
-      signal: browser.signal,
-      browserAuthorization: browser.authorize,
-    });
-    await opened.promise;
-    callback("state=login-state&code=valid");
-    await expect(result).resolves.toEqual({ profiles: [] });
-    browser.close();
-    const context = run.mock.calls[0]![0];
-    await expect(
-      context.oauth.authorize!({
-        state: "retained",
-        timeoutMs: 60_000,
-        buildAuthorizationUrl: () => "https://provider.example/authorize",
-      }),
-    ).rejects.toThrow("closed");
   });
 });

@@ -249,17 +249,21 @@ describe("managed constructor receiver layers", () => {
     async ({ realm, form }) => {
       const source = `(class Base {
       #value = "base own";
+      replacedOwn = function() { return this.#value; };
       ${
         form === "field"
           ? "baseOwn = function() { return this.#value; };"
           : "constructor() { this.baseOwn = function() { return this.#value; }; }"
       }
     })`;
-      const Base: new () => { baseOwn(): string } =
+      const Base: new () => { baseOwn(): string; replacedOwn(): string } =
         realm === "VM" ? runInNewContext(source) : runInThisContext(source);
       const WrappedBase = instance.wrap(Base);
       class DerivedFields extends WrappedBase {
         #value = "derived own";
+        override replacedOwn = function (this: DerivedFields) {
+          return this.#value;
+        };
         derivedOwn = function (this: DerivedFields) {
           return this.#value;
         };
@@ -269,6 +273,9 @@ describe("managed constructor receiver layers", () => {
         declare derivedOwn: () => string;
         constructor() {
           super();
+          this.replacedOwn = function (this: DerivedAssignment) {
+            return this.#value;
+          };
           this.derivedOwn = function (this: DerivedAssignment) {
             return this.#value;
           };
@@ -277,11 +284,14 @@ describe("managed constructor receiver layers", () => {
       const value = form === "field" ? new DerivedFields() : new DerivedAssignment();
       const baseOwn = value.baseOwn;
       const derivedOwn = value.derivedOwn;
+      const replacedOwn = value.replacedOwn;
       expect(baseOwn()).toBe("base own");
       expect(Reflect.apply(derivedOwn, undefined, [])).toBe("derived own");
+      expect(Reflect.apply(replacedOwn, undefined, [])).toBe("derived own");
       await instance.dispose();
       expect(() => baseOwn()).toThrow("reloaded or disabled");
       expect(() => Reflect.apply(derivedOwn, undefined, [])).toThrow("reloaded or disabled");
+      expect(() => Reflect.apply(replacedOwn, undefined, [])).toThrow("reloaded or disabled");
     },
   );
 });

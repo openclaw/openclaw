@@ -1,5 +1,5 @@
 // Real SDK ids and aggregations protect RPC parents, phase timing, and signal gating.
-import { context, metrics, trace } from "@opentelemetry/api";
+import { context, metrics, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   AggregationTemporality,
@@ -12,12 +12,19 @@ import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { emitInternalDiagnosticEventForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, test } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
-import { startOtelService, stopStartedOtelServices } from "./service.test-helpers.js";
+import {
+  startOtelService,
+  startOtelServiceWithHostUsage,
+  startOtlpReceiver,
+  stopStartedOtelServices,
+} from "./service.test-helpers.js";
 
 const sdk = installRealOtelSdkTestHarness();
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
@@ -382,3 +389,373 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
     await meterProvider.shutdown();
   }
 });
+
+test("exports the producing agent identity on run, harness, message, tool-loop, and model-call spans", async () => {
+  const { service, ctx } = await startOtelService({ traces: true });
+  const agent = { agentId: "ops", sessionId: "session-agent" };
+  const model = {
+    ...agent,
+    runId: "run-agent-1",
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+  };
+
+  emitTrustedDiagnosticEvent({
+    type: "run.completed",
+    ...model,
+    durationMs: 100,
+    outcome: "completed",
+  });
+  emitTrustedDiagnosticEvent({
+    type: "harness.run.completed",
+    ...model,
+    harnessId: "claude-cli",
+    durationMs: 100,
+    outcome: "completed",
+  });
+  emitTrustedDiagnosticEvent({
+    type: "message.processed",
+    ...agent,
+    channel: "webchat",
+    durationMs: 5,
+    outcome: "completed",
+  });
+  emitTrustedDiagnosticEvent({
+    type: "tool.loop",
+    ...agent,
+    toolName: "read",
+    level: "warning",
+    action: "warn",
+    detector: "generic_repeat",
+    count: 3,
+    message: "repeated read calls",
+  });
+  emitTrustedDiagnosticEvent({
+    type: "model.call.completed",
+    ...model,
+    callId: "call-agent-1",
+    api: "claude-code",
+    transport: "stdio-live",
+    observationUnit: "turn",
+    durationMs: 80,
+  });
+  await waitForDiagnosticEventsDrained();
+  await service.stop?.(ctx);
+
+  const spanAgent = (name: string) =>
+    sdk.exporter
+      .getFinishedSpans()
+      .filter((span) => span.name === name)
+      .map((span) => span.attributes["openclaw.agent"]);
+  expect(spanAgent("openclaw.run")).toEqual(["ops"]);
+  expect(spanAgent("openclaw.harness.run")).toEqual(["ops"]);
+  expect(spanAgent("openclaw.message.processed")).toEqual(["ops"]);
+  expect(spanAgent("openclaw.tool.loop")).toEqual(["ops"]);
+  expect(spanAgent("openclaw.model.call")).toEqual(["ops"]);
+});
+
+test("adds plugin attribution only from trusted exporter-private provenance", async () => {
+  const started = await startOtelServiceWithHostUsage();
+  const { service, ctx } = started;
+
+  started.emitHostPluginUsage(
+    {
+      type: "model.usage",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4.6",
+      usage: {
+        input: 100,
+        output: 40,
+        cacheRead: 30,
+        cacheWrite: 20,
+        promptTokens: 150,
+        total: 190,
+      },
+      durationMs: 25,
+    },
+    "llm-task",
+  );
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: { input: 2 },
+    pluginId: "public-emitter-spoof",
+  } as Parameters<typeof emitTrustedDiagnosticEvent>[0] & { pluginId: string });
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: { input: 3 },
+  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.usage",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: { input: 5 },
+    },
+    { hostPluginId: "private-data-spoof" } as Parameters<
+      typeof emitTrustedDiagnosticEventWithPrivateData
+    >[1] & { hostPluginId: string },
+  );
+  await waitForDiagnosticEventsDrained();
+  await service.stop?.(ctx);
+
+  const usageSpans = sdk.exporter
+    .getFinishedSpans()
+    .filter((span) => span.name === "openclaw.model.usage");
+  const modelUsageAttributes = usageSpans[0]?.attributes;
+  expect(modelUsageAttributes).toMatchObject({
+    "gen_ai.operation.name": "chat",
+    "gen_ai.system": "anthropic",
+    "gen_ai.request.model": "anthropic/claude-sonnet-4.6",
+    "gen_ai.usage.input_tokens": 150,
+    "gen_ai.usage.output_tokens": 40,
+    "gen_ai.usage.cache_read.input_tokens": 30,
+    "gen_ai.usage.cache_creation.input_tokens": 20,
+  });
+  for (const key of [
+    "openclaw.sessionKey",
+    "openclaw.sessionId",
+    "gen_ai.provider.name",
+    "gen_ai.input.messages",
+    "gen_ai.output.messages",
+  ]) {
+    expect(modelUsageAttributes).not.toHaveProperty(key);
+  }
+  expect(JSON.stringify(modelUsageAttributes)).not.toContain("session-key");
+  expect(usageSpans).toHaveLength(4);
+  expect(usageSpans.map((span) => span.attributes["openclaw.plugin"])).toEqual([
+    "llm-task",
+    undefined,
+    undefined,
+    undefined,
+  ]);
+});
+
+test("retains event-loop and GC durations only as metrics with all preloaded SDK signals enabled", async () => {
+  const receiver = await startOtlpReceiver();
+  let meterProvider: MeterProvider | undefined;
+  try {
+    context.disable();
+    context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const observedParents: Array<string | undefined> = [];
+    meterProvider = new MeterProvider({
+      readers: [
+        new PeriodicExportingMetricReader({
+          exporter: metricExporter,
+          exportIntervalMillis: 60_000,
+        }),
+      ],
+      views: ["openclaw.gateway.event_loop.*", "openclaw.gc.duration_ms"].map((instrumentName) => ({
+        instrumentName,
+        attributesProcessors: [
+          {
+            process(attributes, measurementContext) {
+              observedParents.push(
+                measurementContext ? trace.getSpanContext(measurementContext)?.traceId : undefined,
+              );
+              return attributes;
+            },
+          },
+        ],
+      })),
+    });
+    metrics.disable();
+    expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
+    let deliveredSamples = 0;
+    await startOtelService({
+      endpoint: receiver.endpoint,
+      traces: true,
+      metrics: true,
+      logs: true,
+      configure(serviceContext) {
+        const bridge = serviceContext.internalDiagnostics!;
+        serviceContext.internalDiagnostics = {
+          ...bridge,
+          onEvent(listener, filter) {
+            return bridge.onEvent((event, metadata, privateData) => {
+              if (event.type === "gateway.event_loop.sample" || event.type === "diagnostic.gc") {
+                deliveredSamples++;
+              }
+              listener(event, metadata, privateData);
+            }, filter);
+          },
+        };
+      },
+    });
+    await waitForDiagnosticEventsDrained();
+    const ambientTraceId = "11111111111111111111111111111111";
+    const ambient = trace.setSpanContext(ROOT_CONTEXT, {
+      traceId: ambientTraceId,
+      spanId: "1111111111111111",
+      traceFlags: 1,
+    });
+    const sampleMetrics = () =>
+      Object.fromEntries(
+        (
+          metricExporter
+            .getMetrics()
+            .at(-1)
+            ?.scopeMetrics.flatMap((scope) => scope.metrics) ?? []
+        )
+          .filter(
+            (metric) =>
+              metric.descriptor.name.startsWith("openclaw.gateway.event_loop.") ||
+              metric.descriptor.name === "openclaw.gc.duration_ms",
+          )
+          .map(
+            (metric) =>
+              [
+                metric.descriptor.name,
+                {
+                  unit: metric.descriptor.unit,
+                  points: metric.dataPoints.map(({ attributes, value }) => ({
+                    attributes,
+                    value,
+                  })),
+                },
+              ] as const,
+          ),
+      );
+    for (const [intervalMs, delayMaxMs, totalMs, count, sum] of [
+      [2_000, 1_250, 2_000, 1, 1_250],
+      [8_000, 20, 10_000, 2, 1_270],
+    ] as const) {
+      await context.with(ambient, async () => {
+        expect(trace.getSpanContext(context.active())?.traceId).toBe(ambientTraceId);
+        emitInternalDiagnosticEventForTest({
+          type: "gateway.event_loop.sample",
+          intervalMs,
+          delayMaxMs,
+        });
+        emitInternalDiagnosticEventForTest({ type: "diagnostic.gc", durationMs: delayMaxMs });
+        await waitForDiagnosticEventsDrained();
+      });
+      await meterProvider.forceFlush();
+      expect(sampleMetrics()).toMatchObject({
+        "openclaw.gateway.event_loop.delay_max_ms": {
+          unit: "ms",
+          points: [{ attributes: {}, value: { count, sum } }],
+        },
+        "openclaw.gateway.event_loop.observed_ms": {
+          unit: "ms",
+          points: [{ attributes: {}, value: totalMs }],
+        },
+        "openclaw.gc.duration_ms": {
+          unit: "ms",
+          points: [{ attributes: {}, value: { count, sum } }],
+        },
+      });
+    }
+    const retained = sampleMetrics();
+    emitDiagnosticEvent({
+      type: "gateway.event_loop.sample",
+      intervalMs: 99_000,
+      delayMaxMs: 99_000,
+    });
+    emitDiagnosticEvent({ type: "diagnostic.gc", durationMs: 99_000 });
+    await waitForDiagnosticEventsDrained();
+    await meterProvider.forceFlush();
+    expect(sampleMetrics()).toEqual(retained);
+    expect(
+      Object.values(sampleMetrics()).flatMap((metric) =>
+        metric.points.map(({ attributes }) => attributes),
+      ),
+    ).toEqual([{}, {}, {}]);
+    expect(deliveredSamples).toBe(6);
+    expect(observedParents).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    await stopStartedOtelServices();
+    expect(sdk.exporter.getFinishedSpans()).toEqual([]);
+    expect(receiver.requests).toEqual([]);
+  } finally {
+    try {
+      await stopStartedOtelServices();
+    } finally {
+      try {
+        await meterProvider?.shutdown();
+      } finally {
+        await receiver.close();
+      }
+    }
+  }
+}, 30_000);
+
+test.each([false, true])(
+  "exports completed commentary with content capture %s",
+  async (captureContent) => {
+    await startOtelService({ traces: true, captureContent });
+    const harness = { runId: "run-1", harnessId: "codex", trace: createDiagnosticTraceContext() };
+    const run = { runId: harness.runId, trace: createChildDiagnosticTraceContext(harness.trace) };
+    const commentary = {
+      ...harness,
+      type: "agent.commentary" as const,
+      itemId: "private-item-id",
+      sourceSequence: 7,
+      sourceTimestampMs: Date.now(),
+      textLength: 100,
+      contentCaptured: true,
+      contentTruncated: false,
+    };
+    const content = {
+      modelContent: {
+        outputMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Checking files. Bearer " + "a".repeat(80) }],
+          },
+        ],
+      },
+    };
+    emitTrustedDiagnosticEvent({ ...harness, type: "harness.run.started" });
+    emitTrustedDiagnosticEvent({ ...run, type: "run.started" });
+    emitDiagnosticEvent(commentary);
+    emitTrustedDiagnosticEventWithPrivateData(commentary, content);
+    // run.completed is synchronous. Do not drain between it and the queued
+    // harness completion: commentary must reach the real SDK before span.end.
+    emitTrustedDiagnosticEvent({
+      ...run,
+      type: "run.completed",
+      outcome: "completed",
+      durationMs: 1,
+    });
+    emitTrustedDiagnosticEvent({
+      ...harness,
+      type: "harness.run.completed",
+      outcome: "completed",
+      durationMs: 1,
+    });
+    await waitForDiagnosticEventsDrained();
+    const span = sdk.exporter
+      .getFinishedSpans()
+      .find((entry) => entry.name === "openclaw.harness.run");
+    expect(span?.events).toHaveLength(1);
+    expect(span?.events[0]).toMatchObject({
+      name: "openclaw.agent.commentary",
+      attributes: {
+        "openclaw.harness.id": "codex",
+        "openclaw.commentary.sequence": 7,
+        "openclaw.commentary.text_length": 100,
+      },
+    });
+    const exported = JSON.stringify(span?.events);
+    expect(exported.includes("Checking files.")).toBe(captureContent);
+    expect(exported).not.toContain("a".repeat(80));
+    expect(exported).not.toContain("private-item-id");
+    emitTrustedDiagnosticEventWithPrivateData(commentary, content);
+    await waitForDiagnosticEventsDrained();
+    expect(span?.events).toHaveLength(1);
+    expect(sdk.exporter.getFinishedSpans()).toHaveLength(2);
+  },
+);

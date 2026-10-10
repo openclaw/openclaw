@@ -137,33 +137,59 @@ it.each(["composer retirement", "preference clear"] as const)(
   },
 );
 
-it("commits identified-user name consumption before navigation disposes the draft", async () => {
+it("opens an accepted worktree while its saved name cleanup is pending", async () => {
   const prefs = identityPreferences();
   const first = await readyPreferenceDraft(prefs);
-  expect(first.place.worktreeName).toBe("first-task");
-  const clear = createDeferred();
-  prefs.beforeSave.mockImplementation(async () => clear.promise);
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+  const admission = createDeferred<typeof acceptedWorktreeSession>();
+  const clearing = createDeferred();
+  const clearStarted = createDeferred();
+  const navigated = createDeferred();
+  prefs.beforeSave.mockImplementation(async () => {
+    clearStarted.resolve();
+    await clearing.promise;
+  });
+  vi.mocked(first.context.sessions.createResult).mockReturnValue(admission.promise);
   vi.mocked(first.context.navigateAndWait).mockImplementation(async () => {
     disposeWorktreeDraft(first);
+    navigated.resolve();
     queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
   });
   first.flow.setMessage("first task");
-  const submitting = first.flow.submit();
-  await vi.waitFor(() =>
-    expect(
-      prefs.beforeSave.mock.calls.length +
-        vi.mocked(first.context.navigateAndWait).mock.calls.length,
-    ).toBeGreaterThan(0),
-  );
-  const navigatedBeforeSave = vi.mocked(first.context.navigateAndWait).mock.calls.length;
-  clear.resolve();
-  await submitting;
-  expect(navigatedBeforeSave).toBe(0);
-  expect(first.context.navigateAndWait).toHaveBeenCalledOnce();
-  const next = await readyPreferenceDraft(prefs, first.context.gateway);
-  expect(next.place.worktreeName).toBe("");
-  expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
+  vi.useFakeTimers();
+  try {
+    const submitting = first.flow.submit();
+    let settled = false;
+    void submitting.then(() => {
+      settled = true;
+    });
+    // Worktree preparation finishes after several seconds, then the run is accepted.
+    await vi.advanceTimersByTimeAsync(5_000);
+    admission.resolve(acceptedWorktreeSession);
+    await clearStarted.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(first.context.navigateAndWait).toHaveBeenCalledOnce();
+      await navigated.promise;
+      expect(first.context.gateway.snapshot.sessionKey).toBe(acceptedWorktreeSession.key);
+      expect(
+        first.context.chatSubmissions.readInitial(
+          acceptedWorktreeSession.key,
+          first.context.gateway.snapshot.client!,
+        )?.pendingRunId,
+      ).toBe("first-run");
+      expect(settled).toBe(false);
+    } finally {
+      clearing.resolve();
+      await submitting;
+    }
+    vi.useRealTimers();
+    const next = await readyPreferenceDraft(prefs, first.context.gateway);
+    expect(next.place.worktreeName).toBe("");
+    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
+    expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it.each([

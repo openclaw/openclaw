@@ -295,6 +295,13 @@ jobs:
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
+      - name: Check updater compatibility before building
+        run: |
+          set -euo pipefail
+          if jq -e '.scripts["update:compat:check"] | type == "string"' package.json >/dev/null; then
+            pnpm update:compat:check
+          fi
+
       - name: Resolve preflight build cache key
         id: preflight_cache_key
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

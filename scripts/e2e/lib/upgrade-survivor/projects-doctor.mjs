@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { readJson } from "../fixtures/common.mjs";
 import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
 import {
   resolveWorkerCellExport,
@@ -33,10 +34,6 @@ const STAGES = new Set([
 function digest(file) {
   assert(fs.lstatSync(file).isFile(), `Expected a regular fixture file: ${file}`);
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {

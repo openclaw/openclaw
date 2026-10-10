@@ -7,6 +7,7 @@ import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   agentsCapability,
   agentsList,
@@ -45,7 +46,7 @@ describe("AgentsPage routing", () => {
       } as unknown as ApplicationContext;
       page.agentsList = roster;
       page.agentsSelectedId = selectedId;
-      page.agentFileContents = { "AGENTS.md": "Previous agent's file" };
+      setAgentFileValues(page, "content", { "AGENTS.md": "Previous agent's file" });
       page.routeData = {
         ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
         gatewaySnapshot: snapshot(null, false),
@@ -57,7 +58,7 @@ describe("AgentsPage routing", () => {
       expect(page.agentsPanel).toBe("tools");
       expect(page.agentsSelectedId).toBe(expectedAgentId);
       expect(selection.state.selectedId).toBe(expectedAgentId);
-      expect(page.agentFileContents).toEqual(
+      expect(agentFileValues(page, "content")).toEqual(
         selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
       );
     },

@@ -71,36 +71,29 @@ type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
 };
 export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
 
-function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRuntime>> | null) {
-  return [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-    .filter(Boolean)
-    .join("|");
-}
-
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
 }): Promise<boolean> {
-  const readLaunchObservation = async (
-    timeoutMs?: number,
-  ): Promise<{
-    state: "running" | "not-yet-run" | "stopped-success" | "other";
-    signature: string;
-  }> => {
+  const readLaunchObservation = async (timeoutMs?: number) => {
     const runtime = await readScheduledTaskRuntime(params.env, { timeoutMs }).catch(() => null);
+    let state: "running" | "not-yet-run" | "stopped-success" | "other" = "other";
     if (runtime?.status === "running") {
-      return { state: "running", signature: runtimeSignature(runtime) };
+      state = "running";
+    } else if (runtime?.status === "stopped") {
+      // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
+      if (runtime.lastRunResult === "267011") {
+        state = "not-yet-run";
+      } else if (runtime.lastRunResult === "0") {
+        state = "stopped-success";
+      }
     }
-    if (runtime?.status !== "stopped") {
-      return { state: "other", signature: runtimeSignature(runtime) };
-    }
-    // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
-    if (runtime.lastRunResult === "267011") {
-      return { state: "not-yet-run", signature: runtimeSignature(runtime) };
-    }
-    return runtime.lastRunResult === "0"
-      ? { state: "stopped-success", signature: runtimeSignature(runtime) }
-      : { state: "other", signature: runtimeSignature(runtime) };
+    return {
+      state,
+      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+        .filter(Boolean)
+        .join("|"),
+    };
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {

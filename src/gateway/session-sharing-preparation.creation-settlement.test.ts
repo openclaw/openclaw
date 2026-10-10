@@ -1,11 +1,14 @@
-import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
 } from "../config/sessions/session-accessor.entry-mutation.js";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   isSqliteWorkerError,
@@ -15,51 +18,18 @@ import {
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const unavailableMessage =
   "Session access facts are unavailable; retry after session storage is ready.";
-
-it("binds creation through a logical session store under a directory alias", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    fs.symlinkSync(state.stateDir, state.path("state-alias"), "junction");
-    const storePath = state.path("state-alias", "agents", "main", "sessions", "sessions.json");
-    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:main:alias-creation";
-    const sessionId = "alias-created";
-    const scope = { agentId: "main", storePath, sessionKey };
-    await using storagePreparation = prepareSessionEntryMutationDatabases(
-      [{ scope, assertCurrent: () => {} }],
-      Promise.resolve(),
-    );
-    const storage = await storagePreparation.preparations[0]!;
-    const prepared = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey,
-      agentId: "main",
-      allowMissing: true,
-    });
-    try {
-      expect(prepared.readCurrent(cfg).target).toBeNull();
-      await expect(
-        createSessionEntryWithTranscript(
-          scope,
-          () => ({ ok: true, entry: { sessionId, updatedAt: 1 } }),
-          { bindCreation: prepared.bindCreation, commitGuard: () => storage.assertCurrent() },
-        ),
-      ).resolves.toMatchObject({ ok: true, entry: { sessionId } });
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(sessionId);
-      expect(readTranscriptStorageRows(database, sessionId)).toHaveLength(1);
-    } finally {
-      prepared.release();
-    }
-  });
-});
 
 it.each([
   { native: "completed", broker: "unknown" },
@@ -231,6 +201,72 @@ it.each([
         expect(readTranscriptStorageRows(database, sessionId)).toEqual(header);
       } finally {
         fresh.release();
+      }
+    });
+  },
+);
+
+it.each(["metadata", "reset-aba", "unknown", "retirement"] as const)(
+  "retains sharing acquisition across %s while database admission waits",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = { agents: { entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      const sessionKey = "agent:main:sharing-admission";
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const entry = { sessionId: "admission-session", lifecycleRevision: "original", updatedAt: 1 };
+      runOpenClawAgentWriteTransaction(
+        (database) => writeSessionEntry(database, sessionKey, entry),
+        { agentId: "main", path: storePath },
+      );
+      const ready = createDeferredCore();
+      const pending = prepareSessionMutationFacts({
+        cfg,
+        sessionKey,
+        agentId: "main",
+        storageReady: ready.promise,
+      });
+      try {
+        if (change === "retirement") {
+          await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+          openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        } else {
+          runOpenClawAgentWriteTransaction(
+            (database) => {
+              if (change === "unknown") {
+                publishSessionEntryCacheInvalidation(database, { sessionKey });
+              } else if (change === "reset-aba") {
+                writeSessionEntry(database, sessionKey, { ...entry, lifecycleRevision: "reset" });
+                writeSessionEntry(database, sessionKey, entry);
+              } else {
+                writeSessionEntry(database, sessionKey, { ...entry, updatedAt: 2 });
+              }
+            },
+            { agentId: "main", path: storePath },
+          );
+        }
+        ready.resolve();
+        if (change === "metadata") {
+          const read = await pending;
+          try {
+            expect(read.readCurrent(cfg).target).toMatchObject({
+              storeKey: sessionKey,
+              entry: { ...entry, updatedAt: 2 },
+            });
+          } finally {
+            read.release();
+          }
+        } else {
+          await expect(pending).rejects.toThrow(
+            "Session access facts are unavailable; retry after session storage is ready.",
+          );
+        }
+      } finally {
+        ready.resolve();
+        await pending.then(
+          (read) => read.release(),
+          () => {},
+        );
       }
     });
   },

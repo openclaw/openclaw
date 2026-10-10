@@ -178,11 +178,8 @@ export function preserveCodexNativeSubagentSubmissions(
   nextBinding: CodexAppServerThreadBinding,
   value: unknown,
 ): unknown {
-  return currentBinding.threadId === nextBinding.threadId &&
-    codexNativeSubagentHistoryConnectionFingerprint(currentBinding) ===
-      codexNativeSubagentHistoryConnectionFingerprint(nextBinding) &&
-    isDeepStrictEqual(currentBinding.pendingSupervisionBranch, nextBinding.pendingSupervisionBranch)
-    ? value
+  return currentBinding.threadId === nextBinding.threadId
+    ? preserveNativePendingAssignments(currentBinding, nextBinding, value)
     : undefined;
 }
 

@@ -59,7 +59,7 @@ async function read(
   }
   const pool = (runtime.pool ??= new WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>({
     workerUrl: workerUrl(),
-    maxWorkers: 1,
+    workerClass: "reader",
     idleTimeoutMs: 30_000,
   }));
   const reply = await pool.run(command, {

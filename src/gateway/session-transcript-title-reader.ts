@@ -7,7 +7,6 @@ import {
   readSessionTranscriptWatermark,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
-  type SessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -61,10 +60,6 @@ type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWaterma
 const sqliteTitleFieldCache = new LruCache<SqliteTitleFieldCacheEntry>(
   SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES,
 );
-
-function sqliteTitleFieldCacheKey(target: SessionTranscriptReadTarget): string {
-  return `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
-}
 
 function readSqliteTitleProbeRange(
   scope: SessionTranscriptReadScope,
@@ -158,14 +153,14 @@ function copySessionTitleText(text: string | null): string | null {
   return text === null ? null : Buffer.from(text, "utf16le").toString("utf16le");
 }
 
-function hydrateSqliteTitleFields(
-  target: SessionTranscriptReadTarget,
+export function readSessionTitleFieldsFromTranscript(
+  input: SessionTranscriptReadScope,
   opts?: SessionTitleReadOptions,
-  env?: NodeJS.ProcessEnv,
 ): SessionTitleFields {
+  const target = resolveSessionTranscriptReadTarget(input);
   try {
-    const scope = { ...toTranscriptReadScope(target), ...(env ? { env } : {}) };
-    const cacheKey = sqliteTitleFieldCacheKey(target);
+    const scope = { ...toTranscriptReadScope(target), ...(input.env ? { env: input.env } : {}) };
+    const cacheKey = `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
     const watermark = readSessionTranscriptWatermark(scope);
     if (watermark.maxSeq === null) {
       return { ...EMPTY_SESSION_TITLE_FIELDS };
@@ -261,14 +256,6 @@ function hydrateSqliteTitleFields(
     // watermark: restoration and projection reconciliation can make these fields available again.
     return { ...EMPTY_SESSION_TITLE_FIELDS };
   }
-}
-
-/** Reads title and preview text from one transcript. */
-export function readSessionTitleFieldsFromTranscript(
-  scope: SessionTranscriptReadScope,
-  opts?: SessionTitleReadOptions,
-): SessionTitleFields {
-  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts, scope.env);
 }
 
 /** Reuse the bounded title cache in the existing history worker without transporting session metadata. */

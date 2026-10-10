@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionPatchResult } from "./patch.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import type { SessionArchiveVisibility } from "./session-capability.ts";
 import type { SessionArchiveFields } from "./session-pending-rows.ts";
 import {
@@ -184,8 +184,7 @@ export function createSessionArchiveState(
       if (!result || confirmed.size === 0) {
         return result;
       }
-      const sessions = result.sessions.map(applyRow);
-      return projectSessionResultRows(result, sessions);
+      return mapSessionResultRows(result, applyRow);
     },
     visibility: (key: string): SessionArchiveVisibility | undefined => {
       const normalizedKey = key.trim();

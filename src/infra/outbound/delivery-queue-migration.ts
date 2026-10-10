@@ -10,7 +10,7 @@ import {
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
-  countPendingDeliveryQueueEntries,
+  countPendingDeliveryQueueEntriesForMaintenance,
   terminalizePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
 import {
@@ -18,7 +18,7 @@ import {
   resolveOutboundMediaAccessForSend,
 } from "./deliver-payload.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
-import { failDurableDelivery } from "./delivery-completion.js";
+import { settleDurableDelivery } from "./delivery-completion.js";
 import {
   collectEntrySpoolPaths,
   releaseSpoolArtifacts,
@@ -32,6 +32,7 @@ import {
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
+import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import { reconcileUnknownQueuedDelivery } from "./delivery-queue-reconciliation.js";
 import type { RecoveryLogger } from "./delivery-queue-recovery.js";
 import {
@@ -43,7 +44,7 @@ import {
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import {
-  acceptedPreparedOutboundEntries,
+  preparedOutboundPayloads,
   createUnavailablePreparedOutboundBatch,
   mapPreparedOutboundAcceptedPayloads,
   projectPreparedOutboundBatchForStorage,
@@ -81,26 +82,12 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
   });
   return {
     cfg,
-    channel: entry.channel,
-    to: entry.to,
-    accountId: entry.accountId,
+    ...projectQueuedDeliveryOptions(entry),
     queuePolicy: entry.queuePolicy,
     requireUnknownSendReconciliation: entry.requireUnknownSendReconciliation,
     payloads: entry.payloads,
-    renderedBatchPlan: entry.renderedBatchPlan,
-    threadId: entry.threadId,
     reply,
-    formatting: entry.formatting,
-    identity: entry.identity,
-    bestEffort: entry.bestEffort,
-    gifPlayback: entry.gifPlayback,
-    forceDocument: entry.forceDocument,
     replyPayloadSendingHook: entry.replyPayloadSendingHook,
-    silent: entry.silent,
-    mirror: entry.mirror,
-    session: entry.session,
-    gatewayClientScopes: entry.gatewayClientScopes,
-    preparedMessageId: entry.preparedMessageId,
     deliveryCompletion: entry.deliveryCompletion,
     completionRetention: entry.completionRetention,
   } as const;
@@ -153,26 +140,27 @@ async function prepareLegacyEntryCheckpoint(params: {
   let sourceEntry = params.entry;
   let preparedBatch;
   if (prepareForReplay) {
-    let modifiersStarted = false;
     let leaseLost = false;
+    const replaceSourceEntry = (replacementEntry: LegacyQueuedDeliveryPreparation): boolean => {
+      const replaced = replacePendingDeliveryQueueEntry({
+        queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+        expectedEntry: sourceEntry,
+        replacementEntry,
+        stateDir: params.stateDir,
+      });
+      if (replaced) {
+        sourceEntry = replacementEntry;
+      }
+      return replaced;
+    };
     const renewLeaseSafely = (): void => {
       try {
         if (leaseLost) {
           return;
         }
-        const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
-        if (
-          !replacePendingDeliveryQueueEntry({
-            queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-            expectedEntry: sourceEntry,
-            replacementEntry: renewed,
-            stateDir: params.stateDir,
-          })
-        ) {
+        if (!replaceSourceEntry(withLegacyPreparationLease(sourceEntry, params.ownerId))) {
           leaseLost = true;
-          return;
         }
-        sourceEntry = renewed;
       } catch (error) {
         leaseLost = true;
         params.log.warn(
@@ -189,22 +177,14 @@ async function prepareLegacyEntryCheckpoint(params: {
           if (leaseLost) {
             throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
           }
-          const startedEntry: LegacyQueuedDeliveryPreparation = {
-            ...sourceEntry,
-            legacyPreparationState: "modifiers_started",
-          };
           if (
-            !replacePendingDeliveryQueueEntry({
-              queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-              expectedEntry: sourceEntry,
-              replacementEntry: startedEntry,
-              stateDir: params.stateDir,
+            !replaceSourceEntry({
+              ...sourceEntry,
+              legacyPreparationState: "modifiers_started",
             })
           ) {
             throw new Error(`Legacy delivery ${params.entry.id} preparation ownership changed`);
           }
-          sourceEntry = startedEntry;
-          modifiersStarted = true;
         },
       });
       if (leaseLost) {
@@ -212,23 +192,17 @@ async function prepareLegacyEntryCheckpoint(params: {
       }
     } catch (error) {
       clearInterval(leaseTimer);
-      if (modifiersStarted) {
+      if (sourceEntry.legacyPreparationState === "modifiers_started") {
         await failInterruptedLegacyPreparation({
           entry: sourceEntry,
           log: params.log,
           stateDir: params.stateDir,
         });
       } else if (!leaseLost) {
-        const releasedEntry: LegacyQueuedDeliveryPreparation = {
+        replaceSourceEntry({
           ...sourceEntry,
           legacyPreparationOwnerId: undefined,
           legacyPreparationLeaseExpiresAt: undefined,
-        };
-        replacePendingDeliveryQueueEntry({
-          queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-          expectedEntry: sourceEntry,
-          replacementEntry: releasedEntry,
-          stateDir: params.stateDir,
         });
       }
       throw error;
@@ -237,9 +211,7 @@ async function prepareLegacyEntryCheckpoint(params: {
   } else {
     preparedBatch = createUnavailablePreparedOutboundBatch(params.entry.payloads.length);
   }
-  const acceptedPayloads = acceptedPreparedOutboundEntries(preparedBatch).map(
-    (entry) => entry.payload,
-  );
+  const acceptedPayloads = preparedOutboundPayloads(preparedBatch);
   const {
     payloads: _legacyPayloads,
     replyPayloadSendingHook: _legacyReplyHook,
@@ -309,7 +281,11 @@ async function failInterruptedLegacyPreparation(params: {
   }
   if (params.entry.deliveryCompletion) {
     try {
-      await failDurableDelivery(params.entry.deliveryCompletion, params.stateDir);
+      await settleDurableDelivery(
+        params.entry.deliveryCompletion,
+        { platformSendStarted: true },
+        params.stateDir,
+      );
     } catch (error) {
       params.log.warn(
         `Legacy delivery ${params.entry.id} interrupted preparation owner could not be marked unknown: ${String(error)}`,
@@ -326,10 +302,11 @@ async function failInterruptedLegacyPreparation(params: {
   });
 }
 
-function claimLegacyEntryForPreparation(params: {
+function claimLegacyPreparation(params: {
   entry: LegacyQueuedDelivery;
   ownerId: string;
   stateDir?: string;
+  source: "legacy" | "preparing";
 }): LegacyQueuedDeliveryPreparation | null {
   const claimed = withLegacyPreparationLease(
     {
@@ -338,32 +315,25 @@ function claimLegacyEntryForPreparation(params: {
     },
     params.ownerId,
   );
-  const result = movePendingDeliveryQueueEntryNamespace({
-    sourceQueueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-    destinationQueueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-    expectedSourceEntry: params.entry,
-    destinationEntry: claimed,
-    retainSourceCompletionFence:
-      params.entry.requiresProducerClaim === true || params.entry.completionRetention !== undefined,
-    stateDir: params.stateDir,
-  });
-  return result === "moved" ? claimed : null;
-}
-
-function reclaimLegacyPreparation(params: {
-  entry: LegacyQueuedDeliveryPreparation;
-  ownerId: string;
-  stateDir?: string;
-}): LegacyQueuedDeliveryPreparation | null {
-  const claimed = withLegacyPreparationLease(params.entry, params.ownerId);
-  return replacePendingDeliveryQueueEntry({
-    queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-    expectedEntry: params.entry,
-    replacementEntry: claimed,
-    stateDir: params.stateDir,
-  })
-    ? claimed
-    : null;
+  const acquired =
+    params.source === "preparing"
+      ? replacePendingDeliveryQueueEntry({
+          queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+          expectedEntry: params.entry,
+          replacementEntry: claimed,
+          stateDir: params.stateDir,
+        })
+      : movePendingDeliveryQueueEntryNamespace({
+          sourceQueueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+          destinationQueueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+          expectedSourceEntry: params.entry,
+          destinationEntry: claimed,
+          retainSourceCompletionFence:
+            params.entry.requiresProducerClaim === true ||
+            params.entry.completionRetention !== undefined,
+          stateDir: params.stateDir,
+        }) === "moved";
+  return acquired ? claimed : null;
 }
 
 async function finalizePreparedMigration(params: {
@@ -372,9 +342,7 @@ async function finalizePreparedMigration(params: {
   log: RecoveryLogger;
   stateDir?: string;
 }): Promise<"moved" | "skipped"> {
-  const acceptedPayloads = acceptedPreparedOutboundEntries(params.entry.preparedBatch).map(
-    (entry) => entry.payload,
-  );
+  const acceptedPayloads = preparedOutboundPayloads(params.entry.preparedBatch);
   const stageForReplay = params.entry.legacyPreparedContentUnavailable !== true;
   let stagedPayloads = acceptedPayloads;
   let mediaStageId: string | undefined;
@@ -483,12 +451,9 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   );
 }
 
-async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
-  cfg: OpenClawConfig;
-  log: RecoveryLogger;
-  stateDir?: string;
-  hookRunner?: HookRunner;
-}): Promise<LegacyOutboundDeliveryMigrationResult> {
+async function migrateLegacyPendingOutboundDeliveriesOwned(
+  params: Parameters<typeof migrateLegacyPendingOutboundDeliveries>[0],
+): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();
@@ -507,7 +472,12 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
       skipped += 1;
       continue;
     }
-    const claimed = reclaimLegacyPreparation({ entry, ownerId, stateDir: params.stateDir });
+    const claimed = claimLegacyPreparation({
+      entry,
+      ownerId,
+      stateDir: params.stateDir,
+      source: "preparing",
+    });
     if (!claimed) {
       skipped += 1;
       params.log.info(`Legacy delivery ${entry.id} preparation ownership changed`);
@@ -516,10 +486,11 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
     claimedPreparations.push(claimed);
   }
   for (const entry of loadLegacyPendingDeliveries(params.stateDir)) {
-    const claimed = claimLegacyEntryForPreparation({
+    const claimed = claimLegacyPreparation({
       entry,
       ownerId,
       stateDir: params.stateDir,
+      source: "legacy",
     });
     if (!claimed) {
       skipped += 1;
@@ -553,7 +524,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   if (moved > 0 || skipped > 0) {
     params.log.info(`Legacy delivery migration settled moved=${moved} skipped=${skipped}`);
   }
-  const remaining = countPendingDeliveryQueueEntries(
+  const remaining = countPendingDeliveryQueueEntriesForMaintenance(
     [
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,

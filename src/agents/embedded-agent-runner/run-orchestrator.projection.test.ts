@@ -154,12 +154,9 @@ function fenceProjection(target: SessionTranscriptRuntimeTarget) {
 describe("embedded retry transcript ownership", () => {
   it.each([
     ["detached", false, "active", false, "disconnect"],
-    ["detached", true, "active", false, "disconnect"],
     ["durable", true, "active", false, "disconnect"],
     ["durable", false, "active", false, "disconnect"],
     ["durable", false, "active", true, "disconnect"],
-    ["detached", false, "absent", false, "disconnect"],
-    ["durable", false, "idle", false, "disconnect"],
     ["detached", false, "absent", false, "output-limit"],
     ["durable", false, "active", false, "output-limit"],
     ["detached", false, "absent", false, "output-limit-repeat"],

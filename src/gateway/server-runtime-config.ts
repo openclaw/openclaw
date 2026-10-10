@@ -1,5 +1,3 @@
-// Gateway startup runtime-config resolver.
-// Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type {
@@ -129,7 +127,6 @@ export function assertGatewayRuntimeSecurityConfig(
   }
 }
 
-/** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;

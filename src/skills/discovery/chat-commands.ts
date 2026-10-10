@@ -44,13 +44,7 @@ type WorkspaceSkillCommandParams = {
 };
 
 function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams) {
-  const nodeSkills = resolveNodeExecEligibility({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-    execOverrides: params.execOverrides,
-  });
+  const nodeSkills = resolveNodeExecEligibility(params);
   const eligibility = {
     nodeSkills,
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),

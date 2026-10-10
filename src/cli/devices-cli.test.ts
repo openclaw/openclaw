@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { registerDevicesCli } from "./devices-cli.js";
+import { ExpectedCliError } from "./failure-output.js";
 
 const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
@@ -51,6 +52,22 @@ async function run(...argv: string[]) {
   const program = new Command().exitOverride();
   registerDevicesCli(program);
   await program.parseAsync(["devices", ...argv], { from: "user" });
+}
+async function refusal(...argv: string[]): Promise<string> {
+  const failure: unknown = await run(...argv).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  if (!(failure instanceof Error)) {
+    throw new Error("Expected a devices refusal");
+  }
+  expect(failure).toBeInstanceOf(ExpectedCliError);
+  expect(failure).toMatchObject({
+    humanOutput: failure.message,
+    machineOutput: failure.message,
+  });
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(runtime.writeJson).not.toHaveBeenCalled();
+  expect(runtime.exit).not.toHaveBeenCalled();
+  return failure.message;
 }
 const output = () => runtime.log.mock.calls.map(([text]) => text).join("\n");
 const errors = () => stripAnsi(runtime.error.mock.calls.map(([text]) => text).join("\n"));
@@ -234,11 +251,19 @@ describe("approval", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("routes an empty pending list through the root JSON failure handler", async () => {
+    list();
+    expect(await refusal("approve", "--json")).toBe(
+      "No pending device pairing requests to approve",
+    );
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
   it("suggests node reapproval for a device IP without exposing connection credentials", async () => {
     list([], [nodeDevice()])
       .mockRejectedValueOnce(new Error("device pairing approval denied"))
       .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
-    await run(
+    const message = await refusal(
       "approve",
       "192.168.0.202",
       "--json",
@@ -248,13 +273,11 @@ describe("approval", () => {
       "secret-token",
     );
     expect(callGateway).toHaveBeenCalledTimes(3);
-    expect(errors()).toContain("No pending device request matches");
-    expect(errors()).toContain("Node reapproval pending for Kitchen Mac. Run");
-    expect(errors()).toContain("openclaw nodes approve node-req-1");
-    expect(errors()).toContain("Reuse the same connection options when rerunning: --url, --token.");
-    expect(errors()).not.toMatch(/gateway-user|url-secret|gateway.example|secret-token/);
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(message).toContain("No pending device request matches");
+    expect(message).toContain("Node reapproval pending for Kitchen Mac. Run");
+    expect(message).toContain("openclaw nodes approve node-req-1");
+    expect(message).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(message).not.toMatch(/gateway-user|url-secret|gateway.example|secret-token/);
   });
 
   it("does not treat cosmetic device names as node approval identifiers", async () => {
@@ -262,12 +285,34 @@ describe("approval", () => {
       [],
       [{ ...nodeDevice("Shared Phone"), displayName: "Shared Phone" }],
     ).mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
-    await run("approve", "Shared Phone", "--json");
+    const message = await refusal("approve", "Shared Phone", "--json");
     expect(callGateway).toHaveBeenCalledTimes(2);
-    expect(errors()).toContain("No pending device request matches Shared Phone");
-    expect(errors()).not.toContain("openclaw nodes approve");
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(message).toContain("No pending device request matches Shared Phone");
+    expect(message).not.toContain("openclaw nodes approve");
+  });
+
+  it("preserves scope-upgrade recovery guidance in a JSON refusal", async () => {
+    list().mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-remote)"),
+    );
+    expect(
+      await refusal("approve", "req-remote", "--json", "--url", "wss://gateway.example/ws"),
+    ).toBe(
+      "This device can't approve its own scope upgrade. Approve it from the Control UI or another authorized device.",
+    );
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes device-controlled node guidance before throwing", async () => {
+    list([], [nodeDevice("Bad\u001b[2J\nName\r")]).mockRejectedValueOnce({
+      message: "unknown requestId",
+      gatewayCode: "INVALID_REQUEST",
+    });
+    const message = await refusal("approve", "192.168.0.202", "--json");
+    expect(message).toContain("Node reapproval pending for BadName. Run");
+    expect(message).not.toContain("\u001b");
+    expect(message).not.toContain("\r");
   });
 });
 
@@ -333,12 +378,38 @@ describe("mutations", () => {
     });
     expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true });
   });
-  it("rejects blank token targets", async () => {
-    await run("rotate", "--device", " ", "--role", "main");
+  it.each(["rotate", "revoke"])(
+    "routes blank %s targets as JSON without the explicit flag",
+    async (operation) => {
+      const message = await refusal(operation, "--device", " ", "--role", "node");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(message).toContain("--device and --role are required.");
+      expect(message).toContain("devices list");
+    },
+  );
+  it.each([
+    { args: ["clear"], message: "Refusing to clear pairing table without --yes" },
+    { args: ["remove", ""], message: "deviceId is required." },
+    { args: ["reject", " "], message: "requestId is required." },
+    {
+      args: ["rename", "--device", "", "--name", "Proof"],
+      message: "--device and --name are required.",
+    },
+    {
+      args: ["rename", "--device", "device-1", "--name", " "],
+      message: "--device and --name are required.",
+    },
+    {
+      args: ["rotate", "--device", "device-1", "--role", ""],
+      message: "--device and --role are required.",
+    },
+    {
+      args: ["revoke", "--device", "", "--role", "node"],
+      message: "--device and --role are required.",
+    },
+  ])("routes $args local JSON refusals before RPC", async ({ args, message }) => {
+    expect(await refusal(...args, "--json")).toContain(message);
     expect(callGateway).not.toHaveBeenCalled();
-    expect(errors()).toContain("--device and --role are required.");
-    expect(errors()).toContain("devices list");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
   it("renames a device", async () => {
     callGateway.mockResolvedValueOnce({ deviceId: "device-1", label: "Kitchen Mac" });

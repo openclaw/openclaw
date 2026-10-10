@@ -7,10 +7,10 @@ import {
   planLobsterBottle,
   planLobsterPasser,
   prefersReducedMotion,
-  type LobsterBottlePlan,
   type LobsterPasserPlan,
   type LobsterPasserOptions,
 } from "./lobster-pet-plans.ts";
+import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
 // Facing, reactions, and the act loop stay owned by the pet element; the
 // controller only reports crossing milestones.
@@ -29,18 +29,14 @@ type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
 export class LobsterLedgeTraffic implements ReactiveController {
   passer: LobsterPasserPlan | null = null;
+  bottle: LobsterBottleScene | null = null;
   private connected = false;
-  private bottlePlan: LobsterBottlePlan | null = null;
-  private bottleVisible = false;
-  private bottleOpened = false;
-  private passerTimer: number | null = null;
-  private passerEndTimer: number | null = null;
-  private passerWatchTimer: number | null = null;
+  private readonly timers = new LobsterPetTimers<
+    "passerTimer" | "passerEndTimer" | "passerWatchTimer" | "bottleTimer" | "bottleEndTimer"
+  >();
   private seed: number | null = null;
   private passerConsumed = false;
   private crossingMs = 0;
-  private bottleTimer: number | null = null;
-  private bottleEndTimer: number | null = null;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -57,7 +53,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     if (!this.hooks.visitsEnabled()) {
       this.clearTimers();
       this.passer = null;
-      this.bottleVisible = false;
+      this.bottle = null;
     }
   }
 
@@ -66,7 +62,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.clearTimers();
     // Clear visible guests so a reconnect cannot show a stopped passer or bottle.
     this.passer = null;
-    this.bottleVisible = false;
+    this.bottle = null;
     this.host.requestUpdate();
   }
 
@@ -78,8 +74,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.clearTimers();
     this.passer = null;
-    this.bottleVisible = false;
-    this.bottleOpened = false;
+    this.bottle = null;
     if (this.connected && this.hooks.visitsEnabled()) {
       this.schedulePasser(seed);
       this.scheduleBottle(seed);
@@ -115,49 +110,22 @@ export class LobsterLedgeTraffic implements ReactiveController {
     return this.passer ? this.crossingMs : 0;
   }
 
-  bottle(): LobsterBottleScene | null {
-    if (!this.bottleVisible || !this.bottlePlan) {
-      return null;
-    }
-    return {
-      spotPct: this.bottlePlan.spotPct,
-      opened: this.bottleOpened,
-      fortune: expectDefined(
-        LOBSTER_BOTTLE_FORTUNES[this.bottlePlan.fortuneIndex],
-        "lobster bottle fortune",
-      ),
-    };
-  }
-
   readonly openBottle = () => {
-    if (this.bottleOpened || !this.bottleVisible) {
+    if (!this.bottle || this.bottle.opened) {
       return;
     }
-    this.bottleOpened = true;
+    this.bottle = { ...this.bottle, opened: true };
     this.armBottleEbb(120_000);
     this.host.requestUpdate();
   };
 
   private clearTimers() {
     this.clearPasserTimers();
-    for (const timer of [this.bottleTimer, this.bottleEndTimer]) {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
-    }
-    this.bottleTimer = null;
-    this.bottleEndTimer = null;
+    this.timers.clear("bottleTimer", "bottleEndTimer");
   }
 
   private clearPasserTimers() {
-    for (const timer of [this.passerTimer, this.passerEndTimer, this.passerWatchTimer]) {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
-    }
-    this.passerTimer = null;
-    this.passerEndTimer = null;
-    this.passerWatchTimer = null;
+    this.timers.clear("passerTimer", "passerEndTimer", "passerWatchTimer");
   }
 
   private schedulePasser(seed: number) {
@@ -168,8 +136,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     if (!plan || prefersReducedMotion()) {
       return;
     }
-    this.passerTimer = window.setTimeout(() => {
-      this.passerTimer = null;
+    this.timers.schedule("passerTimer", plan.atMs, () => {
       // A crossing gets one chance per load, even after theme or preference refreshes.
       this.passerConsumed = true;
       if (
@@ -189,44 +156,45 @@ export class LobsterLedgeTraffic implements ReactiveController {
       this.host.requestUpdate();
       const crossMs = this.passerCrossMs();
       this.hooks.onPasserFacing(plan.direction === 1 ? -1 : 1);
-      this.passerWatchTimer = window.setTimeout(() => {
-        this.passerWatchTimer = null;
+      this.timers.schedule("passerWatchTimer", crossMs / 2, () => {
         this.hooks.onPasserFacing(plan.direction);
         this.hooks.onPasserMidCross();
-      }, crossMs / 2);
-      this.passerEndTimer = window.setTimeout(() => {
-        this.passerEndTimer = null;
+      });
+      this.timers.schedule("passerEndTimer", crossMs, () => {
         this.passer = null;
         this.host.requestUpdate();
         this.hooks.onPasserDone();
-      }, crossMs);
-    }, plan.atMs);
+      });
+    });
   }
 
   private scheduleBottle(seed: number) {
-    this.bottlePlan = planLobsterBottle(seed);
-    if (!this.bottlePlan) {
+    const plan = planLobsterBottle(seed);
+    if (!plan) {
       return;
     }
-    this.bottleTimer = window.setTimeout(() => {
-      this.bottleTimer = null;
+    this.timers.schedule("bottleTimer", plan.atMs, () => {
       if (!this.connected || !this.hooks.visitsEnabled()) {
         return;
       }
-      this.bottleVisible = true;
+      this.bottle = {
+        spotPct: plan.spotPct,
+        opened: false,
+        fortune: expectDefined(
+          LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
+          "lobster bottle fortune",
+        ),
+      };
       this.host.requestUpdate();
       this.armBottleEbb(300_000);
-    }, this.bottlePlan.atMs);
+    });
   }
 
   private armBottleEbb(delayMs: number) {
-    if (this.bottleEndTimer !== null) {
-      window.clearTimeout(this.bottleEndTimer);
-    }
-    this.bottleEndTimer = window.setTimeout(() => {
-      this.bottleEndTimer = null;
-      this.bottleVisible = false;
+    this.timers.clear("bottleEndTimer");
+    this.timers.schedule("bottleEndTimer", delayMs, () => {
+      this.bottle = null;
       this.host.requestUpdate();
-    }, delayMs);
+    });
   }
 }

@@ -44,6 +44,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
   createSessionRowModelCacheKey,
@@ -347,6 +348,7 @@ export function getSessionDefaults(
     thinkingLevels: thinkingProfile.thinkingLevels,
     thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
     thinkingDefault: thinkingProfile.thinkingDefault,
+    communication: resolveSessionCommunicationPolicy({ config: cfg }),
   };
 }
 

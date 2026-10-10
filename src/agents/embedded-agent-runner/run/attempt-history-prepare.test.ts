@@ -131,8 +131,7 @@ it("awaits descriptive worker rows before publishing the recovery briefing", asy
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     content: expect.not.stringContaining("unrelated"),
   });
-  const [, update, options] = mocks.updateEntry.mock.calls[0]!;
-  expect(options?.assertCommitAllowed).toBe(fixture.assertActive);
+  const [, update] = mocks.updateEntry.mock.calls[0]!;
   expect(await update(fixture.entry, {})).toMatchObject({ quotaSuspension: { state: "active" } });
   expect(await update({ ...fixture.entry, sessionId: "replacement" }, {})).toBeNull();
 });

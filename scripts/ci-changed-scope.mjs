@@ -1,4 +1,3 @@
-// Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -161,9 +160,11 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/locales\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+// A plugin can declare its browser entry in any package directory. Keep this
+// path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
-  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
+  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|extensions\/[^/]+\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
@@ -217,7 +218,6 @@ function isNativeProtocolInput(path) {
 }
 
 /**
- * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
  * @returns {ChangedScope}
  */
@@ -715,7 +715,6 @@ export function shouldRunNativeI18n(changedPaths) {
 }
 
 /**
- * Detects whether node-fast CI can cover the changed paths.
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
  */
@@ -767,7 +766,6 @@ function detectInstallSmokeScopeForPath(path) {
 }
 
 /**
- * Detects whether install-smoke CI should run for changed paths.
  * @param {string[]} changedPaths
  * @returns {InstallSmokeScope}
  */
@@ -792,7 +790,6 @@ export function detectInstallSmokeScope(changedPaths) {
 }
 
 /**
- * Lists changed paths for CI base/head inputs.
  * @param {string} base
  * @param {string} [head]
  * @param {string} [cwd]
@@ -827,7 +824,6 @@ export function listChangedPaths(
 }
 
 /**
- * Writes CI scope decisions to GitHub Actions output.
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
  * @param {InstallSmokeScope} [installSmokeScope]
@@ -915,11 +911,6 @@ export function writeGitHubOutput(
   );
 }
 
-/** @returns {boolean} */
-function isDirectRun() {
-  return isDirectRunUrl(process.argv[1], import.meta.url);
-}
-
 /**
  * @param {string[]} argv
  * @returns {{ base: string; head: string; mergeHeadFirstParent: boolean }}
@@ -945,7 +936,7 @@ export function parseArgs(argv) {
   return args;
 }
 
-if (isDirectRun()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const workflowEventName = process.env.GITHUB_EVENT_NAME ?? "";
   try {
     const args = parseArgs(process.argv.slice(2));

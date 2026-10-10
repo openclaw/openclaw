@@ -1,11 +1,7 @@
-import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
+import type { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import type {
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
   deliverDiscordInteractionReply,
@@ -14,24 +10,21 @@ import {
 } from "./native-command-reply.js";
 import type { DiscordConfig } from "./native-command.types.js";
 
-type ResolveDirectStatusReplyForSession = typeof resolveDirectStatusReplyForSession;
-
 export async function maybeDeliverDiscordDirectStatus(params: {
   commandName: string;
   suppressReplies?: boolean;
-  resolveDirectStatusReplyForSession: ResolveDirectStatusReplyForSession;
+  resolveDirectStatusReplyForSession: typeof resolveDirectStatusReplyForSession;
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionKey: string;
   commandTargetSessionKey?: string | null;
-  channel: "discord";
   senderId: string;
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction: CommandInteraction | BaseComponentInteraction;
   mediaLocalRoots: readonly string[];
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
@@ -44,7 +37,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   const statusReply = await params.resolveDirectStatusReplyForSession({
     cfg: params.cfg,
     sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
-    channel: params.channel,
+    channel: "discord",
     senderId: params.senderId,
     senderIsOwner: params.senderIsOwner,
     isAuthorizedSender: params.isAuthorizedSender,
@@ -60,8 +53,8 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
     });
-    return { accepted: true, effectiveRoute: params.effectiveRoute };
+  } else {
+    await params.respond("Status unavailable.");
   }
-  await params.respond("Status unavailable.");
   return { accepted: true, effectiveRoute: params.effectiveRoute };
 }

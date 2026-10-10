@@ -17,6 +17,26 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "update-command-post-update",
     distWorkerPath: "cli/update-cli/update-command-post-update.js",
   },
+  terminal: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-terminal",
+    distWorkerPath: "cli/update-cli/update-command-terminal.js",
+  },
+  packageSwapFixture: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/package-update-swap.test-support",
+    distWorkerPath: "infra/package-update-swap.test-support.js",
+  },
+  packageSwap: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/package-update-swap",
+    distWorkerPath: "infra/package-update-swap.js",
+  },
+  packageDistInventory: {
+    currentModuleUrl,
+    sourceWorkerName: "../../../scripts/lib/package-dist-inventory",
+    distWorkerPath: "scripts/lib/package-dist-inventory.js",
+  },
   candidateState: {
     currentModuleUrl,
     sourceWorkerName: "../../infra/update-candidate-state",

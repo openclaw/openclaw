@@ -20,14 +20,6 @@ type SessionDiscussionStateListener = (
   openUrl: string | null,
 ) => void;
 
-type OpeningDiscussion = {
-  sessionKey: string;
-  loader: SessionDiscussionInfoLoader;
-  opener: SessionDiscussionInfoLoader | null;
-  sourceGeneration: number;
-  canOpen: boolean;
-};
-
 export type SessionDiscussionPanelConfig = {
   sessionKey: string;
   canOpen: boolean;
@@ -85,7 +77,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   @property({ type: Boolean }) canOpen = true;
   @property({ type: Number }) sourceGeneration = 0;
 
-  @state() private openingDiscussion: OpeningDiscussion | null = null;
+  @state() private isOpeningDiscussionCurrent: (() => boolean) | null = null;
   private themeObserver: MutationObserver | null = null;
 
   private readonly discussionTask = new Task(this, {
@@ -97,57 +89,46 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
         this.sourceGeneration,
         this.canOpen,
       ] as const,
-    task: async ([sessionKey, loader, opener, _sourceGeneration, canOpen], { signal }) => {
+    task: async ([sessionKey, loader, opener, sourceGeneration, canOpen], { signal }) => {
       if (!loader || !sessionKey) {
         return null;
       }
       const loaded = await loader(sessionKey);
       signal.throwIfAborted();
-      const opening = {
-        sessionKey,
-        loader,
-        opener,
-        sourceGeneration: _sourceGeneration,
-        canOpen,
-      };
-      if (!this.isOpeningCurrent(opening)) {
+      const isCurrent = () =>
+        sessionKey === this.sessionKey.trim() &&
+        loader === this.loadInfo &&
+        opener === this.openDiscussion &&
+        sourceGeneration === this.sourceGeneration &&
+        canOpen === this.canOpen;
+      if (!isCurrent()) {
         return initialState;
       }
       let info = loaded;
       if (loaded.state === "available" && canOpen && opener) {
-        this.openingDiscussion = opening;
+        this.isOpeningDiscussionCurrent = isCurrent;
         this.publish(sessionKey, loaded);
-        if (!this.isOpeningCurrent(opening)) {
+        if (!isCurrent()) {
           return initialState;
         }
         info = (await opener(sessionKey)) ?? loaded;
       }
       signal.throwIfAborted();
-      if (!this.isOpeningCurrent(opening)) {
+      if (!isCurrent()) {
         return initialState;
       }
       return { sessionKey, info };
     },
     onComplete: (result) => {
-      this.openingDiscussion = null;
+      this.isOpeningDiscussionCurrent = null;
       if (result) {
         this.publish(result.sessionKey, result.info);
       }
     },
     onError: () => {
-      this.openingDiscussion = null;
+      this.isOpeningDiscussionCurrent = null;
     },
   });
-
-  private isOpeningCurrent(opening: OpeningDiscussion): boolean {
-    return (
-      opening.sessionKey === this.sessionKey.trim() &&
-      opening.loader === this.loadInfo &&
-      opening.opener === this.openDiscussion &&
-      opening.sourceGeneration === this.sourceGeneration &&
-      opening.canOpen === this.canOpen
-    );
-  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -238,7 +219,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     const loading =
       Boolean(this.loadInfo && this.sessionKey.trim()) &&
       this.discussionTask.status === TaskStatus.PENDING;
-    if (loading && this.openingDiscussion && this.isOpeningCurrent(this.openingDiscussion)) {
+    if (loading && this.isOpeningDiscussionCurrent?.()) {
       return renderPanelLoadingSkeleton("discussion", t("chat.sessionDiscussion.opening"));
     }
     if (loading) {

@@ -224,7 +224,7 @@ AUTHORING (recurring): every fire re-runs the same instructions; keep the model 
 
 ${triggerSection}
 
-DELIVERY: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
+DELIVERY: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route or creating-conversation commit when no external route exists; set channel/to for a specific chat — no messaging tool inside the run). Conversation delivery succeeds after the history commit; WebChat sees it live and after reconnect.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
 FAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.
 
@@ -445,17 +445,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
-            if (
-              typeof canonicalJob.declarationKey === "string" &&
-              canonicalJob.declarationKey.trim().length === 0
-            ) {
-              throw new Error("declarationKey must be a non-empty string");
-            }
-            if (
-              typeof canonicalJob.displayName === "string" &&
-              canonicalJob.displayName.trim().length === 0
-            ) {
-              throw new Error("displayName must be a non-empty string");
+            for (const key of ["declarationKey", "displayName"]) {
+              const value = canonicalJob[key];
+              if (typeof value === "string" && value.trim().length === 0) {
+                throw new Error(`${key} must be a non-empty string`);
+              }
             }
             const enabledExplicit = typeof canonicalJob.enabled === "boolean";
             const job =

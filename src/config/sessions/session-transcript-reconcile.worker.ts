@@ -1,7 +1,7 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteSchemaCookie } from "../../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
@@ -365,9 +365,9 @@ async function run(
           throw new Error("Transcript worker lost its admitted shared-state handle");
         }
         const shared = sharedBorrow.database;
-        const sharedSchema = readSqliteSchemaCookie(shared.db);
-        const agentSchema = readSqliteSchemaCookie(opened.database.db);
-        if (typeof sharedSchema !== "number" || typeof agentSchema !== "number") {
+        const sharedSchema = getAdmittedSqliteSchemaFacts(shared.db)?.admissionId;
+        const agentSchema = getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId;
+        if (!sharedSchema || !agentSchema) {
           throw new Error("Transcript worker cannot retain its admitted schema identities");
         }
         // Reentry is a new native phase, never adoption of a schema changed while yielding.
@@ -375,8 +375,8 @@ async function run(
           sharedBorrow?.assertCurrent();
           if (
             !shared.db.isOpen ||
-            readSqliteSchemaCookie(shared.db) !== sharedSchema ||
-            readSqliteSchemaCookie(opened.database.db) !== agentSchema
+            getAdmittedSqliteSchemaFacts(shared.db)?.admissionId !== sharedSchema ||
+            getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId !== agentSchema
           ) {
             throw new Error("Transcript worker schema changed between lifecycle phases");
           }

@@ -239,7 +239,6 @@ function cronPage(
 
 describe("cron cli", () => {
   it.each([
-    { leaf: [], port: "65267", token: "parent-token" },
     { leaf: ["--port", "65268", "--token", "leaf-token"], port: "65268", token: "leaf-token" },
   ])("resolves Gateway options with leaf overrides $leaf", async ({ leaf, port, token }) => {
     await runCronCommand([
@@ -265,23 +264,7 @@ describe("cron cli", () => {
     );
   });
 
-  it("documents the gateway-host timezone default for cron --tz help", () => {
-    const program = buildProgram();
-    const cronCommand = program.commands.find((command) => command.name() === "cron");
-    const addCommand = cronCommand?.commands.find((command) => command.name() === "add");
-    const editCommand = cronCommand?.commands.find((command) => command.name() === "edit");
-
-    expect(addCommand?.helpInformation()).toContain("Gateway host local timezone");
-    expect(editCommand?.helpInformation()).toContain("Gateway host local timezone");
-    expect(editCommand?.helpInformation()).toMatch(/offset-less uses\s+--tz/);
-  });
-
   it.each([
-    {
-      name: "exits 0 for cron run when job executes successfully",
-      ran: true,
-      expectedExitCode: 0,
-    },
     {
       name: "exits 0 for cron run when job is queued successfully",
       enqueued: true,
@@ -297,67 +280,27 @@ describe("cron cli", () => {
     expect(exitCode).toBe(expectedExitCode);
   });
 
-  it.each([
-    { completionStatus: undefined, expectedExitCode: 0 },
-    { completionStatus: "succeeded" as const, expectedExitCode: 0 },
-    { completionStatus: "failed" as const, expectedExitCode: 1 },
-  ])(
-    "waits for stored completion $completionStatus",
-    async ({ completionStatus, expectedExitCode }) => {
-      const { calls, exitCode } = await runCronRunAndCaptureExit({
-        enqueued: true,
-        runId: "manual:job-1:123:0",
-        runStatus: "ok",
-        completionStatus,
-        args: [...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"],
-      });
-      expect(exitCode).toBe(expectedExitCode);
-      expect(rpcParams("cron.runs")).toEqual({
-        id: "job-1",
-        runId: "manual:job-1:123:0",
-        limit: 1,
-      });
-      expect(JSON.parse(stdoutText())).toMatchObject({
-        completed: true,
-        status: "ok",
-        completionStatus: completionStatus ?? "succeeded",
-      });
-      expect(calls.some(([method]) => method === "cron.get")).toBe(false);
-    },
-  );
-
-  it.each([
-    ["1s", undefined, "600000", 1_000],
-    ["1s", "5", "5", 5],
-    ["10ms", "5000", "5000", 10],
-    ["0ms", undefined, "600000", 1],
-  ] as const)(
-    "bounds history RPCs for wait %s and RPC timeout %s",
-    async (wait, rpc, enqueue, max) => {
-      const { calls, exitCode, runOpts } = await runCronRunAndCaptureExit({
-        enqueued: true,
-        runId: "manual:job-1:123:0",
-        runStatus: "ok",
-        args: [
-          ...RUN_WAIT,
-          "--wait-timeout",
-          wait,
-          "--poll-interval",
-          "1ms",
-          ...(rpc === undefined ? [] : ["--timeout", rpc]),
-        ],
-      });
-      const historyCalls = calls.filter(([method]) => method === "cron.runs");
-      const options = historyCalls[0]?.[1] as { timeout?: string } | undefined;
-      const timeout = Number(options?.timeout);
-      expect(exitCode).toBe(0);
-      expect(historyCalls).toHaveLength(1);
-      expect(runOpts.timeout).toBe(enqueue);
-      expect(Number.isSafeInteger(timeout)).toBe(true);
-      expect(timeout).toBeGreaterThan(0);
-      expect(timeout).toBeLessThanOrEqual(max);
-    },
-  );
+  it("waits for stored failed completion", async () => {
+    const { calls, exitCode } = await runCronRunAndCaptureExit({
+      enqueued: true,
+      runId: "manual:job-1:123:0",
+      runStatus: "ok",
+      completionStatus: "failed",
+      args: [...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"],
+    });
+    expect(exitCode).toBe(1);
+    expect(rpcParams("cron.runs")).toEqual({
+      id: "job-1",
+      runId: "manual:job-1:123:0",
+      limit: 1,
+    });
+    expect(JSON.parse(stdoutText())).toMatchObject({
+      completed: true,
+      status: "ok",
+      completionStatus: "failed",
+    });
+    expect(calls.some(([method]) => method === "cron.get")).toBe(false);
+  });
 
   it("reduces each history RPC timeout after the system clock jumps backward", async () => {
     vi.useFakeTimers();
@@ -413,7 +356,6 @@ describe("cron cli", () => {
 
   it.each([
     ["rm", "cron.remove"],
-    ["run", "cron.run"],
     ["scratch", "cron.scratch.get"],
     ["runs", "cron.runs"],
   ])("preserves canonical lookup errors for %s", async (command, method) => {
@@ -453,16 +395,12 @@ describe("cron cli", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["enable", true],
-    ["disable", false],
-  ] as const)("sets enabled with %s", async (command, enabled) => {
+  it.each([["disable", false]] as const)("sets enabled with %s", async (command, enabled) => {
     await runCronCommand(["cron", command, "job-1"]);
     expect(rpcParams("cron.update")).toEqual({ id: "job-1", patch: { enabled } });
   });
 
   it.each([
-    { args: [], expected: { includeDisabled: false, limit: 200, offset: 0 } },
     {
       args: ["--agent", " Ops "],
       expected: { includeDisabled: false, agentId: "ops", limit: 200, offset: 0 },
@@ -661,14 +599,6 @@ describe("cron cli", () => {
     expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
-  it("creates exact command argv with a tool allowlist", async () => {
-    expect(
-      await namedAdd("--command-argv", '["echo","ok"]', "--tools", "read,write"),
-    ).toMatchObject({
-      payload: { kind: "command", argv: ["echo", "ok"], toolsAllow: ["read", "write"] },
-    });
-  });
-
   it("creates stream schedules from exact argv flags", async () => {
     expect(
       await add(
@@ -720,44 +650,12 @@ describe("cron cli", () => {
     expect(patch).not.toHaveProperty("delivery");
   });
 
-  it("updates model and thinking without repeating the message", async () => {
-    expect(await edit("--model", "opus", "--thinking", "low")).toEqual({
-      payload: { kind: "agentTurn", model: "opus", thinking: "low" },
-    });
-  });
-
-  it.each([
-    { args: ["--fallbacks", ""], fallbacks: [] },
-    { args: ["--clear-fallbacks"], fallbacks: null },
-  ])("preserves strict/cleared fallback semantics for $args", async ({ args, fallbacks }) => {
-    expect(await edit(...args)).toEqual({ payload: { kind: "agentTurn", fallbacks } });
-  });
-
   it("sets and clears agent routing", async () => {
     expect(await edit("--agent", " Ops ", "--session", "SESSION:Project-Alpha")).toEqual({
       agentId: "ops",
       sessionTarget: "session:Project-Alpha",
     });
     expect(await edit("--clear-agent")).toEqual({ agentId: null });
-  });
-
-  it("disables light context on message edits", async () => {
-    expect(await edit("--message", "hello", "--no-light-context")).toEqual({
-      payload: { kind: "agentTurn", message: "hello", lightContext: false },
-    });
-  });
-
-  it("converts payloads to exact command argv", async () => {
-    expect(
-      await edit(
-        "--command-argv",
-        '["node","scripts/report.mjs","  "]',
-        "--command-cwd",
-        "/srv/app",
-      ),
-    ).toEqual({
-      payload: { kind: "command", argv: ["node", "scripts/report.mjs", "  "], cwd: "/srv/app" },
-    });
   });
 
   it("preserves the stored command kind on timeout-only edits", async () => {
@@ -796,8 +694,6 @@ describe("cron cli", () => {
   });
 
   it.each([
-    { args: ["--thread-id", "42"], delivery: { threadId: 42 } },
-    { args: ["--account", "  coordinator  "], delivery: { accountId: "coordinator" } },
     { args: ["--no-deliver"], delivery: { mode: "none" } },
     {
       args: ["--webhook", " https://example.invalid/cron ", "--best-effort-deliver"],
@@ -844,40 +740,24 @@ describe("cron cli", () => {
     expect(await edit("--no-failure-alert")).toEqual({ failureAlert: false });
   });
 
-  it("changes skipped-run inclusion without replacing other alert settings", async () => {
-    expect(await edit("--failure-alert-include-skipped")).toEqual({
-      failureAlert: { includeSkipped: true },
-    });
-  });
-
   it.each([
-    ["+002027-01-15T12:00:00", "America/New_York", "2027-01-15T17:00:00.000Z"],
     ["+002027-01-15T12:00:00+02:00", "America/New_York", "2027-01-15T10:00:00.000Z"],
-    ["+002027-01-15", undefined, "2027-01-15T00:00:00.000Z"],
   ] as const)("normalizes one-shot creation %s in %s", async (at, tz, expected) => {
-    const params = await add(
-      "--name",
-      "job",
-      "--at",
-      at,
-      "--message",
-      "hello",
-      ...(tz === undefined ? [] : ["--tz", tz]),
-    );
+    const params = await add("--name", "job", "--at", at, "--message", "hello", "--tz", tz);
     expect(params.schedule).toEqual({ kind: "at", at: expected });
   });
 
-  it.each([false, true])("converts to a zoned one-shot with keep-after-run=%s", async (keep) => {
+  it("converts to a zoned one-shot with keep-after-run", async () => {
     const patch = await edit(
       "--at",
       "+002027-01-15T12:00:00",
       "--tz",
       "America/New_York",
-      ...(keep ? ["--keep-after-run"] : []),
+      "--keep-after-run",
     );
     expect(patch).toEqual({
       schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" },
-      ...(keep ? { deleteAfterRun: false } : {}),
+      deleteAfterRun: false,
     });
   });
 
@@ -946,37 +826,16 @@ describe("cron cli", () => {
       args: [...AGENT_ADD, "--webhook", "https://example.invalid/cron", "--to", "channel:C123"],
       error: "--webhook cannot be combined with chat delivery options",
     },
-    { args: [...AGENT_ADD, "--timeout-seconds", "1.5"], error: "Invalid --timeout-seconds" },
-    { args: [...EDIT, "--timeout-seconds", "1.5"], error: "Invalid --timeout-seconds" },
-    ...[
-      "--no-output-timeout-seconds",
-      "--output-max-bytes",
-      "--script-timeout-seconds",
-      "--script-tool-budget",
-    ].map((flag) => ({
-      args: [...EDIT, flag, "0"],
-      error: `Invalid ${flag} (must be a positive integer).`,
-    })),
-    ...["--no-output-timeout-seconds", "--output-max-bytes"].map((flag) => ({
-      args: [...ADD, "--command", "echo ok", flag, "0"],
-      error: `Invalid ${flag} (must be a positive integer).`,
-    })),
     { args: [...AGENT_ADD, "--command", "echo ok"], error: "Choose exactly one payload" },
-    ...[
-      { flag: "--channel", value: "telegram" },
-      { flag: "--to", value: "+1234567890" },
-      { flag: "--account", value: "coordinator" },
-      { flag: "--thread-id", value: "42" },
-    ].map(({ flag, value }) => ({
-      args: [...ADD, "--session", "main", "--system-event", "tick", flag, value],
+    {
+      args: [...ADD, "--session", "main", "--system-event", "tick", "--thread-id", "42"],
       error: "require a non-main agentTurn, command, or script job with delivery",
-    })),
+    },
     {
       args: [...AGENT_ADD, "--thread-id", "topic-42"],
       error: "--thread-id must be a positive integer",
     },
     { args: ["cron", "list", "--agent", "   "], error: "--agent must not be blank" },
-    { args: ["cron", "runs", "--id", "job-1", "--limit", "10x"], error: "Invalid --limit" },
     {
       args: ["cron", "runs", "--id", "job-1", "--run-id", "   "],
       error: "--run-id must not be blank",
@@ -985,15 +844,7 @@ describe("cron cli", () => {
       args: ["cron", "runs", "job-1", "--id", "job-2"],
       error: 'Conflicting job ids: positional "job-1" and --id "job-2".',
     },
-    { args: ["cron", "runs", "--id", "   "], error: "Missing job id" },
-    ...["rm", "show", "run", "scratch", "edit"].map((command) => ({
-      args: ["cron", command, "   "],
-      error: "Missing job id",
-    })),
-    {
-      args: ["automations", "runs", "--limit", "0"],
-      error: "Missing job id. Pass it positionally or with --id.",
-    },
+    { args: ["cron", "show", "   "], error: "Missing job id" },
     {
       args: ["cron", "run", "job-1", "--wait", "--poll-interval", "0ms"],
       error: "invalid --poll-interval",

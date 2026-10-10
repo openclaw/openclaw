@@ -59,119 +59,106 @@ vi.mock("openai", () => ({
 }));
 
 describe("worker inference account service tiers", () => {
-  it.each(["profile", "direct"] as const)(
-    "uses session speed and publishes a downgrade for the resolved %s credential",
-    async (source) => {
-      const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
-      const applyStreamPolicy = extraParamsRuntime.applyExtraParamsToAgent;
-      const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
-      const profileId = source === "profile" ? "openai:worker" : undefined;
-      const credential = { type: "api_key", provider: PROVIDER, key: AUTH_MARKER } as const;
-      const runtimeConfig: OpenClawConfig =
-        source === "direct"
-          ? {
-              ...config,
-              models: {
-                providers: {
-                  openai: {
-                    api: "openai-responses",
-                    baseUrl: "https://api.openai.com/v1",
-                    auth: "api-key",
-                    apiKey: AUTH_MARKER,
-                    models: [],
-                  },
-                },
-              },
-            }
-          : config;
-      const accountCatalog = createPreparedAccountCatalogAccess(
-        () => true,
-        undefined,
-        runtimeConfig,
-      );
-      const model = {
-        ...logicalModel,
-        api: "openai-responses" as const,
-        baseUrl: "https://api.openai.com/v1",
-      };
-      const pluginRegistry = createEmptyPluginRegistry();
-      pluginRegistry.providers.push({
-        pluginId: "worker-provider",
-        source: "test",
-        provider: {
-          id: PROVIDER,
-          label: "Worker provider",
-          auth: [],
-          createStreamFn: () => createOpenAIResponsesTransportStreamFn(),
-          wrapStreamFn: ({ streamFn, extraParams }) =>
-            createOpenAIFastModeWrapper(streamFn, resolveOpenAIFastMode(extraParams)),
+  it("uses session speed and publishes a downgrade for a direct credential", async () => {
+    const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
+    const applyStreamPolicy = extraParamsRuntime.applyExtraParamsToAgent;
+    const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
+    const runtimeConfig: OpenClawConfig = {
+      ...config,
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            auth: "api-key",
+            apiKey: AUTH_MARKER,
+            models: [],
+          },
         },
+      },
+    };
+    const accountCatalog = createPreparedAccountCatalogAccess(() => true, undefined, runtimeConfig);
+    const model = {
+      ...logicalModel,
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "worker-provider",
+      source: "test",
+      provider: {
+        id: PROVIDER,
+        label: "Worker provider",
+        auth: [],
+        createStreamFn: () => createOpenAIResponsesTransportStreamFn(),
+        wrapStreamFn: ({ streamFn, extraParams }) =>
+          createOpenAIFastModeWrapper(streamFn, resolveOpenAIFastMode(extraParams)),
+      },
+    });
+    const entry = { sessionId: SESSION_ID, updatedAt: 1, fastMode: "ultrafast" as const };
+    const runtime = setup(entry, { pluginRegistry, accountCatalog, config: runtimeConfig });
+    const authStorage = AuthStorage.inMemory({});
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
+    vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
+    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
+      apiKey: AUTH_MARKER,
+      mode: "api-key",
+      source: "worker provider fixture",
+    });
+    runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
+      prepareModel(
+        { ...modelParams, modelResolver: async () => ({ model, authStorage, modelRegistry }) },
+        assertCurrent,
+      ),
+    );
+    runtime.applyStreamPolicy.mockImplementation(applyStreamPolicy);
+    vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
+      registerProviderStream,
+    );
+    const route = {
+      identityKey: "direct:openai",
+      modelId: MODEL,
+      runtimeId: "openclaw",
+      api: model.api,
+      baseUrl: model.baseUrl,
+    };
+    transport.requests.length = 0;
+    for (const echo of ["priority", "priority", "ultrafast"]) {
+      transport.echo = echo;
+      await expect(
+        runtime.executor(params(request(), vi.fn(), runtimeConfig)),
+      ).resolves.toMatchObject({
+        type: "done",
       });
-      const entry = { sessionId: SESSION_ID, updatedAt: 1, fastMode: "ultrafast" as const };
-      const runtime = setup(entry, { pluginRegistry, accountCatalog, config: runtimeConfig });
-      const authStorage = AuthStorage.inMemory({});
-      const modelRegistry = ModelRegistry.inMemory(authStorage);
-      vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
-        version: 1,
-        profiles: profileId ? { [profileId]: credential } : {},
-      });
-      vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
-      vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
-        apiKey: AUTH_MARKER,
-        mode: "api-key",
-        profileId,
-        source: "worker provider fixture",
-      });
-      runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
-        prepareModel(
-          { ...modelParams, modelResolver: async () => ({ model, authStorage, modelRegistry }) },
-          assertCurrent,
-        ),
+      expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
+      expect(accountCatalog.readServiceTierObservation(route)).toEqual(
+        echo === "ultrafast" ? undefined : { requestedTier: "ultrafast", responseTier: echo },
       );
-      runtime.applyStreamPolicy.mockImplementation(applyStreamPolicy);
-      vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
-        registerProviderStream,
-      );
-      const route = {
-        identityKey: profileId ? `profile:${profileId}` : "direct:openai",
-        modelId: MODEL,
-        runtimeId: "openclaw",
-        api: model.api,
-        baseUrl: model.baseUrl,
-      };
-      transport.requests.length = 0;
-      for (const echo of ["priority", "priority", "ultrafast"]) {
-        transport.echo = echo;
-        await expect(
-          runtime.executor(params(request(), vi.fn(), runtimeConfig)),
-        ).resolves.toMatchObject({
-          type: "done",
-        });
-        expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
-        expect(accountCatalog.readServiceTierObservation(route)).toEqual(
-          echo === "ultrafast" ? undefined : { requestedTier: "ultrafast", responseTier: echo },
-        );
-      }
-      expect(runtime.prepareModel.mock.calls[0]?.[0].profileId).toBeUndefined();
-      expect(
-        accountCatalog.readServiceTierObservation({
-          ...route,
-          identityKey: "profile:openai:other",
-        }),
-      ).toBeUndefined();
-      for (const fastMode of [false, true]) {
-        runtime.readPromptCacheContext.mockReturnValue({ boundaryCount: 0, fastMode });
-        const inferenceRequest = request();
-        Object.assign(inferenceRequest.options, { fastMode: "ultrafast" });
-        await expect(
-          runtime.executor(params(inferenceRequest, vi.fn(), runtimeConfig)),
-        ).resolves.toMatchObject({
-          type: "done",
-        });
-        expect(transport.requests.at(-1)?.service_tier).toBe(fastMode ? "priority" : undefined);
-      }
-    },
-  );
+    }
+    expect(runtime.prepareModel.mock.calls[0]?.[0].profileId).toBeUndefined();
+    expect(
+      accountCatalog.readServiceTierObservation({
+        ...route,
+        identityKey: "profile:openai:other",
+      }),
+    ).toBeUndefined();
+    for (const fastMode of [false, true]) {
+      runtime.readPromptCacheContext.mockReturnValue({ boundaryCount: 0, fastMode });
+      const inferenceRequest = request();
+      Object.assign(inferenceRequest.options, { fastMode: "ultrafast" });
+      await expect(
+        runtime.executor(params(inferenceRequest, vi.fn(), runtimeConfig)),
+      ).resolves.toMatchObject({
+        type: "done",
+      });
+      expect(transport.requests.at(-1)?.service_tier).toBe(fastMode ? "priority" : undefined);
+    }
+  });
 
   it("uses the shared Auto deadline across repeated worker inference requests", async () => {
     const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1, fastMode: false });

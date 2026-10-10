@@ -355,9 +355,9 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      return markFutureUpdateFixture(root, sequence);
-    }),
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) =>
+      markFutureUpdateFixture(root, sequence),
+    ),
   };
 }
 
@@ -443,22 +443,14 @@ function main() {
     );
     return;
   }
-  if (
-    (mode === "first-hop-tarball" ||
-      mode === "negative-tarball" ||
-      mode === "future-tarball" ||
-      mode === "unsupported-admission-tarball" ||
-      mode === "future-runtime-tarball") &&
-    packageRoot &&
-    outputTarball
-  ) {
-    const pack = {
-      "first-hop-tarball": packFirstHopUpdateFixture,
-      "negative-tarball": packNegativeUpdateFixture,
-      "future-tarball": packFutureUpdateFixture,
-      "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
-      "future-runtime-tarball": packFutureRuntimeFixture,
-    }[mode];
+  const packers = {
+    "first-hop-tarball": packFirstHopUpdateFixture,
+    "negative-tarball": packNegativeUpdateFixture,
+    "future-tarball": packFutureUpdateFixture,
+    "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
+    "future-runtime-tarball": packFutureRuntimeFixture,
+  };
+  if (Object.hasOwn(packers, mode) && packageRoot && outputTarball) {
     const fixtureArg =
       mode === "negative-tarball"
         ? (sequence ?? "")
@@ -466,7 +458,7 @@ function main() {
           ? 0
           : Number(sequence);
     process.stdout.write(
-      `${JSON.stringify(pack(packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
+      `${JSON.stringify(packers[mode](packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
     );
     return;
   }

@@ -162,8 +162,8 @@ const prompt = await MCP.docs.prompts.get({
 });
 ```
 
-`API.read("mcp/<server>.d.ts")` returns compact declarations inferred from MCP
-tool metadata:
+`(await API.read("mcp/<server>.d.ts")).content` contains compact declarations
+inferred from MCP tool metadata:
 
 ```typescript
 interface McpToolResult {
@@ -228,9 +228,9 @@ directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
 catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
 `mcp/<server>.d.ts` per visible server, and injects that small read-only table
 into the selected executor's worker. Guest code sees only the `API` object:
-`API.list(prefix?)` returns file metadata and `API.read(path)` returns the
-selected declaration content. Unknown paths and `.`/`..` segments are
-rejected.
+`API.list(prefix?)` returns `{ files }` with file metadata and `API.read(path)`
+returns `{ path, description, content, bytes }`. The `content` field holds the
+declaration text. Unknown paths and `.`/`..` segments are rejected.
 
 This keeps large MCP schemas out of the model prompt: the agent learns the
 virtual API exists from the `exec` tool description, reads only the needed

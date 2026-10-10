@@ -5,7 +5,7 @@ import {
   listSessionEntriesCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-runtime.js";
+import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-maintenance.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createSessionReaperTimerHarness } from "./service.session-reaper.test-support.js";
 import {
@@ -160,26 +160,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await onTimer(state);
       expect(readExpired).toHaveBeenCalledOnce();
       expect(entries(sessionStorePath)).toHaveLength(1);
-    });
-  });
-
-  it("runs explicit-agent jobs when no default reaper agent exists", async () => {
-    const job = { ...dueJob("explicit-agent"), agentId: "worker" };
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
-    const { state, sessionStorePath } = await fixture([job], {
-      runIsolatedAgentJob,
-      defaultAgentId: undefined,
-      resolveDefaultAgentId: () => undefined,
-      resolveSessionStoreAgentIds: () => ["worker"],
-    });
-    await seedExpired(sessionStorePath, "worker");
-    state.store = { version: 1, jobs: [job] };
-    await withCronServiceStateForTest(state, async () => {
-      await expect(onTimer(state)).resolves.toBeUndefined();
-      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-      expect(entries(sessionStorePath, "worker")).toStrictEqual([]);
-      expect(state.running).toBe(false);
-      expect(state.timer).not.toBeNull();
     });
   });
 

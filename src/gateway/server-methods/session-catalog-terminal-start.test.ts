@@ -6,7 +6,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { catalogStartHandler } from "./session-catalog-terminal-start.js";
+import { sessionCatalogHandlers } from "./session-catalog.js";
 
 vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
@@ -24,9 +24,11 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
-const handler = catalogStartHandler((catalogId) =>
-  activeProvider.id === catalogId ? activeProvider : undefined,
-);
+vi.mock("./session-catalog-provider-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-catalog-provider-access.js")>()),
+  catalogRegistrationSnapshot: () => ({ providers: [activeProvider] }),
+}));
+const handler = sessionCatalogHandlers["sessions.catalog.startTerminal"]!;
 
 function startCall(
   params: unknown,

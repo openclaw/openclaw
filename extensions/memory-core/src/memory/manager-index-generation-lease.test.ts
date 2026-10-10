@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireMemoryIndexReadGeneration,
-  withMemoryIndexPublishGeneration,
+  withMemoryIndexGeneration,
 } from "./manager-index-generation-lease.js";
 
 const leaseChildSource = String.raw`
@@ -186,7 +186,7 @@ describe("memory index generation lease", () => {
     });
     await vi.waitFor(() => expect(events).toContain("first-reader-start"));
 
-    const publish = withMemoryIndexPublishGeneration(generationPath, async () => {
+    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
       events.push("publish");
     });
     await Promise.resolve();
@@ -210,7 +210,7 @@ describe("memory index generation lease", () => {
       await firstReaderGate;
     });
     await vi.waitFor(() => expect(events).toContain("first-reader"));
-    const publish = withMemoryIndexPublishGeneration(generationPath, async () => {
+    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
       events.push("publish");
     });
     const nextReader = withReadGeneration(generationPath, async () => {
@@ -247,7 +247,7 @@ describe("memory index generation lease", () => {
     try {
       expect(await readChildLine(child)).toBe("acquired");
       const events: string[] = [];
-      const publication = withMemoryIndexPublishGeneration(databasePath, async () => {
+      const publication = withMemoryIndexGeneration(databasePath, "write", async () => {
         events.push("published");
       });
       await new Promise<void>((resolve) => {
@@ -271,7 +271,7 @@ describe("memory index generation lease", () => {
     try {
       expect(await readChildLine(firstReader)).toBe("acquired");
       const events: string[] = [];
-      publication = withMemoryIndexPublishGeneration(databasePath, async () => {
+      publication = withMemoryIndexGeneration(databasePath, "write", async () => {
         events.push("published");
       });
       await new Promise<void>((resolve) => {

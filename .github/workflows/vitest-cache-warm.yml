@@ -76,6 +76,12 @@ jobs:
           path: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
           key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
 
+      - name: Warm Playwright Chromium
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: read-write
+
   warm:
     if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     runs-on: ${{ (matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}

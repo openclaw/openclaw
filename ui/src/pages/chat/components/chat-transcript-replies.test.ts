@@ -1,10 +1,10 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import * as chatMessage from "./chat-message-group.ts";
 import {
   getTranscriptState,
@@ -401,7 +401,7 @@ describe("chat transcript replies", () => {
       strips: [],
     },
   ])(
-    "keeps reply attribution from the full conversation when $case",
+    "keeps cached reply attribution from the full conversation when $case",
     async ({ messages, query, session, strips }) => {
       const props = threadProps("pane-reply-context", "agent:main:main", [...messages]);
       if (session) {
@@ -411,6 +411,10 @@ describe("chat transcript replies", () => {
           updatedAt: 1,
           ...session,
         } as GatewaySessionRow;
+      }
+      if (props.selectedSession) {
+        props.transcriptMetadata = projectChatTranscriptMetadata(props.selectedSession);
+        props.selectedSession = undefined;
       }
       expect(await renderedStrips(props, query)).toEqual(strips);
     },

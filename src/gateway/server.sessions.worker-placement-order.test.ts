@@ -79,7 +79,7 @@ test.each(["delete", "archive", "recover"] as const)(
         await releaseMove.promise;
         return {
           managedWorktrees: {
-            findLiveByOwner: () => ({
+            findLiveByOwner: async () => ({
               id: "order-worktree",
               ownerId: sessionKey,
               path: "/fixture/worktree",

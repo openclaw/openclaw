@@ -37,6 +37,18 @@ export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
+/** Undefined shared facets await their owner; null is acknowledged absence. */
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
+  Partial<Pick<PreparedSessionRowDatabaseFacts, "acpMeta" | "repositoryWorkspace">>;
+
+export function isPreparedSessionRowDatabaseFacts(
+  facts: RetainedSessionRowDatabaseFacts | undefined,
+): facts is PreparedSessionRowDatabaseFacts {
+  return (
+    facts !== undefined && facts.acpMeta !== undefined && facts.repositoryWorkspace !== undefined
+  );
+}
+
 export type SessionRowStore = {
   target: SessionStoreTarget;
   agentId: string;
@@ -54,8 +66,8 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
-  /** Catalog changes reuse the accepted snapshot until a data publication or demotion. */
-  retainedDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Presentation retains certified facets until their owner publishes or the row is demoted. */
+  retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
@@ -143,14 +155,10 @@ export const identity = (row: RowTarget) =>
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
 const logical = (agentId: string, key: string) => `logical:${agentId}\0${key}`;
 export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
-  const children = new Set(byParent.get(logical(row.agentId, row.key)));
-  const physicalChildren = byParent.get(physical(row.storeTarget.storePath, row.key));
-  if (physicalChildren) {
-    for (const id of physicalChildren) {
-      children.add(id);
-    }
-  }
-  return children;
+  return new Set([
+    ...(byParent.get(logical(row.agentId, row.key)) ?? []),
+    ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
+  ]);
 }
 export function markRelated(
   row: Row,
@@ -204,18 +212,17 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }
 }
 
-/** Expire both accepted facts and worker replies still waiting to enter this row. */
-export function invalidateDatabaseFacts(row: Row) {
+/** Expire accepted facts and pending replies, retaining only independently certified facets. */
+export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;
-  row.retainedDatabaseFacts = undefined;
-  row.preparedAcpMeta = undefined;
+  row.retainedDatabaseFacts = retained;
+  row.preparedAcpMeta = retained?.acpMeta;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -401,10 +408,9 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
     return candidates[0];
   }
   for (const sourcePath of storePaths) {
-    for (const row of candidates) {
-      if (row.storeTarget.storePath === sourcePath) {
-        return row;
-      }
+    const row = candidates.find((candidate) => candidate.storeTarget.storePath === sourcePath);
+    if (row) {
+      return row;
     }
   }
   return undefined;
@@ -588,11 +594,8 @@ export function readSessionRowParents(
   };
   addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
   addParent(storedEntry.spawnedBy);
-  const runs = context.subagentRunsByChildSessionKey.get(row.key);
-  if (runs) {
-    for (const run of runs) {
-      addParent(run.controllerSessionKey || run.requesterSessionKey);
-    }
+  for (const run of context.subagentRunsByChildSessionKey.get(row.key) ?? []) {
+    addParent(run.controllerSessionKey || run.requesterSessionKey);
   }
   return parents;
 }
@@ -655,12 +658,14 @@ export function acquireSessionRowEntry(params: {
       row.entry.lifecycleRevision === entry.lifecycleRevision)
       ? row.generation
       : Symbol("row");
+  const retainedDatabaseFacts =
+    row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined;
   let next: Row = {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    retainedDatabaseFacts: undefined,
-    databaseFactsRevision: row.databaseFactsRevision + 1,
+    retainedDatabaseFacts,
+    databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
     ...lineage,
     sharingEntry: storedEntry,
     generation,

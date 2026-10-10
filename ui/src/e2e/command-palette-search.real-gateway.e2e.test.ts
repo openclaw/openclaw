@@ -362,7 +362,14 @@ suite.define(() => {
       const url = new URL("/chat/main", suite.server.baseUrl);
       url.hash = new URL(browserUrl).hash;
       await suite.withPage(
-        { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+        {
+          serviceWorkers: "block",
+          locale: "en-US",
+          viewport: { width: 1280, height: 900 },
+          ...(captureEnabled
+            ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+            : {}),
+        },
         async ({ page }) => {
           await page.addInitScript((key) => {
             localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));

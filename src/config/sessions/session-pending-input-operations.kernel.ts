@@ -181,7 +181,7 @@ export function mutatePendingInput(
       }
       receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
     } else if (row) {
-      executeSqliteQuerySync(
+      const result = executeSqliteQuerySync(
         current.db,
         getSessionKysely(current.db)
           .updateTable("session_pending_inputs")
@@ -190,6 +190,9 @@ export function mutatePendingInput(
           .where("state", "=", "queued")
           .where("consumed_event_id", "is", null),
       );
+      if (input.disposition === "cancelled" && result.numAffectedRows === 1n) {
+        receipt.withdrawnInputId = input.inputId;
+      }
     }
     publish(current.db, receipt);
     admit("commit", grant);

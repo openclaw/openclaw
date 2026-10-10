@@ -192,7 +192,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     captureDetailSplitPct: 34,
     captureDetailSplitDragging: false,
     captureDetailView: "overview",
-    capturePreferredDetailView: null,
     captureFlowDetailLayout: null,
     capturePayloadDetailLayout: null,
     capturePayloadExtent: "preview",
@@ -246,7 +245,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     anchor: { start: number; end: number };
     current: { start: number; end: number };
   } | null = null;
-  let captureGlobalListenersBound = false;
 
   function isSelectOpen(): boolean {
     const active = document.activeElement;
@@ -711,7 +709,33 @@ export async function createQaLabApp(root: HTMLDivElement) {
     render();
   }
 
+  async function deleteCaptureData(sessionIds?: string[]) {
+    if (sessionIds?.length === 0) {
+      return;
+    }
+    const confirmed = window.confirm(
+      sessionIds
+        ? `Delete ${sessionIds.length} selected capture session${sessionIds.length === 1 ? "" : "s"}?`
+        : "Purge all captured sessions, events, and blobs?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    await postJson(
+      sessionIds ? "/api/capture/delete-sessions" : "/api/capture/purge",
+      sessionIds ? { sessionIds } : {},
+    );
+    state.selectedCaptureSessionIds = [];
+    state.selectedCaptureEventKey = null;
+    await refresh();
+  }
+
   function bindEvents() {
+    const bindClicks = (selector: string, onClick: (node: HTMLElement) => void) => {
+      root.querySelectorAll<HTMLElement>(selector).forEach((node) => {
+        node.addEventListener("click", () => onClick(node));
+      });
+    };
     const bindValue = (
       selector: string,
       event: "input" | "change",
@@ -726,41 +750,36 @@ export async function createQaLabApp(root: HTMLDivElement) {
       render();
     });
 
-    root.querySelectorAll<HTMLElement>("[data-conversation-key]").forEach((node) => {
-      node.addEventListener("click", () => {
-        state.selectedConversationKey = node.dataset.conversationKey ?? null;
-        state.selectedThreadId = null;
-        if (state.activeTab !== "chat") {
-          state.activeTab = "chat";
-        }
-        render();
-      });
-    });
-
-    root.querySelectorAll<HTMLElement>("[data-thread-select]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const val = node.dataset.threadSelect;
-        if (val === "root") {
+    for (const [attribute, field, tab] of [
+      ["data-conversation-key", "selectedConversationKey", "chat"],
+      ["data-scenario-id", "selectedScenarioId", "results"],
+      ["data-evidence-entry-key", "selectedEvidenceEntryKey", null],
+      ["data-capture-event", "selectedCaptureEventKey", null],
+    ] as const) {
+      bindClicks(`[${attribute}]`, (node) => {
+        state[field] = node.getAttribute(attribute);
+        if (field === "selectedConversationKey") {
           state.selectedThreadId = null;
-        } else {
-          state.selectedThreadId = val ?? null;
-          const conversationKey = node.dataset.threadConversationKey;
-          if (conversationKey) {
-            state.selectedConversationKey = conversationKey;
-          }
+        }
+        if (tab) {
+          state.activeTab = tab;
         }
         render();
       });
-    });
+    }
 
-    root.querySelectorAll<HTMLElement>("[data-scenario-id]").forEach((node) => {
-      node.addEventListener("click", () => {
-        state.selectedScenarioId = node.dataset.scenarioId ?? null;
-        if (state.activeTab !== "results") {
-          state.activeTab = "results";
+    bindClicks("[data-thread-select]", (node) => {
+      const val = node.dataset.threadSelect;
+      if (val === "root") {
+        state.selectedThreadId = null;
+      } else {
+        state.selectedThreadId = val ?? null;
+        const conversationKey = node.dataset.threadConversationKey;
+        if (conversationKey) {
+          state.selectedConversationKey = conversationKey;
         }
-        render();
-      });
+      }
+      render();
     });
 
     const bindAction = (action: string, handler: () => void) => {
@@ -772,13 +791,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
     bindAction("reset", () => void resetState());
     bindAction("toggle-theme", toggleTheme);
     bindAction("toggle-sidebar", toggleSidebar);
-    root.querySelectorAll<HTMLElement>("[data-sidebar-panel]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const panel = node.dataset.sidebarPanel;
-        if (panel === "config" || panel === "run" || panel === "scenarios") {
-          setSidebarPanel(panel);
-        }
-      });
+    bindClicks("[data-sidebar-panel]", (node) => {
+      const panel = node.dataset.sidebarPanel;
+      if (panel === "config" || panel === "run" || panel === "scenarios") {
+        setSidebarPanel(panel);
+      }
     });
     bindAction("self-check", () => void runSelfCheck());
     bindAction("run-suite", () => void runSuite());
@@ -920,13 +937,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.selectedEvidenceEntryKey = null;
       render();
     });
-    root.querySelectorAll<HTMLElement>("[data-evidence-entry-key]").forEach((node) => {
-      node.addEventListener("click", () => {
-        state.selectedEvidenceEntryKey = node.dataset.evidenceEntryKey ?? null;
-        render();
-      });
-    });
-
     root.querySelector<HTMLSelectElement>("#capture-session")?.addEventListener("change", (e) => {
       state.selectedCaptureSessionIds = readMultiSelect(e.currentTarget as HTMLSelectElement);
       state.selectedCaptureEventKey = null;
@@ -963,53 +973,24 @@ export async function createQaLabApp(root: HTMLDivElement) {
       persistCaptureSavedViews(state.captureSavedViews);
       render();
     });
-    root.querySelectorAll<HTMLButtonElement>("[data-capture-session-remove]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const sessionId = node.dataset.captureSessionRemove?.trim();
-        if (!sessionId) {
-          return;
-        }
-        state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter(
-          (id) => id !== sessionId,
-        );
-        state.selectedCaptureEventKey = null;
-        void refresh();
-      });
+    bindClicks("[data-capture-session-remove]", (node) => {
+      const sessionId = node.dataset.captureSessionRemove?.trim();
+      if (!sessionId) {
+        return;
+      }
+      state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter(
+        (id) => id !== sessionId,
+      );
+      state.selectedCaptureEventKey = null;
+      void refresh();
     });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
-        void (async () => {
-          if (state.selectedCaptureSessionIds.length === 0) {
-            return;
-          }
-          const confirmed = window.confirm(
-            `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
-              state.selectedCaptureSessionIds.length === 1 ? "" : "s"
-            }?`,
-          );
-          if (!confirmed) {
-            return;
-          }
-          await postJson("/api/capture/delete-sessions", {
-            sessionIds: state.selectedCaptureSessionIds,
-          });
-          state.selectedCaptureSessionIds = [];
-          state.selectedCaptureEventKey = null;
-          await refresh();
-        })();
+        void deleteCaptureData(state.selectedCaptureSessionIds);
       });
     root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
-      void (async () => {
-        const confirmed = window.confirm("Purge all captured sessions, events, and blobs?");
-        if (!confirmed) {
-          return;
-        }
-        await postJson("/api/capture/purge", {});
-        state.selectedCaptureSessionIds = [];
-        state.selectedCaptureEventKey = null;
-        await refresh();
-      })();
+      void deleteCaptureData();
     });
     bindValue("#capture-preset", "change", (value) => {
       state.captureQueryPreset = value as UiState["captureQueryPreset"];
@@ -1154,7 +1135,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     bindCaptureRadio("capture-detail-view", (value) => {
       state.captureDetailView =
         value === "flow" || value === "payload" || value === "headers" ? value : "overview";
-      state.capturePreferredDetailView = state.captureDetailView;
     });
     bindCaptureRadio("capture-flow-layout", (value) => {
       state.captureFlowDetailLayout = value === "pair-first" ? "pair-first" : "nav-first";
@@ -1204,37 +1184,27 @@ export async function createQaLabApp(root: HTMLDivElement) {
       ["data-capture-lane-toggle", "captureCollapsedLaneIds"],
       ["data-capture-lane-pin", "capturePinnedLaneIds"],
     ] as const) {
-      root.querySelectorAll<HTMLElement>(`[${attribute}]`).forEach((node) => {
-        node.addEventListener("click", () => {
-          const laneId = node.getAttribute(attribute);
-          if (!laneId) {
-            return;
-          }
-          const selected = new Set(state[field]);
-          if (selected.has(laneId)) {
-            selected.delete(laneId);
-          } else {
-            selected.add(laneId);
-          }
-          state[field] = [...selected];
-          render();
-        });
-      });
-    }
-    root.querySelectorAll<HTMLElement>("[data-capture-event]").forEach((node) => {
-      node.addEventListener("click", () => {
-        state.selectedCaptureEventKey = node.dataset.captureEvent ?? null;
-        render();
-      });
-    });
-    root.querySelectorAll<HTMLButtonElement>("[data-copy-text]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const text = node.dataset.copyText ?? "";
-        if (!text) {
+      bindClicks(`[${attribute}]`, (node) => {
+        const laneId = node.getAttribute(attribute);
+        if (!laneId) {
           return;
         }
-        void navigator.clipboard.writeText(text).catch(() => undefined);
+        const selected = new Set(state[field]);
+        if (selected.has(laneId)) {
+          selected.delete(laneId);
+        } else {
+          selected.add(laneId);
+        }
+        state[field] = [...selected];
+        render();
       });
+    }
+    bindClicks("[data-copy-text]", (node) => {
+      const text = node.dataset.copyText ?? "";
+      if (!text) {
+        return;
+      }
+      void navigator.clipboard.writeText(text).catch(() => undefined);
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {
       const readWindow = () => {
@@ -1332,100 +1302,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
         window.addEventListener("mouseup", handleUp);
       });
     });
-    if (!captureGlobalListenersBound) {
-      captureGlobalListenersBound = true;
-      window.addEventListener("mouseup", (event) => {
-        if (!sparklineSweep) {
-          return;
-        }
-        const { anchor, current } = sparklineSweep;
-        sparklineSweep = null;
-        const start = Math.min(anchor.start, current.start);
-        const end = Math.max(anchor.end, current.end);
-        const width = Math.max(0.01, end - start);
-        const expand = event.shiftKey ? width : 0;
-        state.captureTimelineWindowStartPct = Math.max(0, Math.min(100, start - expand));
-        state.captureTimelineWindowEndPct = Math.max(0, Math.min(100, end + expand));
-        state.captureTimelineBrushAnchorPct = null;
-        state.captureTimelineBrushCurrentPct = null;
-        state.selectedCaptureEventKey = null;
-        render();
-      });
-      root.addEventListener("keydown", (event) => {
-        if (state.activeTab !== "capture") {
-          return;
-        }
-        if (isEditableElement(event.target)) {
-          return;
-        }
-        if (event.key === "1" || event.key === "2" || event.key === "3" || event.key === "4") {
-          const radios = [
-            ...root.querySelectorAll<HTMLInputElement>('input[name="capture-detail-view"]'),
-          ].filter((node) => !node.disabled);
-          const index = Number(event.key) - 1;
-          const target = radios[index];
-          if (target) {
-            event.preventDefault();
-            target.checked = true;
-            state.captureDetailView =
-              target.value === "flow" || target.value === "payload" || target.value === "headers"
-                ? target.value
-                : "overview";
-            state.capturePreferredDetailView = state.captureDetailView;
-            render();
-          }
-          return;
-        }
-        if (state.captureViewMode !== "timeline") {
-          return;
-        }
-        if (
-          event.key !== "ArrowLeft" &&
-          event.key !== "ArrowRight" &&
-          event.key !== "Home" &&
-          event.key !== "End" &&
-          event.key !== "Escape"
-        ) {
-          return;
-        }
-        if (event.key === "Escape") {
-          if (
-            state.captureTimelineWindowStartPct != null ||
-            state.captureTimelineBrushAnchorPct != null
-          ) {
-            event.preventDefault();
-            clearCaptureTimelineWindow();
-          }
-          return;
-        }
-        const markers = [
-          ...root.querySelectorAll<HTMLElement>(".capture-timeline [data-capture-event]"),
-        ];
-        if (markers.length === 0) {
-          return;
-        }
-        const currentIndex = markers.findIndex(
-          (node) => (node.dataset.captureEvent ?? null) === state.selectedCaptureEventKey,
-        );
-        let nextIndex = Math.max(currentIndex, 0);
-        if (event.key === "Home") {
-          nextIndex = 0;
-        } else if (event.key === "End") {
-          nextIndex = markers.length - 1;
-        } else if (event.key === "ArrowLeft") {
-          nextIndex = currentIndex <= 0 ? 0 : currentIndex - 1;
-        } else if (event.key === "ArrowRight") {
-          nextIndex = currentIndex < 0 ? 0 : Math.min(markers.length - 1, currentIndex + 1);
-        }
-        const next = markers[nextIndex];
-        if (!next) {
-          return;
-        }
-        event.preventDefault();
-        state.selectedCaptureEventKey = next.dataset.captureEvent ?? null;
-        render();
-      });
-    }
 
     bindValue("#conversation-kind", "change", (selectedKind) => {
       state.composer.conversationKind =
@@ -1491,6 +1367,97 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
     requestAnimationFrame(() => scrollChatToBottom());
   }
+
+  window.addEventListener("mouseup", (event) => {
+    if (!sparklineSweep) {
+      return;
+    }
+    const { anchor, current } = sparklineSweep;
+    sparklineSweep = null;
+    const start = Math.min(anchor.start, current.start);
+    const end = Math.max(anchor.end, current.end);
+    const width = Math.max(0.01, end - start);
+    const expand = event.shiftKey ? width : 0;
+    state.captureTimelineWindowStartPct = Math.max(0, Math.min(100, start - expand));
+    state.captureTimelineWindowEndPct = Math.max(0, Math.min(100, end + expand));
+    state.captureTimelineBrushAnchorPct = null;
+    state.captureTimelineBrushCurrentPct = null;
+    state.selectedCaptureEventKey = null;
+    render();
+  });
+  root.addEventListener("keydown", (event) => {
+    if (state.activeTab !== "capture") {
+      return;
+    }
+    if (isEditableElement(event.target)) {
+      return;
+    }
+    if (event.key === "1" || event.key === "2" || event.key === "3" || event.key === "4") {
+      const radios = [
+        ...root.querySelectorAll<HTMLInputElement>('input[name="capture-detail-view"]'),
+      ].filter((node) => !node.disabled);
+      const index = Number(event.key) - 1;
+      const target = radios[index];
+      if (target) {
+        event.preventDefault();
+        target.checked = true;
+        state.captureDetailView =
+          target.value === "flow" || target.value === "payload" || target.value === "headers"
+            ? target.value
+            : "overview";
+        render();
+      }
+      return;
+    }
+    if (state.captureViewMode !== "timeline") {
+      return;
+    }
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "Home" &&
+      event.key !== "End" &&
+      event.key !== "Escape"
+    ) {
+      return;
+    }
+    if (event.key === "Escape") {
+      if (
+        state.captureTimelineWindowStartPct != null ||
+        state.captureTimelineBrushAnchorPct != null
+      ) {
+        event.preventDefault();
+        clearCaptureTimelineWindow();
+      }
+      return;
+    }
+    const markers = [
+      ...root.querySelectorAll<HTMLElement>(".capture-timeline [data-capture-event]"),
+    ];
+    if (markers.length === 0) {
+      return;
+    }
+    const currentIndex = markers.findIndex(
+      (node) => (node.dataset.captureEvent ?? null) === state.selectedCaptureEventKey,
+    );
+    let nextIndex = Math.max(currentIndex, 0);
+    if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = markers.length - 1;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = currentIndex <= 0 ? 0 : currentIndex - 1;
+    } else if (event.key === "ArrowRight") {
+      nextIndex = currentIndex < 0 ? 0 : Math.min(markers.length - 1, currentIndex + 1);
+    }
+    const next = markers[nextIndex];
+    if (!next) {
+      return;
+    }
+    event.preventDefault();
+    state.selectedCaptureEventKey = next.dataset.captureEvent ?? null;
+    render();
+  });
 
   render();
   await refresh();

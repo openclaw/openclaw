@@ -188,75 +188,51 @@ export function renewDeliveryQueueEntryPlatformSendLeaseInDatabase(
     : undefined;
 }
 
-/** Atomically fence the exact unexpired owner at the real provider boundary. */
-export function promoteDeliveryQueueEntryPlatformSendInDatabase(
-  database: OpenClawStateDatabase,
-  params: PlatformClaimParams & {
-    claimId: string;
-    route?: { replyToId?: string | null };
-  },
-): boolean {
-  return transitionDeliveryQueueEntryPlatformSendInDatabase(
-    database,
-    params,
-    "promote",
-    (entry, now) =>
-      entry.recoveryState === "producer_claimed" &&
-      hasLiveDeliveryQueueClaim(entry, params.claimId, now)
-        ? {
-            ...entry,
-            // Only an explicitly leased owner keeps its cross-process fence;
-            // legacy recovery must remain immediately eligible after a crash.
-            availableAt:
-              entry.requiresProducerClaim === true ? now + PLATFORM_SEND_OWNER_LEASE_MS : undefined,
-            producerClaimId: undefined,
-            platformSendAttemptId: params.claimId,
-            platformSendStartedAt: now,
-            ...(params.route && "replyToId" in params.route
-              ? { effectiveReplyToId: params.route.replyToId ?? null }
-              : {}),
-            recoveryState: "send_attempt_started",
-          }
-        : undefined,
-  );
+function platformSendTransition(operation: "promote" | "dispatch") {
+  return (
+    database: OpenClawStateDatabase,
+    params: PlatformClaimParams & {
+      claimId: string;
+      route?: { replyToId?: string | null };
+    },
+  ): boolean => {
+    return transitionDeliveryQueueEntryPlatformSendInDatabase(
+      database,
+      params,
+      operation,
+      (entry, now) => {
+        if (
+          (operation === "promote" && entry.recoveryState !== "producer_claimed") ||
+          !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
+        ) {
+          return undefined;
+        }
+        return {
+          ...entry,
+          // Exact reconciliation can skip pre-send promotion, so publish attempt identity
+          // atomically; later batch dispatches retain stronger unknown-after-send evidence.
+          availableAt:
+            entry.requiresProducerClaim === true
+              ? entry.recoveryState === "producer_claimed"
+                ? now + PLATFORM_SEND_OWNER_LEASE_MS
+                : entry.availableAt
+              : undefined,
+          producerClaimId: undefined,
+          platformSendAttemptId: params.claimId,
+          platformSendStartedAt: now,
+          ...(params.route && "replyToId" in params.route
+            ? { effectiveReplyToId: params.route.replyToId ?? null }
+            : {}),
+          recoveryState:
+            entry.recoveryState === "unknown_after_send"
+              ? "unknown_after_send"
+              : "send_attempt_started",
+        };
+      },
+    );
+  };
 }
 
-export function dispatchDeliveryQueueEntryPlatformSendInDatabase(
-  database: OpenClawStateDatabase,
-  params: PlatformClaimParams & {
-    claimId: string;
-    route?: { replyToId?: string | null };
-  },
-): boolean {
-  return transitionDeliveryQueueEntryPlatformSendInDatabase(
-    database,
-    params,
-    "dispatch",
-    (entry, now) => {
-      if (!hasLiveDeliveryQueueClaim(entry, params.claimId, now)) {
-        return undefined;
-      }
-      return {
-        ...entry,
-        // Exact reconciliation can skip pre-send promotion, so publish attempt identity
-        // atomically; later batch dispatches retain stronger unknown-after-send evidence.
-        availableAt:
-          entry.requiresProducerClaim === true
-            ? entry.recoveryState === "producer_claimed"
-              ? now + PLATFORM_SEND_OWNER_LEASE_MS
-              : entry.availableAt
-            : undefined,
-        producerClaimId: undefined,
-        platformSendAttemptId: params.claimId,
-        platformSendStartedAt: now,
-        ...(params.route && "replyToId" in params.route
-          ? { effectiveReplyToId: params.route.replyToId ?? null }
-          : {}),
-        recoveryState:
-          entry.recoveryState === "unknown_after_send"
-            ? "unknown_after_send"
-            : "send_attempt_started",
-      };
-    },
-  );
-}
+/** Atomically fence the exact unexpired owner at the real provider boundary. */
+export const promoteDeliveryQueueEntryPlatformSendInDatabase = platformSendTransition("promote");
+export const dispatchDeliveryQueueEntryPlatformSendInDatabase = platformSendTransition("dispatch");

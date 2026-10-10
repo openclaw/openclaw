@@ -264,7 +264,7 @@ describe("chat model runtime choices", () => {
       ).toEqual(alternate ? ["GPT-5.6 Sol codex", "GPT-5.6 Sol"] : ["GPT-5.6 Sol"]);
       expect(
         container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-      ).toBe(alternate && !observed ? "GPT-5.6 Sol codex" : "GPT-5.6 Sol");
+      ).toBe(alternate ? "GPT-5.6 Sol codex" : "GPT-5.6 Sol");
     },
   );
 

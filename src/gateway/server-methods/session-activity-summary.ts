@@ -3,6 +3,7 @@ import {
   errorShape,
   validateSessionsActivitySummaryEnsureParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -38,6 +39,19 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
           respond(false, undefined, agent.error);
           return;
         }
+        if (isIncognitoSessionKey(requested.key)) {
+          const error = authorizeIncognitoSessionTarget({
+            client,
+            sessionKey: requested.key,
+            target: null,
+          });
+          if (error) {
+            respond(false, undefined, error);
+            return;
+          }
+          targets.push({ key: requested.key, agentId: agent.agentId, unavailable: true });
+          continue;
+        }
         const target = resolveSessionSharingTarget({
           cfg,
           sessionKey: requested.key,
@@ -68,7 +82,10 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
         sessions: targets.map((target) => ({
           key: target.key,
           agentId: target.agentId,
-          activitySummary: { ...service.ensure(target), canEnsure: true },
+          activitySummary: {
+            ...(target.unavailable ? { state: "unavailable" as const } : service.ensure(target)),
+            canEnsure: true,
+          },
         })),
       });
     },

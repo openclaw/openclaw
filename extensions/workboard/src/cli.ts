@@ -113,7 +113,11 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .command("list")
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
-    .option("--status <status>", "Filter by status")
+    .addOption(
+      workboard
+        .createOption("--status <status>", "Filter by status")
+        .choices([...WORKBOARD_STATUSES]),
+    )
     .option("--include-archived", "Include archived cards (default false)")
     .option("--json", "Print JSON", false)
     .action(
@@ -247,8 +251,17 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       } else {
         const record = isRecord(result) ? result : {};
         const started = Array.isArray(record.started) ? record.started.length : 0;
-        const failures = Array.isArray(record.startFailures) ? record.startFailures.length : 0;
-        writeLine(`dispatch complete: started=${started} failures=${failures}`);
+        const failures = Array.isArray(record.startFailures) ? record.startFailures : [];
+        writeLine(`dispatch complete: started=${started} failures=${failures.length}`);
+        for (const failure of failures) {
+          if (
+            isRecord(failure) &&
+            typeof failure.cardId === "string" &&
+            typeof failure.error === "string"
+          ) {
+            writeLine(`${failure.cardId.slice(0, 8)}: ${failure.error}`);
+          }
+        }
       }
     } catch (error) {
       if (

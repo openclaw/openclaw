@@ -5,6 +5,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/k
 import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB, SessionRepositoryWorkspaces } from "./openclaw-state-db.generated.js";
+import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
@@ -79,7 +80,11 @@ export function findSessionRepositoryWorkspaceInDatabase(
   return row ? project(row) : undefined;
 }
 
-function changed(workspace: SessionRepositoryWorkspaceRecord): RepositoryWorkspaceMutationResult {
+function changed(
+  db: DatabaseSync,
+  workspace: SessionRepositoryWorkspaceRecord,
+): RepositoryWorkspaceMutationResult {
+  repositoryWorkspacePublication.stagePostimages(db, [workspace]);
   return {
     workspaceId: workspace.workspaceId,
     workspace,
@@ -112,7 +117,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
     ) {
       throw new Error("Session already owns a different repository workspace");
     }
-    return { ...changed(existing), changed: false };
+    return { ...changed(db, existing), changed: false };
   }
   const workspaceId = randomUUID();
   const inserted = executeSqliteQueryTakeFirstSync(
@@ -140,7 +145,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
   if (!inserted) {
     throw new Error("Repository workspace creation failed");
   }
-  return changed(project(inserted));
+  return changed(db, project(inserted));
 }
 
 function mutate(
@@ -169,7 +174,7 @@ function mutate(
   if (!updated) {
     throw new Error("Repository workspace revision changed");
   }
-  return changed(project(updated));
+  return changed(db, project(updated));
 }
 
 export function bindSessionRepositoryWorkspaceBaseInDatabase(
@@ -225,6 +230,7 @@ export function deleteSessionRepositoryWorkspaceInDatabase(
         query(db).deleteFrom(table).where("workspace_id", "=", workspaceId).returningAll(),
       )
     : undefined;
+  repositoryWorkspacePublication.stageDeletions(db, [workspaceId]);
   return {
     workspaceId,
     workspace: undefined,

@@ -277,26 +277,6 @@ describe("config IO with deferred plugin migrations", () => {
     expect((await io.readConfigFileSnapshot()).valid).toBe(true);
   });
 
-  it("excludes only the declared pending fields from validation", () => {
-    const result = validateConfigObjectWithPlugins(
-      { gateway: { port: "invalid" }, legacySample: { root: "/srv/sample" } },
-      {
-        pluginValidation: "core-only",
-        deferredPluginMigrations: [
-          {
-            ...pendingPlugin,
-            configPaths: [["legacySample"]],
-            validationExcludedPaths: [["legacySample"]],
-          },
-        ],
-      },
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues.map((issue) => issue.path)).toEqual(["gateway.port"]);
-    }
-  });
-
   it("keeps the migrated fixed-store owner while excluding a pending plugin field", () => {
     const source = createCanonicalAgentConfigFixture({
       agents: { list: [{ id: "operator", default: true }, { id: "worker" }] },

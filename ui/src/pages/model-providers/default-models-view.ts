@@ -94,7 +94,7 @@ function renderHelpTitle(params: {
   title: string;
   label: string;
   triggerId: string;
-  body: TemplateResult;
+  paragraphs: string[];
 }) {
   return html`
     <span class="model-providers__label-with-help">
@@ -114,11 +114,28 @@ function renderHelpTitle(params: {
           >
             ${icons.info}
           </button>
-          <div slot="content" class="settings-section__help-panel">${params.body}</div>
+          <div slot="content" class="settings-section__help-panel">
+            ${params.paragraphs.map((text) => html`<p>${text}</p>`)}
+          </div>
         </openclaw-tooltip>
       </span>
     </span>
   `;
+}
+
+function renderBehaviorSetting(field: "thinking" | "fastMode", control: TemplateResult) {
+  return renderSettingsRow({
+    title: renderHelpTitle({
+      title: t(`quickSettings.model.${field}`),
+      label: t(`modelProviders.defaults.${field}HelpLabel`),
+      triggerId: field === "thinking" ? THINKING_HELP_ID : FAST_MODE_HELP_ID,
+      paragraphs: [
+        t(`modelProviders.defaults.${field}Help`),
+        t(`modelProviders.defaults.${field}DefaultHelp`),
+      ],
+    }),
+    control,
+  });
 }
 
 function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
@@ -230,10 +247,10 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("modelProviders.defaults.utility"),
           label: t("modelProviders.defaults.utilityHelpLabel"),
           triggerId: UTILITY_MODEL_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.utilityHelpPurpose")}</p>
-            <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>
-          `,
+          paragraphs: [
+            t("modelProviders.defaults.utilityHelpPurpose"),
+            t("modelProviders.defaults.utilityHelpAutomatic"),
+          ],
         }),
         control: renderModelPicker({
           id: UTILITY_MODEL_PICKER_ID,
@@ -292,17 +309,9 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.thinking"),
-          label: t("modelProviders.defaults.thinkingHelpLabel"),
-          triggerId: THINKING_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.thinkingHelp")}</p>
-            <p>${t("modelProviders.defaults.thinkingDefaultHelp")}</p>
-          `,
-        }),
-        control: html`
+      ${renderBehaviorSetting(
+        "thinking",
+        html`
           ${renderSettingsSegmented({
             value: props.thinkingLevel ?? "",
             ariaLabel: t("quickSettings.model.thinking"),
@@ -328,18 +337,10 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             },
           })}
         `,
-      })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.fastMode"),
-          label: t("modelProviders.defaults.fastModeHelpLabel"),
-          triggerId: FAST_MODE_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.fastModeHelp")}</p>
-            <p>${t("modelProviders.defaults.fastModeDefaultHelp")}</p>
-          `,
-        }),
-        control: html`
+      )}
+      ${renderBehaviorSetting(
+        "fastMode",
+        html`
           ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
             value: fastMode,
             ariaLabel: t("quickSettings.model.fastMode"),
@@ -367,7 +368,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             },
           })}
         `,
-      })}
+      )}
       ${renderCatalogProgress(props)}
       ${props.canMutate ? renderMutationMessage(props.message) : nothing}
     </div>

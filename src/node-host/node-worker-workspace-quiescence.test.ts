@@ -5,10 +5,12 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { PassThrough } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import type { ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
@@ -51,7 +53,7 @@ const acquire = { action: "acquire", nonce, timeoutMs: 30_000 } as const;
 const renew = { action: "renew", nonce, timeoutMs: 30_000, validationMode: "final" } as const;
 const release = { action: "release", nonce } as const;
 
-function fixture() {
+function fixture(guestPlatform: "win32" | "linux" = "win32") {
   const home = fs.realpathSync(tempDirs.make("node-quiescence-controller-"));
   const workspaceDir = path.join(home, "workspace");
   fs.mkdirSync(workspaceDir);
@@ -77,6 +79,15 @@ function fixture() {
       signal,
     );
   const readLease = () => {
+    if (guestPlatform === "linux") {
+      const lease = path.join(
+        home,
+        ".openclaw-worker",
+        "quiescence",
+        createHash("sha256").update(workspaceDir).digest("hex") + "." + nonce + ".json",
+      );
+      return fs.existsSync(lease) ? JSON.parse(fs.readFileSync(lease, "utf8")) : undefined;
+    }
     const database = new DatabaseSync(
       path.join(home, ".openclaw-worker", "quiescence", "windows-shared-host.sqlite"),
       { readOnly: true },
@@ -91,14 +102,18 @@ function fixture() {
     }
   };
 
-  // Execute the generated program, including its real SQLite transactions and IPC
-  // receipts. Only the OS transport and expiry clock are simulated on Linux CI.
+  // Execute the generated program with real lease storage and IPC receipts.
+  // Only the OS transport, process identity and expiry clock are simulated.
   const script = (args: readonly string[], child?: ChildProcess) => {
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
     const exited = new Error("script exited");
     const pid = child?.pid ?? 9000;
+    const writeStderr = (text: string) => {
+      stderr += text;
+      child?.stderr?.emit("data", Buffer.from(text));
+    };
     const finish = (code: number) => {
       exitCode = code;
       if (child && mocks.live.delete(pid)) {
@@ -111,11 +126,15 @@ function fixture() {
     };
     const guest = Object.assign(new EventEmitter(), {
       argv: [process.execPath, ...args.slice(2)],
-      platform: "win32",
+      platform: guestPlatform,
+      getuid: () => 0,
+      kill: () => {
+        throw new Error("native quiescence must not signal any process");
+      },
       pid,
       execPath: process.execPath,
       stdout: { write: (text: string) => (stdout += text) },
-      stderr: { write: (text: string) => (stderr += text) },
+      stderr: { write: writeStderr },
       send: (message: unknown) => queueMicrotask(() => child?.emit("message", message)),
       exit: (code: number) => {
         finish(code);
@@ -151,7 +170,14 @@ function fixture() {
             return { homedir: () => home };
           }
           if (name === "node:child_process") {
-            return {};
+            return {
+              execFileSync: (command: string, probeArgs: string[]) => {
+                if (command !== "ps" || probeArgs[0] !== "-o" || probeArgs.at(-1) !== String(pid)) {
+                  throw new Error("native quiescence must only inspect its watchdog");
+                }
+                return "Tue Oct  6 19:00:00 2026\n";
+              },
+            };
           }
           return require(name);
         },
@@ -161,7 +187,7 @@ function fixture() {
       });
     } catch (error) {
       if (error !== exited) {
-        stderr += String(error);
+        writeStderr(String(error));
         finish(1);
       }
     }
@@ -176,6 +202,7 @@ function fixture() {
     Object.defineProperties(child, {
       pid: { value: pid },
       connected: { configurable: true, value: true },
+      stderr: { value: new PassThrough() },
     });
     children.push(child);
     mocks.live.add(pid);
@@ -209,6 +236,8 @@ function fixture() {
     readLease,
     releaseWorkspace,
     children,
+    script,
+    workspaceDir,
     kill: async () => {
       const child = children.at(-1)!;
       const closed = new Promise<void>((resolve) => {
@@ -219,6 +248,39 @@ function fixture() {
     },
   };
 }
+
+describe("root-owned POSIX quiescence", () => {
+  it("acquires, renews and releases native custody without scanning or signaling root processes", async () => {
+    const f = fixture("linux");
+    try {
+      await expect(f.execute(acquire)).resolves.toBe("quiesced " + nonce + "\n");
+      expect(f.readLease()).toMatchObject({
+        nonce,
+        sharedHost: true,
+        processes: [],
+        watchdog: { pid: f.children[0]?.pid },
+      });
+      await expect(f.execute(renew)).resolves.toBe("renewed " + nonce + "\n");
+      await f.execute(release);
+      expect(f.readLease()).toBeUndefined();
+    } finally {
+      await f.owner.close();
+    }
+    expect(f.children[0]?.exitCode).toBe(0);
+  });
+
+  it.each(["dedicated", "shared-host"] as const)(
+    "keeps detached %s acquisition unavailable to root",
+    async (hostMode) => {
+      const f = fixture("linux");
+      const result = f.script(workspaceQuiescenceArgv(f.workspaceDir, acquire, hostMode).slice(1));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("workspace quiescence refuses root-owned worker sessions");
+      expect(f.readLease()).toBeUndefined();
+      await f.owner.close();
+    },
+  );
+});
 
 describe("Windows-selected quiescence controller contracts", () => {
   it("reuses the retained helper across SQLite leases while fencing stale nonces", async () => {

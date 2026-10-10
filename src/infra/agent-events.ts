@@ -9,6 +9,12 @@ import {
   recordAgentEventRouting,
 } from "./agent-event-execution-context.js";
 import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
+import type {
+  AgentAssistantProjection,
+  AgentAssistantSourceReceipt,
+  AgentEventPayload,
+  AgentEventRuntimePayload,
+} from "./agent-events.types.js";
 import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
 import {
   getAgentRunContext,
@@ -22,81 +28,30 @@ import {
 import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
-/** Payload for approval requests and their later resolution events. */
-export type AgentApprovalEventData = {
-  phase: "requested" | "resolved";
-  kind: "exec" | "plugin" | "unknown";
-  status: "pending" | "unavailable" | "approved" | "denied" | "failed";
-  title: string;
-  itemId?: string;
-  toolCallId?: string;
-  approvalId?: string;
-  approvalSlug?: string;
-  command?: string;
-  host?: string;
-  reason?: string;
-  scope?: "turn" | "session";
-  message?: string;
-};
+export type {
+  AgentApprovalEventData,
+  AgentAssistantProjection,
+  AgentAssistantSourceReceipt,
+  AgentEventPayload,
+  AgentEventRuntimePayload,
+  AgentEventStream,
+} from "./agent-events.types.js";
 
-/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
-export type AgentEventStream =
-  | "lifecycle"
-  | "tool"
-  | "assistant"
-  | "usage"
-  | "error"
-  | "item"
-  | "plan"
-  | "approval"
-  | "command_output"
-  | "patch"
-  | "compaction"
-  | "thinking"
-  | (string & {});
-
-/** Enriched event delivered to subscribers after sequencing and context stamping. */
-export type AgentEventPayload = {
-  runId: string;
-  seq: number;
-  stream: AgentEventStream;
-  ts: number;
-  data: Record<string, unknown>;
-  /** Internal, non-enumerable gateway lifecycle generation that owns this run. */
-  lifecycleGeneration?: string;
-  sessionKey?: string;
-  /**
-   * sessionId the run was bound to when it started. Lifecycle persistence uses
-   * this to reject terminal events from a pre-`sessions.reset` run that would
-   * otherwise clobber the rotated session row resolved by the shared sessionKey.
-   */
-  sessionId?: string;
-  agentId?: string;
-};
-
-/** Gateway-only routing metadata stamped onto events after public input validation. */
-export type AgentEventRuntimePayload = AgentEventPayload & {
-  readonly admitLifecyclePublication?: () => boolean;
-  readonly controlUiVisible?: boolean;
-  readonly contextClaimId?: string;
-  readonly deliverySessionKey?: string;
-  readonly mainSessionRestartRecovery?: true;
-  readonly projectSessionLifecycle?: boolean;
-  readonly projectSessionMessages?: boolean;
-  readonly isHeartbeat?: boolean;
-  readonly verboseLevel?: AgentRunContext["verboseLevel"];
-  readonly registeredAt?: number;
-};
-
-type AgentEventListener = (evt: AgentEventRuntimePayload) => void;
+type AgentEventListener = (
+  evt: AgentEventRuntimePayload,
+  isDeliveryCurrent?: () => boolean,
+) => void;
+type CaptureAgentEventDelivery = (evt: AgentEventRuntimePayload) => () => boolean;
 type AgentEventRegistration = {
   readonly listener: AgentEventListener;
   readonly id: number;
+  readonly captureDelivery?: CaptureAgentEventDelivery;
 };
 type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
 type AgentEventState = {
   runs: Map<string, AgentRunEventState>;
+  assistantSources?: WeakMap<object, AgentAssistantSourceReceipt>;
   listeners: AgentEventListeners;
   runListeners: Map<string, AgentEventListeners>;
   nextListenerId: number;
@@ -125,6 +80,22 @@ function getAgentEventState(): AgentEventState {
     listenerRevision: 0,
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
   }));
+}
+
+/** Correlate copied model frames with their occurrence without changing transcript bytes. */
+export function bindAgentAssistantSource(
+  message: object,
+  source: AgentAssistantSourceReceipt,
+): void {
+  (getAgentEventState().assistantSources ??= new WeakMap()).set(message, source);
+}
+
+export function readAgentAssistantSource(
+  message: unknown,
+): AgentAssistantSourceReceipt | undefined {
+  return message && typeof message === "object"
+    ? getAgentEventState().assistantSources?.get(message)
+    : undefined;
 }
 
 registerAgentRunSequenceResetHandler((runId) => {
@@ -213,12 +184,17 @@ export function isAgentEventLifecycleGenerationCurrent(lifecycleGeneration: stri
 export function registerAgentEventLifecycleRotationHandler(
   key: string,
   handler: (lifecycleGeneration: string) => void,
-): void {
+): () => void {
   const state = getAgentEventState();
   const handlers =
     state.lifecycleRotationHandlers ??
     (state.lifecycleRotationHandlers = new Map<string, (lifecycleGeneration: string) => void>());
   handlers.set(key, handler);
+  return () => {
+    if (handlers.get(key) === handler) {
+      handlers.delete(key);
+    }
+  };
 }
 
 /** Rejects work that no longer belongs to the active gateway lifecycle. */
@@ -428,6 +404,8 @@ function enrichAgentEvent(
   claimId?: string,
   expectedContext?: AgentRunContext,
   reservedPublication?: symbol,
+  assistantSource?: AgentAssistantSourceReceipt,
+  assistantProjection?: AgentAssistantProjection,
 ): AgentEventRuntimePayload | undefined {
   const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
   if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
@@ -539,6 +517,10 @@ function enrichAgentEvent(
       },
     });
   }
+  Object.defineProperties(enriched, {
+    assistantSource: { value: assistantSource, enumerable: false },
+    assistantProjection: { value: assistantProjection, enumerable: false },
+  });
   if (lifecycleGeneration) {
     // Persistence needs restart ownership, but agent events are also spread into
     // public payloads. Keep the internal generation readable without serializing it.
@@ -571,6 +553,7 @@ function enrichAgentEvent(
 function* iterateAgentEventListeners(
   state: AgentEventState,
   enriched: AgentEventRuntimePayload,
+  deliveries: ReadonlyMap<AgentEventRegistration, () => boolean>,
 ): Generator<AgentEventListener, void> {
   let lastId = -1;
   let revision = -1;
@@ -604,7 +587,14 @@ function* iterateAgentEventListeners(
       return;
     }
     lastId = next.id;
-    yield next.listener;
+    yield next.captureDelivery
+      ? (event) => {
+          const isDeliveryCurrent = deliveries.get(next);
+          if (isDeliveryCurrent?.()) {
+            next.listener(event, isDeliveryCurrent);
+          }
+        }
+      : next.listener;
   }
 }
 
@@ -613,19 +603,56 @@ function dispatchAgentEvent(
   claimId?: string,
   expectedContext?: AgentRunContext,
   reservedPublication?: symbol,
+  assistantSource?: AgentAssistantSourceReceipt,
+  assistantProjection?: AgentAssistantProjection,
 ): boolean {
   const state = getAgentEventState();
-  const enriched = enrichAgentEvent(state, event, claimId, expectedContext, reservedPublication);
+  const enriched = enrichAgentEvent(
+    state,
+    event,
+    claimId,
+    expectedContext,
+    reservedPublication,
+    assistantSource,
+    assistantProjection,
+  );
   if (!enriched) {
     return false;
   }
-  notifyListeners(iterateAgentEventListeners(state, enriched), enriched);
+  const deliveries = new Map<AgentEventRegistration, () => boolean>();
+  // Capture registrations before callbacks can replace them. New subscriptions
+  // during this emission have no captured delivery authority until the next event.
+  notifyListeners(
+    Array.from(state.listeners.values(), (registration) => () => {
+      if (registration.captureDelivery) {
+        deliveries.set(registration, registration.captureDelivery(enriched));
+      }
+    }),
+    enriched,
+  );
+  notifyListeners(iterateAgentEventListeners(state, enriched, deliveries), enriched);
   return true;
 }
 
 /** Emits an event only when its run ownership is still current. */
 export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
   return dispatchAgentEvent(event);
+}
+
+/** Bind the source occurrence only after ordinary event ownership admission. */
+export function emitAgentEventWithAssistantSourceIfCurrent(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  assistantSource: AgentAssistantSourceReceipt | undefined,
+  assistantProjection?: AgentAssistantProjection,
+): boolean {
+  return dispatchAgentEvent(
+    event,
+    undefined,
+    undefined,
+    undefined,
+    assistantSource,
+    assistantProjection,
+  );
 }
 
 /** Adds one completed model call, returning its accepted run total for local callbacks. */
@@ -689,8 +716,11 @@ export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
 }
 
 /** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
-export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
-  return registerAgentEventListener(listener);
+export function onAgentRuntimeEvent(
+  listener: AgentEventListener,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
+  return registerAgentEventListener(listener, undefined, captureDelivery);
 }
 
 /**
@@ -702,12 +732,16 @@ export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayl
   return registerAgentEventListener(listener, runId);
 }
 
-function registerAgentEventListener(listener: AgentEventListener, runId?: string) {
+function registerAgentEventListener(
+  listener: AgentEventListener,
+  runId?: string,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
   const state = getAgentEventState();
   const bucket: AgentEventListeners =
     runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
   if (!bucket.has(listener)) {
-    bucket.set(listener, { listener, id: state.nextListenerId++ });
+    bucket.set(listener, { listener, id: state.nextListenerId++, captureDelivery });
     if (runId !== undefined) {
       state.runListeners.set(runId, bucket);
     }

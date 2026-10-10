@@ -25,6 +25,8 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -130,6 +132,28 @@ function withAbortableMaintenance<T>(
 }
 
 describe("asynchronous agent database maintenance admission", () => {
+  it("checks maintenance authority on the held transaction without opening separate readers", async () => {
+    const f = fixture();
+    await withAgentDatabaseMaintenanceLease(
+      { env: f.env, schemaPolicy: "existing" },
+      async (maintenance) => {
+        runExistingOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const reads = vi.spyOn(stateReads, "withOpenClawStateDatabaseReadOnly");
+            try {
+              maintenance.assertOwnedInTransaction(db);
+              expect(reads).not.toHaveBeenCalled();
+            } finally {
+              reads.mockRestore();
+            }
+          },
+          { env: f.env },
+          { schemaSql: "", operationLabel: "maintenance authority regression" },
+        );
+      },
+    );
+  });
+
   it("reuses one integrity process across agent maintenance while checking each file afresh", async () => {
     const f = fixture();
     const createTarget = (agentId: string) => {

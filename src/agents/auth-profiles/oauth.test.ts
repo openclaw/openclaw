@@ -161,24 +161,15 @@ describe("resolveApiKeyForProfile", () => {
     ).resolves.toEqual({ apiKey: "sk-or-50ec", provider: "openrouter", email: undefined });
   });
 
-  it.each([
-    {
-      type: "api_key" as const,
-      provider: "openai",
-      keyRef: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
-    },
-    {
+  it("reads published token SecretRefs without an inline source secret", async () => {
+    const source = {
       type: "token" as const,
       provider: "github-copilot",
       tokenRef: { source: "env" as const, provider: "default", id: "GITHUB_TOKEN" },
-    },
-  ])("reads published $type SecretRefs without an inline source secret", async (source) => {
+    };
     setRuntimeAuthProfileStoreSnapshot(
       createAuthProfileStoreFixture({
-        "fixture:default":
-          source.type === "api_key"
-            ? { ...source, key: "materialized-secret" }
-            : { ...source, token: "materialized-secret" },
+        "fixture:default": { ...source, token: "materialized-secret" },
       }),
     );
     await expect(resolveCredential(source)).resolves.toEqual({

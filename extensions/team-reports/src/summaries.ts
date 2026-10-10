@@ -23,11 +23,6 @@ type SummaryResult = {
 const MAX_RESPONSE_CHARS = 128 * 1024;
 const MAX_DIGEST_BYTES = 2 * 1024 * 1024;
 
-function summaryOutputBudget(report: ReportDocument): number {
-  // Reserve overview space plus per-member prose for the complete roster on either attempt.
-  return Math.min(32_000, 4_000 + 300 * report.members.length);
-}
-
 class SummaryResponseError extends Error {
   constructor(
     message: string,
@@ -354,7 +349,8 @@ export async function generateSummaries(params: {
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: digest },
   ];
-  const maxTokens = summaryOutputBudget(report);
+  // Reserve overview space plus per-member prose for the complete roster on either attempt.
+  const maxTokens = Math.min(32_000, 4_000 + 300 * report.members.length);
   let failureReason = "Model summary unavailable: invalid JSON after repair";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     signal?.throwIfAborted();

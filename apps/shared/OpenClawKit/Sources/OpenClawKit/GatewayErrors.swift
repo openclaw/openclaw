@@ -4,11 +4,7 @@ import OpenClawProtocol
 func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
     var details = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] ?? [:]
     if let error {
-        if details["code"] == nil {
-            details["code"] = OpenClawProtocol.AnyCodable(error.code)
-        } else {
-            details["errorCode"] = OpenClawProtocol.AnyCodable(error.code)
-        }
+        details[details["code"] == nil ? "code" : "errorCode"] = OpenClawProtocol.AnyCodable(error.code)
         details["message"] = OpenClawProtocol.AnyCodable(error.message)
         if let retryable = error.retryable {
             details["retryable"] = OpenClawProtocol.AnyCodable(retryable)
@@ -136,13 +132,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     }
 
     public var detail: GatewayConnectAuthDetailCode? {
-        guard let detailCodeRaw else { return nil }
-        return GatewayConnectAuthDetailCode(rawValue: detailCodeRaw)
+        self.detailCodeRaw.flatMap(GatewayConnectAuthDetailCode.init(rawValue:))
     }
 
     public var recommendedNextStep: GatewayConnectRecoveryNextStep? {
-        guard let recommendedNextStepRaw else { return nil }
-        return GatewayConnectRecoveryNextStep(rawValue: recommendedNextStepRaw)
+        self.recommendedNextStepRaw.flatMap(GatewayConnectRecoveryNextStep.init(rawValue:))
     }
 
     public var errorDescription: String? {

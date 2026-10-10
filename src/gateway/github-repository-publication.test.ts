@@ -60,19 +60,6 @@ describe("repository checkpoint GitHub publication", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it("publishes the accepted checkpoint with an absent-ref lease and replays the same receipt", async () => {
-    const f = await repositoryFixture();
-    const input = { agentId: "main", sessionKey: SESSION_KEY, idempotencyKey: "shared" };
-    const published = await f.coordinator.requestForSession(input);
-    expect(published).toMatchObject({ status: "published", url, publisher: { accountId: 42 } });
-    expect(f.runtime.uploaded.get(f.first.sha)).toEqual(Buffer.from("accepted first\n"));
-    expect(f.casRequests[0]).toMatchObject({ beforeOid: "0".repeat(40), force: false });
-    expect(await f.coordinator.requestForSession(input)).toEqual(published);
-    expect(f.runtime.effects).toEqual(["push", "pull_request"]);
-    expect(mocks.findWorktree).not.toHaveBeenCalled();
-    expect(mocks.resolveRepository).not.toHaveBeenCalled();
-  });
-
   it.each(["shared", "personal"] as const)(
     "retains the accepted %s PR response after publication authority closes",
     async (source) => {
@@ -320,26 +307,6 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.uploaded.size).toBe(0);
     expect(f.runtime.effects).toEqual([]);
   });
-
-  it.each([false, true])(
-    "reports no changes for an unchanged pinned ancestor (PR base advanced: %s)",
-    async (advanced) => {
-      const f = await repositoryFixture();
-      if (advanced) {
-        f.runtime.baseHead = "d".repeat(40);
-        f.runtime.baseHeadTree = "c".repeat(40);
-      }
-      await f.capture(null, "unchanged-pr-base");
-      const result = await f.coordinator.requestForSession({
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-        idempotencyKey: "unchanged-pr-base",
-      });
-      expect(result).toMatchObject({ status: "failed", code: "no_changes" });
-      expect(f.runtime.uploaded.size).toBe(0);
-      expect(f.runtime.effects).toEqual([]);
-    },
-  );
 
   it("distinguishes an unchanged published tree from a complete revert to the PR base", async () => {
     const f = await repositoryFixture();

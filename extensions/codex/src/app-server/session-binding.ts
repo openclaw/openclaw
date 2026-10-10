@@ -1,6 +1,7 @@
 /** SQLite-backed Codex app-server thread bindings. */
 
 import {
+  AgentHarnessSessionSupersededError,
   embeddedAgentLog,
   type AgentHarnessSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -27,7 +28,6 @@ import {
   adoptCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
-import { createCodexSessionGenerationSupersededError } from "./session-binding-authority.js";
 import {
   CODEX_APP_SERVER_BINDING_LEASE,
   PHYSICAL_SESSION_RETIRE_TTL_MS,
@@ -71,10 +71,6 @@ export {
 } from "./session-binding-record.js";
 
 export { combineNativeSessionBindingAuthority as combineCodexBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
-export {
-  createCodexSessionGenerationSupersededError,
-  resolveCodexRunSessionBindingAuthority,
-} from "./session-binding-authority.js";
 export {
   createStoredCodexAppServerBinding,
   hashCodexAppServerBindingFingerprint,
@@ -222,6 +218,15 @@ type CodexSessionGenerationReclaimParams = {
   bindingStore: CodexAppServerBindingStore;
   reclaimStale?: boolean;
 };
+
+/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
+export function createCodexSessionGenerationSupersededError(
+  sessionId: string,
+): AgentHarnessSessionSupersededError {
+  return new AgentHarnessSessionSupersededError(
+    `Codex session generation is no longer current: ${sessionId}`,
+  );
+}
 
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(
@@ -461,35 +466,21 @@ export function createCodexAppServerBindingStore(
               }
               if (ownsGeneration) {
                 if (
-                  current.state === "cleared" &&
-                  current.retired === true &&
-                  current.sessionId === mutation.expectedPreviousSessionId
+                  current.state !== "cleared" ||
+                  current.retired !== true ||
+                  current.sessionId !== mutation.expectedPreviousSessionId
                 ) {
-                  // Reset boundaries now retain the OpenClaw session id. The
-                  // authoritative session-store check above proves this fence
-                  // belongs to the previous in-place lifecycle, not live work.
                   return {
-                    result: true,
-                    next: {
-                      version: 1,
-                      state: "cleared",
-                      sessionId: identity.sessionId,
-                      ...preserveNativeTaskImport(current),
-                      ...ownedLease,
-                    },
+                    result: current.state !== "cleared" || current.retired !== true,
                   };
                 }
-                return {
-                  result: current.state !== "cleared" || current.retired !== true,
-                };
-              }
-              if (current.sessionId !== mutation.expectedPreviousSessionId) {
-                return { result: false };
-              }
-              // A stale physical generation must never turn private user-home ownership into
-              // an ordinary empty binding. Supervision adoption has an explicit generation
-              // transfer path; every other successor fails closed and preserves this owner.
-              if (current.state === "active" && current.binding.connectionScope === "supervision") {
+                // The authoritative session-store check proves this same-id fence
+                // belongs to the previous in-place lifecycle, not live work.
+              } else if (
+                current.sessionId !== mutation.expectedPreviousSessionId ||
+                // Only explicit supervision adoption can transfer private user-home ownership.
+                (current.state === "active" && current.binding.connectionScope === "supervision")
+              ) {
                 return { result: false };
               }
               return {

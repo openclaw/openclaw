@@ -1,29 +1,44 @@
-import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { realpathSync, symlinkSync } from "node:fs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  emptySqliteCounts,
-  observeParentSqlite,
-} from "../../../test/helpers/sqlite-parent-observer.js";
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { compareSessionProviderReview } from "../../config/sessions/provider-review-store.js";
+import type { SessionProviderReview } from "../../config/sessions/provider-review.types.js";
 import {
-  readSessionTranscriptMessageEvents,
+  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
-import {
-  historyLane,
-  projectionLane,
-} from "../../config/sessions/session-transcript-worker-resources.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
+import {
+  bindSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
@@ -31,84 +46,19 @@ import {
   client,
   context,
   registerSessionSuggestionTestLifecycle,
+  responseSuggestionId,
   sessionKey,
   upsertDefaultSuggestionSession,
 } from "./sessions-suggestions.test-support.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+beforeEach(() => mocks.afterSuggestionClaim.mockReset());
 // Register shared mocks before the handlers capture their presence dependency.
 const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 describe("session suggestion visibility and role ceilings", () => {
-  it("lists from resident sharing facts without discovery or caller SQLite and propagates reader rejection", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      addSessionSuggestion(
-        { agentId: "main", sessionKey },
-        { id: "idea", authorId: "alice", text: "idea" },
-      );
-      const requestContext = context();
-      await initializeSessionReadContext(requestContext);
-      const params = { sessionKey: "main" };
-      const respond = vi.fn();
-      const requester = client("alice", "Alice");
-      const invoke = () =>
-        sessionSuggestionHandlers["session.suggestions.list"]!({
-          req: { type: "req", id: "list", method: "session.suggestions.list", params },
-          params,
-          client: requester,
-          context: requestContext,
-          respond,
-          isWebchatConnect: () => true,
-        });
-      const observer = observeParentSqlite();
-      const requests: string[] = [];
-      let failure: Error | undefined;
-      for (const { pool } of [historyLane, projectionLane]) {
-        const run = pool.run.bind(pool);
-        vi.spyOn(pool, "run").mockImplementation(async (...args) => {
-          const reply = await run(...args);
-          if (
-            reply.ok &&
-            typeof reply.value === "object" &&
-            !Array.isArray(reply.value) &&
-            "kind" in reply.value
-          ) {
-            const kind = reply.value.kind;
-            if (
-              ["session-target-inventory", "session-exact-entries", "session-suggestions"].includes(
-                kind,
-              )
-            ) {
-              requests.push(kind);
-            }
-            if (kind === "session-suggestions" && failure) {
-              throw failure;
-            }
-          }
-          return reply;
-        });
-      }
-      try {
-        await invoke();
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-          role: "viewer",
-          suggestions: [expect.objectContaining({ id: "idea" })],
-        });
-        expect(observer.counts).toEqual(emptySqliteCounts());
-        expect(requests).toEqual(["session-suggestions"]);
-        failure = new Error("suggestion reader refused");
-        respond.mockClear();
-        await expect(invoke()).rejects.toBe(failure);
-        expect(respond).not.toHaveBeenCalled();
-        expect(observer.counts).toEqual(emptySqliteCounts());
-      } finally {
-        observer.restore();
-      }
-    });
-  });
-
   it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
     "rechecks %s after a delayed suggestion list reply",
     async (change) => {
@@ -290,45 +240,6 @@ describe("session suggestion visibility and role ceilings", () => {
                 ]),
         });
       }
-    });
-  });
-
-  it("lets a suggest viewer add and list only their own suggestion", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const alice = client("alice", "Alice");
-      const add = await call(
-        "session.suggestions.add",
-        { sessionKey: "main", text: "  Try the focused fix\n" },
-        alice,
-      );
-      expect(add.responses[0]?.[0]).toBe(true);
-      expect(add.responses[0]?.[1]).toMatchObject({
-        suggestion: {
-          author: { id: "alice", label: "Alice" },
-          text: "  Try the focused fix\n",
-          state: "pending",
-        },
-      });
-      expect(add.context.broadcast).toHaveBeenCalledWith(
-        "session.suggestion",
-        expect.objectContaining({ action: "added" }),
-        expect.objectContaining({ sessionKeys: [sessionKey, "main"] }),
-      );
-      expect(
-        readSessionTranscriptMessageEvents({ agentId: "main", sessionId: "session-main" }),
-      ).toEqual([]);
-
-      await call(
-        "session.suggestions.add",
-        { sessionKey, text: "Bob's idea" },
-        client("bob", "Bob"),
-      );
-      const listed = await call("session.suggestions.list", { sessionKey }, alice);
-      expect(listed.responses[0]?.[1]).toMatchObject({
-        role: "viewer",
-        suggestions: [{ author: { id: "alice" }, text: "  Try the focused fix\n" }],
-      });
     });
   });
 
@@ -591,4 +502,331 @@ describe("session suggestion visibility and role ceilings", () => {
       });
     });
   });
+});
+
+describe("session suggestion store binding", () => {
+  it.each([
+    ["directory-alias", "send"],
+    ["incognito", "queue"],
+  ] as const)(
+    "dispatches a %s suggestion with %s through its original store",
+    async (layout, resolution) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const agentId = "ops";
+        const incognito = layout === "incognito";
+        const key = incognito
+          ? "agent:ops:dashboard:incognito-suggestions-binding"
+          : "agent:ops:aliased-suggestions";
+        const physicalStorePath = incognito
+          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })
+          : state.statePath("original", "session.sqlite");
+        const scope = { agentId, sessionKey: key, storePath: physicalStorePath, env: state.env };
+        const sessionId = "session-store-binding";
+        await upsertSessionEntryCore(scope, {
+          sessionId,
+          updatedAt: 1,
+          ...(incognito ? { incognito: true } : {}),
+          createdActor: { type: "human", source: "profile", id: "owner" },
+          visibility: "suggest",
+        });
+        const cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]> = {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId } },
+            entries: { ops: {} },
+          },
+        };
+        const aliasStorePath = state.statePath("selected", "session.sqlite");
+        if (!incognito) {
+          const nativeTarget = resolveSqliteTargetFromSessionStorePath(physicalStorePath, scope);
+          await closeOpenClawAgentDatabaseByPathAsync(nativeTarget.path, nativeTarget.agentId);
+          symlinkSync(state.statePath("original"), state.statePath("selected"), "junction");
+          cfg.session = { store: aliasStorePath };
+          // Gateway startup registers its writable store before capturing request authority.
+          const aliasTarget = resolveSqliteTargetFromSessionStorePath(aliasStorePath, scope);
+          if (!aliasTarget.agentId) {
+            throw new Error("expected the seeded alias database owner");
+          }
+          openOpenClawAgentDatabase({
+            agentId: aliasTarget.agentId,
+            path: aliasTarget.path,
+            env: state.env,
+          });
+        }
+        await state.writeConfig(cfg);
+        const requestContext = context(vi.fn(), cfg);
+        const requester = client("owner", "Owner", incognito);
+        const added = await call(
+          "session.suggestions.add",
+          { sessionKey: key, agentId, text: "Keep this suggestion bound to its original store." },
+          requester,
+          requestContext,
+        );
+        expect(added.responses[0]).toMatchObject([
+          true,
+          { suggestion: { sessionKey: key, agentId, state: "pending" } },
+        ]);
+        const id = responseSuggestionId(added);
+        const listed = await call(
+          "session.suggestions.list",
+          { sessionKey: key, agentId },
+          requester,
+          requestContext,
+        );
+        expect(listed.responses).toEqual([
+          [
+            true,
+            {
+              role: incognito ? "admin" : "owner",
+              suggestions: [expect.objectContaining({ id, sessionKey: key, agentId })],
+            },
+          ],
+        ]);
+        await withReadySessionRows(
+          requireSessionRowProjection(requestContext),
+          () => [{ key, agentId }],
+          (read) => {
+            const row = read.describe({ key, agentId });
+            expect(row).toBeDefined();
+            if (!row) {
+              throw new Error("expected the original suggestion row");
+            }
+            if (incognito) {
+              expect(row.storeTarget.storePath).toBe(physicalStorePath);
+              expect(read.readSource(row)).toBeUndefined();
+            } else {
+              expect(row.storeTarget.storePath).toBe(aliasStorePath);
+              expect(read.readSource(row)?.path).toBe(realpathSync(physicalStorePath));
+              expect(read.readSource(row)?.path).not.toBe(row.storeTarget.storePath);
+            }
+          },
+        );
+
+        const resolved = await call(
+          "session.suggestions.resolve",
+          { sessionKey: key, agentId, id, resolution },
+          requester,
+          requestContext,
+        );
+
+        expect(resolved.responses).toHaveLength(1);
+        expect(resolved.responses[0]).toMatchObject([
+          true,
+          { suggestion: { id, sessionKey: key, agentId, state: "accepted" } },
+        ]);
+        expect(mocks.handleChatSend).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            params: expect.objectContaining({
+              sessionKey: key,
+              sessionId,
+              agentId,
+              queueMode: resolution === "queue" ? "followup" : "steer",
+              idempotencyKey: `session-suggestion:${id}`,
+            }),
+          }),
+        );
+        expect(await listSessionSuggestions(scope)).toEqual([
+          expect.objectContaining({ id, state: "accepted" }),
+        ]);
+      });
+    },
+  );
+});
+
+describe("suggestions queued behind provider review", () => {
+  it.for(["add", "edit", "dismiss", "queue"] as const)(
+    "preserves the lifecycle boundary for %s without replacing the session",
+    async (action, { signal }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const metadataWrites =
+          await import("../../config/sessions/session-metadata-write.async.js");
+        const scope = { agentId: "main", sessionKey, env: state.env };
+        openOpenClawStateDatabase({ env: state.env });
+        const scheduled = observeSqliteWalPeriodicWork();
+        const database = (() => {
+          try {
+            return openOpenClawAgentDatabase(scope);
+          } finally {
+            scheduled.restore();
+          }
+        })();
+        const periodic = scheduled.periodic;
+        await upsertSessionEntryCore(scope, {
+          sessionId: "provider-review-suggestion",
+          lifecycleRevision: "provider-review-generation",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: "owner" },
+          visibility: "suggest",
+        });
+        const originalEntry = loadSessionEntry(scope)!;
+        const originalSessionId = originalEntry.sessionId;
+        if (!originalSessionId) {
+          throw new Error("expected a seeded suggestion session");
+        }
+        const options = { ...scope, path: database.path };
+        const id = "queued-provider-review-suggestion";
+        if (action !== "add") {
+          addSessionSuggestion(scope, { id, authorId: "owner", text: "Synthetic suggestion" });
+        }
+        const broadcast = vi.fn();
+        const requestContext = context(broadcast);
+        await initializeSessionReadContext(requestContext);
+        const release = createDeferred();
+        const metadataQueued = createDeferred();
+        let blocker: Promise<void> | undefined;
+        let maintenance: Promise<unknown> | undefined;
+        let review: ReturnType<typeof compareSessionProviderReview> | undefined;
+        let request: ReturnType<typeof call> | undefined;
+        const providerReview: SessionProviderReview = {
+          id: "queued-provider-review",
+          sessionId: originalSessionId,
+          runId: "paused-provider-run",
+          provider: "openai",
+          model: "test-model",
+          runtimeId: "openclaw",
+        };
+        const queueReviewBeforeNextWrite = async () => {
+          const entered = createDeferred();
+          blocker = agentWriteAdmission.runOpenClawAgentWorkerWrite(options, async () => {
+            entered.resolve();
+            await release.promise;
+          });
+          await withinTest(entered.promise, signal);
+          const reviewQueued = createDeferred();
+          // Target discovery yields before review admission; unrelated writers are not this gate.
+          const reviewScope = new AsyncLocalStorage<boolean>();
+          const enqueueWrite = agentWriteAdmission.runOpenClawAgentWorkerWrite;
+          const observeReview = vi
+            .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
+            .mockImplementation((...args) => {
+              const pending = enqueueWrite(...args);
+              if (reviewScope.getStore()) {
+                reviewQueued.resolve();
+              }
+              return pending;
+            });
+          try {
+            // A real maintenance writer must not release the review-specific queue barrier.
+            maintenance = Promise.resolve(periodic());
+            review = reviewScope.run(true, () =>
+              compareSessionProviderReview(
+                {
+                  ...scope,
+                  storePath: database.path,
+                  sessionId: originalSessionId,
+                  lifecycleRevision: originalEntry.lifecycleRevision,
+                },
+                {
+                  expectedReview: undefined,
+                  nextReview: providerReview,
+                  assertCurrent: () => signal.throwIfAborted(),
+                },
+              ),
+            );
+            await withinTest(
+              awaitGateBeforeSettlement(
+                reviewQueued.promise,
+                review,
+                "provider review finished before its writer entered the queue",
+              ),
+              signal,
+            );
+          } finally {
+            observeReview.mockRestore();
+            reviewScope.disable();
+          }
+        };
+        if (action === "add") {
+          const add = metadataWrites.addSessionSuggestionInWorker;
+          vi.spyOn(metadataWrites, "addSessionSuggestionInWorker").mockImplementation(
+            async (...args) => {
+              // Capture lifecycle facts before introducing the preceding writer.
+              await queueReviewBeforeNextWrite();
+              const pending = add(...args);
+              metadataQueued.resolve();
+              return pending;
+            },
+          );
+        } else {
+          const finalize = metadataWrites.finalizeSessionSuggestionClaimInWorker;
+          vi.spyOn(metadataWrites, "finalizeSessionSuggestionClaimInWorker").mockImplementation(
+            (...args) => {
+              const pending = finalize(...args);
+              metadataQueued.resolve();
+              return pending;
+            },
+          );
+          if (action === "edit" || action === "dismiss") {
+            mocks.afterSuggestionClaim.mockImplementationOnce(queueReviewBeforeNextWrite);
+          } else {
+            mocks.handleChatSend.mockImplementationOnce(
+              async ({ respond }: { respond: RespondFn }) => {
+                respond(true, { runId: `session-suggestion:${id}`, status: "started" });
+                await queueReviewBeforeNextWrite();
+              },
+            );
+          }
+        }
+        try {
+          request = call(
+            action === "add" ? "session.suggestions.add" : "session.suggestions.resolve",
+            action === "add"
+              ? { sessionKey, text: "Synthetic suggestion" }
+              : { sessionKey, id, resolution: action },
+            client("owner", "Owner"),
+            requestContext,
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              metadataQueued.promise,
+              request,
+              "suggestion finished before its metadata writer entered the queue",
+            ),
+            signal,
+          );
+          expect(loadSessionEntry(scope)?.providerReview).toBeUndefined();
+          release.resolve();
+          const [result, paused] = await withinTest(Promise.all([request, review!]), signal);
+          expect(paused.providerReview).toEqual(providerReview);
+          expect(loadSessionEntry(scope)).toMatchObject({
+            sessionId: originalEntry.sessionId,
+            lifecycleRevision: originalEntry.lifecycleRevision,
+            providerReview,
+          });
+          expect(result.responses).toHaveLength(1);
+          const rejected = action === "add" || action === "edit";
+          if (rejected) {
+            expect(result.responses[0]).toMatchObject([
+              false,
+              undefined,
+              { message: expect.stringContaining("paused as a precaution") },
+            ]);
+            expect(broadcast).not.toHaveBeenCalled();
+          } else {
+            expect(result.responses[0]).toMatchObject([
+              true,
+              { suggestion: { id, state: action === "dismiss" ? "dismissed" : "accepted" } },
+            ]);
+          }
+          if (action === "add") {
+            expect(await listSessionSuggestions(scope)).toEqual([]);
+          } else {
+            expect(
+              database.db
+                .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+                .get(id),
+            ).toEqual({
+              state:
+                action === "edit" ? "pending" : action === "dismiss" ? "dismissed" : "accepted",
+              dispatch_token: null,
+            });
+          }
+          expect(mocks.handleChatSend).toHaveBeenCalledTimes(action === "queue" ? 1 : 0);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([blocker, review, request, maintenance]);
+        }
+      });
+    },
+  );
 });

@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { assertConversationAuthority } from "./conversation-authority.js";
 import {
   ConversationDeliveryInputError,
   ConversationDeliveryMissingError,
@@ -17,6 +18,7 @@ import {
   type ConversationDeliveryTransition,
   type ConversationDeliveryLookup,
 } from "./conversation-delivery-store.types.js";
+import { resolveConversationInDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 
@@ -152,6 +154,12 @@ export function beginConversationDeliveryInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   params: ConversationDeliveryBegin,
 ): { created: boolean; record: ConversationDeliveryRecord } {
+  if (params.authority) {
+    assertConversationAuthority(
+      resolveConversationInDatabase(database, params.authority.conversationRef),
+      params.authority,
+    );
+  }
   const operationId = normalizeOperationId(params.operationId);
   const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
   const messageHash = sha256Hex(params.message);

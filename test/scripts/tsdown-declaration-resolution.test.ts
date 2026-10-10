@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
@@ -733,10 +733,10 @@ console.log("workspace/AI native compilation settled after success and failure")
     {
       name: "SDK",
       groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-      run: async (command: CommandFixture, root: string, env = {}) =>
+      run: async (command: CommandFixture, root: string, env?: NodeJS.ProcessEnv) =>
         await runWriter(command, root, false, env),
     },
-    { name: "unified", groups: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
+    { name: "unified", groups: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
   ])(
     "uses local explicit references and seals real inputs for $name",
     ({ groups, run }, { command }) =>
@@ -784,7 +784,7 @@ for (const config of configs) {
         expectStagingClean(root);
         // Both writers seal through the same owner. Replay its mutation cycle once;
         // the unified suite separately covers failed and mixed-cache publication.
-        if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+        if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
           return;
         }
         const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));

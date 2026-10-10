@@ -76,6 +76,7 @@ export type PluginNativeRecovery = {
   references: Map<string, PluginNativeArtifactFact>;
   namespaces: Map<string, PluginNativeNamespaceFact>;
   directories: Map<string, string>;
+  fork(relocate?: (source: string) => string): PluginNativeRecovery;
   retain(cache: PluginCache): void;
   dispose(): void;
   disposeAsync(): Promise<void>;
@@ -115,6 +116,18 @@ function createNativeRecovery(
     references,
     namespaces,
     directories,
+    fork(relocate = (source) => source) {
+      if (disposed) {
+        throw new Error("Plugin native recovery has been disposed");
+      }
+      return createNativeRecovery(
+        receipt,
+        new Map([...references].map(([source, fact]) => [relocate(source), { ...fact }])),
+        structuredClone(namespaces),
+        new Map([...directories].map(([source, namespace]) => [relocate(source), namespace])),
+        roots,
+      );
+    },
     retain(cache) {
       if (disposed) {
         throw new Error("Plugin native recovery has been disposed");
@@ -180,7 +193,7 @@ export function createPluginNativeAdmission(
   const targets = new Map<string, string>();
   const hardlinkedTargets = new Set<string>();
   const pendingTargets = new Set<string>();
-  let assertReference = createPluginNativeReferenceValidator(directory);
+  let assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
   const recoveredFiles = new Map<string, PluginNativeArtifactFact>();
   let hostRoot: string | undefined;
   let finalReceipt: NativeReceipt | undefined;
@@ -669,7 +682,7 @@ export function createPluginNativeAdmission(
     },
     linkHost(selectedHost: string) {
       // Explicit host selection is a new admission boundary, even without newly captured files.
-      assertReference = createPluginNativeReferenceValidator(directory);
+      assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
       linkHost(selectedHost);
       assertReferenceNamespaces(hardlinkedTargets);
       publish();

@@ -9,8 +9,10 @@ import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutat
 import type { ModelsAuthLoginFlowResult } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { expect, vi } from "vitest";
+import { expect, type Mock, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -43,6 +45,46 @@ export function createOwnerLoginConfig(): OpenClawConfig {
     commands: { native: true, ownerAllowFrom: ["200"] },
     agents: { entries: { main: {} } },
   };
+}
+
+export async function prepareTelegramLoginSessionStore(
+  directory: string,
+  mocks: {
+    getSessionEntry: ReturnType<typeof vi.fn>;
+    resolveStorePath: ReturnType<typeof vi.fn>;
+    patchSessionEntry: Mock<typeof patchSessionEntry>;
+  },
+) {
+  const store = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    storePath: path.join(directory, "sessions.sqlite"),
+  };
+  await store.upsertSessionEntry({
+    ...scope,
+    entry: { sessionId: "telegram-login", updatedAt: 1, authProfileOverride: "openai:prior" },
+  });
+  mocks.getSessionEntry.mockImplementation(
+    (requested: Parameters<typeof store.getSessionEntry>[0]) =>
+      store.getSessionEntry({ ...requested, storePath: scope.storePath }),
+  );
+  mocks.resolveStorePath.mockReturnValue(scope.storePath);
+  const queries: string[] = [];
+  mocks.patchSessionEntry.mockImplementationOnce(
+    async (write: Parameters<typeof store.patchSessionEntry>[0]) => {
+      const sql = observeHostDataSql();
+      try {
+        return await store.patchSessionEntry(write);
+      } finally {
+        queries.push(...sql.queries);
+        sql.restore();
+      }
+    },
+  );
+  return { store, scope, queries };
 }
 
 export function registerLoginCommand(params: {

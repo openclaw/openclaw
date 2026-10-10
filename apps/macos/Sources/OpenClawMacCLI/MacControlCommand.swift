@@ -3,7 +3,6 @@ import Foundation
 import OpenClawIPC
 
 func runMacControl(_ context: MacCLIContext) {
-    let args = context.arguments
     do {
         var options = try MacControlOptions.parse(context)
         if options.help {
@@ -32,7 +31,7 @@ func runMacControl(_ context: MacCLIContext) {
             try printMacControlResult(result, operation: options.request.operation, primaryOnly: options.primaryOnly)
         }
     } catch {
-        exitMacCLI(error, json: args.contains("--json"))
+        exitMacCLI(error, json: context.arguments.contains("--json"))
     }
 }
 

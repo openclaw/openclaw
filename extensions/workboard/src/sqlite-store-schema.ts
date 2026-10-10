@@ -5,11 +5,21 @@ import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  getSqliteDatabaseAdmission,
+  openNodeSqliteDatabase,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
+const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "workboard.schema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
 
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
   return new Set(
@@ -273,6 +283,9 @@ const WORKBOARD_SCHEMA_SQL = `
   `;
 
 function ensureWorkboardSchema(db: DatabaseSync): void {
+  if (getSqliteDatabaseAdmission(db, schemaAdmission)) {
+    return;
+  }
   db.exec(WORKBOARD_SCHEMA_SQL);
   ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
   ensureColumn(db, "workboard_boards", "kind", "kind TEXT");
@@ -289,6 +302,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
     ).run(migrationId, Date.now());
   }
+  publishSqliteDatabaseAdmission(db, schemaAdmission, true);
 }
 
 function chmodIfExists(targetPath: string, mode: number): void {

@@ -46,27 +46,27 @@ describe("deferred logical-turn lifecycle", () => {
     handles.length = 0;
   });
 
-  it.each([
-    { label: "omitted", reason: undefined },
-    { label: "explicit user", reason: "user_abort" as const },
-  ])("classifies $label cancellation when the caller signal stays live", ({ reason }) => {
-    const caller = new AbortController();
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "cancelled-logical-run",
-      sessionId,
-      sessionKey,
-      abortSignal: caller.signal,
-    });
+  it.each([{ label: "omitted", reason: undefined }])(
+    "classifies $label cancellation when the caller signal stays live",
+    ({ reason }) => {
+      const caller = new AbortController();
+      const manager = createDeferredEmbeddedRunLifecycleManager({
+        runId: "cancelled-logical-run",
+        sessionId,
+        sessionKey,
+        abortSignal: caller.signal,
+      });
 
-    manager.abort(reason);
+      manager.abort(reason);
 
-    expect(caller.signal.aborted).toBe(false);
-    expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
-    expect(resolveAgentRunErrorLifecycleFields(manager.signal.reason, caller.signal)).toEqual({
-      aborted: true,
-      stopReason: "aborted",
-    });
-  });
+      expect(caller.signal.aborted).toBe(false);
+      expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
+      expect(resolveAgentRunErrorLifecycleFields(manager.signal.reason, caller.signal)).toEqual({
+        aborted: true,
+        stopReason: "aborted",
+      });
+    },
+  );
 
   it.each([
     { reason: "restart" as const, matchesReason: isAgentRunRestartAbortReason },

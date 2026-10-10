@@ -106,25 +106,18 @@ export async function readUpdateCandidateSource(
   legacyConfigPlan?: LegacyConfigUpdatePlan,
   options?: Pick<TargetDatabaseSchemaContextOptions, "configValidation">,
 ) {
-  if (legacyConfigPlan) {
-    const context = await captureTargetDatabaseSchemaContext(env, {
-      legacyConfigPlan,
-      ...options,
-    });
-    if (context.legacyConfigPlan) {
-      return {
-        config: context.config,
-        hash: hashConfigRaw(context.configSnapshot.raw),
-        source: updateConfigSource(context.configSnapshot),
-      };
-    }
-  }
-  const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-    readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-  );
+  const context = legacyConfigPlan
+    ? await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan, ...options })
+    : undefined;
+  const snapshot = context?.legacyConfigPlan
+    ? context.configSnapshot
+    : await withOwnedManagedUpdateEnv(env, () =>
+        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+      );
   return {
-    config:
-      options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
+    config: context?.legacyConfigPlan
+      ? context.config
+      : options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
         ? snapshot.sourceConfig
         : snapshot.config,
     hash: hashConfigRaw(snapshot.raw),

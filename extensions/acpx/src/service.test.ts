@@ -858,7 +858,7 @@ describe("createAcpxRuntimeService", () => {
       expect(runtime.doctor).toHaveBeenCalledOnce();
       expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(false);
       expect(ctx.logger.warn).toHaveBeenCalledWith(
-        "embedded acpx runtime setup failed: embedded acpx runtime backend startup probe timed out after 0.001s",
+        "embedded acpx runtime setup failed: embedded acpx runtime backend startup check timed out after 0.001s",
       );
     } finally {
       releaseDoctor.resolve({ ok: false, message: "unavailable" });

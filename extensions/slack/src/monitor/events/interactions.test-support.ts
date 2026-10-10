@@ -141,7 +141,6 @@ export function createContext(overrides?: {
 }) {
   installSlackTestRuntime();
   let handler: RegisteredHandler | null = null;
-  let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewHandler | null = null;
   let shortcutHandler: RegisteredShortcutHandler | null = null;
@@ -181,8 +180,7 @@ export function createContext(overrides?: {
     };
   };
   const app = {
-    action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
-      actionMatcher = matcher;
+    action: vi.fn((_matcher: RegExp, next: RegisteredHandler) => {
       handler = async (args) => await next(withBoltScope(args));
     }),
     view: vi.fn(
@@ -269,12 +267,6 @@ export function createContext(overrides?: {
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
-    getActionMatcher: () => {
-      if (!actionMatcher) {
-        throw new Error("Expected Slack action matcher to be registered");
-      }
-      return actionMatcher;
-    },
     getHandler: () => {
       if (!handler) {
         throw new Error("Expected Slack action handler to be registered");

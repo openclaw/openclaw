@@ -79,13 +79,7 @@ export function splitSqlList(sql: string): string[] {
   const items: string[] = [];
   let depth = 0;
   let start = 0;
-  let index = 0;
-  while (index < sql.length) {
-    const next = skipSqlQuotedOrComment(sql, index);
-    if (next !== index) {
-      index = next;
-      continue;
-    }
+  for (const index of unquotedSqlIndexes(sql, 0)) {
     const char = sql[index];
     if (char === "(") {
       depth += 1;
@@ -95,37 +89,23 @@ export function splitSqlList(sql: string): string[] {
       items.push(sql.slice(start, index));
       start = index + 1;
     }
-    index += 1;
   }
   items.push(sql.slice(start));
   return items;
 }
 
 export function findSqlCharacter(sql: string, character: string): number {
-  let index = 0;
-  while (index < sql.length) {
-    const next = skipSqlQuotedOrComment(sql, index);
-    if (next !== index) {
-      index = next;
-      continue;
-    }
+  for (const index of unquotedSqlIndexes(sql, 0)) {
     if (sql[index] === character) {
       return index;
     }
-    index += 1;
   }
   return -1;
 }
 
 export function findSqlClosingParenthesis(sql: string, open: number): number {
   let depth = 0;
-  let index = open;
-  while (index < sql.length) {
-    const next = skipSqlQuotedOrComment(sql, index);
-    if (next !== index) {
-      index = next;
-      continue;
-    }
+  for (const index of unquotedSqlIndexes(sql, open)) {
     const char = sql[index];
     if (char === "(") {
       depth += 1;
@@ -135,7 +115,6 @@ export function findSqlClosingParenthesis(sql: string, open: number): number {
         return index;
       }
     }
-    index += 1;
   }
   throw new Error("SQLite schema contains an unterminated table definition.");
 }
@@ -150,30 +129,27 @@ export function normalizeSqlWhitespace(sql: string): string {
     const index = segment.index;
     const char = segment[0][0] ?? "";
     const quoted = skipSqlQuoted(sql, index, char);
+    let text = segment[0];
     if (quoted !== index) {
-      if (pendingSpace && normalized.length > 0) {
-        normalized += " ";
-      }
-      normalized += sql.slice(index, quoted);
-      pendingSpace = false;
+      text = sql.slice(index, quoted);
       segments.lastIndex = quoted;
-      continue;
-    }
-    const comment = skipSqlComment(sql, index);
-    if (comment !== index) {
-      pendingSpace = true;
-      segments.lastIndex = comment;
-      continue;
-    }
-    if (/\s/u.test(char)) {
-      pendingSpace = true;
     } else {
-      if (pendingSpace && normalized.length > 0) {
-        normalized += " ";
+      const comment = skipSqlComment(sql, index);
+      if (comment !== index) {
+        pendingSpace = true;
+        segments.lastIndex = comment;
+        continue;
       }
-      normalized += segment[0];
-      pendingSpace = false;
+      if (/\s/u.test(char)) {
+        pendingSpace = true;
+        continue;
+      }
     }
+    if (pendingSpace && normalized.length > 0) {
+      normalized += " ";
+    }
+    normalized += text;
+    pendingSpace = false;
   }
   return normalized.trim();
 }
@@ -182,9 +158,18 @@ export function quoteSqliteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-function skipSqlQuotedOrComment(sql: string, index: number): number {
-  const quoted = skipSqlQuoted(sql, index, sql[index] ?? "");
-  return quoted !== index ? quoted : skipSqlComment(sql, index);
+function* unquotedSqlIndexes(sql: string, start: number): Generator<number> {
+  let index = start;
+  while (index < sql.length) {
+    const quoted = skipSqlQuoted(sql, index, sql[index] ?? "");
+    const next = quoted !== index ? quoted : skipSqlComment(sql, index);
+    if (next !== index) {
+      index = next;
+    } else {
+      yield index;
+      index += 1;
+    }
+  }
 }
 
 function skipSqlQuoted(sql: string, index: number, quote: string): number {

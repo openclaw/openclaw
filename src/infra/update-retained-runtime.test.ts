@@ -296,26 +296,40 @@ async function fixture(
   return root;
 }
 
-it.each([false, true])(
-  "separates package control from runtime assets (explicitLink=%s)",
-  async (explicitLink) => {
-    const root = await fixture(tempDirs.make("retained-control-boundary-"), "npm");
-    const control = resolvePackageActivationControl(
-      resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw")),
+it.each(
+  ["control", "anchor", "superseded"].flatMap((kind) =>
+    [false, true].map((explicitLink) => ({ kind, explicitLink })),
+  ),
+)(
+  "leaves package recovery $kind untouched during runtime retention (explicitLink=$explicitLink)",
+  async ({ kind, explicitLink }) => {
+    const root = await fixture(tempDirs.make("retained-recovery-boundary-"), "npm");
+    const anchor = resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw"));
+    const recoveryRoot =
+      kind === "control"
+        ? resolvePackageActivationControl(anchor)
+        : kind === "anchor"
+          ? anchor
+          : `${anchor}.superseded-00000000-0000-4000-8000-000000000001`;
+    const recoveryFile = path.join(
+      recoveryRoot,
+      kind === "control" ? "operation.sqlite" : "previous/dist/entry.js",
     );
-    const journal = path.join(control, "operation.sqlite");
-    await mkdir(control, { mode: 0o700 });
-    await writeFile(journal, "mutable control", { mode: 0o600 });
+    await mkdir(path.dirname(recoveryFile), { recursive: true, mode: 0o700 });
+    await writeFile(recoveryFile, "preserved recovery evidence", { mode: 0o600 });
+    const before = await fs.lstat(recoveryFile, { bigint: true });
     const assets = [
       path.join("node_modules", "runtime.control", "asset.sqlite"),
-      path.join("dist", path.basename(control), "asset.sqlite"),
+      path.join("node_modules", `${path.basename(anchor)}.notes`, "asset.sqlite"),
+      path.join("node_modules", `${path.basename(anchor)}.superseded-not-a-uuid`, "asset.sqlite"),
+      path.join("dist", path.basename(recoveryRoot), "asset.sqlite"),
     ];
     for (const relative of assets) {
       await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
       await writeFile(path.join(root, relative), "runtime asset");
     }
     if (explicitLink) {
-      await symlink(journal, path.join(root, "dist/control-link"));
+      await symlink(recoveryFile, path.join(root, "dist/recovery-link"));
     }
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
     const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
@@ -326,8 +340,13 @@ it.each([false, true])(
       for (const relative of assets) {
         expect(await readFile(path.join(retainedRoot, relative), "utf8")).toBe("runtime asset");
       }
-      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, control)))).toBe(false);
-      expect((await stat(journal)).nlink).toBe(1);
+      expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
+        nlink: before.nlink,
+        ctimeNs: before.ctimeNs,
+      });
+      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, recoveryRoot)))).toBe(
+        false,
+      );
     });
     if (explicitLink) {
       await expect(operation).rejects.toThrow(
@@ -336,8 +355,15 @@ it.each([false, true])(
     } else {
       await operation;
     }
-    expect(await readFile(journal, "utf8")).toBe("mutable control");
-    expect((await stat(journal)).nlink).toBe(1);
+    expect(await readFile(recoveryFile, "utf8")).toBe("preserved recovery evidence");
+    // Old sealed helpers hash these fields: hard-linking identical bytes still
+    // invalidates their recovery fingerprint, even after the link is removed.
+    expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
+      dev: before.dev,
+      ino: before.ino,
+      nlink: before.nlink,
+      ctimeNs: before.ctimeNs,
+    });
   },
 );
 

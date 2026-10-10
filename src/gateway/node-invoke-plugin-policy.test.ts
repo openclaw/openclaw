@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
@@ -794,3 +794,68 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 });
+
+it.each([true, false])(
+  "plugin dispatch snapshots only bound turn source (bound=%s)",
+  async (bound) => {
+    onTestFinished(() => resetPluginRuntimeStateForTest());
+    const source = {
+      channel: "telegram",
+      to: "-100123:topic:42",
+      accountId: "work",
+      threadId: "42",
+    };
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy(async (ctx) => {
+        source.to = "mutated-owner";
+        return ctx.invokeNode({
+          params: { ...DEMO_PARAMS, turnSourceTo: "payload-selected-owner" },
+        });
+      }),
+    ]);
+    const { context, invoke } = createContext({
+      validateAgentRuntimeApprovalAuthority: () => true,
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("source-policy-run");
+    const client = bound
+      ? {
+          ...createOperatorClient(),
+          internal: {
+            agentRuntimeIdentity: {
+              kind: "agentRuntime" as const,
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              operationalRunInstance,
+              delegatedAuthority: {
+                kind: "local" as const,
+                operationalRunInstance,
+                lifecycleGeneration: "generation",
+                claimId: "claim",
+              },
+            },
+          },
+        }
+      : createOperatorClient();
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      turnSource: source,
+    });
+    expect(result?.ok).toBe(true);
+    expect(invoke).toHaveBeenCalledOnce();
+    if (bound) {
+      expect(invoke.mock.calls[0]?.[0]?.turnSource).toEqual({
+        channel: "telegram",
+        to: "-100123:topic:42",
+        accountId: "work",
+        threadId: "42",
+      });
+    } else {
+      expect(invoke.mock.calls[0]?.[0]?.turnSource).toBeUndefined();
+    }
+    resetPluginRuntimeStateForTest();
+  },
+);

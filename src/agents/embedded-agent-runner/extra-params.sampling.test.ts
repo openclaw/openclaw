@@ -76,6 +76,25 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions).toMatchObject({ temperature: 0.4, topP: 0.7, maxTokens: 512 });
   });
 
+  it.each([false, true])("forwards configured streaming=%s to the transport", (streaming) => {
+    const { underlying, agent } = createStreamAgent();
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: { defaults: { models: { "local/model": { params: { streaming } } } } },
+      },
+      "local",
+      "model",
+    );
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
+      { id: "model", api: "openai-completions", provider: "local" } as Model,
+      undefined,
+    );
+    expect(callOptions).toMatchObject({ streaming });
+  });
+
   it("canonicalizes token aliases with config precedence before preparing stream params", () => {
     // Canonicalization happens before provider preparation so plugins receive a
     // single maxTokens field with agent-level precedence already applied.

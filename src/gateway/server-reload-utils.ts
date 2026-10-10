@@ -1,8 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
-import { requestActiveCronJobCancellationByDeclarationKeyPrefix } from "../cron/active-jobs.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { isRecord } from "../utils.js";
 import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
@@ -37,18 +35,6 @@ export function restoreCanonicalSecretRefs(
   sourceConfig: OpenClawConfig,
 ): OpenClawConfig {
   return projectCanonicalSecretRefsOntoRuntime(sourceConfig, runtimeConfig) as OpenClawConfig;
-}
-
-export function revokeActiveSkillReviewsBeforeConfigPublication(config: OpenClawConfig): void {
-  if (resolveSkillWorkshopConfig(config).autonomous.mode === "auto") {
-    return;
-  }
-  // Durable cron convergence may wait on its serialized tail. Abort active reviews
-  // at the commit edge so the new mode never publishes with stale write authority.
-  requestActiveCronJobCancellationByDeclarationKeyPrefix(
-    "skill-collection-review:",
-    "Skill collection review disabled by configuration.",
-  );
 }
 
 export function assertIrreversibleReloadPlanHasRecoveryOwner(

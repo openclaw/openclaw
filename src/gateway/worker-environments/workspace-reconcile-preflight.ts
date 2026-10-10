@@ -19,7 +19,7 @@ import type {
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   localWorkspaceNode,
 } from "./workspace-reconcile-fs.js";
@@ -181,11 +181,7 @@ export async function preflightWorkspaceApplyImpl(
         local?.type === "directory" &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
-          params.root,
-          entryPath,
-          isRetainedInput,
-        ))
+        (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))
       ) {
         local = undefined;
       }

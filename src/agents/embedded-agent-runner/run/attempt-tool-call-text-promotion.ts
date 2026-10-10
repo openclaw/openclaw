@@ -57,11 +57,9 @@ function wrapStreamPromoteStandaloneTextToolCalls(
     ): Record<string, unknown> => {
       const sourceKey = `${ordinal}:${block.start}:${block.end}`;
       ordinal += 1;
-      let id = promotedIdBySource.get(sourceKey);
-      if (!id) {
-        id = `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-        promotedIdBySource.set(sourceKey, id);
-      }
+      const id =
+        promotedIdBySource.get(sourceKey) || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      promotedIdBySource.set(sourceKey, id);
       return {
         type: "toolCall",
         id,

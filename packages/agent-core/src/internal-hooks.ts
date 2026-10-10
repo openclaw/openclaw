@@ -1,10 +1,13 @@
 import type {
   AgentLoopConfig,
+  AfterToolOutcomeContext,
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
+  ToolLoopIntervention,
+  ToolLoopRecoveryState,
 } from "./types.js";
 
 export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
@@ -23,9 +26,14 @@ export type InternalToolBatchLifecycle = {
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
-  releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
+  /** Observe settled outcomes in assistant order, before warning text changes their identity. */
+  observeOutcome?: (
+    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    state: ToolLoopRecoveryState,
+  ) => ToolLoopIntervention | undefined;
 };
 
 const toolBatchLifecycleByResult = new WeakMap<

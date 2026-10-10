@@ -576,34 +576,20 @@ export async function renderDiffDocument(
     ? "language-pack"
     : "base";
   const imageTypography = resolveDiffTypography(buildImageRenderOptions(options).presentation);
+  const document = (bodyHtml: string, runtimeMode: "viewer" | "image") =>
+    buildHtmlDocument({
+      title,
+      bodyHtml,
+      theme: options.presentation.theme,
+      imageMaxWidth: options.image.maxWidth,
+      imageTypography,
+      runtimeMode,
+      viewerRuntime,
+    });
 
   return {
-    ...(viewerBodyHtml
-      ? {
-          html: buildHtmlDocument({
-            title,
-            bodyHtml: viewerBodyHtml,
-            theme: options.presentation.theme,
-            imageMaxWidth: options.image.maxWidth,
-            imageTypography,
-            runtimeMode: "viewer",
-            viewerRuntime,
-          }),
-        }
-      : {}),
-    ...(imageBodyHtml
-      ? {
-          imageHtml: buildHtmlDocument({
-            title,
-            bodyHtml: imageBodyHtml,
-            theme: options.presentation.theme,
-            imageMaxWidth: options.image.maxWidth,
-            imageTypography,
-            runtimeMode: "image",
-            viewerRuntime,
-          }),
-        }
-      : {}),
+    ...(viewerBodyHtml ? { html: document(viewerBodyHtml, "viewer") } : {}),
+    ...(imageBodyHtml ? { imageHtml: document(imageBodyHtml, "image") } : {}),
     title,
     fileCount: sections.length,
     inputKind: input.kind,

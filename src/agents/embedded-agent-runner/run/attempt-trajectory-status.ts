@@ -69,11 +69,8 @@ export function resolveTerminalAssistantTexts(params: {
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
-  if (params.interrupted) {
-    return { status: "interrupted" };
-  }
-  if (params.failed) {
-    return { status: "error" };
+  if (params.interrupted || params.failed) {
+    return { status: params.interrupted ? "interrupted" : "error" };
   }
 
   // Messaging/tool-use attempts may not have assistant text; only committed
@@ -101,12 +98,7 @@ export function resolveAttemptTrajectoryTerminal(
         params.synthesizedPayloadCount > 0 ||
         (params.lastAssistantStopReason !== "length" && params.successfulCronAdds > 0)));
 
-  if (hasDeliverableOrProgress) {
-    return { status: "success" };
-  }
-
-  return {
-    status: "error",
-    terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-  };
+  return hasDeliverableOrProgress
+    ? { status: "success" }
+    : { status: "error", terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON };
 }

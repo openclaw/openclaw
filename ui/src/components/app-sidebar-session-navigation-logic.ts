@@ -203,15 +203,19 @@ export function buildSidebarSessionNavigationState(input: {
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
       gatewayHasActiveRun: row.hasActiveRun,
+      hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      sidebarRoot: row.sidebarRoot,
       snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
       sharingRole: row.sharingRole,
+      communication: row.communication,
+      effectiveCommunication: row.effectiveCommunication,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
@@ -440,7 +444,7 @@ export function collectCategorizedChildRootRows(input: {
     (row) =>
       !scopedRootKeys.has(row.key) &&
       !isSubagentSessionKey(row.key) &&
-      normalizeOptionalString(row.category) != null &&
+      (row.sidebarRoot === true || normalizeOptionalString(row.category) != null) &&
       resolveUiSessionNavigationParentKey(row) != null &&
       sessionMatchesVisibleSessionScope(row, input.visibilityOptions),
   );

@@ -40,8 +40,12 @@ export function sessionMenuReasons(params: {
     });
   const renameReason = patchReason({ label: null }, true);
   const pinReason = patchReason({ pinned: true }, true);
+  const promotionReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ sidebarRoot: true }, true);
   const iconReason = patchReason({ icon: null });
   const colorReason = patchReason({ color: null });
+  const communicationReason = patchReason({ communication: null });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
   const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {
     if (!batchRows) {
@@ -92,11 +96,13 @@ export function sessionMenuReasons(params: {
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
     ...(colorReason ? { "set-color": colorReason } : {}),
+    ...(communicationReason ? { "set-communication": communicationReason } : {}),
     ...(session.pinnable === false ? { "toggle-pin": t("sessionsView.pinRootSessionsOnly") } : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
     ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
-    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason, "archive-tree": archiveReason } : {}),
+    ...(promotionReason ? { "move-to-top-level": promotionReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(forkReason ? { fork: forkReason } : {}),
     ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),

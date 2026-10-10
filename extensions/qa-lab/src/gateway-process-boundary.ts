@@ -100,15 +100,8 @@ function normalizeEnvKeys(keys: readonly string[]) {
   return normalized.toSorted();
 }
 
-function parsePositiveInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 1) {
-    throw new Error(`invalid ${label}`);
-  }
-  return value;
-}
-
-function parseNonNegativeInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+function parseInteger(value: unknown, label: string, minimum: number) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`invalid ${label}`);
   }
   return value;
@@ -140,14 +133,14 @@ function parseQaGatewayProcessHandoff(value: unknown) {
   return {
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "process-boundary generation"),
-    pid: parsePositiveInteger(value.pid, "process-boundary pid"),
-    uid: parseNonNegativeInteger(value.uid, "process-boundary uid"),
-    gid: parseNonNegativeInteger(value.gid, "process-boundary gid"),
+    pid: parseInteger(value.pid, "process-boundary pid", 2),
+    uid: parseInteger(value.uid, "process-boundary uid", 0),
+    gid: parseInteger(value.gid, "process-boundary gid", 0),
     procStartTicks: parseNonEmptyString(
       value.procStartTicks,
       "process-boundary process start ticks",
     ),
-    pgrp: parsePositiveInteger(value.pgrp, "process-boundary process group"),
+    pgrp: parseInteger(value.pgrp, "process-boundary process group", 2),
     commandFile: {
       path: parseNonEmptyString(commandFile.path, "process-boundary command path"),
       sha256: parseSha256(commandFile.sha256, "process-boundary command digest"),
@@ -185,11 +178,11 @@ function parseQaGatewayProcessRuntimeProof(value: unknown) {
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "runtime generation"),
     status: "pass",
-    pid: parsePositiveInteger(value.pid, "runtime pid"),
-    uid: parseNonNegativeInteger(value.uid, "runtime uid"),
-    gid: parseNonNegativeInteger(value.gid, "runtime gid"),
+    pid: parseInteger(value.pid, "runtime pid", 2),
+    uid: parseInteger(value.uid, "runtime uid", 0),
+    gid: parseInteger(value.gid, "runtime gid", 0),
     procStartTicks: parseNonEmptyString(value.procStartTicks, "runtime process start ticks"),
-    pgrp: parsePositiveInteger(value.pgrp, "runtime process group"),
+    pgrp: parseInteger(value.pgrp, "runtime process group", 2),
     state,
     cwd: parseNonEmptyString(value.cwd, "runtime cwd"),
     executablePath: parseNonEmptyString(value.executablePath, "runtime executable path"),
@@ -204,19 +197,6 @@ async function assertContainedPath(root: string, target: string, label: string) 
     throw new Error(`${label} escaped its trusted root`);
   }
   return targetPath;
-}
-
-async function assertRegularFile(params: {
-  pathName: string;
-  root: string;
-  mode: number;
-  label: string;
-}) {
-  const stats = await fs.lstat(params.pathName);
-  if (!stats.isFile() || stats.isSymbolicLink() || (stats.mode & 0o777) !== params.mode) {
-    throw new Error(`${params.label} is not a regular mode ${params.mode.toString(8)} file`);
-  }
-  return await assertContainedPath(params.root, params.pathName, params.label);
 }
 
 async function writeAtomicFile(pathName: string, contents: Buffer | string) {
@@ -253,52 +233,6 @@ async function waitForJsonFile(params: {
   throw new Error(`timed out waiting for process-boundary identity: ${String(lastError)}`);
 }
 
-async function runBoundaryLauncherCommand(params: {
-  args: readonly string[];
-  label: string;
-  launcherPath: string;
-  timeoutMs: number;
-}) {
-  // The proxy gets its own process group; the verified SUT identity and its
-  // UID-quiescence checks remain owned by the launcher, never this cleanup.
-  const result = await runQaScenarioCommandLifecycle({
-    command: params.launcherPath,
-    args: [...params.args],
-    cwd: process.cwd(),
-    timeoutMs: params.timeoutMs,
-    env: {
-      HOME: process.env.HOME,
-      LANG: process.env.LANG ?? "C.UTF-8",
-      PATH: process.env.PATH,
-    },
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `process-boundary ${params.label} proxy exited ${result.exitCode}${result.stderrTruncated ? " (stderr truncated)" : ""}: ${result.failureMessage ?? result.stderr.trim()}`,
-    );
-  }
-  if (result.stdoutTruncated) {
-    throw new Error(
-      `process-boundary ${params.label} proxy stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes`,
-    );
-  }
-  return result.stdout;
-}
-
-async function runBoundaryVerification(params: {
-  launcherPath: string;
-  identityFilePath: string;
-  mode: "preentry" | "live";
-}) {
-  const output = await runBoundaryLauncherCommand({
-    args: ["--verify", params.mode, params.identityFilePath],
-    label: `${params.mode} verification`,
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_START_TIMEOUT_MS,
-  });
-  return parseQaGatewayProcessRuntimeProof(JSON.parse(output) as unknown);
-}
-
 function commandLineBytes(executable: string, argv: readonly string[]) {
   return Buffer.from(`${[executable, ...argv].join("\0")}\0`);
 }
@@ -332,6 +266,54 @@ export async function createQaGatewayProcessBoundaryController(params: {
     params.config.terminationRetryTimeoutMs < PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS
   ) {
     throw new Error("invalid process-boundary termination retry timeout");
+  }
+
+  async function assertRegularFile(pathName: string, mode: number, label: string) {
+    const stats = await fs.lstat(pathName);
+    if (!stats.isFile() || stats.isSymbolicLink() || (stats.mode & 0o777) !== mode) {
+      throw new Error(`${label} is not a regular mode ${mode.toString(8)} file`);
+    }
+    return await assertContainedPath(controlDir, pathName, label);
+  }
+
+  async function runBoundaryLauncherCommand(
+    args: readonly string[],
+    label: string,
+    timeoutMs: number,
+  ) {
+    // The proxy gets its own process group; the verified SUT identity and its
+    // UID-quiescence checks remain owned by the launcher, never this cleanup.
+    const result = await runQaScenarioCommandLifecycle({
+      command: params.launcherPath,
+      args: [...args],
+      cwd: process.cwd(),
+      timeoutMs,
+      env: {
+        HOME: process.env.HOME,
+        LANG: process.env.LANG ?? "C.UTF-8",
+        PATH: process.env.PATH,
+      },
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `process-boundary ${label} proxy exited ${result.exitCode}${result.stderrTruncated ? " (stderr truncated)" : ""}: ${result.failureMessage ?? result.stderr.trim()}`,
+      );
+    }
+    if (result.stdoutTruncated) {
+      throw new Error(
+        `process-boundary ${label} proxy stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes`,
+      );
+    }
+    return result.stdout;
+  }
+
+  async function runBoundaryVerification(identityFilePath: string, mode: "preentry" | "live") {
+    const output = await runBoundaryLauncherCommand(
+      ["--verify", mode, identityFilePath],
+      `${mode} verification`,
+      PROCESS_BOUNDARY_START_TIMEOUT_MS,
+    );
+    return parseQaGatewayProcessRuntimeProof(JSON.parse(output) as unknown);
   }
 
   const writeEvidence = async () => {
@@ -375,12 +357,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
   const terminateUidUntilQuiescent = async () => {
     for (;;) {
       try {
-        await runBoundaryLauncherCommand({
-          args: ["--terminate-uid"],
-          label: "UID termination",
-          launcherPath: params.launcherPath,
-          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-        });
+        await runBoundaryLauncherCommand(
+          ["--terminate-uid"],
+          "UID termination",
+          PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        );
         return;
       } catch {
         await sleep(PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS);
@@ -393,12 +374,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
-        await runBoundaryLauncherCommand({
-          args: ["--terminate", identityFilePath],
-          label: "termination",
-          launcherPath: params.launcherPath,
-          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-        });
+        await runBoundaryLauncherCommand(
+          ["--terminate", identityFilePath],
+          "termination",
+          PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        );
         return undefined;
       } catch (error) {
         lastError = error;
@@ -493,24 +473,21 @@ export async function createQaGatewayProcessBoundaryController(params: {
     if (handoff.pgrp !== launcherPid) {
       throw new Error("process-boundary runtime escaped the launcher process group");
     }
-    const commandPath = await assertRegularFile({
-      pathName: acceptParams.prepared.commandFilePath,
-      root: controlDir,
-      mode: 0o600,
-      label: "process-boundary command file",
-    });
-    await assertRegularFile({
-      pathName: acceptParams.prepared.identityFilePath,
-      root: controlDir,
-      mode: 0o640,
-      label: "process-boundary identity file",
-    });
-    await assertRegularFile({
-      pathName: acceptParams.prepared.sandboxFilePath,
-      root: controlDir,
-      mode: 0o640,
-      label: "process-boundary sandbox proof",
-    });
+    const commandPath = await assertRegularFile(
+      acceptParams.prepared.commandFilePath,
+      0o600,
+      "process-boundary command file",
+    );
+    await assertRegularFile(
+      acceptParams.prepared.identityFilePath,
+      0o640,
+      "process-boundary identity file",
+    );
+    await assertRegularFile(
+      acceptParams.prepared.sandboxFilePath,
+      0o640,
+      "process-boundary sandbox proof",
+    );
     if (
       handoff.commandFile.path !== commandPath ||
       handoff.commandFile.sha256 !== acceptParams.prepared.commandSha256 ||
@@ -522,11 +499,10 @@ export async function createQaGatewayProcessBoundaryController(params: {
       throw new Error("process-boundary runtime environment mismatch");
     }
 
-    const runtimeProof = await runBoundaryVerification({
-      launcherPath: params.launcherPath,
-      identityFilePath: acceptParams.prepared.identityFilePath,
-      mode: "preentry",
-    });
+    const runtimeProof = await runBoundaryVerification(
+      acceptParams.prepared.identityFilePath,
+      "preentry",
+    );
     const expectedCwd = path.resolve(tempRoot, acceptParams.prepared.command.cwdRelative);
     const expectedExecutablePath = await fs.realpath(acceptParams.prepared.command.executable);
     const expectedCmdlineSha256 = sha256(
@@ -638,20 +614,15 @@ export async function createQaGatewayProcessBoundaryController(params: {
     identity: QaGatewayVerifiedProcessIdentity,
     signalName: "SIGCONT" | "SIGUSR2" | "SIGQUIT",
   ) => {
-    await runBoundaryLauncherCommand({
-      args: ["--signal", signalName, identity.identityFilePath],
-      label: "signal",
-      launcherPath: params.launcherPath,
-      timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
-    });
+    await runBoundaryLauncherCommand(
+      ["--signal", signalName, identity.identityFilePath],
+      "signal",
+      PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
+    );
   };
 
   const markReady = async (identity: QaGatewayVerifiedProcessIdentity) => {
-    const runtimeProof = await runBoundaryVerification({
-      launcherPath: params.launcherPath,
-      identityFilePath: identity.identityFilePath,
-      mode: "live",
-    });
+    const runtimeProof = await runBoundaryVerification(identity.identityFilePath, "live");
     // The SUT invokes dist/index.js through the gateway fast path, which preserves
     // argv. A changed digest means it exec'd or retitled before readiness.
     if (
@@ -695,12 +666,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     markReady,
     markExited,
     cleanupTempRoot: () =>
-      runBoundaryLauncherCommand({
-        args: ["--cleanup-temp-root", tempRoot],
-        label: "temp-root cleanup",
-        launcherPath: params.launcherPath,
-        timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
-      }),
+      runBoundaryLauncherCommand(
+        ["--cleanup-temp-root", tempRoot],
+        "temp-root cleanup",
+        PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
+      ),
     evidencePath,
     retainCredentialLeasePath,
     retainCredentialLease,

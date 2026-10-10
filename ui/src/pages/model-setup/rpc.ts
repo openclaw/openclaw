@@ -27,7 +27,6 @@ export function createModelSetupDetectTask(
     ModelSetupDetectTaskResult
   >(host, {
     autoRun: false,
-    args: () => [null, null, null],
     task: async ([client, agentId, token], { signal }) => {
       if (!client || !token) {
         return initialState;
@@ -56,7 +55,6 @@ export function createModelSetupVerifyTask(host: ReactiveControllerHost) {
     ModelSetupTaskResult<SystemAgentSetupVerifyResult>
   >(host, {
     autoRun: false,
-    args: () => [null, null, undefined],
     task: async ([client, agentId, modelTarget], { signal }) =>
       client
         ? captureModelSetupResult(client, () =>

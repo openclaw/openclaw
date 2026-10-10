@@ -1,18 +1,11 @@
 #!/bin/bash
 # Mobile-friendly Claude Code re-authentication
 # Designed for use via SSH from Termux
-#
-# This script handles the authentication flow in a way that works
-# from a mobile device by:
-# 1. Checking if auth is needed
-# 2. Running claude setup-token for long-lived auth
-# 3. Outputting URLs that can be easily opened on phone
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -22,7 +15,6 @@ NC='\033[0m'
 echo "=== Claude Code Mobile Re-Auth ==="
 echo ""
 
-# Check current auth status
 echo "Checking auth status..."
 AUTH_STATUS=$("$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null || echo "ERROR")
 
@@ -57,7 +49,6 @@ echo ""
 echo "Press Enter when ready to continue..."
 read -r
 
-# Run setup-token interactively
 echo ""
 echo "Running 'claude setup-token'..."
 echo "(Follow the prompts and paste your API key when asked)"
@@ -69,7 +60,6 @@ if claude setup-token; then
     echo ""
     "$SCRIPT_DIR/claude-auth-status.sh" full
 
-    # Restart openclaw service if running
     if systemctl --user is-active openclaw >/dev/null 2>&1; then
         echo ""
         echo "Restarting openclaw service..."

@@ -49,6 +49,8 @@ export function createWorkerLiveTrajectoryRecorder(params: {
 }): WorkerLiveTrajectoryRecorder {
   const target = params.source.sessionTarget;
   return createTrajectoryRuntimeRecorder({
+    // Capture policy stays current; storage routing belongs to the admitted turn.
+    env: { ...target.env, OPENCLAW_TRAJECTORY: process.env.OPENCLAW_TRAJECTORY },
     runId: params.runId,
     sessionId: target.sessionId,
     sessionKey: target.sessionKey,

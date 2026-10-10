@@ -1,4 +1,3 @@
-/** Builds minimal, portable environment blocks for managed daemon services. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,27 +36,6 @@ export const SERVICE_PROXY_ENV_KEYS = [
   "no_proxy",
   "all_proxy",
 ] as const;
-
-function readServiceSqliteEnvironment(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform,
-  runtime: GatewayDaemonRuntime | undefined,
-): { OPENCLAW_SQLITE_LIBRARY?: string; HOMEBREW_PREFIX?: string } {
-  // Match the library selected by the installing shell and judged by the daemon
-  // probe (src/daemon/runtime-paths.ts RUNTIME_PROBE_ENV_KEYS); wrappers hide the runtime.
-  if (
-    platform !== "darwin" ||
-    (runtime !== "bun" && !normalizeOptionalString(env.OPENCLAW_WRAPPER))
-  ) {
-    return {};
-  }
-  const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
-  const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);
-  return {
-    ...(library ? { OPENCLAW_SQLITE_LIBRARY: library } : {}),
-    ...(prefix && path.posix.isAbsolute(prefix) ? { HOMEBREW_PREFIX: prefix } : {}),
-  };
-}
 
 function normalizeServicePathDir(dir: string | undefined): string | undefined {
   const trimmed = dir?.trim();
@@ -263,24 +241,24 @@ function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): 
   return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
-export function buildServiceEnvironment(params: {
+type ServiceEnvironmentParams = {
   env: Record<string, string | undefined>;
-  port: number;
-  existingNodeOptions?: string;
   runtime?: GatewayDaemonRuntime;
-  launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
   execPath?: string;
-}): Record<string, string | undefined> {
-  const { env, port, launchdLabel, extraPathDirs } = params;
+};
+
+export function buildServiceEnvironment(
+  params: ServiceEnvironmentParams & {
+    port: number;
+    existingNodeOptions?: string;
+    launchdLabel?: string;
+  },
+): Record<string, string | undefined> {
+  const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
-  const commonEnvironment = buildCommonServiceEnvironment(
-    env,
-    platform,
-    extraPathDirs,
-    params.execPath,
-  );
+  const commonEnvironment = buildCommonServiceEnvironment(params, platform);
   const profile = env.OPENCLAW_PROFILE;
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
@@ -288,7 +266,6 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...commonEnvironment,
-    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     // An empty assignment clears supervisor ambient options; omission would
     // allow preloads/debug flags to bypass the heap-only service boundary.
     NODE_OPTIONS: resolveGatewayHeapNodeOptions(
@@ -310,24 +287,14 @@ export function buildServiceEnvironment(params: {
   };
 }
 
-export function buildNodeServiceEnvironment(params: {
-  env: Record<string, string | undefined>;
-  runtime?: GatewayDaemonRuntime;
-  platform?: NodeJS.Platform;
-  extraPathDirs?: string[];
-  execPath?: string;
-}): Record<string, string | undefined> {
-  const { env, extraPathDirs } = params;
+export function buildNodeServiceEnvironment(
+  params: ServiceEnvironmentParams,
+): Record<string, string | undefined> {
+  const { env } = params;
   const platform = params.platform ?? process.platform;
-  const commonEnvironment = buildCommonServiceEnvironment(
-    env,
-    platform,
-    extraPathDirs,
-    params.execPath,
-  );
+  const commonEnvironment = buildCommonServiceEnvironment(params, platform);
   return {
     ...commonEnvironment,
-    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     OPENCLAW_GATEWAY_TOKEN: normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN),
     OPENCLAW_GATEWAY_PASSWORD: normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD),
     CF_ACCESS_CLIENT_ID: normalizeOptionalString(env.CF_ACCESS_CLIENT_ID),
@@ -357,10 +324,8 @@ function resolveServiceTmpDir(
 }
 
 function buildCommonServiceEnvironment(
-  env: Record<string, string | undefined>,
+  { env, extraPathDirs, execPath, runtime }: ServiceEnvironmentParams,
   platform: NodeJS.Platform,
-  extraPathDirs: string[] | undefined,
-  execPath?: string,
 ): Record<string, string | undefined> {
   const tmpDir = resolveServiceTmpDir(env, platform);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
@@ -381,7 +346,7 @@ function buildCommonServiceEnvironment(
         );
   // Generic shell proxy vars are audited but never frozen into services.
   const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
-  return {
+  const environment: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     NODE_EXTRA_CA_CERTS: startupTlsEnv.NODE_EXTRA_CA_CERTS,
@@ -391,4 +356,19 @@ function buildCommonServiceEnvironment(
     ...(proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {}),
     ...(minimalPath ? { PATH: minimalPath } : {}),
   };
+  // Match the installing shell's probed SQLite library; wrappers hide the runtime.
+  if (
+    platform === "darwin" &&
+    (runtime === "bun" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
+  ) {
+    const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
+    const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);
+    if (library) {
+      environment.OPENCLAW_SQLITE_LIBRARY = library;
+    }
+    if (prefix && path.posix.isAbsolute(prefix)) {
+      environment.HOMEBREW_PREFIX = prefix;
+    }
+  }
+  return environment;
 }

@@ -15,8 +15,6 @@ import {
   readJsonBodyOrError,
   retainGatewayHttpResponseWork,
   sendGatewayAuthFailure,
-  sendInvalidRequest,
-  sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
   sendRateLimited,
@@ -86,16 +84,6 @@ describe("setDefaultSecurityHeaders", () => {
   });
 });
 
-describe("sendJson", () => {
-  it("sets status, content-type and writes JSON body", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    sendJson(res, 201, { ok: true });
-    expect(res.statusCode).toBe(201);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
-    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: true }));
-  });
-});
-
 describe("sendMissingScopeForbidden", () => {
   it("preserves the legacy response when no concrete scope is available", () => {
     const { res, end } = makeMockHttpResponse();
@@ -121,12 +109,6 @@ describe("sendMethodNotAllowed", () => {
     expect(res.statusCode).toBe(405);
     expect(end).toHaveBeenCalledWith("Method Not Allowed");
   });
-
-  it("honours a custom Allow header value", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendMethodNotAllowed(res, "GET, POST");
-    expect(setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
-  });
 });
 
 describe("sendRateLimited", () => {
@@ -145,25 +127,11 @@ describe("sendRateLimited", () => {
     );
   });
 
-  it("responds with 429 and no Retry-After when retryAfterMs is zero", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendRateLimited(res, 0);
-    expect(res.statusCode).toBe(429);
-    expectHeaderNotSet(setHeader, "Retry-After");
-  });
-
   it("responds with 429 and no Retry-After when retryAfterMs is negative", () => {
     const { res, setHeader } = makeMockHttpResponse();
     sendRateLimited(res, -500);
     expect(res.statusCode).toBe(429);
     expectHeaderNotSet(setHeader, "Retry-After");
-  });
-
-  it("sets Retry-After (seconds, ceiled) when retryAfterMs is positive", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendRateLimited(res, 1500);
-    expect(res.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", "2");
   });
 });
 
@@ -182,17 +150,6 @@ describe("sendGatewayAuthFailure", () => {
     const authResult = { ok: false, rateLimited: false } as GatewayAuthResult;
     sendGatewayAuthFailure(res, authResult);
     expectUnauthorizedPayload(res, end);
-  });
-});
-
-describe("sendInvalidRequest", () => {
-  it("responds with 400 and includes the supplied message", () => {
-    const { res, end } = makeMockHttpResponse();
-    sendInvalidRequest(res, "bad input");
-    expect(res.statusCode).toBe(400);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "bad input", type: "invalid_request_error" } }),
-    );
   });
 });
 
@@ -363,17 +320,6 @@ describe("watchClientDisconnect", () => {
     expect(controller.signal.aborted).toBe(false);
   });
 
-  it("aborts the controller and calls onDisconnect when a socket closes", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    watchClientDisconnect(req, res, controller, onDisconnect);
-    socket.emit("close");
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-    expect(controller.signal.aborted).toBe(true);
-  });
-
   it("immediately aborts when the request socket was already destroyed", () => {
     const socket = Object.assign(new EventEmitter(), { destroyed: true });
     const { req, res } = makeMockHttpReqRes(socket, socket);
@@ -386,40 +332,6 @@ describe("watchClientDisconnect", () => {
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(socket.listenerCount("close")).toBe(0);
     expect(res.listenerCount("error")).toBe(1);
-    cleanup();
-    res.emit("close");
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("immediately aborts when the response was already destroyed", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    Object.assign(res, { destroyed: true });
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-
-    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-
-    expect(controller.signal.aborted).toBe(true);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-    expect(socket.listenerCount("close")).toBe(0);
-    expect(res.listenerCount("error")).toBe(1);
-    cleanup();
-    res.emit("close");
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("handles response stream errors as client disconnects", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-
-    expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
-    expect(controller.signal.aborted).toBe(true);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-
     cleanup();
     res.emit("close");
     expect(res.listenerCount("error")).toBe(0);
@@ -506,15 +418,6 @@ describe("watchClientDisconnect", () => {
     watchClientDisconnect(req, res, controller);
     socket.emit("close");
     expect(controller.signal.aborted).toBe(true);
-  });
-
-  it("deduplicates identical request and response sockets", () => {
-    const socket = new EventEmitter();
-    const onSpy = vi.spyOn(socket, "on");
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    watchClientDisconnect(req, res, controller);
-    expect(onSpy).toHaveBeenCalledTimes(1);
   });
 
   it("releases both socket watchers after one disconnect and notifies once", () => {

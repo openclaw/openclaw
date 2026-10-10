@@ -107,7 +107,7 @@ describe("worker session placement gate", () => {
             })
           : undefined;
       if (state === "move") {
-        store.beginPlacementMove({
+        await store.beginPlacementMove({
           sessionId: active.sessionId,
           source: { ...binding, generation: active.generation },
           target: { kind: "gateway" },

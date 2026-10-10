@@ -226,6 +226,8 @@ it.each(["open", "another board", "hidden"] as const)(
     document.body.append(container);
     const mounted = page.mount(container, createViewContext(host, { boardId: "ops" }));
     try {
+      await vi.dynamicImportSettled();
+      mounted?.update?.(createViewContext(host, { boardId: "ops" }));
       await vi.advanceTimersByTimeAsync(0);
       const previousBoards = boards;
       if (presentation === "open") {
@@ -374,6 +376,8 @@ it("disambiguates a created board and its sibling before pinning through a stale
   const page = registrations.get("page/workboard") as ControlUiPage;
   const mounted = page.mount(container, createViewContext(host, {}));
   try {
+    await vi.dynamicImportSettled();
+    mounted?.update?.(createViewContext(host, {}));
     await vi.advanceTimersByTimeAsync(0);
     expect(registrations.get("navigation/board-sessions")).toMatchObject({ label: "Created" });
     expectDefined(

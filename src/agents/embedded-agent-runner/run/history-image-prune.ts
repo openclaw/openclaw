@@ -35,52 +35,31 @@ type PrunableContextAgent = {
   ) => AgentMessage[] | Promise<AgentMessage[]>;
 };
 
-/**
- * Number of most-recent completed turns whose preceding user/toolResult image
- * blocks are kept intact. Counts all completed turns, not just image-bearing
- * ones, so text-only turns consume the window.
- */
+// Start cleanup after three completed turns; subsequent cuts retire eight turns at once.
+// Derive the boundary from canonical history so replay after a restart keeps the same bytes.
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
+const PRUNE_TURN_BATCH = 8;
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
-  const completedTurnStarts: number[] = [];
-  let currentTurnStart = -1;
-  let currentTurnHasAssistantReply = false;
-
-  for (let i = 0; i < messages.length; i++) {
-    const role = messages[i]?.role;
-    if (role === "user") {
-      if (currentTurnStart >= 0 && currentTurnHasAssistantReply) {
-        // The retained window and one older turn are enough to decide pruning.
-        if (completedTurnStarts.length > PRESERVE_RECENT_COMPLETED_TURNS) {
-          completedTurnStarts.shift();
-        }
-        completedTurnStarts.push(currentTurnStart);
+  const completedTurns: number[] = [];
+  let turnStart = -1;
+  let hasAssistantReply = false;
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "user") {
+      // Only a later user closes a turn; an active tool loop never advances the boundary.
+      if (turnStart >= 0 && hasAssistantReply) {
+        completedTurns.push(turnStart);
       }
-      currentTurnStart = i;
-      currentTurnHasAssistantReply = false;
-      continue;
-    }
-    if (role === "toolResult") {
-      if (currentTurnStart < 0) {
-        currentTurnStart = i;
-      }
-      continue;
-    }
-    if (role === "assistant" && currentTurnStart >= 0) {
-      currentTurnHasAssistantReply = true;
+      turnStart = index;
+      hasAssistantReply = false;
+    } else if (message.role === "toolResult" && turnStart < 0) {
+      turnStart = index;
+    } else if (message.role === "assistant" && turnStart >= 0) {
+      hasAssistantReply = true;
     }
   }
-
-  // Only a later user message closes a turn; tool-loop replies must not move
-  // the cutoff and rewrite the warm prefix during the active turn.
-  if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
-    return -1;
-  }
-  return completedTurnStarts.at(-PRESERVE_RECENT_COMPLETED_TURNS) ?? -1;
-}
-
-function wasStructurallyMediaPruned(message: AgentMessage): boolean {
-  return asNonArrayRecord(Reflect.get(message, "__openclaw")).mediaImagePruned === true;
+  const eligible = completedTurns.length - PRESERVE_RECENT_COMPLETED_TURNS;
+  const pruneCount = 1 + Math.floor((eligible - 1) / PRUNE_TURN_BATCH) * PRUNE_TURN_BATCH;
+  return eligible > 0 ? completedTurns[pruneCount]! : -1;
 }
 
 function replaceLegacyFactlessMediaText(text: string): string {
@@ -222,7 +201,8 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
         ? (readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [])
         : [];
     const hasOwnedMedia = media.length > 0;
-    const structuredMediaWasPruned = wasStructurallyMediaPruned(message);
+    const structuredMediaWasPruned =
+      asNonArrayRecord(Reflect.get(message, "__openclaw")).mediaImagePruned === true;
     const pruneText = (text: string) =>
       hasOwnedMedia
         ? replaceOwnedMediaProjection(text, media)
@@ -266,17 +246,15 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
         continue;
       }
       const block = content[index];
-      let nextBlock: (typeof content)[number] | undefined;
+      let nextBlock = block;
       if (block?.type === "text" && typeof block.text === "string") {
         const text = pruneText(block.text);
-        if (text !== block.text) {
-          nextBlock = { ...block, text };
-        }
+        nextBlock = text === block.text ? block : { ...block, text };
       } else if (block?.type === "image") {
         prunedImageBlock = true;
         nextBlock = { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER };
       }
-      if (nextBlock !== undefined) {
+      if (nextBlock !== undefined && nextBlock !== block) {
         nextContent ??= content.slice(0, contentLength);
         nextContent[index] = nextBlock;
       }

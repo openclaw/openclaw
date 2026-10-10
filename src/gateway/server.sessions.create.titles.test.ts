@@ -230,7 +230,7 @@ test("successful naming survives setup failure and is shared with discussion ope
     await settleWorkspaceRuns(context, storePath, key);
     expect(await fs.readFile(starts, "utf8")).toBe("started\n");
     expect(titleMocks.generate).toHaveBeenCalledOnce();
-    expect(managedWorktrees.findLiveByOwner("session", key)?.branch).toContain(
+    expect((await managedWorktrees.findLiveByOwner("session", key))?.branch).toContain(
       "workspace-repair-plan",
     );
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
@@ -243,7 +243,7 @@ test("successful naming survives setup failure and is shared with discussion ope
   } finally {
     naming.resolve("Workspace repair plan");
     await settleWorkspaceRuns(context, storePath, key, true);
-    const owned = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
+    const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
     if (owned) {
       await managedWorktrees.remove({
         id: owned.id,
@@ -340,7 +340,7 @@ test.each(["generator error", "worktree wait timeout"])(
       title.resolve("Fixture cleanup");
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key, true);
-      const owned = managedWorktrees.findLiveByOwner("session", key);
+      const owned = await managedWorktrees.findLiveByOwner("session", key);
       if (owned) {
         await managedWorktrees.remove({
           id: owned.id,
@@ -384,5 +384,5 @@ test("sessions.create rejects another plugin's session before naming or worktree
   expect(result.error?.message).toContain("did not create it");
   expect(titleMocks.generate).not.toHaveBeenCalled();
   expect(loadSessionEntry(scope)).toEqual(entry);
-  expect(managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
+  expect(await managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
 });

@@ -145,38 +145,49 @@ describe("chat metadata store", () => {
       const release = subscribeChatMetadata(client, scope, listener);
       beginChatMetadataPublication(client, scope).publish(metadata("before"));
       await Promise.all([loadModelCatalog(client, scope), loadModelCatalog(client, other)]);
-      const sessionOnly = !catalogChanged && (reason === "patch" || reason === "command-metadata");
       invalidateChatMetadataForSessionEvent(client, { ...scope, reason, catalogChanged }, {});
       expect(listener).toHaveBeenLastCalledWith({
         type: "invalidated",
-        scope: sessionOnly ? "session" : "full",
-        refreshSessionFacts: sessionOnly,
+        scope: "session",
+        refreshSessionFacts: true,
       });
-      expect(peekChatMetadata(client, scope)).toBeUndefined();
+      expect(peekChatMetadata(client, scope)).toEqual(metadata("before"));
       expect(peekModelCatalog(client, scope)).toBeUndefined();
       expect(peekModelCatalog(client, other)).toEqual({ models: [] });
       release();
     },
   );
 
-  it("requests compact metadata and keeps startup models out of the commands cache", async () => {
-    const commands = metadata("status");
+  it("revalidates compact commands by revision without repeating session or account reads", async () => {
+    const commands = {
+      ...metadata("status"),
+      revision: "commands-1",
+      requiredWorkerInferenceProfileId: "worker-profile",
+    };
+    const scope = { agentId: "main", sessionKey: "agent:main:saved" };
     const legacy = {
       ...commands,
       models: [{ id: "old", name: "Old", provider: "example" }],
       accountSelection: { kind: "automatic", label: "Automatic" },
     } satisfies ChatMetadataResponse;
-    const request = vi.fn().mockResolvedValue(commands);
+    const request = vi.fn().mockResolvedValue({ unchanged: true, revision: commands.revision });
     const client = clientWith(request);
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(legacy);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    beginChatMetadataPublication(client, scope).publish(legacy);
+    expect(peekChatMetadata(client, scope)).toEqual(commands);
     invalidateChatMetadataStore(client);
-    expect(await loadChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    expect(peekChatMetadata(client, scope)).toBeUndefined();
+    expect(await loadChatMetadata(client, scope)).toEqual(commands);
     expect(request).toHaveBeenCalledWith("chat.metadata", {
       agentId: "main",
       includeModels: false,
+      ifRevision: "commands-1",
     });
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    expect(peekChatMetadata(client, scope)).toEqual(commands);
+    const changed = { ...metadata("new-command"), revision: "commands-2" };
+    request.mockResolvedValue(changed);
+    invalidateChatMetadataStore(client);
+    expect(await loadChatMetadata(client, scope)).toEqual(changed);
+    expect(peekChatMetadata(client, scope)).toEqual(changed);
   });
 
   it.each([
@@ -198,6 +209,21 @@ describe("chat metadata store", () => {
     void lateStartup.publish(metadata("late"));
     expect(peekChatMetadata(client, scope)).toEqual(metadata("locked"));
     expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("neutral"));
+  });
+
+  it("retries missing startup commands after a model-only publication", async () => {
+    const scope = { agentId: "main", sessionKey: "agent:main:commands" };
+    const request = vi.fn().mockResolvedValue(metadata("recovered"));
+    const client = clientWith(request);
+    beginChatMetadataPublication(client, scope).publish(metadata("previous"));
+    expect(() =>
+      beginChatMetadataPublication(client, scope).publish({ revision: "failed" }),
+    ).toThrow("Chat commands are unavailable");
+    expect(peekChatMetadata(client, scope)).toBeUndefined();
+    invalidateChatMetadataStore(client, undefined, undefined, "refresh", false);
+    expect(await loadChatMetadata(client, scope)).toEqual(metadata("recovered"));
+    expect(request).toHaveBeenCalledOnce();
+    expect(peekChatMetadata(client, scope)).toEqual(metadata("recovered"));
   });
 
   it.each(["result", "error"])(
@@ -233,7 +259,10 @@ describe("chat metadata store", () => {
       expect(request).toHaveBeenCalledTimes(2);
       expect(peekChatMetadata(client, scope)).toEqual(replacement);
       expect(updates).not.toContain("error");
-      expect(request).toHaveBeenLastCalledWith("chat.metadata", { ...scope, includeModels: false });
+      expect(request).toHaveBeenLastCalledWith("chat.metadata", {
+        agentId: scope.agentId,
+        includeModels: false,
+      });
       unsubscribe();
     },
   );

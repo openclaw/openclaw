@@ -334,12 +334,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       if (lifecycleGeneration !== currentLifecycleGeneration) {
         const wasQueuedBeforeRotation =
           options.initialQueuedLifecycleGeneration === lifecycleGeneration;
-        const canResumeAcrossRotation = sessionLanePolicy.canResumeAcrossRotation;
         const newerSameIdExecutionOwnsContext =
           existingContext?.lifecycleGeneration === currentLifecycleGeneration;
         if (
           !wasQueuedBeforeRotation ||
-          !canResumeAcrossRotation ||
+          !sessionLanePolicy.canResumeAcrossRotation ||
           newerSameIdExecutionOwnsContext
         ) {
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -445,11 +444,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         releaseQueuedContext("abandoned");
         throw error;
       }
-      return await queuedRun
-        .finally(() => {
-          releaseQueuedContext("abandoned");
-        })
-        .catch(rethrowQueueError);
+      return await queuedRun.finally(abandonQueuedContext).catch(rethrowQueueError);
     } finally {
       releaseForeground?.();
     }

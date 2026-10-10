@@ -393,8 +393,7 @@ describe("runReplyAgent media path normalization", () => {
         },
       );
 
-      // The .runtime import is only used by agent-runner-execution.ts. This path
-      // should never create its own media context when the caller provides one.
+      // Execution creates a context only when the caller did not provide one.
       if (providedContext) {
         expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
       } else {

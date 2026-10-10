@@ -184,10 +184,11 @@ describe("Markdown clipboard operation lifetime", () => {
           ]),
           owner,
         );
-        await vi.waitFor(() =>
-          expect(owner.querySelector('[aria-label="Copy image"]')).not.toBeNull(),
-        );
-        copy = () => owner.querySelector<HTMLButtonElement>('[aria-label="Copy image"]')!.click();
+        await vi.waitFor(() => expect(owner.querySelector("wa-dropdown")).not.toBeNull());
+        copy = () =>
+          owner
+            .querySelector("wa-dropdown")!
+            .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy" } } }));
       } else {
         const frame = document.body.appendChild(document.createElement("iframe"));
         owners.push(frame);

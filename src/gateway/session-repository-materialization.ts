@@ -1,6 +1,15 @@
 import os from "node:os";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
@@ -17,6 +26,7 @@ import {
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
 import { readRepositoryGitHubPublicationBranch } from "./github-repository-publication-store.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
@@ -29,10 +39,29 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
 }): Promise<void> {
-  const initial = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  return withGatewaySessionEntryReadOnly(
+    {
+      cfg: params.cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      assertActive: params.assertCurrent,
+    },
+    async (initial) => materializeCapturedRepositoryWorkspace(params, initial),
+  );
+}
+
+async function materializeCapturedRepositoryWorkspace(
+  params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
+  initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+): Promise<void> {
+  const metadata = captureSessionEntryMetadataRead({
+    agentId: params.agentId,
+    sessionKey: initial.canonicalKey,
+    storePath: initial.storePath,
+  });
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
   }
@@ -71,24 +100,62 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       "Repository publication is awaiting a GitHub effect observation; retry the Gateway move after publication settles",
     );
   }
-  const assertCurrent = () => {
+  const assertOtherOwners = () => {
     params.signal?.throwIfAborted();
-    params.assertCurrent();
     const currentBranch = branch();
-    const current = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
     if (
       currentBranch.unsettled ||
       currentBranch.head?.pushed_head_commit !== published?.pushed_head_commit ||
-      current.storePath !== initial.storePath ||
-      current.canonicalKey !== initial.canonicalKey ||
-      current.entry?.sessionId !== params.sessionId ||
-      current.entry.lifecycleRevision !== initial.entry?.lifecycleRevision ||
-      current.entry.repositoryWorkspaceId !== workspaceId ||
       preparedRepository.current()?.revision !== repository.revision
     ) {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
   };
+  const assertEntry = (current: Partial<NonNullable<typeof initial.entry>> | undefined) => {
+    if (
+      current?.sessionId !== params.sessionId ||
+      current.lifecycleRevision !== initial.entry?.lifecycleRevision ||
+      current.repositoryWorkspaceId !== workspaceId
+    ) {
+      throw new Error("Repository workspace changed during Gateway materialization; retry move");
+    }
+  };
+  const entrySource = captureSessionEntrySourceAssertion({
+    scope: {
+      agentId: params.agentId,
+      sessionKey: initial.canonicalKey,
+      storePath: initial.storePath,
+    },
+    readSource: initial.capturedReadSource,
+    fields: ["sessionId", "lifecycleRevision"],
+    expected: initial.entry,
+    assertCurrent: () => {
+      if (metadata) {
+        assertEntry(metadata.readCurrent());
+        return;
+      }
+      const current = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+        agentId: params.agentId,
+      });
+      if (
+        current.storePath !== initial.storePath ||
+        current.canonicalKey !== initial.canonicalKey
+      ) {
+        throw new Error("Repository workspace changed during Gateway materialization; retry move");
+      }
+      assertEntry(current.entry);
+    },
+    refuse: () => {
+      throw new Error("Repository workspace changed during Gateway materialization; retry move");
+    },
+  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.assertCurrent, entrySource],
+    (assertSources) => {
+      assertSources();
+      assertOtherOwners();
+    },
+  );
   assertCurrent();
   const github = await prepareWorkerGitHubBinding({
     sessionId: params.sessionId,
@@ -255,12 +322,13 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     } else {
       await alignPublication();
     }
-    const bind = async (assertSourceCurrent: () => void) =>
+    const bind = async (assertSourceCurrent: SessionSourceAssertion) =>
       await patchSessionEntryCore(
         { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
         (current) => {
           assertCurrent();
           assertSourceCurrent();
+          assertEntry(current);
           return {
             ...current,
             repositoryWorkspaceId: undefined,
@@ -272,10 +340,9 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
         },
         {
           replaceEntry: true,
-          assertCommitAllowed: () => {
-            assertCurrent();
-            assertSourceCurrent();
-          },
+          ...sessionEntryCommitGuardOptions(
+            composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]),
+          ),
           requireWriteSuccess: true,
           skipMaintenance: true,
           onCommitted: () => {

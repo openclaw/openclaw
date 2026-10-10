@@ -1,11 +1,12 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
+import type { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
 import {
+  createCodexAppInventoryRequest,
   findCodexMarketplacePluginSummary,
   isOpenAiCuratedMarketplaceName,
   listCodexPluginMetadata,
@@ -14,7 +15,7 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
+import type { v2 } from "./protocol.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 
 type CodexPluginActivationReason =
@@ -47,6 +48,7 @@ type EnsureCodexPluginActivationParams = {
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
   appInventoryCacheKey?: string;
+  threadId?: string;
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   installEvenIfActive?: boolean;
@@ -202,6 +204,7 @@ export async function refreshCodexPluginRuntimeState(params: {
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
   appInventoryCacheKey?: string;
+  threadId?: string;
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   deferAppInventoryRefresh?: boolean;
@@ -235,6 +238,7 @@ export async function refreshCodexAppRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache: CodexAppInventoryCache;
   appCacheKey: string;
+  threadId?: string;
   targetAppIds?: readonly string[];
   deferAppInventoryRefresh?: boolean;
 }): Promise<void> {
@@ -249,11 +253,9 @@ export async function refreshCodexAppRuntimeState(params: {
   if (params.deferAppInventoryRefresh) {
     return;
   }
-  const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
   await params.appCache.refreshNow({
     key: params.appCacheKey,
-    request,
+    request: createCodexAppInventoryRequest(params),
     forceRefetch: true,
     targetAppIds: params.targetAppIds,
   });

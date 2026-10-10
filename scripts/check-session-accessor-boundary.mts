@@ -725,7 +725,6 @@ function sortRecordByKey<Value>(record: Record<string, Value>) {
   );
 }
 
-/** Counts legacy call sites per unmigrated file for every debt concern. */
 async function collectSessionAccessorDebtCounts(repoRoot: string) {
   const counts: SessionAccessorDebtCounts = {};
   for (const [key, concern] of Object.entries(sessionAccessorDebtConcerns)) {
@@ -748,7 +747,6 @@ async function collectSessionAccessorDebtCounts(repoRoot: string) {
   return sortRecordByKey(counts);
 }
 
-/** Ratchet compare: counts above baseline are regressions, below are improvements. */
 export function compareSessionAccessorDebt(
   currentCounts: SessionAccessorDebtCounts,
   baselineCounts: SessionAccessorDebtCounts,

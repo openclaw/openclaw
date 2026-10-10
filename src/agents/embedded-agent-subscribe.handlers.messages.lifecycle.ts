@@ -15,6 +15,7 @@ import {
 import {
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
+  emitPersistentReasoning,
   emitReasoningEnd,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
@@ -46,6 +47,8 @@ export function handleMessageStart(
     return;
   }
 
+  // Persistent reasoning spans all text items in this provider message.
+  ctx.state.lastReasoningSent = undefined;
   // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;
@@ -89,6 +92,22 @@ export function handleMessageEnd(
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
+  const canEmitReply = () =>
+    !ctx.params.silentExpected &&
+    !suppressDeterministicApprovalOutput &&
+    !suppressMessageToolOnlySourceReplyOutput;
+  const appendRawMessage = (getText: () => string) =>
+    appendRawStream(
+      () => ({
+        ts: Date.now(),
+        event: "assistant_message_end",
+        runId: ctx.params.runId,
+        sessionId: (ctx.params.session as { id?: string }).id,
+        rawText: getText(),
+        rawThinking: extractAssistantThinking(assistantMessage),
+      }),
+      ctx.params.sessionKey,
+    );
   // Provider completion can omit thinking_end; close the visible lane before final output.
   if (!suppressMessageToolOnlySourceReplyOutput) {
     emitReasoningEnd(ctx);
@@ -97,33 +116,13 @@ export function handleMessageEnd(
   // Only a silent stop below can keep the earlier answer; any other message replaces it.
   ctx.state.keptAnswer = undefined;
   if (suppressVisibleAssistantOutput) {
-    appendRawStream(
-      () => ({
-        ts: Date.now(),
-        event: "assistant_message_end",
-        runId: ctx.params.runId,
-        sessionId: (ctx.params.session as { id?: string }).id,
-        rawText: extractEmbeddedAssistantText(assistantMessage),
-        rawThinking: extractAssistantThinking(assistantMessage),
-      }),
-      ctx.params.sessionKey,
-    );
+    appendRawMessage(() => extractEmbeddedAssistantText(assistantMessage));
     emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage)
       : "";
-    if (
-      !ctx.params.silentExpected &&
-      !suppressDeterministicApprovalOutput &&
-      !suppressMessageToolOnlySourceReplyOutput &&
-      suppressedTrimmedReasoning &&
-      ctx.params.onBlockReply &&
-      suppressedTrimmedReasoning !== ctx.state.lastReasoningSent
-    ) {
-      ctx.state.lastReasoningSent = suppressedTrimmedReasoning;
-      ctx.emitBlockReply({ text: suppressedTrimmedReasoning, isReasoning: true });
-    }
+    emitPersistentReasoning(ctx, suppressedTrimmedReasoning);
     return;
   }
   const sourceContent = assistantMessage.content;
@@ -133,17 +132,7 @@ export function handleMessageEnd(
   const getRawText = () => (rawText ??= extractEmbeddedAssistantText(assistantMessage));
   const snapshot = extractAssistantStreamSnapshot(ctx, assistantMessage);
   const rawVisibleText = snapshot.text;
-  appendRawStream(
-    () => ({
-      ts: Date.now(),
-      event: "assistant_message_end",
-      runId: ctx.params.runId,
-      sessionId: (ctx.params.session as { id?: string }).id,
-      rawText: getRawText(),
-      rawThinking: extractAssistantThinking(assistantMessage),
-    }),
-    ctx.params.sessionKey,
-  );
+  appendRawMessage(getRawText);
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const messageToolText = extractStandaloneMessageToolText(rawVisibleText, {
     allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
@@ -243,11 +232,7 @@ export function handleMessageEnd(
     ctx.state.reasoningStreamOpen = false;
   };
 
-  if (
-    !ctx.params.silentExpected &&
-    !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput
-  ) {
+  if (canEmitReply()) {
     ctx.emitAssistantStreamData(
       {
         text: cleanedText,
@@ -309,37 +294,10 @@ export function handleMessageEnd(
   }
 
   const onBlockReply = ctx.params.onBlockReply;
-  const shouldEmitReasoning = Boolean(
-    !ctx.params.silentExpected &&
-    !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    ctx.state.includeReasoning &&
-    rawThinking &&
-    onBlockReply &&
-    rawThinking !== ctx.state.lastReasoningSent,
-  );
-  const shouldEmitReasoningBeforeAnswer =
-    shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
-  const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning) {
-      return;
-    }
-    ctx.state.lastReasoningSent = rawThinking;
-    // Lane purity: the payload carries raw thinking only. Tool persistence is
-    // the verbose lane's job; interleaving comes from arrival order.
-    ctx.emitBlockReply({ text: rawThinking, isReasoning: true });
-  };
+  // Providers without thinking_end still deliver reasoning before the terminal answer drain.
+  emitPersistentReasoning(ctx, rawThinking);
 
-  if (shouldEmitReasoningBeforeAnswer) {
-    maybeEmitReasoning();
-  }
-
-  if (
-    !ctx.params.silentExpected &&
-    !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    onBlockReply
-  ) {
+  if (canEmitReply() && onBlockReply) {
     // Reconcile source first, then finalize the parser and attachment selection
     // together. Replaying provider events here would rotate logical-item state.
     const pending = ctx.flushBlockReplyBuffer({
@@ -362,9 +320,6 @@ export function handleMessageEnd(
     };
   }
 
-  if (!shouldEmitReasoningBeforeAnswer) {
-    maybeEmitReasoning();
-  }
   if (!ctx.params.silentExpected && rawThinking) {
     // Emit-always: bus/archive get message-end thinking regardless of the
     // streamReasoning rendering setting (gated inside emitReasoningStream).
@@ -389,5 +344,4 @@ export function handleMessageEnd(
   }
 
   finalizeMessageEnd();
-  return undefined;
 }

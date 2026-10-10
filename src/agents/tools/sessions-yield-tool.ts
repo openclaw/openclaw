@@ -84,6 +84,9 @@ export function createSessionsYieldTool(opts?: {
     // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
     // tool must stay visible even when tool search compacts the catalog.
     catalogMode: "direct-only",
+    // A yield waits, so it must pause an async-tool response: the next request then
+    // delivers this response's async results ahead of the yield result.
+    async: false,
     description:
       'End this turn for pending child completion events; this is not a final-result submission. For background tools, follow their result\'s continuation instructions. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
     parameters: SessionsYieldToolSchema,
@@ -105,7 +108,7 @@ export function createSessionsYieldTool(opts?: {
         return jsonResult({
           status: "deferred",
           message:
-            "Earlier async tool results are still being delivered. Finish this response to receive them, then yield again only if external work still requires waiting.",
+            "Earlier async tool results from this response arrive with this result. Use them, then yield again only if external work still requires waiting.",
         });
       }
       const claim = await opts.claimYield?.(

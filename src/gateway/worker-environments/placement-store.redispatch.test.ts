@@ -91,7 +91,7 @@ describe("failed worker placement redispatch", () => {
           owner: placementTurnOwner(active),
         });
       } else if (scenario === "move") {
-        store.beginPlacementMove({
+        await store.beginPlacementMove({
           sessionId: SESSION.sessionId,
           source: {
             generation: active.generation,

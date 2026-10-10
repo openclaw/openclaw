@@ -355,7 +355,7 @@ async function collectInstalledPackageDistErrors(params: {
   installedVersion: string | null;
   expectedVersion?: string | null;
 }): Promise<string[]> {
-  const criticalPaths = await collectCriticalInstalledPackageDistPaths(params.packageRoot);
+  let criticalPaths = await collectCriticalInstalledPackageDistPaths(params.packageRoot);
   let inventoryFiles: string[] | null = null;
   let inventoryError: string | null = null;
   try {
@@ -364,9 +364,11 @@ async function collectInstalledPackageDistErrors(params: {
     inventoryError = `invalid package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`;
   }
 
+  let actualFiles: string[] | null = null;
+  let inventoryErrors: string[] = [];
   if (inventoryFiles !== null) {
-    const actualFiles = await collectPackageDistInventory(params.packageRoot);
-    const inventoryErrors = await collectInstalledPathErrors({
+    actualFiles = await collectPackageDistInventory(params.packageRoot);
+    inventoryErrors = await collectInstalledPathErrors({
       packageRoot: params.packageRoot,
       expectedFiles: inventoryFiles,
       actualFiles,
@@ -374,39 +376,28 @@ async function collectInstalledPackageDistErrors(params: {
       unexpectedMessage: (relativePath) => `unexpected packaged dist file ${relativePath}`,
     });
     const inventorySet = new Set(inventoryFiles);
-    const supplementalCriticalPaths = criticalPaths.filter(
-      (relativePath) => !inventorySet.has(relativePath),
-    );
-    return [
-      ...inventoryErrors,
-      ...(await collectInstalledPathErrors({
-        packageRoot: params.packageRoot,
-        expectedFiles: supplementalCriticalPaths,
-        actualFiles,
-        missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
-      })),
-    ];
+    criticalPaths = criticalPaths.filter((relativePath) => !inventorySet.has(relativePath));
   }
 
   const criticalErrors = await collectInstalledPathErrors({
     packageRoot: params.packageRoot,
     expectedFiles: criticalPaths,
-    actualFiles: null,
+    actualFiles,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
-  if (inventoryError) {
-    return [inventoryError, ...criticalErrors];
+  if (inventoryFiles === null) {
+    if (inventoryError) {
+      inventoryErrors.push(inventoryError);
+    } else if (
+      shouldRequirePackagedDistInventory(params.installedVersion) ||
+      shouldRequirePackagedDistInventory(params.expectedVersion)
+    ) {
+      inventoryErrors.push(
+        `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      );
+    }
   }
-  if (
-    shouldRequirePackagedDistInventory(params.installedVersion) ||
-    shouldRequirePackagedDistInventory(params.expectedVersion)
-  ) {
-    return [
-      `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-      ...criticalErrors,
-    ];
-  }
-  return criticalErrors;
+  return [...inventoryErrors, ...criticalErrors];
 }
 
 async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
@@ -864,19 +855,13 @@ async function resolvePnpmIsolatedGlobalPackage(params: {
   return null;
 }
 
-async function isPnpmIsolatedGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
-  const globalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
-  if (!globalRoot) {
-    return false;
-  }
-  return Boolean(await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }));
-}
-
 async function isPnpmGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
-  if (await isPnpmIsolatedGlobalPackageRoot(pkgRoot)) {
-    return true;
-  }
-  if (await hasPnpmIsolatedProjectMetadata(pkgRoot)) {
+  const isolatedRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
+  if (
+    (isolatedRoot &&
+      (await resolvePnpmIsolatedGlobalPackage({ globalRoot: isolatedRoot, pkgRoot }))) ||
+    (await hasPnpmIsolatedProjectMetadata(pkgRoot))
+  ) {
     return true;
   }
   const globalRoot = inferPnpmGlobalRootFromPackageRoot(pkgRoot);
@@ -966,8 +951,7 @@ async function resolveGlobalRoot(
   if (resolved.manager === "bun") {
     return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
   }
-  const argv = [resolved.command, "root", "-g"];
-  const res = await runCommand(argv, { timeoutMs }).catch(() => null);
+  const res = await runCommand([resolved.command, "root", "-g"], { timeoutMs }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }
@@ -1157,18 +1141,13 @@ export async function detectGlobalInstallManagerForRoot(
     return (await isPnpmGlobalPackageRoot(pkgRoot)) ? "pnpm" : "bun";
   }
 
-  const candidates: Array<{
-    manager: "npm" | "pnpm";
-    argv: string[];
-  }> = [
-    { manager: "npm", argv: ["npm", "root", "-g"] },
-    { manager: "pnpm", argv: ["pnpm", "root", "-g"] },
-  ];
-
-  for (const { manager, argv } of candidates) {
-    const res = await runCommand(argv, { timeoutMs }).catch(() => null);
-    const globalRoot = res?.code === 0 ? readPackageManagerProbeValue(res.stdout) : "";
-    diagnostics.push(`${argv.join(" ")}: ${globalRoot || "unavailable"}`);
+  for (const manager of ["npm", "pnpm"] as const) {
+    const globalRoot = await resolveGlobalRoot(
+      { manager, command: manager },
+      runCommand,
+      timeoutMs,
+    );
+    diagnostics.push(`${manager} root -g: ${globalRoot || "unavailable"}`);
     if (!globalRoot) {
       continue;
     }
@@ -1231,16 +1210,13 @@ export function globalInstallArgs(
   npmLifecyclePolicy: NpmLifecyclePolicy = "allow-scripts",
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
-  if (resolved.manager === "pnpm") {
-    return [resolved.command, "add", "-g", PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG, spec];
-  }
-  if (resolved.manager === "bun") {
+  if (resolved.manager !== "npm") {
     return [
       resolved.command,
       "add",
       "-g",
-      BUN_OPENCLAW_TRUST_FLAG,
-      resolveBunGlobalInstallSpec(spec),
+      resolved.manager === "pnpm" ? PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG : BUN_OPENCLAW_TRUST_FLAG,
+      resolved.manager === "pnpm" ? spec : resolveBunGlobalInstallSpec(spec),
     ];
   }
   return [

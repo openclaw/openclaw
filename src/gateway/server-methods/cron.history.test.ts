@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { CronHistoryResult } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -16,10 +18,12 @@ import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import {
   pruneCronRunHistoryInDatabase,
+  readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../../cron/store/run-history.kernel.js";
 import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
 import { prepareCronRunReceiptWriteSchema } from "../../cron/store/run-receipt-write-admission.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -213,102 +217,168 @@ async function setup() {
 }
 
 it("pages the exact archived Cron generation for a limited caller without main-thread SQL", async () => {
-  await withCronTranscript(async ({ job, query, cron, storePath, profile }) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        roles: {
-          default: "limited",
-          definitions: {
-            limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+  await withCronTranscript(
+    async ({ job, query, cron, storePath, profile, record, alias, oldScope }) => {
+      const detail = expectDefined(record.detail, "record detail");
+      if (typeof detail !== "object" || Array.isArray(detail)) {
+        throw new Error("Expected detail object");
+      }
+      const recoveryMarker = "cron-recovery-only:";
+      persistHistory(
+        Array.from({ length: 32 }, (_, index) => ({
+          ...record,
+          runId: index === 0 ? record.runId : `internal-payload-${index}`,
+          startedAt: index === 0 ? record.startedAt : 30 + index,
+          endedAt: index === 0 ? record.endedAt : 40 + index,
+          detail: {
+            ...detail,
+            runId: index === 0 ? "public-old-run" : `public-payload-${index}`,
+            runAtMs: index === 0 ? 10 : 30 + index,
+            scriptStateChanged: true,
+            scriptState: `${recoveryMarker}${index}:` + "x".repeat(64 * 1024),
+          },
+        })),
+      );
+      const stored = runOpenClawStateWriteTransaction(
+        ({ db }) => readCronRunRecordsInDatabase(db, job.id, record.runId)[0],
+      );
+      // Existing clients retain cursors across upgrades; the ordered identity bytes stay stable.
+      const expectedBinding = createHash("sha256")
+        .update(
+          JSON.stringify([
+            cronStoreKey(storePath),
+            expectDefined(stored, "stored run").id,
+            record.runId,
+            job.id,
+            "public-old-run",
+            10,
+            alias,
+            oldScope.sessionId,
+            "main",
+          ]),
+        )
+        .digest("base64url");
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "limited",
+            definitions: {
+              limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            },
           },
         },
-      },
-    };
-    const context = await createHistoryReadContext({
-      cron,
-      cronStorePath: storePath,
-      getRuntimeConfig: () => cfg,
-    });
-    const options = {
-      client: sharingPolicyClient({ scopes: ["operator.read"], user: profile.id }),
-    };
-    prepareGatewayRecipientProfile(options.client);
-    expect(operatorSessionCap(options.client, cfg)).toBe("none");
-    const observation = observeMainThreadSql();
-    const forbidden = forbidMainThreadSql("Cron history performed main-thread SQL");
-    try {
-      const first = await query(
-        { id: job.id, runId: "public-old-run", limit: 2 },
-        options,
-        context,
-      );
-      const failures: string[] = [];
-      for (const call of observation.calls) {
-        for (const result of call.mock.results) {
-          if (result.type === "throw" && result.value instanceof Error) {
-            failures.push(result.value.stack ?? result.value.message);
+      };
+      const context = await createHistoryReadContext({
+        cron,
+        cronStorePath: storePath,
+        getRuntimeConfig: () => cfg,
+      });
+      const options = {
+        client: sharingPolicyClient({ scopes: ["operator.read"], user: profile.id }),
+      };
+      prepareGatewayRecipientProfile(options.client);
+      expect(operatorSessionCap(options.client, cfg)).toBe("none");
+      const observation = observeMainThreadSql();
+      const forbidden = forbidMainThreadSql("Cron history performed main-thread SQL");
+      const workerRuns = vi.spyOn(WorkerTaskPool.prototype, "run");
+      try {
+        const first = await query(
+          { id: job.id, runId: "public-old-run", limit: 2 },
+          options,
+          context,
+        );
+        const failures: string[] = [];
+        for (const call of observation.calls) {
+          for (const result of call.mock.results) {
+            if (result.type === "throw" && result.value instanceof Error) {
+              failures.push(result.value.stack ?? result.value.message);
+            }
           }
         }
-      }
-      expect(observation.count(), failures.join("\n")).toBe(0);
-      expect(first.respond.mock.calls[0]?.[0], JSON.stringify(first.respond.mock.calls)).toBe(true);
-      expect(first.payload?.messages).toMatchObject([
-        { content: "Old second" },
-        { content: "Old last" },
-      ]);
-      const next = await query(
-        {
-          id: job.id,
-          runAtMs: 10,
-          limit: 2,
-          cursor: expectDefined(first.payload?.nextCursor, "older page cursor"),
-        },
-        options,
-        context,
-      );
-      expect(next.payload?.messages).toMatchObject([{ content: "Old first" }]);
-      expect(next.payload?.nextCursor).toBeUndefined();
-      const invalid = await query(
-        {
-          id: job.id,
-          runId: "public-old-run",
-          sessionKey: "agent:main:private",
-        },
-        options,
-        context,
-      );
-      expect(invalid.respond.mock.calls[0]).toMatchObject([
-        false,
-        undefined,
-        { code: "INVALID_REQUEST" },
-      ]);
-      for (const [method, params, expected] of [
-        ["cron.get", { id: job.id }, { id: job.id }],
-        ["cron.list", { includeDisabled: true }, { jobs: [{ id: job.id }] }],
-        ["cron.runs", { id: job.id }, { entries: [], total: 0 }],
-        ["cron.runs", { scope: "all" }, { entries: [], total: 0 }],
-      ] as const) {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          cronHandlers[method],
-          method,
-        )({
-          req: { type: "req", id: method, method, params },
-          params,
-          client: options.client,
+        expect(observation.count(), failures.join("\n")).toBe(0);
+        expect(first.respond.mock.calls[0]?.[0], JSON.stringify(first.respond.mock.calls)).toBe(
+          true,
+        );
+        expect(first.payload?.messages).toMatchObject([
+          { content: "Old second" },
+          { content: "Old last" },
+        ]);
+        expect(
+          JSON.parse(
+            Buffer.from(
+              expectDefined(first.payload?.nextCursor, "bound cursor"),
+              "base64url",
+            ).toString("utf8"),
+          ),
+        ).toEqual([expectedBinding, 2]);
+        const historyReplies = await Promise.all(
+          workerRuns.mock.calls.flatMap(([input], index) =>
+            asOptionalRecord(asOptionalRecord(input)?.history)?.jobId === job.id
+              ? [workerRuns.mock.results[index]?.value]
+              : [],
+          ),
+        );
+        const serializedReplies = historyReplies.map((reply) => JSON.stringify(reply));
+        expect(historyReplies.length).toBeGreaterThanOrEqual(2);
+        for (const reply of serializedReplies) {
+          expect(reply.includes(recoveryMarker)).toBe(false);
+          expect(Buffer.byteLength(reply)).toBeLessThan(1024);
+        }
+        const next = await query(
+          {
+            id: job.id,
+            runAtMs: 10,
+            limit: 2,
+            cursor: expectDefined(first.payload?.nextCursor, "older page cursor"),
+          },
+          options,
           context,
-          respond,
-          isWebchatConnect: () => false,
-        });
-        expect(respond.mock.calls[0]?.[0], method).toBe(true);
-        expect(respond.mock.calls[0]?.[1], method).toMatchObject(expected);
+        );
+        expect(next.payload?.messages).toMatchObject([{ content: "Old first" }]);
+        expect(next.payload?.nextCursor).toBeUndefined();
+        const invalid = await query(
+          {
+            id: job.id,
+            runId: "public-old-run",
+            sessionKey: "agent:main:private",
+          },
+          options,
+          context,
+        );
+        expect(invalid.respond.mock.calls[0]).toMatchObject([
+          false,
+          undefined,
+          { code: "INVALID_REQUEST" },
+        ]);
+        for (const [method, params, expected] of [
+          ["cron.get", { id: job.id }, { id: job.id }],
+          ["cron.list", { includeDisabled: true }, { jobs: [{ id: job.id }] }],
+          ["cron.runs", { id: job.id }, { entries: [], total: 0 }],
+          ["cron.runs", { scope: "all" }, { entries: [], total: 0 }],
+        ] as const) {
+          const respond = vi.fn<RespondFn>();
+          await expectDefined(
+            cronHandlers[method],
+            method,
+          )({
+            req: { type: "req", id: method, method, params },
+            params,
+            client: options.client,
+            context,
+            respond,
+            isWebchatConnect: () => false,
+          });
+          expect(respond.mock.calls[0]?.[0], method).toBe(true);
+          expect(respond.mock.calls[0]?.[1], method).toMatchObject(expected);
+        }
+        observation.expectIdle();
+      } finally {
+        workerRuns.mockRestore();
+        forbidden.restore();
+        observation.restore();
       }
-      observation.expectIdle();
-    } finally {
-      forbidden.restore();
-      observation.restore();
-    }
-  });
+    },
+  );
 });
 
 it("preserves shared custom-session conversation history across recorded runs", async () => {
@@ -361,6 +431,26 @@ it("refuses ambiguous timestamps and cursors moved to another recorded run", asy
     expect(
       (await query({ id: job.id, runId: "public-second-run", cursor })).respond.mock.calls[0]?.[0],
     ).toBe(false);
+    expect(
+      (await query({ id: job.id, runId: "public-old-run", runAtMs: 11 })).respond.mock
+        .calls[0]?.[0],
+    ).toBe(false);
+    expect(
+      (await query({ id: job.id, runId: "public-old-run", runAtMs: 10 })).respond.mock
+        .calls[0]?.[0],
+    ).toBe(true);
+    // An incomplete duplicate must not make an otherwise ambiguous public run selectable.
+    const { sessionId: _sessionId, ...incompleteDetail } = detail;
+    persistHistory([
+      {
+        ...record,
+        runId: "internal-incomplete-run",
+        detail: incompleteDetail,
+      },
+    ]);
+    expect((await query({ id: job.id, runId: "public-old-run" })).respond.mock.calls[0]?.[0]).toBe(
+      false,
+    );
   });
 });
 

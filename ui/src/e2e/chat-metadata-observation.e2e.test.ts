@@ -242,6 +242,13 @@ suite.define(() => {
           models: [model],
           methodResponses: {
             "sessions.list": sessionsResponse(),
+            "chat.startup": {
+              sessionId: "metadata-session",
+              sessionInfo: sessionsResponse().sessions[0],
+              messages: [],
+              thinkingLevel: null,
+              metadata: { commands: [], models: [model] },
+            },
             "chat.metadata": { commands: [] },
             "models.list": {
               models: [
@@ -283,7 +290,7 @@ suite.define(() => {
         expect(await sessionFacts()).toHaveLength(factsBefore);
         await page.clock.runFor(2_500);
         expect.soft(await requestCounts(gateway)).toEqual({
-          "chat.metadata": before["chat.metadata"] + 1,
+          "chat.metadata": before["chat.metadata"],
           "models.list": before["models.list"] + 1,
         });
         expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
@@ -306,7 +313,7 @@ suite.define(() => {
         await setDocumentVisibility(page, "visible");
         await page.clock.runFor(100);
         expect(await requestCounts(gateway)).toEqual({
-          "chat.metadata": visibleCounts["chat.metadata"] + 1,
+          "chat.metadata": visibleCounts["chat.metadata"],
           "models.list": visibleCounts["models.list"] + 1,
         });
 
@@ -344,7 +351,7 @@ suite.define(() => {
             expectCatalog(panes.nth(1), selectedModel.name),
           ]);
           expect(await requestCounts(gateway)).toEqual({
-            "chat.metadata": beforeAccount["chat.metadata"] + 1,
+            "chat.metadata": beforeAccount["chat.metadata"],
             "models.list": beforeAccount["models.list"] + 1,
           });
           if (proof) {
@@ -452,15 +459,16 @@ suite.define(() => {
       await gateway.setMethodResponse("models.list", { models: [freshModel] });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      if (presentation.includes("without metadata")) {
+      if (presentation.startsWith("late follower")) {
         await gateway.setMethodResponse("chat.startup", {
           sessionId: "metadata-session",
           sessionInfo: { key: sessionKeys[0], kind: "direct" },
           messages: [],
           thinkingLevel: null,
+          ...(!presentation.includes("without metadata")
+            ? { metadata: { commands: [], models: [model] } }
+            : {}),
         });
-      }
-      if (presentation.startsWith("late follower")) {
         await page.getByRole("button", { name: "Open split view", exact: true }).click();
         await expect.poll(() => panes.count()).toBe(2);
       }

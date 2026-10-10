@@ -70,13 +70,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
-    const details = await buildGatewayProbeConnectionDetails({
-      config: params.config,
-      token: params.token,
-      password: params.password,
-      ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
-      localPortOverride: params.localPortOverride,
-    });
+    const details = await buildGatewayProbeConnectionDetails(params);
     const probe = await probeGatewayStatus({
       url: details.url,
       token: params.token,
@@ -166,15 +160,10 @@ export async function healthCommand(
   } catch (error) {
     if (
       await emitReachableGatewayAuthDiagnostic({
+        ...opts,
         error,
         config: cfg,
         runtime,
-        timeoutMs: opts.timeoutMs,
-        token: opts.token,
-        password: opts.password,
-        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
-        localPortOverride: opts.localPortOverride,
-        json: opts.json,
       })
     ) {
       return;
@@ -309,10 +298,7 @@ export async function healthCommand(
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
-      if (!channelSummary || channelSummary.linked !== true) {
-        continue;
-      }
-      if (!plugin.status?.logSelfId) {
+      if (channelSummary?.linked !== true || !plugin.status?.logSelfId) {
         continue;
       }
       const boundAccounts = defaultAgentId
@@ -336,11 +322,9 @@ export async function healthCommand(
       if (
         accountContext.probeAccount === undefined ||
         !accountContext.enabled ||
-        accountContext.configured !== true
+        accountContext.configured !== true ||
+        accountContext.diagnostics.length > 0
       ) {
-        continue;
-      }
-      if (accountContext.diagnostics.length > 0) {
         continue;
       }
       try {

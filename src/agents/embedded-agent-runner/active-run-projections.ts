@@ -22,26 +22,26 @@ export function getActiveEmbeddedRunCount(): number {
   return Math.max(activeCount, getActiveReplyRunCount());
 }
 
+function sortedSessionIdentifiers(identifiers: Iterable<string>): string[] {
+  return [...new Set(identifiers)].toSorted((a, b) => a.localeCompare(b));
+}
+
 /** Lists active embedded-run session keys from both embedded and auto-reply registries. */
 export function listActiveEmbeddedRunSessionKeys(): string[] {
-  return [
-    ...new Set([
-      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
-      ...listActiveReplyRunSessionKeys(),
-    ]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return sortedSessionIdentifiers([
+    ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
+    ...listActiveReplyRunSessionKeys(),
+  ]);
 }
 
 /** Lists active embedded-run session ids from all embedded-run lookup maps. */
 export function listActiveEmbeddedRunSessionIds(): string[] {
-  return [
-    ...new Set([
-      ...ACTIVE_EMBEDDED_RUNS.keys(),
-      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.values(),
-      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.values(),
-      ...listActiveReplyRunSessionIds(),
-    ]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return sortedSessionIdentifiers([
+    ...ACTIVE_EMBEDDED_RUNS.keys(),
+    ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.values(),
+    ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.values(),
+    ...listActiveReplyRunSessionIds(),
+  ]);
 }
 
 /** Resolves the current session id for an active run after resets or compaction. */

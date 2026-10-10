@@ -12,6 +12,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   beginConversationDeliveryOperation,
+  ConversationDeliveryInputError,
   findConversationTurnDeliveryByReplyTarget,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
@@ -20,7 +21,7 @@ import {
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
 } from "./conversation-delivery-store.js";
-import { resolveConversation } from "./conversation-registry.js";
+import { readConversation } from "./conversation-registry.js";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
@@ -28,6 +29,7 @@ import {
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 type LegacyDeliveryFixture = Partial<SessionEntry> & {
@@ -122,6 +124,48 @@ describe("conversation delivery store", () => {
         ).rejects.toThrow("Conversation delivery operation was reused with different input: retry");
       }
       expect(await getConversationDeliveryOperation(scope, "retry")).toEqual(begun.record);
+    });
+  });
+
+  it("preserves input conflicts without waiting for reader retirement that needs the next writer", async () => {
+    await withConversationStore(async ({ scope, conversationRef }) => {
+      const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+      openOpenClawAgentDatabase(options);
+      const input = { operationKind: "send" as const, conversationRef, message: "original" };
+      await beginConversationDeliveryOperation(scope, { operationId: "conflict", ...input });
+      const historyRetiring = createDeferred();
+      const writerSettled = createDeferred();
+      const releaseHistory = createDeferred();
+      const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+        historyRetiring.resolve();
+        return Promise.race([writerSettled.promise, releaseHistory.promise]);
+      });
+      const reading = getConversationDeliveryOperation(scope, "conflict", {
+        ...input,
+        message: "changed",
+      });
+      const outcome = reading.catch((error: unknown) => error);
+      const following = runOpenClawAgentWriteAdmission(options, () => {
+        writerSettled.resolve();
+        return "following writer";
+      });
+      try {
+        const result = await Promise.race([
+          outcome,
+          historyRetiring.promise.then(
+            () => new Error("Conflict cleanup waits on the writer queued behind its own admission"),
+          ),
+        ]);
+        expect(result).toBeInstanceOf(ConversationDeliveryInputError);
+        expect(result).toMatchObject({
+          message: expect.stringContaining("reused with different input"),
+        });
+        await expect(following).resolves.toBe("following writer");
+      } finally {
+        releaseHistory.resolve();
+        await Promise.allSettled([reading, following]);
+        retirement.mockRestore();
+      }
     });
   });
 
@@ -318,7 +362,7 @@ describe("conversation delivery store", () => {
         maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
       });
 
-      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+      expect(await readConversation(scope, conversationRef)).toMatchObject({
         conversationRef,
         channel: "reef",
         sessionId: "reef-session",
@@ -387,7 +431,7 @@ describe("conversation delivery store", () => {
           .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
           .get("unrelated", "operation-deleted-session"),
       ).toEqual({ value_json: "keep" });
-      expect(resolveConversation(scope, conversationRef)).toMatchObject({ conversationRef });
+      expect(await readConversation(scope, conversationRef)).toMatchObject({ conversationRef });
     });
   });
 
@@ -410,11 +454,11 @@ describe("conversation delivery store", () => {
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
 
-      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+      expect(await readConversation(scope, conversationRef)).toMatchObject({
         conversationRef,
         channel: "reef",
       });
-      expect(resolveConversation(scope, conversationRef)?.sessionId).toBeUndefined();
+      expect((await readConversation(scope, conversationRef))?.sessionId).toBeUndefined();
       expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
       expect(
         await getConversationDeliveryOperation(scope, "operation-migrated-session"),

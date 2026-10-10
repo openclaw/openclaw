@@ -172,10 +172,10 @@ export function wizardStateFromResult(
   if (result.done && result.status === "done") {
     return { phase: "done" };
   }
-  if (result.status === "cancelled") {
-    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
-  }
-  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
+  return {
+    phase: result.status === "cancelled" ? "cancelled" : "error",
+    message: formatUiExternalText(result.error, fallbackError),
+  };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

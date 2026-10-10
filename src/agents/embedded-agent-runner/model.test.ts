@@ -186,11 +186,7 @@ import type { Model } from "../../llm/types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { expectUnknownModelErrorResult } from "./model.forward-compat.test-support.js";
-import {
-  createEmptyAgentDiscoveryStores,
-  resolveModelAsync,
-  resolveModelWithRegistry,
-} from "./model.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
@@ -823,12 +819,8 @@ describe("resolveModel", () => {
         },
       ],
     });
-    const resolved = await resolveModelWithRegistry({
-      provider: "custom",
-      modelId: "Model",
-      cfg,
-      modelRegistry: createEmptyAgentDiscoveryStores().modelRegistry,
-      agentDir: state.agentDir(),
+    const { model: resolved } = await resolveModelAsync("custom", "Model", state.agentDir(), cfg, {
+      ...createEmptyAgentDiscoveryStores(),
       runtimeHooks: createRuntimeHooks(),
     });
     expect.soft(resolved).toMatchObject({

@@ -22,6 +22,7 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import * as logger from "../logger.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -876,6 +877,47 @@ setInterval(() => {}, 1000);
         message: "node worker capacity remained full for 10000 ms",
       },
     });
+  });
+
+  it("returns and logs bounded, redacted workspace failure details", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("node-worker-workspace-diagnostic-"),
+    });
+    const exec = vi
+      .spyOn(workspace, "exec")
+      .mockRejectedValueOnce(
+        new Error(
+          `workspace quiescence failed: Authorization: Bearer ${secret}\n${"detail ".repeat(300)}terminal diagnosis`,
+        ),
+      );
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        paramsJSON: JSON.stringify({
+          gatewayNamespace: "gateway-1",
+          environmentId: "environment-1",
+          sessionId: "session-1",
+          generation: 4,
+          argv: ["node", "-e", "void 0"],
+        }),
+        workspace,
+      });
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const message = result?.error?.message ?? "";
+      expect(message).toContain("workspace quiescence failed");
+      expect(message).toContain("terminal diagnosis");
+      expect(message).not.toContain(secret);
+      expect(message).not.toContain("\n");
+      expect(message.length).toBeLessThanOrEqual(500);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        `node workspace command failed (${NODE_WORKER_WORKSPACE_EXEC_COMMAND}, UNAVAILABLE): ${message}`,
+      );
+    } finally {
+      exec.mockRestore();
+      warn.mockRestore();
+    }
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {

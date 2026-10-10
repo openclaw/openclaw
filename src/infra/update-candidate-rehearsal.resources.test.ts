@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-service-env.js";
 import * as exec from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -307,7 +308,10 @@ it.each([
     config: {},
     stateDir: f.stateDir,
     candidateRoot: f.root,
-    env: { TMPDIR: nominated },
+    env: resolveOwnedManagedUpdateEnv({
+      processEnv: { TMPDIR: nominated },
+      serviceEnv: { TMPDIR: "/tmp", OPENCLAW_STATE_DIR: f.stateDir },
+    }),
   });
   try {
     const root =
@@ -316,6 +320,11 @@ it.each([
     expect(rehearsal.snapshotCapacity).toMatchObject({
       reason: kind,
       selection: { kind, directory: rehearsal.stateDir },
+      candidates: [
+        { kind: "explicit-tmpdir", directory: nominated, availableBytes: explicit },
+        { kind: "state-volume", directory: sibling, availableBytes: state },
+        { kind: "system-tmpdir", directory: os.tmpdir(), availableBytes: system },
+      ],
     });
   } finally {
     await rehearsal.cleanup();

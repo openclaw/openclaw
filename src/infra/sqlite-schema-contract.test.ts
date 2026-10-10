@@ -55,6 +55,26 @@ const CANONICAL_SCHEMA = `
   END;
 `;
 
+it("excludes named expected indexes without accepting unexpected actual uniqueness", () => {
+  const table = "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT);";
+  const index = "CREATE INDEX optional_records_value ON records(value);";
+  const database = new DatabaseSync(":memory:");
+  const compatibility = { excludedIndexes: ["optional_records_value"] };
+  try {
+    database.exec(table);
+    expect(collectSqliteSchemaIssues(database, table + index, compatibility)).toEqual([]);
+    database.exec("CREATE UNIQUE INDEX optional_records_value ON records(value)");
+    expect(collectSqliteSchemaIssues(database, table + index, compatibility)).toMatchObject([
+      { code: "unexpected-unique-index", objectName: "optional_records_value" },
+    ]);
+    database.exec("DROP INDEX optional_records_value");
+    database.exec(index);
+    expect(collectSqliteSchemaIssues(database, table + index, compatibility)).toEqual([]);
+  } finally {
+    database.close();
+  }
+});
+
 describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)", (cacheEnabled) => {
   function createDatabase(schema: string): DatabaseSync {
     const database = new DatabaseSync(":memory:");

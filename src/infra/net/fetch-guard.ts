@@ -37,8 +37,8 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -544,8 +544,7 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs =
-        params.timeoutMs !== undefined ? params.timeoutMs : globalUndiciStreamTimeoutMs;
+      const timeoutMs = params.timeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -603,6 +602,7 @@ async function fetchWithSsrFGuardInternal(
             origin: parsedUrl.origin,
             addresses: [...pinned.addresses].toSorted(),
             timeoutMs: timeoutMs ?? null,
+            streamTimeoutMs: timeoutMs ?? globalUndiciStreamTimeoutMs ?? null,
             familyConnect: familyConnect ?? null,
             policy: policyForUrl ?? null,
           });

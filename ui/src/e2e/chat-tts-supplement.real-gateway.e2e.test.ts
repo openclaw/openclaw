@@ -361,7 +361,6 @@ suite.define(() => {
                   });
                   const previousConnection = historyConnection;
                   await page.reload();
-                  await enterControlUiSession(page);
                   await waitForControlUiGatewayReady(page);
                   await expect
                     .poll(async () => {
@@ -444,7 +443,6 @@ suite.define(() => {
                   .getByRole("button", { name: "Stop generating", exact: true })
                   .waitFor({ state: "detached" });
                 await page.reload();
-                await enterControlUiSession(page);
                 await waitForControlUiGatewayReady(page);
                 await assertSpeech(text, index + 1);
               }

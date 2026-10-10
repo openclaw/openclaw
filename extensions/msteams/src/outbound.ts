@@ -227,8 +227,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
         text,
         mediaUrls,
-        send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
-          await sendWithDeliveryResults(
+        send: ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
+          sendWithDeliveryResults(
             (report) =>
               send(deliveryTarget, textLocal, {
                 mediaUrl: mediaUrlLocal,

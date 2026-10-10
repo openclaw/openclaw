@@ -2,6 +2,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
+import type { IncognitoOutboxOperations } from "../../config/sessions/session-incognito-outbox-contract.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -149,61 +150,26 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
         throw new Error("Incognito outbox requires its captured session target");
       }
       const scoped = <Input extends object>(input: Input) => ({ ...input, sessionKey, sessionId });
+      const runActor = <Key extends keyof IncognitoOutboxOperations>(
+        type: Key,
+        input: IncognitoOutboxOperations[Key]["input"],
+      ) => actor.sessions.outbox(authority, { type, input });
       const commands: {
         [Key in keyof ContextEngineTurnOutboxWorkerOperations]: (
           input: ContextEngineTurnOutboxWorkerOperations[Key]["input"],
         ) => Promise<ContextEngineTurnOutboxWorkerOperations[Key]["output"]>;
       } = {
-        prepareRun: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.prepareRun",
-            input: scoped(input),
-          }),
+        prepareRun: (input) => runActor("session.outbox.prepareRun", scoped(input)),
         listPendingSessions: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.listPendingSessions",
-            input: scoped(input),
-          }),
-        readNextPending: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.readNextPending",
-            input: scoped(input),
-          }),
-        complete: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.complete",
-            input: scoped(input),
-          }),
-        recordFailure: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.recordFailure",
-            input: scoped(input),
-          }),
-        hasPending: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.hasPending",
-            input: scoped(input),
-          }),
-        enqueueIntent: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.enqueueIntent",
-            input: scoped(input),
-          }),
-        acceptIntent: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.acceptIntent",
-            input: scoped(input),
-          }),
-        publishClosedTurn: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.publishClosedTurn",
-            input: scoped(input),
-          }),
-        discardIntent: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.discardIntent",
-            input: scoped(input),
-          }),
+          runActor("session.outbox.listPendingSessions", scoped(input)),
+        readNextPending: (input) => runActor("session.outbox.readNextPending", scoped(input)),
+        complete: (input) => runActor("session.outbox.complete", scoped(input)),
+        recordFailure: (input) => runActor("session.outbox.recordFailure", scoped(input)),
+        hasPending: (input) => runActor("session.outbox.hasPending", scoped(input)),
+        enqueueIntent: (input) => runActor("session.outbox.enqueueIntent", scoped(input)),
+        acceptIntent: (input) => runActor("session.outbox.acceptIntent", scoped(input)),
+        publishClosedTurn: (input) => runActor("session.outbox.publishClosedTurn", scoped(input)),
+        discardIntent: (input) => runActor("session.outbox.discardIntent", scoped(input)),
       };
       const execute: SqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>["execute"] = ({
         type,

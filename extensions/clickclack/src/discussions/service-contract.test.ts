@@ -16,6 +16,25 @@ import {
   testExternalRef,
 } from "./service-test-support.js";
 
+function occupiedBinding(index: number): ClickClackDiscussionBinding {
+  return {
+    accountId: "default",
+    agentId: "main",
+    sessionId: `occupied-${index}`,
+    serverBaseUrl: "https://clickclack.example",
+    externalRef: testExternalRef(`agent:main:occupied-${index}`),
+    externalUrl: "",
+    workspaceRef: "team",
+    workspaceId: "wsp_team",
+    channelId: `chn_occupied_${index}`,
+    channelRouteId: `occupied-${index}`,
+    workspaceRouteId: "team-route",
+    section: "Sessions",
+    archived: false,
+    label: "Occupied",
+  };
+}
+
 describe("ClickClack discussion service contracts", () => {
   it("preflights the managed-channel list contract before creating", async () => {
     const harness = createHarness({ label: "Unsupported server" });
@@ -428,7 +447,7 @@ describe("ClickClack discussion service contracts", () => {
   it("rejects binding capacity before creating a remote channel", async () => {
     const harness = createHarness({ label: "At capacity" });
     for (let index = 0; index < 10_000; index += 1) {
-      harness.store.register(`occupied-${index}`, {});
+      harness.store.register(`agent:main:occupied-${index}`, occupiedBinding(index));
     }
 
     await expect(harness.service.open("agent:main:capacity")).rejects.toThrow(
@@ -446,6 +465,9 @@ describe("ClickClack discussion service contracts", () => {
     vi.mocked(harness.runtime.agent.session.getSessionEntry).mockImplementation(({ sessionKey }) =>
       entries.get(sessionKey),
     );
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockImplementation(
+      async ({ sessionKey }) => entries.get(sessionKey),
+    );
 
     entries.set(deletedKey, {
       sessionId: "session-deleted",
@@ -456,7 +478,7 @@ describe("ClickClack discussion service contracts", () => {
     entries.delete(deletedKey);
     await harness.service.reconcile(deletedKey);
     for (let index = 0; index < 9_999; index += 1) {
-      harness.store.register(`occupied-${index}`, {});
+      harness.store.register(`agent:main:occupied-${index}`, occupiedBinding(index));
     }
 
     harness.createChannel.mockImplementationOnce(async (_workspaceId, input) =>

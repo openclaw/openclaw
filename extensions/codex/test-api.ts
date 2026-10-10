@@ -144,3 +144,9 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   }).specs;
 }
 export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";
+
+export {
+  CODEX_NATIVE_TOOL_REQUIREMENTS,
+  CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+} from "./native-tool-policy.js";
+export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";

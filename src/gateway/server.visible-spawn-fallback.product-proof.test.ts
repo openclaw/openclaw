@@ -414,7 +414,11 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               { runId, timeoutMs: 240_000 },
               { timeoutMs: 245_000 },
             );
-          expect((await wait(accepted.runId)).status, JSON.stringify(provider.requests)).toBe("ok");
+          const parentTerminal = await wait(accepted.runId);
+          expect(
+            parentTerminal.status,
+            JSON.stringify({ parentTerminal, requests: provider.requests }),
+          ).toBe("ok");
           if (scenario.configuredAlias) {
             expect(provider.requests.filter((request) => !request.child)).toContainEqual(
               expect.objectContaining({ model: "primary" }),
@@ -517,7 +521,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
-          expect(terminal.status, JSON.stringify(provider.requests)).toBe(
+          expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
             scenario.backup ? "ok" : "error",
           );
           expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");

@@ -19,6 +19,17 @@ class PaletteDraftHost extends OpenClawLightDomElement {
   context: ApplicationContext | undefined;
   paletteOpen = true;
   readonly started = vi.fn();
+  readonly attachmentReady = createDeferred();
+  readonly coldOutcome = createDeferred();
+  observeColdSubmission = false;
+  override updated() {
+    if (this.observeColdSubmission && (!this.draft.messageLocked || this.draft.submitting)) {
+      this.coldOutcome.resolve();
+    }
+    if (this.querySelector('.chat-attachment-loading[data-state="ready"]')) {
+      this.attachmentReady.resolve();
+    }
+  }
   readonly draft = new PaletteSessionDraft(
     this,
     () => ({ context: this.context, open: this.paletteOpen }),
@@ -26,7 +37,7 @@ class PaletteDraftHost extends OpenClawLightDomElement {
   );
   override render() {
     return html`<textarea aria-label="Palette prompt" .value=${this.draft.message}></textarea
-      >${this.draft.renderControls()}${this.draft.renderRecovery()}${this.draft.renderAuxiliary()}`;
+      >${this.draft.renderControls()}${this.draft.renderRecovery()}${this.draft.renderAuxiliary()}${this.draft.renderAttachments()}`;
   }
 }
 customElements.define("test-palette-session-draft", PaletteDraftHost);
@@ -72,10 +83,159 @@ afterEach(() => {
 });
 
 describe("PaletteSessionDraft", () => {
+  it("carries one cold Send through required profile publication", async () => {
+    const policy = createDeferred<unknown>();
+    const submitted = createDeferred();
+    const profile = {
+      id: "dedicated",
+      providerId: "device",
+      inference: "worker",
+      executionModes: ["worker-turn"],
+    };
+    const { host, context } = await mount({
+      methods: ["agents.list", "environments.list", "sessions.create", "sessions.send"],
+      placementPolicy: () => policy.promise,
+    });
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:dashboard:cold-required",
+      initialRun: { status: "idle" },
+    });
+    vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
+    host.draft.setMessage("Carry my cold Send into the required worker");
+    host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
+    await host.attachmentReady.promise;
+    host.observeColdSubmission = true;
+    host.draft.submitCold();
+    await host.updateComplete;
+    expect(host.draft.messageLocked).toBe(true);
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    policy.resolve({ sessionPlacement: { requiredProfile: profile } });
+    await host.coldOutcome.promise;
+    expect(host.draft.submitting).toBe(true);
+    expect(host.draft.error).toBeNull();
+    await submitted.promise;
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
+      { reconciliation: "background" },
+    );
+    expect(context.placementStartup.start).toHaveBeenCalledOnce();
+    expect(context.placementStartup.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recovery: expect.objectContaining({
+          message: "Carry my cold Send into the required worker",
+          target: { kind: "profile", profileId: profile.id, required: true },
+          attachments: [expect.objectContaining({ fileName: "cold.txt", mimeType: "text/plain" })],
+        }),
+      }),
+    );
+  });
+
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+    );
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
+  });
+
+  it("selects a hosted workspace in palette settings without cloning or dispatching a project", async () => {
+    const hosted = {
+      id: "agentsapi",
+      source: "model",
+      workspaceEnvironment: { kind: "provider-hosted", label: "OpenAI (Agents API)" },
+    };
+    const model = {
+      id: "gpt-5.6-luna",
+      name: "Luna",
+      provider: "openai",
+      available: true,
+      agentRuntime: { id: "openclaw", source: "model" },
+      runtimeChoices: [{ agentRuntime: hosted, available: true }],
+    };
+    const { host, context, request } = await mount({
+      modelCatalog: async () => ({ models: [model] }),
+      methods: ["agents.list", "environments.list", "sessions.create", "projects.list"],
+      request: async (method) =>
+        method === "projects.list"
+          ? {
+              projects: [
+                {
+                  id: "registered",
+                  displayName: "Local project",
+                  repoRoot: "/local/project",
+                  source: "registered",
+                },
+              ],
+            }
+          : {},
+    });
+    const select = async (machine: string, project = "") => {
+      await vi.waitFor(() =>
+        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+      );
+      expectDefined(
+        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
+        "workspace picker",
+      ).click();
+      await host.updateComplete;
+      await vi.waitFor(() =>
+        expect(
+          host.querySelector('[data-machine="' + machine + '"][data-project="' + project + '"]'),
+        ).not.toBeNull(),
+      );
+      const row = host.querySelector<HTMLButtonElement>(
+        '[data-machine="' + machine + '"][data-project="' + project + '"]',
+      );
+      expectDefined(row, "environment choice").click();
+      await host.updateComplete;
+    };
+
+    await select("local", "registered");
+    await select("runtime:agentsapi");
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "Hosted workspace",
+    );
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "OpenAI (Agents API)",
+    );
+    expect(host.querySelector(".palette-session-settings__worktree")).toBeNull();
+    await select("local", "registered");
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "Local project",
+    );
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).not.toContain(
+      "Agents API",
+    );
+    await select("runtime:agentsapi");
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:hosted-palette",
+      initialRun: { status: "idle" },
+    });
+    host.draft.setMessage("Analyze my attachment");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
+    const payload = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      model: "openai/gpt-5.6-luna",
+      agentRuntime: "agentsapi",
+      message: "Analyze my attachment",
+    });
+    for (const key of [
+      "projectId",
+      "projectGitUrl",
+      "repository",
+      "cwd",
+      "worktree",
+      "catalogId",
+    ]) {
+      expect(payload).not.toHaveProperty(key);
+    }
+    expect(
+      request.mock.calls.some(
+        ([method]) => method === "sessions.dispatch" || method === "projects.add",
+      ),
+    ).toBe(false);
   });
 
   it.each(["unchanged", "connection", "account"] as const)(

@@ -430,11 +430,13 @@ describe("plugin conversation binding approvals", () => {
       metadata: previous.metadata,
     });
     expect(sessionBindingState.bind).toHaveBeenCalledTimes(2);
-    expect(sessionBindingState.unbind).toHaveBeenCalledWith({
-      bindingId: "binding-1",
-      reason: "plugin-session-bind-rollback",
-      scope: previous.conversation,
-    });
+    expect(sessionBindingState.unbind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindingId: "binding-1",
+        reason: "plugin-session-bind-rollback",
+        scope: previous.conversation,
+      }),
+    );
   });
 
   it("does not roll back a newer successful Control UI binding", async () => {

@@ -76,8 +76,8 @@ export async function prepareGatewayExit(
   }
 }
 
-/** Only a timed-out process exit may discard teardown after database close. */
-export function interruptedShutdownExitOptions(params: {
+/** Only a process-owning stop can leave native retirement to process exit. */
+export function shutdownExitOptions(params: {
   request: GatewayRunSignalRequest;
   drainCutShort: boolean;
   ownsProcessLifecycle?: boolean;
@@ -86,16 +86,19 @@ export function interruptedShutdownExitOptions(params: {
   releaseLock: () => Promise<void>;
   completeBoot: (completion: GatewayBootLifecycleCompletion) => void;
   exit: (code: number) => void;
-}): { onProcessExitReady?: () => Promise<void> } {
+}): { exitAfterClose?: boolean; onProcessExitReady?: () => Promise<void> } {
   if (
     params.request.action === "restart" ||
     params.request.hostedStop ||
-    !params.drainCutShort ||
     params.ownsProcessLifecycle !== true
   ) {
     return {};
   }
+  if (!params.drainCutShort) {
+    return { exitAfterClose: true };
+  }
   return {
+    exitAfterClose: true,
     onProcessExitReady: async () => {
       // Boot outcome is a write: retain state authority until it commits.
       params.completeBoot(formatShutdownCompletion(params.request, false));

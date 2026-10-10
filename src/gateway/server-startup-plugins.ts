@@ -48,12 +48,40 @@ type GatewayPluginBootstrapLog = {
 export async function runGatewayPostReadyStartupMaintenance(params: {
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "registrySource">;
   databases: readonly import("./server-startup-session-migration.js").PreparedStartupSessionDatabase[];
   signal: AbortSignal;
   log: Pick<GatewayPluginBootstrapLog, "info" | "warn">;
   startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   const tasks = [
+    [
+      "plugin-registry",
+      async () => {
+        if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
+          return;
+        }
+        const [{ withPluginLifecycleLease }, { refreshPluginRegistryAfterConfigMutation }] =
+          await Promise.all([
+            import("../plugins/plugin-lifecycle-lease.js"),
+            import("../plugins/registry-refresh.js"),
+          ]);
+        await withPluginLifecycleLease(
+          {
+            signal: params.signal,
+            assertCurrent: () => params.signal.throwIfAborted(),
+            processBound: true,
+          },
+          (lease) =>
+            refreshPluginRegistryAfterConfigMutation({
+              reason: "source-changed",
+              lease,
+              invalidateRuntimeCache: false,
+              logger: params.log,
+            }),
+        );
+      },
+    ],
     [
       "channels",
       async () => {

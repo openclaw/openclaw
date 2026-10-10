@@ -168,6 +168,9 @@ export async function inspectGatewayRestart(params: {
           ...(reachable.channelProbeErrors.length > 0
             ? { channelProbeErrors: reachable.channelProbeErrors }
             : {}),
+          ...(reachable.channelProbeTimeouts?.length
+            ? { channelProbeTimeouts: reachable.channelProbeTimeouts }
+            : {}),
         },
         expectedVersion,
         expectedBuildId,
@@ -189,12 +192,12 @@ export async function inspectGatewayRestart(params: {
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
-  let healthy = running && ownsPort && !startupPhase;
+  let healthy = false;
   if (
     !startupPhase &&
     running &&
     portUsage.status === "busy" &&
-    (requiresGatewayProbe ? healthy : !healthy)
+    (!requiresGatewayProbe || ownsPort)
   ) {
     const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;
@@ -236,6 +239,7 @@ export async function inspectGatewayRestart(params: {
     activatedPluginErrors,
     unavailablePlugins,
     channelProbeErrors,
+    channelProbeTimeouts,
   } = reachability ?? {};
   return finalizeGatewayRestartSnapshot(
     {
@@ -252,6 +256,7 @@ export async function inspectGatewayRestart(params: {
       ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
+      ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
     },
     expectedVersion,
     expectedBuildId,

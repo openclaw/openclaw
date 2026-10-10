@@ -315,10 +315,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
 
     /// nonisolated for Swift 6 strict concurrency compatibility
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
-        Task { @MainActor in
-            self.finish(status: status)
-        }
+        self.locationManager(manager, didChangeAuthorization: manager.authorizationStatus)
     }
 
     /// Legacy callback (still used on some macOS versions / configurations).
@@ -342,9 +339,6 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        let status = manager.authorizationStatus
-        Task { @MainActor in
-            self.finish(status: status)
-        }
+        self.locationManager(manager, didChangeAuthorization: manager.authorizationStatus)
     }
 }

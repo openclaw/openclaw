@@ -25,12 +25,7 @@ import { renderProviderIcon } from "./model-setup-icon-loader.ts";
 import type { NativeModelSetup } from "./native-model-setup.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, renderManualProviderPicker } from "./provider-picker.ts";
-import type {
-  ModelSetupActivationState,
-  ModelSetupPageState,
-  ModelSetupVerifyState,
-  ModelSetupWizardState,
-} from "./state.ts";
+import type { ModelSetupPageState, ModelSetupVerifyState, ModelSetupWizardState } from "./state.ts";
 import { renderModelSetupSuccessDialog } from "./success-dialog.ts";
 import { renderModelSetupWizard } from "./wizard-view.ts";
 
@@ -38,19 +33,15 @@ registerModelSetupEnglish();
 
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
-type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
-type ModelSetupViewProps = {
+type ModelSetupViewProps = Parameters<typeof renderCandidateRows>[0] & {
   connection?: ModelProviderLoginController["pageActions"];
-  embedded?: boolean;
   agentLabel?: string;
   credentialChoices?: readonly string[];
   onClose?: () => void;
   onDiscoveryShown?: () => void;
-  detecting?: boolean;
   detectionError?: string | null;
   page: ModelSetupPageState;
-  activation: ModelSetupActivationState;
   verify: ModelSetupVerifyState;
   wizard: ModelSetupWizardState;
   wizardMode: "auth" | "prepare" | "activate";
@@ -64,7 +55,6 @@ type ModelSetupViewProps = {
   cancellationNotice?: string | null;
   activationUnresolved?: boolean;
   onUseCurrentModel?: () => void;
-  actionsDisabled: boolean;
   manualProviderId: string;
   manualApiKey: string;
   manualError: string | null;
@@ -73,17 +63,14 @@ type ModelSetupViewProps = {
   nativeSessionCatalogsEnabled?: boolean;
   onNativeSessionCatalogsChange?: (enabled: boolean) => void;
   nativeModels?: NativeModelSetup;
-  iconUrls: Readonly<Record<string, string>>;
   onDetect: () => void;
   onVerify: () => void;
-  onActivateCandidate: (candidate: Candidate) => void;
   onStartAuth: (option: AuthOption) => void;
   onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
   onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
   onMoreSignInToggle: (open: boolean) => void;
-  onIconError: (iconUrl: string) => void;
   onOpenChat: () => void;
   onOpenSetupAssistant?: () => void;
   onSuccessClose: () => void;
@@ -227,18 +214,13 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
 }
 
 function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDetectResult) {
-  const result = props.embedded
-    ? {
-        ...detected,
-        manualProviders: detected.manualProviders.filter(
-          (provider) => !props.credentialChoices?.includes(provider.id),
-        ),
-      }
-    : detected;
-  if (result.manualProviders.length === 0 && props.embedded) {
+  const manualProviders = props.embedded
+    ? detected.manualProviders.filter((provider) => !props.credentialChoices?.includes(provider.id))
+    : detected.manualProviders;
+  if (manualProviders.length === 0 && props.embedded) {
     return nothing;
   }
-  const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
+  const provider = manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
   const manualId = props.embedded ? "model-discovery-manual" : "model-setup-manual";
   const testing = props.activation.phase === "testing" && props.activation.targetId === targetId;
@@ -250,7 +232,7 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
       <div class="model-setup__manual">
         <div class="field">
           <span>${t("modelSetup.manual.provider")}</span>
-          ${renderManualProviderPicker(props, result, provider)}
+          ${renderManualProviderPicker(props, { manualProviders }, provider)}
         </div>
         <label class="field">
           <span>
@@ -291,15 +273,13 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
           ?disabled=${props.actionsDisabled || props.detecting || !props.manualProviderId}
           @click=${props.onManualConnect}
         >
-          ${
+          ${t(
             testing
-              ? t("modelSetup.candidates.testingButton")
-              : t(
-                  props.embedded
-                    ? "modelSetup.discovery.connectForAgent"
-                    : "modelSetup.manual.connectAndVerify",
-                )
-          }
+              ? "modelSetup.candidates.testingButton"
+              : props.embedded
+                ? "modelSetup.discovery.connectForAgent"
+                : "modelSetup.manual.connectAndVerify",
+          )}
         </button>
       </div>
     </section>
@@ -346,6 +326,12 @@ function renderNativeSessionDiscovery(
   `;
 }
 
+function renderSetupAccessWarning(canAdmin: boolean) {
+  return html`<div class="callout warning" role="note">
+    ${t(canAdmin ? "modelSetup.access.gatewayTooOld" : "modelSetup.access.adminRequired")}
+  </div>`;
+}
+
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const onContinue =
     props.firstRun && result.setupComplete && props.activation.phase !== "success"
@@ -369,18 +355,12 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
     result,
     activation: props.activation,
     canRepair: props.canAdmin && !props.gatewayTooOld,
-    actionsDisabled:
-      props.actionsDisabled || props.detecting === true || props.activationUnresolved === true,
+    actionsDisabled: props.actionsDisabled || props.detecting === true,
     onOpenAssistant: props.onOpenSetupAssistant ?? props.onOpenChat,
     onActivateCandidate: props.onActivateCandidate,
   })}`;
-  if (!props.canAdmin) {
-    return html`${current}
-      <div class="callout warning" role="note">${t("modelSetup.access.adminRequired")}</div>`;
-  }
-  if (props.gatewayTooOld) {
-    return html`${current}
-      <div class="callout warning" role="note">${t("modelSetup.access.gatewayTooOld")}</div>`;
+  if (!props.canAdmin || props.gatewayTooOld) {
+    return html`${current}${renderSetupAccessWarning(props.canAdmin)}`;
   }
   return html`
     ${current} ${renderNativeSessionDiscovery(props, result)} ${renderEmptyState(props, result)}
@@ -396,14 +376,8 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       { ...props, actionsDisabled: props.actionsDisabled || props.activationUnresolved === true },
       props.page.result,
     );
-  } else if (!props.canAdmin) {
-    body = html`<div class="callout warning" role="note">
-      ${t("modelSetup.access.adminRequired")}
-    </div>`;
-  } else if (props.gatewayTooOld) {
-    body = html`<div class="callout warning" role="note">
-      ${t("modelSetup.access.gatewayTooOld")}
-    </div>`;
+  } else if (!props.canAdmin || props.gatewayTooOld) {
+    body = renderSetupAccessWarning(props.canAdmin);
   } else if (props.page.phase === "loading") {
     body = props.embedded
       ? html`<div class="model-setup__loading" role="status">${t("modelSetup.loading")}</div>`

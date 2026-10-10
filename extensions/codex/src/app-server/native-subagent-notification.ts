@@ -77,10 +77,22 @@ function extractCodexNativeSubagentCompletions(
     ) {
       return [];
     }
-    const completion = parseCodexNativeSubagentNotificationBody(
-      text.slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length),
-    );
-    return completion ? [completion] : [];
+    let payload: JsonValue;
+    try {
+      payload = JSON.parse(
+        text
+          .slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length)
+          .trim(),
+      );
+    } catch {
+      return [];
+    }
+    if (!isJsonObject(payload)) {
+      return [];
+    }
+    const agentPath = readString(payload, "agent_path")?.trim();
+    const completion = readCompletionStatus(payload.status);
+    return agentPath && completion ? [{ agentPath, ...completion }] : [];
   });
 }
 
@@ -139,23 +151,6 @@ function readDeliveredNativeCompletionPaths(notification: CodexServerNotificatio
   )
     ? [author]
     : [];
-}
-
-function parseCodexNativeSubagentNotificationBody(
-  body: string,
-): CodexNativeSubagentNotificationCompletion | undefined {
-  let payload: JsonValue;
-  try {
-    payload = JSON.parse(body.trim());
-  } catch {
-    return undefined;
-  }
-  if (!isJsonObject(payload)) {
-    return undefined;
-  }
-  const agentPath = readString(payload, "agent_path")?.trim();
-  const completion = readCompletionStatus(payload.status);
-  return agentPath && completion ? { agentPath, ...completion } : undefined;
 }
 
 function readCompletionStatus(

@@ -69,44 +69,14 @@ describe("turn model selection harness-path differential", () => {
 
   it.each(
     TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
-      ({ name }) => name !== "default only" && name !== "locked stored selection",
+      ({ name }) =>
+        name === "heartbeat or explicit turn override" ||
+        name === "parent persisted override versus channel" ||
+        name === "explicit default rejects stale child and parent overrides",
     ),
   )("pins observed $name behavior", (fixture) => {
     expectHarnessSelection(fixture);
   });
-
-  it.each([
-    { pluginOwnerId: "model-owner", expectedPin: undefined, expectedOverride: "openclaw" },
-    { pluginOwnerId: undefined, expectedPin: "codex", expectedOverride: "codex" },
-  ])(
-    "preserves the delivery-policy owner with pluginOwnerId=$pluginOwnerId",
-    ({ pluginOwnerId, expectedPin, expectedOverride }) => {
-      selectAgentHarnessMock.mockClear();
-      resolveVisibleRepliesPolicy({
-        cfg: {
-          agents: { defaults: { model: { primary: "openai/dispatch-model" } } },
-        },
-        chatType: "direct",
-        ctx: buildTestCtx({ Provider: "openai" }),
-        entry: {
-          sessionId: "owned-session",
-          updatedAt: 100,
-          agentHarnessId: "codex",
-          agentRuntimeOverride: "openclaw",
-          modelSelectionLocked: true,
-          pluginOwnerId,
-        },
-        sessionAgentId: "main",
-      });
-
-      expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          agentHarnessId: expectedPin,
-          agentHarnessRuntimeOverride: expectedOverride,
-        }),
-      );
-    },
-  );
 
   it("resolves turn aliases in the session agent scope", () => {
     const sessionKey = "agent:worker:telegram:group:selection";

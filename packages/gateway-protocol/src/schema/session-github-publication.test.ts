@@ -11,6 +11,27 @@ import {
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
+    const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
+    for (const sharedUnavailableReason of [
+      "unavailable",
+      "changed",
+      "rate_limited",
+      "unverified",
+      "unsupported_workspace",
+    ]) {
+      expect(
+        Value.Check(SessionGitHubOptionsResultSchema, { ...options, sharedUnavailableReason }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(SessionGitHubOptionsResultSchema, {
+        ...options,
+        sharedUnavailableReason: "raw diagnostics",
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     ["options", SessionGitHubOptionsParamsSchema, {}],
     ["publish", SessionGitHubPublishParamsSchema, { idempotencyKey: "global-publication" }],

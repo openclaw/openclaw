@@ -13,17 +13,22 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
   createTestPluginServiceScheduler,
   createTestPluginApi,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+  DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
   DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
   notifyRequestStoreKey,
   notifySubscriberStoreKey,
+  type NotifySeenRequest,
   type NotifySubscription,
 } from "./notify-state.js";
 
@@ -309,6 +314,62 @@ describe("device-pair notify persistence", () => {
     expect(entries).not.toHaveBeenCalled();
   });
 
+  it.each(["subscriber", "seen receipt"] as const)(
+    "skips idle pairing reads and observes a later %s on the next poll",
+    async (addition) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const clock = createGatewaySchedulerClock(1_000);
+      const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
+      const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
+      const storage = observeNotifyStorage();
+      const api = createApi(sendText, storage.openKeyedStore);
+      const warn = vi.spyOn(api.logger, "warn");
+      const seenStore = openStore<NotifySeenRequest>({
+        namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+        maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+        defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+      });
+      try {
+        startPairingNotifier(api, scheduler);
+        await clock.advanceBy(10_000);
+        expect(warn).not.toHaveBeenCalled();
+        await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
+        expect(listDevicePairingMock).not.toHaveBeenCalled();
+
+        if (addition === "subscriber") {
+          const subscriber: NotifySubscription = {
+            to: "chat-123",
+            mode: "persistent",
+            addedAtMs: 1_000,
+          };
+          await openSubscriberStore().register(notifySubscriberStoreKey(subscriber), subscriber);
+          setPendingRequests({});
+        } else {
+          await seenStore.register(notifyRequestStoreKey("request-1"), {
+            requestId: "request-1",
+            notifiedAtMs: 1_000,
+          });
+        }
+
+        await clock.advanceBy(10_000);
+
+        expect(warn).not.toHaveBeenCalled();
+        expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+        expect(sendText).toHaveBeenCalledTimes(addition === "subscriber" ? 1 : 0);
+        if (addition === "subscriber") {
+          expect(sendText).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
+          );
+        } else {
+          await expect(seenStore.entries()).resolves.toEqual([]);
+        }
+      } finally {
+        await scheduler.stop();
+      }
+    },
+  );
+
   it("defers the first notify poll and keeps one in flight across service recreation", async () => {
     vi.useFakeTimers();
     const firstPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
@@ -319,12 +380,14 @@ describe("device-pair notify persistence", () => {
       .mockResolvedValue({ pending: [], paired: [] });
     const storage = observeNotifyStorage();
     const api = createApi(undefined, storage.openKeyedStore);
+    await notifyCommand(api, "on");
     let service = createNotifier(api);
 
     service.start();
     expect(listDevicePairingMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all(storage.takeStoreReads());
     expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
@@ -341,6 +404,7 @@ describe("device-pair notify persistence", () => {
     service = createNotifier(createApi(undefined, storage.openKeyedStore));
     service.start();
     await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all(storage.takeStoreReads());
     expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
@@ -349,6 +413,7 @@ describe("device-pair notify persistence", () => {
     failedPoll.reject(new Error("poll failed"));
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all(storage.takeStoreReads());
     expect(listDevicePairingMock).toHaveBeenCalledTimes(3);
     await Promise.all(storage.takeStoreReads());
 

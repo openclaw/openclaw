@@ -39,29 +39,35 @@ import { createEmbeddedRunFailoverRetryController } from "./failover-retry-contr
 type ControllerInput = Parameters<typeof createEmbeddedRunFailoverRetryController>[0];
 
 function createController(
-  advanceAuthProfile: ControllerInput["advanceAuthProfile"],
+  advanceAuthProfile: ControllerInput["preparedRuntime"]["advanceAttemptAuthProfile"],
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
-  onRetryWait?: ControllerInput["runParams"]["onRetryWait"],
+  onRetryWait?: ControllerInput["runInput"]["runParams"]["onRetryWait"],
 ) {
   return createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "run:failover-retry-controller-test",
-      abortSignal,
-      onRetryWait,
-    } as ControllerInput["runParams"],
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
-    globalLane: "test",
-    agentDir: "/tmp/openclaw-failover-retry-controller-test",
-    fallbackConfigured,
-    profileFailureStore: { version: 1, profiles: {} },
-    getLastProfileId: () => "openai:p1",
+    runInput: {
+      runParams: {
+        runId: "run:failover-retry-controller-test",
+        abortSignal,
+        onRetryWait,
+      } as ControllerInput["runInput"]["runParams"],
+      globalLane: "test",
+      agentDir: "/tmp/openclaw-failover-retry-controller-test",
+      fallbackConfigured,
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      profileFailureStore: { version: 1, profiles: {} },
+      snapshot: () => ({
+        lastProfileId: "openai:p1",
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: advanceAuthProfile,
+    },
     getSessionId: () => "session:failover-retry-controller-test",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile,
   });
 }
 
@@ -443,7 +449,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile);
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(true);
     await expect(controller.maybeRetryTransient({ reason: "rate_limit" })).resolves.toBe(true);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -515,15 +521,17 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile, true);
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
+    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(true);
+    await expect(
+      controller.advanceAuthProfile("rate_limit", rateLimitContext),
+    ).rejects.toMatchObject({
       name: "FailoverError",
       reason: "rate_limit",
       status: 429,
     } satisfies Partial<FailoverError>);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toBeInstanceOf(
-      FailoverError,
-    );
+    await expect(
+      controller.advanceAuthProfile("rate_limit", rateLimitContext),
+    ).rejects.toBeInstanceOf(FailoverError);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
     expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledTimes(2);

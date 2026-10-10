@@ -34,7 +34,12 @@ export async function runCodexAppServerAttempt(
   }
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
-    prepareCodexAttemptConnection({ params, options }),
+    prepareCodexAttemptConnection({
+      params: params.continuation
+        ? { ...params, prompt: `${params.continuation.prompt}\n\n${params.prompt}` }
+        : params,
+      options,
+    }),
   );
   try {
     const runtime = await preparation.measure("runtime", () =>

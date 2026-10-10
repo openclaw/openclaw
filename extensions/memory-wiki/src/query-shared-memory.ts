@@ -119,6 +119,7 @@ export type SharedMemorySearchParams = {
   sandboxed?: boolean;
   conversationRecall?: ConversationRecallContext;
   memoryContext?: MemoryCallerContext;
+  signal?: AbortSignal;
   query: string;
 };
 
@@ -174,6 +175,7 @@ export async function searchSharedMemory<M extends string>(
   let rawMemoryResults = sharedMemoryManager
     ? await sharedMemoryManager.search(params.query, {
         maxResults: options.maxResults,
+        ...(params.signal ? { signal: params.signal } : {}),
         ...(options.protectedSessionRecall
           ? { sources: ["sessions" as const], sessionKey: params.agentSessionKey }
           : {}),

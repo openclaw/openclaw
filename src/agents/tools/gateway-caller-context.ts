@@ -8,6 +8,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
@@ -42,11 +43,12 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
+import { intersectSessionPermissionModes } from "../session-permission-exec-mode.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type ReceiptAuthority = (() => boolean | void) &
-  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource">;
+  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource" | "opaqueCommitGuard">;
 
 type GatewayToolCallerIdentity = {
   personalToolParticipants?: ReplyTurnParticipants;
@@ -55,6 +57,12 @@ type GatewayToolCallerIdentity = {
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  /** Restrict-only executable surface captured for internal follow-ups. */
+  sessionEventToolsAllow?: readonly string[];
+  /** An object with no mode retains the producer's default permission posture. */
+  sessionEventSettings?: { permissionMode?: SessionEntry["permissionMode"] };
+  /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
+  sessionEventDelivery?: false;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
@@ -219,15 +227,21 @@ export function captureGatewayToolReceiptAssertion(
   const prepare = receipt.prepareSessionSource?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
+    opaqueCommitGuard: receipt.opaqueCommitGuard,
     ...(prepare
       ? {
           async prepareSessionSource() {
             const prepared = await prepare();
             const release = prepared.release?.bind(prepared);
+            const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
             return {
               nativeSource: prepared.nativeSource,
+              opaqueCommitGuard: prepared.opaqueCommitGuard,
               checks: prepared.checks,
               assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              ...(assertPrepared
+                ? { assertPreparedCurrent: () => assertAllowed(assertPrepared()) }
+                : {}),
               ...(release ? { release } : {}),
             };
           },
@@ -507,8 +521,9 @@ export async function withGatewayToolCallerIdentity<T>(
   // Wrappers without a run inherit the admitted owner. A distinct admitted run
   // starts a new root; retaining the outer run would let child work outlive its owner.
   const inheritedOwner = !suppliedRun || inheritedRun === suppliedRun ? inherited : undefined;
-  const operationalRunInstance =
-    inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
+  const inheritedValue = <K extends keyof GatewayToolCallerIdentity>(key: K) =>
+    inheritedOwner?.[key] ?? identity[key];
+  const operationalRunInstance = inheritedValue("operationalRunInstance");
   const embeddedRunToolAuthorityBinding =
     identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding;
   // Same-run wrappers can narrow a prepared posture, never erase a restriction.
@@ -538,14 +553,12 @@ export async function withGatewayToolCallerIdentity<T>(
       throw new Error("agent tool caller approval scopes do not retain the same source");
     }
   }
-  const operatorAuthority = inheritedOwner?.operatorAuthority ?? identity.operatorAuthority;
-  const approvalAuthorityCheck =
-    inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;
+  const operatorAuthority = inheritedValue("operatorAuthority");
+  const approvalAuthorityCheck = inheritedValue("approvalAuthorityCheck");
   const signedAgentRuntimeIdentityToken =
     inheritedOwner?.signedAgentRuntimeIdentityToken ??
     identity.signedAgentRuntimeIdentityToken?.trim();
-  const executionIdentityToken =
-    inheritedOwner?.executionIdentityToken ?? identity.executionIdentityToken;
+  const executionIdentityToken = inheritedValue("executionIdentityToken");
   const receiptAuthority = composeReceiptAuthority(
     inheritedOwner?.receiptAuthority,
     identity.receiptAuthority,
@@ -573,10 +586,10 @@ export async function withGatewayToolCallerIdentity<T>(
   const approvalSignals = [
     ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
   ];
-  const workerTurnClaim = inheritedOwner?.workerTurnClaim ?? identity.workerTurnClaim;
-  const workerTurnExecutionIdentityCapability =
-    inheritedOwner?.workerTurnExecutionIdentityCapability ??
-    identity.workerTurnExecutionIdentityCapability;
+  const workerTurnClaim = inheritedValue("workerTurnClaim");
+  const workerTurnExecutionIdentityCapability = inheritedValue(
+    "workerTurnExecutionIdentityCapability",
+  );
   const gatewayContextResolver =
     inheritedOwner?.gatewayContextResolver ??
     bindGatewayToolContextResolver(identity.gatewayContextResolver);
@@ -587,32 +600,46 @@ export async function withGatewayToolCallerIdentity<T>(
   const cronExecToolTarget = identity.cronExecToolTarget ?? inheritedOwner?.cronExecToolTarget;
   const cronCreatorAuthorityGrant =
     identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant;
-  const mintCronRequesterGrant =
-    inheritedOwner?.mintCronRequesterGrant ?? identity.mintCronRequesterGrant;
+  const mintCronRequesterGrant = inheritedValue("mintCronRequesterGrant");
   const cronManagementGrant = identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant;
   const cronAuthorityCheck = composeReceiptAuthority(
     inheritedOwner?.cronAuthorityCheck,
     identity.cronAuthorityCheck,
   );
   const turnSourceChannel = inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
-  const turnSourceLocal = inheritedOwner?.turnSourceLocal ?? identity.turnSourceLocal;
+  const turnSourceLocal = inheritedValue("turnSourceLocal");
   const turnSourceTo = inheritedOwner?.turnSourceTo ?? identity.turnSourceTo?.trim();
   const turnSourceAccountId =
     inheritedOwner?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
-  const turnSourceThreadId = inheritedOwner?.turnSourceThreadId ?? identity.turnSourceThreadId;
-  const gatewayUiCommandTarget =
-    inheritedOwner?.gatewayUiCommandTarget ?? identity.gatewayUiCommandTarget;
+  const turnSourceThreadId = inheritedValue("turnSourceThreadId");
+  const gatewayUiCommandTarget = inheritedValue("gatewayUiCommandTarget");
   return await gatewayToolCallerStorage.run(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
-      personalToolParticipants:
-        inheritedOwner?.personalToolParticipants ?? identity.personalToolParticipants,
-      personalToolUser: inheritedOwner?.personalToolUser ?? identity.personalToolUser,
-      personalToolIdentityScoped:
-        inheritedOwner?.personalToolIdentityScoped ?? identity.personalToolIdentityScoped,
-      personalToolSelection:
-        inheritedOwner?.personalToolSelection ?? identity.personalToolSelection,
+      sessionEventDelivery:
+        inheritedOwner?.sessionEventDelivery === false || identity.sessionEventDelivery === false
+          ? false
+          : undefined,
+      sessionEventSettings:
+        identity.sessionEventSettings && inheritedOwner?.sessionEventSettings
+          ? {
+              permissionMode: intersectSessionPermissionModes(
+                inheritedOwner.sessionEventSettings.permissionMode,
+                identity.sessionEventSettings.permissionMode,
+              ),
+            }
+          : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
+      sessionEventToolsAllow:
+        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
+          ? identity.sessionEventToolsAllow.filter((name) =>
+              inheritedOwner.sessionEventToolsAllow!.includes(name),
+            )
+          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
+      personalToolParticipants: inheritedValue("personalToolParticipants"),
+      personalToolUser: inheritedValue("personalToolUser"),
+      personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),
+      personalToolSelection: inheritedValue("personalToolSelection"),
       ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),

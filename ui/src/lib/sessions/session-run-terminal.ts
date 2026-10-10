@@ -3,7 +3,7 @@ import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "..
 import { formatUiExternalText } from "../format-error.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -164,7 +164,7 @@ export function reconcileSessionRunTerminal(
     return result;
   }
   const reconcileRow = createSessionRunTerminalReconciler(terminal, observation);
-  return projectSessionResultRows(result, result.sessions.map(reconcileRow));
+  return mapSessionResultRows(result, reconcileRow);
 }
 
 type SessionTerminalRosterState = {

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -85,7 +86,7 @@ class ChatToolOutput extends OpenClawLightDomElement {
         sessionKey,
         agentId,
         messageId: card.resultMessageId,
-        maxChars: 2_000_000,
+        maxChars: card.outputTruncated ? CHAT_MESSAGE_MAX_CHARS : 2_000_000,
       });
       if (version !== this.requestVersion || this.content !== content || !this.isConnected) {
         return;

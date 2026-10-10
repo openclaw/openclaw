@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as groups from "../process/child-process-tree.js";
 import { spawnCommand, withCommandProcessScope } from "../process/exec-spawn.js";
@@ -21,29 +22,124 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("permits no-child Doctor work without an installation root while refusing writer admission", async () => {
-  const root = directories.make("doctor-unresolved-root-");
+it.skipIf(process.platform === "win32").each([
+  { name: "legacy updater without a run ID", runId: undefined, admitted: true },
+  { name: "current updater", runId: "current-update-run", admitted: true },
+  { name: "invalid current run ID", runId: "x".repeat(4097), admitted: false },
+])("admits Doctor commands with $name only with valid custody", async ({ runId, admitted }) => {
+  const root = fs.realpathSync(directories.make("doctor-run-id-custody-"));
+  const privateTmp = path.join(root, "private-tmp");
+  fs.mkdirSync(privateTmp, { mode: 0o700 });
+  const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
   const resultPath = path.join(root, "result.json");
-  const effect = path.join(root, "writer-effect");
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const receiptPath = `${resultPath}.processes`;
+  const effect = path.join(root, "command-effect");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
   vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
-  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(null);
-  using custody = await retainUpdateDoctorProcesses();
-  expect(custody).toBeDefined();
-  await expect(
-    withCommandProcessScope(
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+  {
+    using custody = await retainUpdateDoctorProcesses();
+    expect(custody).toBeDefined();
+    const dispatch = withCommandProcessScope(
       async () =>
         await spawnCommand([
           process.execPath,
           "-e",
-          `require('node:fs').writeFileSync(${JSON.stringify(effect)}, 'written')`,
+          `require('node:fs').writeFileSync(${JSON.stringify(effect)}, 'completed')`,
         ]),
       undefined,
       custody,
-    ),
-  ).rejects.toThrow("Doctor process custody requires its installation root");
-  expect(fs.existsSync(effect)).toBe(false);
+    );
+    if (admitted) {
+      await dispatch;
+      expect(fs.readFileSync(effect, "utf8")).toBe("completed");
+    } else {
+      await expect(dispatch).rejects.toThrow("managed handoff admission is invalid");
+      expect(fs.existsSync(effect)).toBe(false);
+    }
+    expect(JSON.parse(fs.readFileSync(receiptPath, "utf8"))).toMatchObject({ slots: [] });
+    expect(store.readCommandChildren([root])).toEqual([]);
+  }
+  expect(fs.existsSync(receiptPath)).toBe(false);
+  expect(store.read(root).kind).toBe("absent");
 });
+
+it.each(["unavailable root", "missing bound database", "inaccessible command storage"] as const)(
+  "permits no-child Doctor work with %s while refusing writer admission",
+  async (failure) => {
+    const root = fs.realpathSync(directories.make("doctor-unavailable-custody-"));
+    const privateTmp = path.join(root, "private-tmp");
+    fs.mkdirSync(privateTmp, { mode: 0o700 });
+    const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
+    const resultPath = path.join(root, "result.json");
+    const receiptPath = `${resultPath}.processes`;
+    const effect = path.join(root, "writer-effect");
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(
+      failure === "unavailable root" ? null : root,
+    );
+    if (failure === "missing bound database") {
+      fs.writeFileSync(
+        receiptPath,
+        JSON.stringify({
+          nonce: "parent-custody",
+          runId: "run",
+          pid: 0,
+          slots: [],
+          namespace: {
+            roots: [root],
+            databaseIdentity: { databasePath, databaseIdentity: "1:2", parentIdentity: "1:3" },
+          },
+        }),
+      );
+    }
+    const storageFailure = Object.assign(new Error("Command storage is inaccessible"), {
+      code: "EACCES",
+    });
+    if (failure === "inaccessible command storage") {
+      const mkdir = fs.mkdirSync;
+      vi.spyOn(fs, "mkdirSync").mockImplementation((...args) => {
+        if (String(args[0]) === privateTmp) {
+          throw storageFailure;
+        }
+        return mkdir(...args);
+      });
+    }
+    {
+      using custody = await retainUpdateDoctorProcesses();
+      expect(custody).toBeDefined();
+      await expect(
+        withCommandProcessScope(async () => "diagnostics completed", undefined, custody),
+      ).resolves.toBe("diagnostics completed");
+      const dispatch = withCommandProcessScope(
+        async () =>
+          await spawnCommand([
+            process.execPath,
+            "-e",
+            `require('node:fs').writeFileSync(${JSON.stringify(effect)}, 'written')`,
+          ]),
+        undefined,
+        custody,
+      );
+      if (failure === "unavailable root") {
+        await expect(dispatch).rejects.toThrow(
+          "Doctor process custody requires its installation root",
+        );
+      } else if (failure === "missing bound database") {
+        await expect(dispatch).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(dispatch).rejects.toBe(storageFailure);
+      }
+      expect(fs.existsSync(effect)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(receiptPath, "utf8"))).toMatchObject({ slots: [] });
+    }
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(receiptPath)).toBe(failure === "missing bound database");
+  },
+);
 
 it.skipIf(process.platform === "win32").each(["reservation-before-ipc", "retired-before-ipc"])(
   "reconciles durable Doctor custody across %s without trusting the IPC namespace",
@@ -51,12 +147,12 @@ it.skipIf(process.platform === "win32").each(["reservation-before-ipc", "retired
     const root = directories.make("doctor-native-retirement-");
     const roots = [path.join(root, "original"), path.join(root, "candidate")];
     const resultPath = path.join(root, "doctor-result.json");
-    const native = nativeCustody.createManagedCommandProcessCustody({
+    const native = await nativeCustody.createManagedCommandProcessCustody({
       roots,
       runId: "run",
       databasePath: path.join(root, "handoffs.sqlite"),
     });
-    const parent = createUpdateDoctorProcessCustody("run", root, resultPath, {
+    const parent = await createUpdateDoctorProcessCustody("run", root, resultPath, {
       roots,
       databaseIdentity: native.databaseIdentity,
     });
@@ -80,7 +176,7 @@ it.skipIf(process.platform === "win32").each(["reservation-before-ipc", "retired
           cut === "retired-before-ipc" ? [{ id: 1, identity: { pid: 4242, startedAt: 1 } }] : [],
       }),
     );
-    const doctorNative = nativeCustody.createManagedCommandProcessCustody({
+    const doctorNative = await nativeCustody.createManagedCommandProcessCustody({
       roots,
       runId: "run",
       databaseIdentity: native.databaseIdentity,
@@ -136,12 +232,12 @@ it.skipIf(process.platform === "win32")(
     const root = directories.make("doctor-foreign-custody-");
     const roots = [root, path.join(root, "candidate")];
     const resultPath = path.join(root, "doctor-result.json");
-    const peer = nativeCustody.createManagedCommandProcessCustody({
+    const peer = await nativeCustody.createManagedCommandProcessCustody({
       roots,
       runId: "doctor-b",
       databasePath: path.join(root, "handoffs.sqlite"),
     });
-    const parent = createUpdateDoctorProcessCustody("doctor-a", root, resultPath, {
+    const parent = await createUpdateDoctorProcessCustody("doctor-a", root, resultPath, {
       roots,
       databaseIdentity: peer.databaseIdentity,
     });
@@ -273,7 +369,7 @@ it.each([
     vi.spyOn(nativeCustody, "createManagedCommandProcessCustody").mockImplementation(() => {
       throw new Error("Windows command groups have no extinction receipt");
     });
-    const parent = createUpdateDoctorProcessCustody(
+    const parent = await createUpdateDoctorProcessCustody(
       "run",
       root,
       resultPath,

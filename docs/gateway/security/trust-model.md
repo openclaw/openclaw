@@ -20,8 +20,6 @@ sidebarTitle: "Trust model"
 - Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
 - `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
 
-Hosting multiple users or organizations? Run one isolated Gateway cell per tenant instead of sharing a Gateway. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
-
 Before changing remote access, DM policy, reverse proxy, or public exposure, run through the [Gateway exposure runbook](/gateway/security/exposure-runbook) as a pre-flight/rollback checklist.
 
 ## Trust boundary matrix

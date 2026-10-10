@@ -33,7 +33,7 @@ export function registerDevicesCli(program: Command) {
     .command("remove")
     .description("Remove a paired device entry")
     .argument("<deviceId>", "Paired device id")
-    .action(deviceAction((runtime) => runtime.runDevicesRemoveCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesDeleteCommand.bind(null, "remove")));
 
   devices
     .command("clear")
@@ -53,7 +53,7 @@ export function registerDevicesCli(program: Command) {
     .command("reject")
     .description("Reject a pending device pairing request")
     .argument("<requestId>", "Pending request id")
-    .action(deviceAction((runtime) => runtime.runDevicesRejectCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesDeleteCommand.bind(null, "reject")));
 
   devices
     .command("rename")
@@ -69,14 +69,14 @@ export function registerDevicesCli(program: Command) {
     .requiredOption("--role <role>", "Role name")
     .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
     .addOption(new Option("--no-scopes", "Rotate with an empty scope set").conflicts("scope"))
-    .action(deviceAction((runtime) => runtime.runDevicesRotateCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesTokenCommand.bind(null, "rotate")));
 
   devices
     .command("revoke")
     .description("Revoke a device token for a role")
     .requiredOption("--device <id>", "Device id")
     .requiredOption("--role <role>", "Role name")
-    .action(deviceAction((runtime) => runtime.runDevicesRevokeCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesTokenCommand.bind(null, "revoke")));
 
   for (const command of devices.commands) {
     command

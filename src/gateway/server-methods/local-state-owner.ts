@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -35,4 +36,11 @@ export function captureLocalStateMutationGuard(
   };
   assertCurrent();
   return assertCurrent;
+}
+
+export function localStateOwnerChangedError(error: unknown) {
+  return errorShape(ErrorCodes.UNAVAILABLE, String(error), {
+    details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+    retryable: false,
+  });
 }

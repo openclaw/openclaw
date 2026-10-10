@@ -4,7 +4,7 @@ import {
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   patchSessionEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -271,7 +271,7 @@ export async function setCodexConversationPermissions(params: {
       agentId: params.session.agentId,
     });
   if (!params.mode) {
-    const entry = getSessionEntry({
+    const entry = await getSessionEntryAsync({
       agentId: params.session.agentId,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
@@ -307,9 +307,6 @@ export async function setCodexConversationPermissions(params: {
 
 export function parseCodexFastModeArg(arg: string | undefined): boolean | undefined {
   const normalized = arg?.trim().toLowerCase();
-  if (!normalized || normalized === "status") {
-    return undefined;
-  }
   if (normalized === "on" || normalized === "true" || normalized === "fast") {
     return true;
   }
@@ -320,10 +317,7 @@ export function parseCodexFastModeArg(arg: string | undefined): boolean | undefi
 }
 
 export function parseCodexPermissionsModeArg(arg: string | undefined): PermissionsMode | undefined {
-  const normalized = arg?.trim().toLowerCase();
-  if (!normalized || normalized === "status") {
-    return undefined;
-  }
+  const normalized = arg?.trim().toLowerCase() ?? "";
   if (normalized === "yolo" || normalized === "full" || normalized === "full-access") {
     return "yolo";
   }

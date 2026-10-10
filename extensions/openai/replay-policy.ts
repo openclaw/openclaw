@@ -20,7 +20,11 @@ export function buildOpenAIReplayPolicy(ctx: ProviderReplayPolicyContext): Provi
     validateGeminiTurns: false,
     validateAnthropicTurns: false,
     ...(isResponsesFamily
-      ? { allowSyntheticToolResults: true, appendOnlyRuntimeContext: true }
+      ? {
+          allowSyntheticToolResults: true,
+          appendOnlyRuntimeContext: true,
+          ...(ctx.inHistorySystemUpdates ? { inHistorySystemUpdates: true } : {}),
+        }
       : {}),
     ...(ctx.modelApi === "openai-completions"
       ? {

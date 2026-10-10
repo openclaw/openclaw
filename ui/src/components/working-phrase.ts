@@ -2,12 +2,11 @@
 // Silent for the first stretch of a run, then rotates through crab-themed
 // gerunds so long quiet runs feel alive without claiming progress data the
 // UI does not have. Decorative only — the row keeps its sr-only "Working…".
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
-import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { PollController } from "../lit/poll-controller.ts";
+import { TickingLabel } from "./ticking-label.ts";
 
 const PHRASE_KEYS = [
   "shelling",
@@ -58,45 +57,16 @@ function displayedPhraseIndex(seed: string, bucket: number, length: number): num
   return (offset + bucket * stride) % length;
 }
 
-class WorkingPhrase extends OpenClawLightDomContentsElement {
+class WorkingPhrase extends TickingLabel {
   @property({ type: Number }) startMs: number | null = null;
   @property() seed = "";
   @property({ attribute: false }) phrases: readonly string[] | undefined;
 
-  private phrase: string | undefined;
-  private readonly polling = new PollController(
-    this,
-    1_000,
-    () => this.requestUpdate(),
-    false,
-    "visible",
-  );
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.syncTimer();
+  protected override get ticking() {
+    return this.startMs != null && this.phrases?.length !== 0;
   }
 
-  override updated() {
-    this.syncTimer();
-  }
-
-  private syncTimer() {
-    if (this.isConnected && this.startMs != null && this.phrases?.length !== 0) {
-      this.polling.start();
-    } else {
-      this.polling.stop();
-    }
-  }
-
-  override shouldUpdate(changed: PropertyValues<this>) {
-    const phrase = this.currentPhrase();
-    const phraseChanged = phrase !== this.phrase;
-    this.phrase = phrase;
-    return !this.hasUpdated || changed.size > 0 || phraseChanged;
-  }
-
-  private currentPhrase() {
+  protected override currentLabel() {
     if (this.startMs == null || this.phrases?.length === 0) {
       return undefined;
     }
@@ -115,7 +85,7 @@ class WorkingPhrase extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    return this.phrase === undefined ? nothing : html`<span>·</span> ${this.phrase}…`;
+    return this.label === undefined ? nothing : html`<span>·</span> ${this.label}…`;
   }
 }
 

@@ -28,64 +28,82 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("projects unchanged renders and streaming deltas without rereading 3,000 retained messages", () => {
-  let reads = 0;
-  const messages = Array.from(
-    { length: 3_000 },
-    (_, index) =>
-      new Proxy(
-        {
-          role: index % 2 ? "assistant" : "user",
-          content: `Message ${index}`,
-          timestamp: index + 1,
-          __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
-        },
-        {
-          get(target, property, receiver) {
-            reads += 1;
-            return Reflect.get(target, property, receiver);
+it.each(["answer", "reasoning"] as const)(
+  "projects %s deltas without rereading 3,000 retained messages",
+  (kind) => {
+    let reads = 0;
+    const messages = Array.from(
+      { length: 3_000 },
+      (_, index) =>
+        new Proxy(
+          {
+            role: index % 2 ? "assistant" : "user",
+            content: `Message ${index}`,
+            timestamp: index + 1,
+            __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
           },
-        },
-      ),
-  );
-  const props = {
-    ...threadProps("projection-scale", "agent:main:projection-scale", messages),
-    runId: "active",
-    runActive: true,
-    stream: "Reply",
-    streamStartedAt: 4_000,
-  };
-  const transcript = createTestTranscript(props.paneId);
-  const build = vi.spyOn(chatThreadBuild, "buildChatItems");
-  const project = () =>
-    transcript.renderSession(props.sessionKey, (session) => {
-      projectChatTranscript(props, session);
-      return html``;
-    });
-  try {
-    project();
-    expect(reads).toBeGreaterThan(0);
-    transcript.renderSession(props.sessionKey, (session) => {
-      setExpansionState(
-        session.expandedAssistantMessages,
-        messageRecoveryKey(undefined, "message-1"),
-        { status: "loaded", markdown: "Full answer", revision: 1 },
-      );
-      return html``;
-    });
-    project();
-    build.mockClear();
-    for (const stream of ["Reply", "Reply continues", "Reply continues again"]) {
-      props.stream = stream;
-      reads = 0;
+          {
+            get(target, property, receiver) {
+              reads += 1;
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+    );
+    const props = {
+      ...threadProps("projection-scale", "agent:main:projection-scale", messages),
+      runId: "active",
+      runActive: true,
+      stream: kind === "answer" ? "Reply" : "",
+      streamStartedAt: 4_000,
+      showThinking: true,
+      selectedSession: {
+        key: "agent:main:projection-scale",
+        kind: "direct" as const,
+        updatedAt: 1,
+        reasoningLevel: "on",
+      },
+      reasoning:
+        kind === "reasoning"
+          ? { runId: "active", itemId: "thinking", text: "Reply", startedAt: 4_000 }
+          : null,
+    };
+    const transcript = createTestTranscript(props.paneId);
+    const build = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const project = () =>
+      transcript.renderSession(props.sessionKey, (session) => {
+        projectChatTranscript(props, session);
+        return html``;
+      });
+    try {
       project();
-      expect(build).not.toHaveBeenCalled();
-      expect(reads, stream).toBe(0);
+      expect(reads).toBeGreaterThan(0);
+      transcript.renderSession(props.sessionKey, (session) => {
+        setExpansionState(
+          session.expandedAssistantMessages,
+          messageRecoveryKey(undefined, "message-1"),
+          { status: "loaded", markdown: "Full answer", revision: 1 },
+        );
+        return html``;
+      });
+      project();
+      build.mockClear();
+      for (const stream of ["Reply", "Reply continues", "Reply continues again"]) {
+        if (kind === "answer") {
+          props.stream = stream;
+        } else {
+          props.reasoning = { runId: "active", itemId: "thinking", text: stream, startedAt: 4_000 };
+        }
+        reads = 0;
+        project();
+        expect(build).not.toHaveBeenCalled();
+        expect(reads, stream).toBe(0);
+      }
+    } finally {
+      transcript.hostDisconnected();
     }
-  } finally {
-    transcript.hostDisconnected();
-  }
-});
+  },
+);
 
 function personMessage(id: string, name: string, timestamp: number) {
   return {

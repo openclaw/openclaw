@@ -16,6 +16,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { handleGatewayRequest } from "./server-methods.js";
 import { dispatchSuspensionRequest as dispatch } from "./server-methods.suspension-admission.test-support.js";
@@ -23,11 +25,71 @@ import { suspendHandlers } from "./server-methods/suspend.js";
 
 /** Register host handoff contracts under the caller's shared admission reset hooks. */
 export function registerSuspensionHandoffLifecycleTests() {
+  it.each(["resume", "expiry", "replacement"] as const)(
+    "rechecks the lease after %s while status awaits write custody",
+    async (change) => {
+      vi.useFakeTimers();
+      const prepared = prepareGatewaySuspend({
+        requestId: "settling-writes",
+        drain: true,
+        pauseScheduling: () => {},
+        resumeScheduling: () => {},
+        inspect: { getTerminalPersistence: () => 1 },
+      });
+      if (prepared.status !== "draining") {
+        throw new Error("expected a draining lease");
+      }
+      try {
+        if (change === "expiry") {
+          await vi.advanceTimersByTimeAsync(115_000);
+        }
+        const pending = dispatch({
+          method: "gateway.suspend.status",
+          requestParams: { suspensionId: prepared.suspensionId },
+          scope: "operator.read",
+          core: true,
+          handler: suspendHandlers["gateway.suspend.status"]!,
+        });
+        await vi.advanceTimersByTimeAsync(250);
+        expect(pending.respond).not.toHaveBeenCalled();
+        if (change !== "expiry") {
+          resumeGatewaySuspend(prepared.suspensionId);
+          if (change === "replacement") {
+            prepareGatewaySuspend({
+              requestId: "replacement",
+              pauseScheduling: () => {},
+              resumeScheduling: () => {},
+            });
+          }
+        }
+        await vi.advanceTimersByTimeAsync(5_000);
+        await pending.request;
+        if (change === "replacement") {
+          expect(pending.respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
+            }),
+          );
+        } else {
+          expect(pending.respond).toHaveBeenCalledWith(true, { status: "running" });
+        }
+      } finally {
+        resetGatewaySuspendCoordinatorForLifecycleRestart();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["handoff", "installation-replaced"] as const)(
-    "keeps owned status through %s with 200 blocked admissions",
+    "settles write custody before %s status without interrupting 200 admitted requests",
     async (restart) => {
       vi.useFakeTimers();
       const roots = Array.from({ length: 200 }, () => tryBeginGatewayRootWorkAdmission());
+      const writing = createDeferredCore();
+      const written = createDeferredCore();
+      let mutation: Promise<void> | undefined;
       const cron = {
         pauseScheduling: vi.fn(),
         resumeScheduling: vi.fn(),
@@ -81,6 +143,29 @@ export function registerSuspensionHandoffLifecycleTests() {
           Array.from({ length: 200 }, () => beginGatewayRootWorkAdmissionWhenOpen()),
         );
         await vi.advanceTimersByTimeAsync(30_000);
+        mutation = runExclusiveSessionLifecycleMutation("patch", {
+          scope: "suspension-status",
+          identities: ["session"],
+          run: async () => {
+            writing.resolve();
+            await written.promise;
+          },
+        });
+        await writing.promise;
+        const policyCheck = rpc("gateway.suspend.status", { suspensionId });
+        let answered = false;
+        void policyCheck.then(() => {
+          answered = true;
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(answered).toBe(false);
+        written.resolve();
+        await mutation;
+        await vi.advanceTimersByTimeAsync(250);
+        expect(await policyCheck).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "draining", activeCount: 200, writeCustody: [] }),
+        );
         if (restart === "handoff") {
           const armed = await rpc("gateway.suspend.handoff", {
             suspensionId,
@@ -172,6 +257,8 @@ export function registerSuspensionHandoffLifecycleTests() {
         markGatewayRestartDraining();
         expect(getGatewaySuspendStatus(suspensionId)).toEqual({ status: "running" });
       } finally {
+        written.resolve();
+        await mutation;
         for (const root of roots) {
           root?.release();
         }

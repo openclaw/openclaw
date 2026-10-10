@@ -127,6 +127,17 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     }
     ```
 
+    ChatGPT Responses SSE turns may exceed 16 MiB in total. The parser bounds
+    each buffered event to 16 MiB of bytes before decoding or parsing it, and
+    cancels oversized events, including events without a closing delimiter.
+
+    For cached ChatGPT Responses WebSocket requests, an explicit "Rustponses
+    cannot replay" rejection before any response event triggers one retry on a
+    fresh connection with full input instead of the cached response reference.
+    The retry preserves reasoning, compaction, and completed tool results; it
+    does not rerun tools. Rejections of full input and failures after response
+    events remain terminal.
+
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)

@@ -143,7 +143,13 @@ it("requests the configured default agent for the global workspace alias", async
   await loadChatHistory(state);
   expect(request).toHaveBeenCalledWith(
     "chat.history",
-    { sessionKey: "workspace", agentId: "main", limit: 80, maxBytes: 256 * 1024 },
+    {
+      sessionKey: "workspace",
+      agentId: "main",
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
 });
@@ -518,24 +524,14 @@ it("keeps a foreground tool when history persists a sibling's identical call id"
   const backgroundMessage = addTool("run-background", "exec", { command: "background" }, 3, true);
   state.toolStreamOrder = [foreground, background];
   state.chatToolMessages = [foregroundMessage, backgroundMessage];
-  const foregroundSegment = {
-    text: "before foreground",
-    ts: 2,
-    runId: "run-foreground",
-    toolCallId,
-  };
-  state.chatStreamSegments = [
-    foregroundSegment,
-    { text: "before background", ts: 3, runId: "run-background", toolCallId },
-  ];
   await loadChatHistory(state);
   expect(state.chatRunId).toBe("run-foreground");
-  expect(state.chatStream).toBe("foreground still running");
+  // The snapshot owns the unchanged live tail; tool ownership stays run-scoped.
+  expect(state.chatStream).toBe("intentionally ignored on web");
   expect(state.toolStreamOrder).toEqual([foreground]);
   expect(state.toolStreamById.has(foreground)).toBe(true);
   expect(state.toolStreamById.has(background)).toBe(false);
   expect(state.chatToolMessages).toEqual([foregroundMessage]);
-  expect(state.chatStreamSegments).toEqual([foregroundSegment]);
 });
 
 describe("chat history run errors", () => {

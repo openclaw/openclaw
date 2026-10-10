@@ -4,6 +4,7 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { createGitCommandError, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { rawPathStat } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import {
@@ -13,6 +14,8 @@ import {
   runGitBuffered,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
+
+const log = createSubsystemLogger("agents/worktrees");
 
 async function missingCommitObjects(repoRoot: string, commit: string): Promise<string[]> {
   const objects = (
@@ -82,7 +85,12 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
         "--stdin",
       ],
       { input: Buffer.from(`${missing.join("\n")}\n`), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
-    );
+    ).catch((error: unknown) => {
+      log.warn(
+        `worktree prefetch failed: ${missing.length} missing objects for ${commit}; check the promisor remote.`,
+      );
+      throw error;
+    });
   }
 }
 
@@ -97,14 +105,15 @@ function allocatedBlobBytes(size: string): number {
 }
 
 // This projection belongs to the Git worker and disappears when that worker
-// idles out or the Gateway closes it. Never retain missing-object checks here.
-const checkoutSizeFacts = new Map<string, number>();
+// idles out or the Gateway closes it. Hydration is reusable only by its live creation cohort.
+const checkoutSizeFacts = new Map<string, { bytes: number; preparationKey?: string }>();
 const MAX_CHECKOUT_SIZE_FACTS = 32;
 
 async function commitObjectBytes(
   repoRoot: string,
   commit: string,
   replacementRefBase: string | undefined,
+  preparationKey?: string,
 ): Promise<number> {
   const replacements =
     replacementRefBase === undefined
@@ -116,14 +125,21 @@ async function commitObjectBytes(
           replacementRefBase,
         ]);
   let cacheKey: string | undefined;
+  let cached: { bytes: number; preparationKey?: string } | undefined;
   if (replacements === "") {
     const canonicalRoot = await fs.realpath(repoRoot);
     const identity = await fs.stat(canonicalRoot);
     cacheKey = JSON.stringify([canonicalRoot, identity.dev, identity.ino, commit]);
-    const cached = checkoutSizeFacts.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    cached = checkoutSizeFacts.get(cacheKey);
+    if (cached && preparationKey && cached.preparationKey === preparationKey) {
+      return cached.bytes;
     }
+  }
+
+  await hydrateCommitObjects(repoRoot, commit);
+  if (cached && cacheKey) {
+    checkoutSizeFacts.set(cacheKey, { bytes: cached.bytes, preparationKey });
+    return cached.bytes;
   }
 
   try {
@@ -140,7 +156,7 @@ async function commitObjectBytes(
       bytes += allocatedBlobBytes(size);
     }
     if (cacheKey) {
-      checkoutSizeFacts.set(cacheKey, bytes);
+      checkoutSizeFacts.set(cacheKey, { bytes, preparationKey });
       pruneMapToMaxSize(checkoutSizeFacts, MAX_CHECKOUT_SIZE_FACTS);
     }
     return bytes;
@@ -157,10 +173,10 @@ export async function estimateCheckoutObjectBytes(
   repoRoot: string,
   ref: string,
   replacementRefBase?: string,
+  preparationKey?: string,
 ): Promise<number> {
   const commit = await resolveCommit(repoRoot, ref);
-  await hydrateCommitObjects(repoRoot, commit);
-  return await commitObjectBytes(repoRoot, commit, replacementRefBase);
+  return await commitObjectBytes(repoRoot, commit, replacementRefBase, preparationKey);
 }
 
 export async function estimateCheckoutTransitionBytes(
@@ -173,9 +189,8 @@ export async function estimateCheckoutTransitionBytes(
   const target = await resolveCommit(repoRoot, targetRef);
   // Template validation can need blobs that the target deletes. Hydrate both
   // histories, while sharing identical commits within this admitted operation.
-  await hydrateCommitObjects(repoRoot, base);
   if (target !== base) {
-    await hydrateCommitObjects(repoRoot, target);
+    await hydrateCommitObjects(repoRoot, base);
   }
   const targetBytes = await commitObjectBytes(repoRoot, target, replacementRefBase);
   if (target === base) {

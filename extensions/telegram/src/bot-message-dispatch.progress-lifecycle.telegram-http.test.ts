@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { PluginHookReplyPayloadSendingEvent } from "openclaw/plugin-sdk/core";
 import {
   addTestHook,
@@ -8,6 +9,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
@@ -33,6 +35,36 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     waitForBotApiCall,
   } = http;
   afterEach(() => vi.restoreAllMocks());
+
+  it("reports a definite owner rejection without an ambiguous-delivery warning", async () => {
+    await dispatchProgressTurn(async () => {}, {
+      mode: "off",
+      toolProgress: false,
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      finalReply: { text: "The requested answer." },
+      allowErrors: true,
+    });
+    const db = openNodeSqliteDatabase(path.join(http.state.stateDir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM delivery_queue_entries WHERE json_extract(entry_json, '$.recoveryState') IN ('send_attempt_started', 'unknown_after_send')",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+    expect([...visibleMessages.values()]).toEqual([
+      "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error.",
+    ]);
+    expect(calls.some((call) => String(call.fields.text).includes(DELIVERY_WARNING_PREFIX))).toBe(
+      false,
+    );
+  });
 
   it.each(["rejected", "no-message-id", "stopped", "media", "buttons"] as const)(
     "delivers the continuation instead of adopting a %s progress card",
@@ -236,9 +268,13 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     ).toEqual([]);
   });
 
-  it.each([true, false])(
-    "keeps updating and then deletes the same card only after accepted custody (%s)",
-    async (accept) => {
+  it.each([
+    { accept: true, toolProgress: true },
+    { accept: false, toolProgress: true },
+    { accept: true, toolProgress: false },
+  ])(
+    "keeps the same card after accepted custody ($accept, tool log $toolProgress)",
+    async ({ accept, toolProgress }) => {
       const waitingText = "Waiting for delegated work.";
       const commentary = "Parent commentary remains visible.";
       const plan = [
@@ -280,7 +316,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           await waitForBotApiCall((call) => call.method === "sendMessage");
           progressMessageId = [...visibleMessages.keys()][0];
         },
-        { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+        { mode: "progress", toolProgress, finalReply: waitingPayload },
       );
 
       expect(draft).toBeDefined();

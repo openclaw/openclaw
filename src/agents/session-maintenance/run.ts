@@ -270,16 +270,11 @@ export function scheduleSessionMaintenance(
                   throw createAbortError("Session maintenance has no admitted session");
                 }
                 const sessionStore = { [sessionKey]: entry };
-                const memory = await loadAgentRunnerMemoryRuntime();
-                assertCurrent();
-                followupRun.run.timeoutMs = budget.remainingMs();
-                assertCurrent();
-                const flushed = await memory.runMemoryFlushIfNeeded({
+                const maintenanceParams = () => ({
                   cfg: prepared.cfg,
                   followupRun,
                   promptForEstimate: "",
                   defaultModel: followupRun.run.model,
-                  resolvedVerboseLevel: followupRun.run.verboseLevel ?? "off",
                   sessionEntry: entry,
                   sessionStore,
                   sessionKey,
@@ -288,6 +283,14 @@ export function scheduleSessionMaintenance(
                   isHeartbeat: false,
                   abortSignal: owner.signal,
                 });
+                const memory = await loadAgentRunnerMemoryRuntime();
+                assertCurrent();
+                followupRun.run.timeoutMs = budget.remainingMs();
+                assertCurrent();
+                const flushed = await memory.runMemoryFlushIfNeeded({
+                  ...maintenanceParams(),
+                  resolvedVerboseLevel: followupRun.run.verboseLevel ?? "off",
+                });
                 // Flush reports aborted attempts as failed outcomes; cancellation still forbids compaction.
                 assertCurrent();
                 entry = flushed.sessionEntry ?? entry;
@@ -295,22 +298,12 @@ export function scheduleSessionMaintenance(
                 followupRun.run.timeoutMs = budget.remainingMs();
                 assertCurrent();
                 await memory.runSessionCompactionIfNeeded({
-                  cfg: prepared.cfg,
-                  followupRun,
-                  promptForEstimate: "",
+                  ...maintenanceParams(),
                   // The completed user is canonical history; do not reserve its input twice.
                   compactionRequestBudget: request.compactionRequestBudget
                     ? { ...request.compactionRequestBudget, pendingTokens: 0 }
                     : undefined,
-                  sessionEntry: entry,
-                  sessionStore,
-                  sessionKey,
-                  runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
-                  storePath: prepared.storePath,
-                  defaultModel: followupRun.run.model,
-                  isHeartbeat: false,
                   agentHarnessId: request.agentHarnessId,
-                  abortSignal: owner.signal,
                   authorize: () => {
                     assertCurrent();
                     return true;

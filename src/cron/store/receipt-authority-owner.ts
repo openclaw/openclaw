@@ -537,6 +537,7 @@ export type CronReceiptAuthorityMutation = {
   observe: (
     admission: SqliteWorkerOperationAdmission,
     retained: RetainedWorkerTransactionAdmission,
+    onCommitted?: (facts: unknown) => void,
   ) => void;
   publish: (facts: CronReceiptAuthorityPublication) => void;
 };
@@ -619,7 +620,7 @@ function executeMutation<T>(
             }
           },
           publish,
-          observe(admission, settlement) {
+          observe(admission, settlement, onCommitted) {
             retained.push({ admission, owner: settlement });
             observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
               if (!isRecord(facts) || !isRecord(facts.receiptAuthority)) {
@@ -627,6 +628,7 @@ function executeMutation<T>(
               }
               // SAFETY: The private command's canonical worker producer owns this envelope.
               publish(facts.receiptAuthority as CronReceiptAuthorityPublication);
+              onCommitted?.(facts);
             });
           },
         }),

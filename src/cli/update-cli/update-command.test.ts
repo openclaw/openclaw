@@ -17,7 +17,6 @@ import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
-import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
@@ -222,25 +221,54 @@ describe("resolveUpdateTargetEnv", () => {
 });
 
 describe("resolveUpdatedInstallCommandEnv", () => {
-  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+  it("keeps operator scratch and SecretRef inputs while applying managed service selectors", () => {
     const env = resolveUpdatedInstallCommandEnv({
       invocationCwd: "/srv/openclaw",
       processEnv: {
         OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
         OPENCLAW_STATE_DIR: "/wrong/state",
+        OPENCLAW_HOME: "/wrong/home",
+        OPENCLAW_PROFILE: "caller",
         PATH: "/caller/bin",
+        TMPDIR: "/caller/cache",
+        TMP: "/caller/tmp",
+        TEMP: "/caller/temp",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
+        OPENCLAW_HOME: "/daemon/home",
+        OPENCLAW_PROFILE: "work",
         PATH: "/daemon/bin",
+        TMPDIR: "/tmp",
+        TMP: "/service/tmp",
+        TEMP: "/service/temp",
       },
     });
 
     expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.PATH).toBe("/daemon/bin");
+    expect(env.OPENCLAW_HOME).toBe("/daemon/home");
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env).toMatchObject({
+      TMPDIR: "/caller/cache",
+      TMP: "/caller/tmp",
+      TEMP: "/caller/temp",
+    });
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
+  });
+
+  it.each([undefined, ""])("preserves scratch defaults with an operator value of %j", (value) => {
+    const env = resolveUpdatedInstallCommandEnv({
+      processEnv: { TMPDIR: value, TMP: value, TEMP: value },
+      serviceEnv: { TMPDIR: "/service/tmp", TMP: "/service/tmp", TEMP: "/service/tmp" },
+    });
+    expect(env).toMatchObject({
+      TMPDIR: value ?? "/service/tmp",
+      TMP: value ?? "/service/tmp",
+      TEMP: value ?? "/service/tmp",
+    });
   });
 
   it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {
@@ -862,24 +890,5 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
     expect(isLoaded).not.toHaveBeenCalled();
 
     platformSpy.mockRestore();
-  });
-});
-
-describe("resolvePostCoreUpdateChildStdio", () => {
-  it('returns "pipe" on Windows so the child never inherits the parent console handles', () => {
-    // On Windows, stdio:"inherit" passes the parent's console HANDLE to the child process.
-    // PowerShell/CMD will not return the prompt until every holder of those handles exits,
-    // causing the terminal to hang after `openclaw update` completes (#78445).
-    expect(resolvePostCoreUpdateChildStdio("win32")).toBe("pipe");
-  });
-
-  it('returns "inherit" on non-Windows platforms', () => {
-    expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
-    expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
-  });
-
-  it('returns "pipe" for JSON output on every platform', () => {
-    expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
-    expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
   });
 });

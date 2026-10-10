@@ -255,6 +255,13 @@ export function intersectWorkboardWorkspaceAccess(
   };
 }
 
+export class WorkboardWorkspaceOutsideRootsError extends Error {
+  constructor() {
+    super("workspace path is outside the caller's allowed workspaces.");
+    this.name = "WorkboardWorkspaceOutsideRootsError";
+  }
+}
+
 async function assertCanonicalWorkboardPathAccess(
   candidate: string,
   access: WorkboardWorkspaceAccess,
@@ -268,7 +275,7 @@ async function assertCanonicalWorkboardPathAccess(
       return candidate;
     }
   }
-  throw new Error("workspace path is outside the caller's allowed workspaces.");
+  throw new WorkboardWorkspaceOutsideRootsError();
 }
 
 export async function assertCanonicalWorkboardRootAccess(

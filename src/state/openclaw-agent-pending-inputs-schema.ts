@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -12,6 +13,10 @@ let absentDatabases = new WeakSet<DatabaseSync>();
 
 /** Cache feature-table presence per connection; first use invalidates earlier absence checks. */
 export function hasSessionPendingInputsSchema(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return schema.tables.has(SESSION_PENDING_INPUTS_TABLE);
+  }
   if (presentDatabases.has(db)) {
     return true;
   }

@@ -7,6 +7,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { validateUpdateCandidateWithProgress } from "../cli/update-cli/update-command-candidate-validation.js";
 import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import * as bundledDirectory from "../plugins/bundled-dir.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -53,6 +54,9 @@ export function registerCanaryProgressWorkerTests(
     async (outcome) => {
       const root = getRoot();
       stubHealthyGateway();
+      const sourcePackageRoot = path.join(root, "serving-runtime");
+      const sourceBundle = path.join(sourcePackageRoot, "dist", "extensions");
+      vi.spyOn(bundledDirectory, "resolveBundledPluginsDir").mockReturnValue(sourceBundle);
       const json = outcome !== "recorded-text";
       const stdout = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -74,6 +78,12 @@ export function registerCanaryProgressWorkerTests(
           },
         ) => {
           const request: unknown = JSON.parse(options.input);
+          if (isRecord(request) && request.mode === "inventory") {
+            expect(request.sourceBundledPlugins).toEqual({
+              packageRoot: sourcePackageRoot,
+              directory: sourceBundle,
+            });
+          }
           if (outcome === "reopened" && isRecord(request) && request.mode === "inventory") {
             beforeInventory = await readSqliteSidecarIdentities(
               writeOptions.context.admission.databasePath,
@@ -177,6 +187,7 @@ export function registerCanaryProgressWorkerTests(
         validateUpdateCandidateWithProgress(
           {
             root,
+            sourcePackageRoot,
             config: {},
             env,
             assertCurrent: guards.assertCurrent,

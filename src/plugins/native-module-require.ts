@@ -338,21 +338,9 @@ export function tryNativeRequireModule(
   ) {
     return { ok: false };
   }
-  let resolvedPath: string;
+  let resolvedPath: string | undefined;
   try {
     resolvedPath = withNativeRequireAliases(options.aliasMap, () => require.resolve(modulePath));
-  } catch (error) {
-    const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
-    if (
-      isSourceTransformFallbackError(error, modulePath) ||
-      (options.fallbackOnMissingDependency === true &&
-        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
-    ) {
-      return { ok: false };
-    }
-    throw error;
-  }
-  try {
     // Requiring the resolved target could apply a second alias to the same request.
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => require(modulePath));
     nativeModuleLoadFailures.delete(resolvedPath);
@@ -360,15 +348,23 @@ export function tryNativeRequireModule(
   } catch (error) {
     const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
     if (
+      resolvedPath !== undefined &&
       nativeModuleLoadFailures.has(resolvedPath) &&
       (code === "ERR_REQUIRE_ESM_RACE_CONDITION" || code === "ERR_INTERNAL_ASSERTION")
     ) {
       throw nativeModuleLoadFailures.get(resolvedPath);
     }
-    if (isSourceTransformFallbackError(error, modulePath)) {
+    if (
+      isSourceTransformFallbackError(error, modulePath) ||
+      (resolvedPath === undefined &&
+        options.fallbackOnMissingDependency === true &&
+        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
+    ) {
       return { ok: false };
     }
-    nativeModuleLoadFailures.set(resolvedPath, error);
+    if (resolvedPath !== undefined) {
+      nativeModuleLoadFailures.set(resolvedPath, error);
+    }
     throw error;
   }
 }

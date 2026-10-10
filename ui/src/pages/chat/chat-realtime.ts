@@ -69,10 +69,6 @@ export function createInitialChatRealtimeState(): Pick<
   };
 }
 
-function resetChatRealtimeConversation(state: ChatRealtimeState) {
-  state.realtimeTalkConversationState = createRealtimeTalkConversationState();
-}
-
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
   options: { preserveConversation?: boolean } = {},
@@ -99,7 +95,7 @@ export function stopChatRealtimeTalk(
       state.realtimeTalkConversationState,
     );
   } else {
-    resetChatRealtimeConversation(state);
+    state.realtimeTalkConversationState = createRealtimeTalkConversationState();
   }
   void session?.stop();
 }
@@ -175,7 +171,7 @@ export function attachChatRealtimeActions(
     }
   };
   state.resetRealtimeTalkConversation = () => {
-    resetChatRealtimeConversation(state);
+    state.realtimeTalkConversationState = createRealtimeTalkConversationState();
   };
   const startRealtimeTalk = async (
     useSystemDefault = false,

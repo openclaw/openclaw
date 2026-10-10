@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import type { ImmutableInstallRecord } from "./update-immutable-install-schema.js";
 import { inspectImmutableInstall, prepareImmutableUpdate } from "./update-immutable-install.js";
@@ -14,9 +15,10 @@ const mocks = vi.hoisted(() => ({
       typeof import("./package-update-activation-immutable.js").recordImmutablePreparedGeneration
     >(),
   command: vi.fn<import("./update-runner-types.js").CommandRunner>(),
-  preflight: vi.fn<typeof import("./update-runner-git-preflight.js").runGitCandidatePreflight>(),
+  build: vi.fn<typeof import("./update-immutable-build.js").runImmutableBuild>(),
   verify: vi.fn<typeof import("./update-immutable-generation.js").verifyImmutableGeneration>(),
   seal: vi.fn<typeof import("./update-immutable-generation.js").sealImmutableGeneration>(),
+  copy: vi.fn<typeof import("./update-immutable-generation.js").copyImmutableGeneration>(),
 }));
 vi.mock("./update-immutable-owner.js", () => ({
   withImmutableUpdateOwner: async (_root: string, run: (assertCurrent: () => void) => unknown) =>
@@ -30,11 +32,13 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-immutable-generation.js")>()),
   verifyImmutableGeneration: mocks.verify,
   sealImmutableGeneration: mocks.seal,
+  copyImmutableGeneration: mocks.copy,
   installImmutableLauncher: vi.fn(),
 }));
 vi.mock("./update-immutable-service.js", () => ({ verifyImmutableService: async () => {} }));
 vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: async () => [] }));
-vi.mock("./update-runner-git-preflight.js", () => ({ runGitCandidatePreflight: mocks.preflight }));
+// mock-isolation: The synthetic installation cannot launch native systemd build services.
+vi.mock("./update-immutable-build.js", () => ({ runImmutableBuild: mocks.build }));
 vi.mock("./update-runner-git-target.js", () => ({
   readGitTargetSchemaVersions: async () => ({ status: "ok", schemaVersions: { state: 1 } }),
 }));
@@ -119,31 +123,21 @@ beforeEach(async () => {
     identity: identity(generation),
   }));
   mocks.seal.mockResolvedValue(undefined);
+  mocks.copy.mockImplementation(async (source, destination) => {
+    expect((await fs.stat(path.dirname(destination))).mode & 0o077).toBe(0);
+    await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
+  });
   mocks.command.mockImplementation(async (argv) => {
-    if (argv.includes("clone")) {
-      const destination = argv.at(-1)!;
-      await fs.mkdir(path.join(destination, ".git"), { recursive: true, mode: 0o755 });
-    }
     return {
       code: 0,
       stdout: argv.includes("ls-remote") ? `${nextSha}\trefs/heads/main\n` : "",
       stderr: "",
     };
   });
-  mocks.preflight.mockImplementation(async (params) => {
-    const selected = params.targetRevision!;
-    await params.beforeCandidate(selected);
-    const built = path.join(params.artifactRoot, "built");
+  mocks.build.mockImplementation(async ({ stage, sha }) => {
+    const built = path.join(stage, "generation");
     await fs.mkdir(path.join(built, "dist"), { recursive: true, mode: 0o755 });
-    await fs.writeFile(path.join(built, "dist", "index.js"), `candidate ${selected}`);
-    await params.validateCandidate(built);
-    await params.prepareCandidate?.(built, params.artifactRoot);
-    return {
-      status: "ok",
-      candidateSha: selected,
-      selectedDevUpstream: null,
-      localDevBranchExists: null,
-    };
+    await fs.writeFile(path.join(built, "dist", "index.js"), `candidate ${sha}`);
   });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -217,9 +211,10 @@ it.each([undefined, nextSha])(
     const before = await fs.readdir(root);
     const result = await prepareImmutableUpdate({ root, sha, dryRun: true });
     expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
+    expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
     expect(await fs.readdir(root)).toEqual(before);
     expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.build).not.toHaveBeenCalled();
     expect(mocks.record).not.toHaveBeenCalled();
     expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(
       sha ? 0 : 1,
@@ -254,7 +249,7 @@ it.skipIf(process.platform !== "linux")(
     });
     expect(await pointer()).toBe(`releases/${currentSha}`);
     expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
-    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.build).not.toHaveBeenCalled();
     expect(mocks.record).not.toHaveBeenCalled();
     expect(mocks.command).not.toHaveBeenCalled();
   },
@@ -268,7 +263,7 @@ it.skipIf(process.platform !== "linux")(
       targetSha: currentSha,
     });
     expect(mocks.command).not.toHaveBeenCalled();
-    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.build).not.toHaveBeenCalled();
     expect(mocks.record).not.toHaveBeenCalled();
     expect(await fs.readdir(root)).toEqual(["current", "releases"]);
   },
@@ -300,25 +295,32 @@ it.skipIf(process.platform !== "linux").each([undefined, nextSha])(
   },
 );
 
-it.skipIf(process.platform !== "linux").each(["build", "fallback"] as const)(
-  "keeps the serving generation and omits a receipt on %s failure",
-  async (failure) => {
-    mocks.preflight.mockImplementationOnce(async (params) => {
-      if (failure === "fallback") {
-        await params.beforeCandidate("d".repeat(40));
-      }
-      return { status: "error", reason: "build-failed" };
-    });
+it.skipIf(process.platform !== "linux")(
+  "keeps the serving generation and omits a receipt on build failure",
+  async () => {
+    mocks.build.mockRejectedValueOnce(new Error("build-failed"));
     const result = await prepareImmutableUpdate({ root, sha: nextSha });
-    expect(result).toMatchObject({
-      status: "error",
-      targetSha: nextSha,
-      reason: failure === "build" ? "build-failed" : expect.stringContaining("cannot fall back"),
-    });
+    expect(result).toMatchObject({ status: "error", targetSha: nextSha, reason: "build-failed" });
     expect(await pointer()).toBe(`releases/${currentSha}`);
     expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
     expect(mocks.record).not.toHaveBeenCalled();
     expect(mocks.seal).not.toHaveBeenCalled();
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "retains build custody without sealing or publishing when descendants did not settle",
+  async () => {
+    mocks.build.mockRejectedValueOnce(new CommandProcessCleanupError());
+    const result = await prepareImmutableUpdate({ root, sha: nextSha });
+    expect(result.status).toBe("error");
+    expect(result.warnings).toEqual([expect.stringContaining("processes did not settle")]);
+    expect((await fs.readdir(root)).some((name) => name.startsWith(".openclaw-immutable-"))).toBe(
+      true,
+    );
+    expect(await pointer()).toBe(`releases/${currentSha}`);
+    expect(mocks.seal).not.toHaveBeenCalled();
+    expect(mocks.record).not.toHaveBeenCalled();
   },
 );
 
@@ -339,7 +341,7 @@ it.skipIf(process.platform !== "linux")(
       "retain for inspection",
     );
     expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.build).not.toHaveBeenCalled();
     expect(mocks.record).not.toHaveBeenCalled();
   },
 );

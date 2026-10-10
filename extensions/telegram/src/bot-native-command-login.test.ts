@@ -6,11 +6,13 @@ import {
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLoginResult,
   createOwnerLoginConfig,
   exerciseDeferredModelAccess,
+  prepareTelegramLoginSessionStore,
   registerLoginCommand,
   type TelegramLoginFlow,
 } from "./bot-native-command-login.test-support.js";
@@ -21,6 +23,8 @@ import {
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-login-worker-");
 
 const loginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
@@ -663,6 +667,29 @@ describe("registerTelegramNativeCommands /login", () => {
     );
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
+  it("persists the Telegram login account without caller-thread entry SQL", async () => {
+    const { store, scope, queries } = await prepareTelegramLoginSessionStore(
+      sessionDirs.make(),
+      loginSessionMocks,
+    );
+    const { handler } = registerLoginCommand({
+      accountId: "default",
+      cfg: createOwnerLoginConfig(),
+      loginFlow: vi.fn<TelegramLoginFlow>(async () => createLoginResult("openai:saved")),
+    });
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    expect(loginSessionMocks.patchSessionEntry).toHaveBeenCalledOnce();
+    expect(loginSessionMocks.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: scope.sessionKey, storePath: scope.storePath }),
+    );
+    expect(store.getSessionEntry(scope)?.authProfileOverride).toBe("openai:saved");
+    expect(
+      queries.filter((query) =>
+        /\b(?:session_nodes|session_entry_snapshots|session_windows)\b/i.test(query),
+      ),
+    ).toEqual([]);
+  });
+
   it("moves the target session to the profile returned by Telegram /login codex", async () => {
     const finishLogin = createDeferred<void>();
     loginSessionMocks.loadSessionStore.mockReturnValue({

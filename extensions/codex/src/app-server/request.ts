@@ -32,30 +32,25 @@ type CodexAppServerClientRequestParams = {
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
+  storePath?: string;
   controlObservation?: CodexControlRequestObservation;
 };
 
-function observeControlPhase(
+function observeControl(
   observation: CodexControlRequestObservation | undefined,
   phase: CodexControlRequestPhase,
-): void {
-  try {
-    observation?.phase(phase);
-  } catch {
-    // Diagnostics must not replace the request's result or error.
-  }
-}
-
-function observeControlFailure(
-  observation: CodexControlRequestObservation | undefined,
-  phase: CodexControlRequestPhase,
-  error: unknown,
-  deadlineObserved = false,
+  failure?: { error: unknown; deadlineObserved?: boolean },
 ): void {
   if (!observation) {
     return;
   }
   try {
+    if (!failure) {
+      observation.phase(phase);
+      return;
+    }
+    const { error, deadlineObserved } = failure;
     const category: CodexControlRequestFailureCategory = deadlineObserved
       ? "deadline-observed"
       : error instanceof CodexAppServerScopedRequestRejectedError
@@ -76,18 +71,12 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   params: CodexAppServerClientRequestParams,
 ): Promise<T> {
   let phase: CodexControlRequestPhase = "prepare";
-  observeControlPhase(params.controlObservation, phase);
+  observeControl(params.controlObservation, phase);
   try {
-    const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
-    const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-      method: params.method,
-      requestParams: params.requestParams,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
-    if (sandboxBlock) {
-      throw new Error(sandboxBlock);
+    const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
+    const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
+    if (sandboxGuard.block) {
+      throw new Error(sandboxGuard.block);
     }
     const timeoutMs = params.timeoutMs ?? 60_000;
     const method = params.method;
@@ -98,18 +87,21 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
       timeoutMs,
       signal: params.signal,
       withCurrent: params.withCurrent,
-      assertCurrent: params.assertCurrent,
+      assertCurrent: () => {
+        params.assertCurrent?.();
+        sandboxGuard.assertCurrent();
+      },
       ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
     };
     phase = "client-request";
-    observeControlPhase(params.controlObservation, phase);
+    observeControl(params.controlObservation, phase);
     return await withTimeout(
       params.client.request<T>(method, requestParams, options),
       timeoutMs,
       `codex app-server ${params.method} timed out`,
     );
   } catch (error) {
-    observeControlFailure(params.controlObservation, phase, error);
+    observeControl(params.controlObservation, phase, { error });
     throw error;
   }
 }
@@ -129,6 +121,8 @@ type CodexAppServerJsonClientOptions = Pick<
 > & {
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
+  storePath?: string;
   isolated?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -138,7 +132,6 @@ type CodexAppServerJsonClientOptions = Pick<
   controlObservation?: CodexControlRequestObservation;
 };
 
-/** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(
   params: CodexAppServerJsonClientOptions & {
     method: M;
@@ -152,20 +145,21 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   params: CodexAppServerJsonClientOptions & { method: string; requestParams?: unknown },
 ): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
-  observeControlPhase(params.controlObservation, "prepare");
-  const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
-  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-    method: params.method,
-    requestParams: params.requestParams,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
-  if (sandboxBlock) {
-    throw new Error(sandboxBlock);
+  observeControl(params.controlObservation, "prepare");
+  const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
+  const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
+  if (sandboxGuard.block) {
+    throw new Error(sandboxGuard.block);
   }
   return await withCodexAppServerJsonClient(
-    { ...params, timeoutMessage: `codex app-server ${params.method} timed out` },
+    {
+      ...params,
+      assertCurrent: () => {
+        params.assertCurrent?.();
+        sandboxGuard.assertCurrent();
+      },
+      timeoutMessage: `codex app-server ${params.method} timed out`,
+    },
     async (request) =>
       await request<T>({ method: params.method, requestParams: params.requestParams }),
   );
@@ -292,7 +286,7 @@ export async function withCodexAppServerJsonClient<T>(
   let errorPhase: CodexControlRequestPhase | undefined;
   const setPhase = (phase: CodexControlRequestPhase) => {
     activePhase = phase;
-    observeControlPhase(params.controlObservation, phase);
+    observeControl(params.controlObservation, phase);
   };
   setPhase("prepare");
   const timeoutController = new AbortController();
@@ -324,7 +318,7 @@ export async function withCodexAppServerJsonClient<T>(
       timeoutMs,
       timeoutMessage,
       promise: (async () => {
-        const { resolveCodexAppServerDirectSandboxBypassBlock } =
+        const { prepareCodexAppServerDirectSandboxBypassBlock } =
           await import("./sandbox-guard.js");
         const {
           createIsolatedCodexAppServerClient,
@@ -376,15 +370,17 @@ export async function withCodexAppServerJsonClient<T>(
               request: Parameters<CodexAppServerScopedRequest>[0],
             ) => {
               setPhase("prepare");
-              const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+              const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock({
                 method: request.method,
                 requestParams: request.requestParams,
                 config: params.config,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
+                agentId: params.agentId,
+                storePath: params.storePath,
               });
-              if (sandboxBlock) {
-                throw new CodexAppServerScopedRequestRejectedError(sandboxBlock);
+              if (sandboxGuard.block) {
+                throw new CodexAppServerScopedRequestRejectedError(sandboxGuard.block);
               }
               assertCurrent();
               const method = request.method;
@@ -407,6 +403,7 @@ export async function withCodexAppServerJsonClient<T>(
                 assertCurrent: () => {
                   assertCurrent();
                   request.assertCurrent?.();
+                  sandboxGuard.assertCurrent();
                 },
               };
               setPhase("client-request");
@@ -472,11 +469,10 @@ export async function withCodexAppServerJsonClient<T>(
     });
   } catch (error) {
     const deadlineObserved = isPastDeadline();
-    observeControlFailure(
+    observeControl(
       params.controlObservation,
       deadlineObserved ? activePhase : (errorPhase ?? activePhase),
-      error,
-      deadlineObserved,
+      { error, deadlineObserved },
     );
     if (deadlineObserved) {
       timeoutDiagnostics?.timeout();

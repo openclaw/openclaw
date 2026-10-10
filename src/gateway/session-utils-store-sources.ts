@@ -226,7 +226,9 @@ export function prepareGatewaySessionStoreReadSources(params: {
 /** Capture source routing for the existing history worker; no native discovery runs here. */
 export async function prepareGatewaySessionStoreReadSourcesAsync(
   params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const inventory = prepareSessionStoreTargetInventory(
@@ -271,12 +273,12 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       throw storeChanged();
     }
   };
-  const readRegistry = async (assertCallerCurrent?: () => void) => {
+  const readRegistry = async (assertCallerCurrent?: () => void, readSignal?: AbortSignal) => {
     for (let attempt = 0; ; attempt++) {
       assertCallerCurrent?.();
       assertSourceCurrent();
       try {
-        const current = await registryRead.read();
+        const current = await registryRead.read(readSignal);
         assertCallerCurrent?.();
         assertSourceCurrent();
         current.assertCurrent();
@@ -290,7 +292,7 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       }
     }
   };
-  let registry = await readRegistry();
+  let registry = await readRegistry(undefined, signal);
   const original = registry.result;
   const assertCurrent = () => {
     assertSourceCurrent();

@@ -199,51 +199,89 @@ describe("batch file selection", () => {
     ).toEqual(expected);
   });
 
-  it.skipIf(Boolean(process.versions.bun))(
-    "keeps a large exclusion inventory within Node's compiled-pattern cache budget",
-    () => {
-      const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
-      const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
-      // Node's matcher cache evicts the oldest entry when its size reaches 250.
-      const cache = new Set<string>();
-      let compilations = 0;
-      const matcher = (file: string, pattern: string) => {
-        if (!cache.has(pattern)) {
-          compilations += 1;
-          cache.add(pattern);
-          if (cache.size >= 250) {
-            cache.delete(cache.values().next().value!);
-          }
+  it("keeps a large exclusion inventory within Node's compiled-pattern cache budget", () => {
+    const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
+    const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
+    // Node's matcher cache evicts the oldest entry when its size reaches 250.
+    const cache = new Set<string>();
+    let compilations = 0;
+    const matcher = (file: string, pattern: string) => {
+      if (!cache.has(pattern)) {
+        compilations += 1;
+        cache.add(pattern);
+        if (cache.size >= 250) {
+          cache.delete(cache.values().next().value!);
         }
-        return path.matchesGlob(file, pattern);
-      };
-      expect(filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, matcher)).toEqual(
-        candidates,
-      );
-      expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
-    },
-  );
+      }
+      return path.matchesGlob(file, pattern);
+    };
+    expect(filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, matcher)).toEqual(
+      candidates,
+    );
+    expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
+  });
 });
 
 describe("intersectIncludePatterns", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("preserves native non-browser test discovery through directory selection", () => {
+  it.each([
+    { owner: ["ts"], candidate: "tsx", expected: [] },
+    { owner: ["tsx"], candidate: "ts", expected: [] },
+    { owner: ["ts"], candidate: "{ts,tsx}", expected: ["ui/src/components/view.test.ts"] },
+    { owner: ["{ts,tsx}"], candidate: "tsx", expected: ["ui/src/components/view.test.tsx"] },
+    {
+      owner: ["ts", "tsx"],
+      candidate: "{ts,tsx}",
+      expected: ["ui/src/components/view.test.ts", "ui/src/components/view.test.tsx"],
+    },
+  ])(
+    "preserves extension constraints for non-recursive $candidate globs in $owner",
+    ({ owner, candidate, expected }) => {
+      const selected = intersectIncludePatterns(
+        owner.map((extension) => `ui/src/**/*.test.${extension}`),
+        [`ui/src/components/*.test.${candidate}`],
+        matchesVitestGlob,
+      );
+      expect(
+        filterFilesByPatterns(
+          [
+            "ui/src/components/view.test.ts",
+            "ui/src/components/view.test.tsx",
+            "ui/src/elsewhere/view.test.ts",
+            "ui/src/elsewhere/view.test.tsx",
+          ],
+          selected!,
+          [],
+          matchesVitestGlob,
+        ),
+      ).toEqual(expected);
+    },
+  );
+
+  it("preserves native non-browser TS and TSX discovery through directory selection", () => {
     const root = tempDirs.make("vitest-ui-selector-");
-    const uiFiles = [
+    const uiTs = [
       "ui/src/ordinary.test.ts",
       "ui/src/shared.browser-import.test.ts",
       "ui/src/folder.browser/ordinary.test.ts",
       "ui/src/shared.browser.contract.test.ts",
     ];
-    const pluginFiles = ["extensions/example/browser/shared.browser-import.test.ts"];
+    const uiTsx = uiTs.map((file) => `${file}x`);
+    const pluginTs = ["extensions/example/browser/shared.browser-import.test.ts"];
+    const pluginTsx = pluginTs.map((file) => `${file}x`);
     const files = [
-      ...uiFiles,
-      ...pluginFiles,
+      ...uiTs,
+      ...uiTsx,
+      ...pluginTs,
+      ...pluginTsx,
       "ui/src/only.browser.test.ts",
+      "ui/src/only.browser.test.tsx",
       "ui/src/helper.browser-helper.browser.test.ts",
+      "ui/src/helper.browser-helper.browser.test.tsx",
       "ui/src/readme.ts",
       "extensions/example/browser/only.browser.test.ts",
+      "extensions/example/browser/only.browser.test.tsx",
       "other/example.test.ts",
     ];
     for (const file of files) {
@@ -256,9 +294,13 @@ describe("intersectIncludePatterns", () => {
       "extensions/*/browser/**/" + nonBrowserTestBasenamePattern,
     ];
     for (const { requested, expected } of [
-      { requested: ["ui/src/**/*.test.ts"], expected: uiFiles },
-      { requested: ["extensions/**/*.test.ts"], expected: pluginFiles },
-      { requested: ["**/*.test.ts"], expected: [...uiFiles, ...pluginFiles] },
+      { requested: ["ui/src/**/*.test.ts"], expected: uiTs },
+      { requested: ["ui/src/**/*.test.tsx"], expected: uiTsx },
+      { requested: ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"], expected: [...uiTs, ...uiTsx] },
+      { requested: ["extensions/**/*.test.ts"], expected: pluginTs },
+      { requested: ["extensions/**/*.test.tsx"], expected: pluginTsx },
+      { requested: ["**/*.test.ts"], expected: [...uiTs, ...pluginTs] },
+      { requested: ["**/*.test.tsx"], expected: [...uiTsx, ...pluginTsx] },
     ]) {
       const selected = intersectIncludePatterns(owner, requested, matchesVitestGlob);
       expect(filterFilesByPatterns(files, selected!, [], matchesVitestGlob).toSorted()).toEqual(
@@ -270,6 +312,10 @@ describe("intersectIncludePatterns", () => {
           .toSorted(),
       ).toEqual(expected.toSorted());
     }
+    const narrowed = narrowIncludePatternsForCli(owner, ["node", "vitest", "run", "ui/src"]);
+    expect(filterFilesByPatterns(files, narrowed!, [], matchesVitestGlob).toSorted()).toEqual(
+      [...uiTs, ...uiTsx].toSorted(),
+    );
   });
 
   it("projects arbitrary candidate globs onto a finite literal owner", () => {

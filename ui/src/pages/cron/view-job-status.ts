@@ -16,7 +16,7 @@ export function renderJobStateIndicator(job: CronJob) {
   const [state, iconName, label]: [string, IconName | null, string] = isCronJobRunning(job)
     ? ["running", "loader", t("cron.runs.runStatusRunning")]
     : autoDisabled
-      ? ["error", "lock", disabledNoteLabel(job)]
+      ? ["error", "lock", disabledNoteLabel(autoDisabled)]
       : isCronJobActiveFailure(job)
         ? ["error", "alertTriangle", t("cron.runs.runStatusError")]
         : !job.enabled
@@ -46,7 +46,7 @@ export function renderDisabledNote(job: CronJob) {
   if (!autoDisabled) {
     return html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`;
   }
-  const label = disabledNoteLabel(job);
+  const label = disabledNoteLabel(autoDisabled);
   const lastError = job.state?.lastError?.trim();
   return html`<span
     class="cron-table__paused-note cron-table__auto-disabled"
@@ -56,11 +56,9 @@ export function renderDisabledNote(job: CronJob) {
   >`;
 }
 
-function disabledNoteLabel(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  if (!autoDisabled) {
-    return t("cron.list.paused");
-  }
+function disabledNoteLabel(
+  autoDisabled: NonNullable<NonNullable<CronJob["state"]>["autoDisabled"]>,
+) {
   return t(
     autoDisabled.reason === "schedule-errors"
       ? "cron.list.autoDisabledScheduleErrors"

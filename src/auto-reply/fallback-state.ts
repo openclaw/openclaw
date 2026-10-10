@@ -30,10 +30,7 @@ function truncateFallbackReasonPart(value: string): string {
 
 function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): string | undefined {
   const rawError = attempt.error?.trim();
-  if (!rawError) {
-    return undefined;
-  }
-  if (!attempt.reason || !TRANSIENT_FALLBACK_REASONS.has(attempt.reason)) {
+  if (!rawError || !attempt.reason || !TRANSIENT_FALLBACK_REASONS.has(attempt.reason)) {
     return undefined;
   }
   // Only expose transient-looking raw details; permanent/auth errors can leak noisy provider text.
@@ -60,13 +57,12 @@ function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
     return reason.replace(/_/g, " ");
   }
   const code = attempt.code?.trim();
-  if (code) {
-    return code;
-  }
-  if (typeof attempt.status === "number") {
-    return `HTTP ${attempt.status}`;
-  }
-  return truncateFallbackReasonPart(attempt.error || "error");
+  return (
+    code ||
+    (typeof attempt.status === "number"
+      ? `HTTP ${attempt.status}`
+      : truncateFallbackReasonPart(attempt.error || "error"))
+  );
 }
 
 function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
@@ -119,10 +115,7 @@ export function buildFallbackClearedNotice(params: {
 }): string {
   const selected = buildModelCatalogRef(params.selectedProvider, params.selectedModel);
   const previous = normalizeOptionalString(params.previousActiveModel);
-  if (previous && previous !== selected) {
-    return `↪️ Model Fallback cleared: ${selected} (was ${previous})`;
-  }
-  return `↪️ Model Fallback cleared: ${selected}`;
+  return `↪️ Model Fallback cleared: ${selected}${previous && previous !== selected ? ` (was ${previous})` : ""}`;
 }
 
 /** Resolves fallback state transitions and the next persisted notice-state fields. */
@@ -142,13 +135,10 @@ export function resolveFallbackTransition(
     activeModelRef,
     comparisonOptions,
   );
-  const fallbackTransitioned =
-    fallbackActive &&
-    (previousState.selectedModel !== selectedModelRef ||
-      previousState.activeModel !== activeModelRef);
   const previousStateMatchesCurrent =
     previousState.selectedModel === selectedModelRef &&
     previousState.activeModel === activeModelRef;
+  const fallbackTransitioned = fallbackActive && !previousStateMatchesCurrent;
   const previousStateWasRealFallback = previousStateMatchesCurrent
     ? fallbackActive
     : Boolean(

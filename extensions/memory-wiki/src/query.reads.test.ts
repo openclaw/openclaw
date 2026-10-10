@@ -33,6 +33,47 @@ async function createReadVault(relativePath = "sources/alpha.md") {
 }
 
 describe("wiki query page reads", () => {
+  it("reads only compiled metadata candidates for distributed query tokens", async () => {
+    const { rootDir, config, targetPath, relativePath } = await createReadVault();
+    await fs.writeFile(
+      targetPath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.quartz",
+          title: "Cobalt",
+          aliases: ["amber"],
+          questions: ["lantern"],
+        },
+        body: "# Cobalt\n\nSelected evidence.\n",
+      }),
+    );
+    const unrelatedPath = path.join(rootDir, "sources", "unrelated.md");
+    await fs.writeFile(
+      unrelatedPath,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Unrelated" },
+        body: "# Unrelated\n",
+      }),
+    );
+    const query = "cobalt quartz amber lantern";
+    const liveResults = await searchMemoryWiki({ config, query, maxResults: 1 });
+    expect(liveResults[0]?.path).toBe(relativePath);
+    await compileMemoryWikiVault(config);
+    const openedPages: string[] = [];
+    __setFsSafeTestHooksForTest({
+      beforeOpen: (filePath) => {
+        if (filePath.endsWith(".md")) {
+          openedPages.push(filePath);
+        }
+      },
+    });
+
+    await expect(searchMemoryWiki({ config, query, maxResults: 1 })).resolves.toEqual(liveResults);
+    expect(openedPages).toContain(targetPath);
+    expect(openedPages).not.toContain(unrelatedPath);
+  });
+
   it.each([false, true])(
     "searches and reads without extracting unused links (compiled=%s)",
     async (compiled) => {

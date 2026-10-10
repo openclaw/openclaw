@@ -381,7 +381,7 @@ describe("Systems workspace", () => {
     expect(statusReads()).toHaveLength(1);
     const inventory = controller.inventory;
     expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
-    controller.toggleStats();
+    controller.updatePresentation({ showStats: !controller.showStats });
     expect(controller.showStats || controller.showDetails).toBe(false);
 
     visibility = "hidden";
@@ -711,8 +711,8 @@ describe("Systems workspace", () => {
     const viewer = page.querySelector("openclaw-desktop-panel");
     expect(viewer?.hasAttribute("embedded")).toBe(true);
     expect(viewer?.embedded).toBe(true);
-    controller.toggleStats();
-    controller.toggleDetails();
+    controller.updatePresentation({ showStats: !controller.showStats });
+    controller.updatePresentation({ showDetails: !controller.showDetails });
     await controller.refresh();
     await page.updateComplete;
     expect(page.querySelector("openclaw-desktop-panel")).toBe(viewer);

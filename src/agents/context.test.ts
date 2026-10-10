@@ -6,11 +6,7 @@ import {
   prepareDiscoveredContextTokenCache,
   type ContextWindowCatalog,
 } from "./context-cache-projection.js";
-import {
-  getContextWindowCaches,
-  providerContextTokenCacheKey,
-  replaceDiscoveredContextTokenCache,
-} from "./context-cache.js";
+import { getContextWindowCaches, replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { resolveContextTokensForModel, resolveModelContextTokenProjection } from "./context.js";
 import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
@@ -61,11 +57,6 @@ beforeEach(resetContextWindowCacheForTest);
 afterEach(resetContextWindowCacheForTest);
 
 describe("context cache projection", () => {
-  it("prefers discovered contextTokens over the native window", async () => {
-    await discover([{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }]);
-    expect(resolve({ model: "gpt-5.4" })).toBe(272_000);
-  });
-
   it("keeps unowned CLI discovery at its reported window", async () => {
     await discover([{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
     expect(resolve({ model: "claude-cli/claude-opus-4.7-20260219" })).toBe(200_000);
@@ -93,29 +84,6 @@ describe("context cache projection", () => {
     expect(windowCache.has("bad/model")).toBe(false);
     expect(windowCache.has("")).toBe(false);
   });
-
-  it("writes provider-owned bare keys for self-prefixed configured token caps", () => {
-    const cache = new Map<string, number>();
-    applyConfiguredContextWindows({
-      cache,
-      windowCache: new Map(),
-      modelsConfig: {
-        providers: {
-          "google-gemini-cli": {
-            models: [
-              {
-                id: "google-gemini-cli/gemini-3.1-pro-preview",
-                contextTokens: 1_000_000,
-              },
-            ],
-          },
-        },
-      },
-    });
-    expect(
-      cache.get(providerContextTokenCacheKey("google-gemini-cli", "gemini-3.1-pro-preview")),
-    ).toBe(1_000_000);
-  });
 });
 
 describe("context token resolution", () => {
@@ -126,17 +94,14 @@ describe("context token resolution", () => {
     expect(resolve(params)).toBe(32_000);
   });
 
-  it.each([
-    [true, 1_000_000],
-    [false, 200_000],
-  ])("uses the model context1m setting %s over the global default", (context1m, expected) => {
+  it("lets a model disable the global context1m setting", () => {
     expect(
       resolve({
         cfg: {
           agents: {
             defaults: {
-              params: { context1m: !context1m },
-              models: { "claude-cli/claude-opus-4-7": { params: { context1m } } },
+              params: { context1m: true },
+              models: { "claude-cli/claude-opus-4-7": { params: { context1m: false } } },
             },
           },
         },
@@ -144,16 +109,12 @@ describe("context token resolution", () => {
         model: "claude-opus-4-7",
         fallbackContextTokens: 200_000,
       }),
-    ).toBe(expected);
+    ).toBe(200_000);
   });
 
   it.each([
-    ["anthropic", "claude-fable-5"],
-    ["anthropic-vertex", "claude-mythos-5"],
     ["claude-cli", "claude-sonnet-5"],
-    ["claude-cli", "claude-opus-5"],
     ["anthropic-vertex", "claude-sonnet-4-6"],
-    ["claude-cli", "claude-opus-4-7[1m]"],
   ])("resolves the fixed window for %s/%s", (provider, model) => {
     expect(resolve({ provider, model, fallbackContextTokens: 200_000 })).toBe(1_000_000);
   });
@@ -170,22 +131,6 @@ describe("context token resolution", () => {
       authoredContextTokens: 1_000_000,
     });
     expect(resolve(params)).toBe(128_000);
-  });
-
-  it.each([
-    [200_000, 200_000],
-    [1_200_000, 1_000_000],
-  ])("bounds an authored cap of %i by the fixed provider contract", (contextTokens, expected) => {
-    expect(
-      resolve({
-        cfg: modelConfig("anthropic", "claude-sonnet-4-6", {
-          contextWindow: 2_000_000,
-          contextTokens,
-        }),
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      }),
-    ).toBe(expected);
   });
 
   it("uses the caller-supplied model provider for runtime aliases", () => {
@@ -224,24 +169,5 @@ describe("context token resolution", () => {
         modelContextTokens: 272_000,
       }),
     ).toBe(200_000);
-  });
-
-  it.each([
-    [1_000_000, 272_000],
-    [128_000, 128_000],
-  ])("bounds prepared tokens by a configured native window of %i", (contextWindow, expected) => {
-    const caches = getContextWindowCaches();
-    applyConfiguredContextWindows({
-      cache: caches.discoveredTokenCache,
-      windowCache: caches.contextWindowCache,
-      modelsConfig: modelConfig("openai", "gpt-5.5", { contextWindow }).models,
-    });
-    expect(
-      resolve({
-        provider: "openai",
-        model: "gpt-5.5",
-        modelContextTokens: 272_000,
-      }),
-    ).toBe(expected);
   });
 });

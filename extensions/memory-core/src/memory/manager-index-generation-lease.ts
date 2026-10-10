@@ -163,11 +163,9 @@ async function acquireLocal(
   throwIfGenerationLeaseAborted(signal);
   const state = stateFor(key);
   return await new Promise<() => void>((resolve, reject) => {
-    let admitted = false;
     const waiter: Waiter = {
       kind,
       resolve: (release) => {
-        admitted = true;
         signal?.removeEventListener("abort", onAbort);
         if (signal?.aborted) {
           release();
@@ -178,9 +176,6 @@ async function acquireLocal(
       },
     };
     const onAbort = () => {
-      if (admitted) {
-        return;
-      }
       const index = state.queue.indexOf(waiter);
       if (index < 0) {
         return;
@@ -238,23 +233,12 @@ export async function acquireMemoryIndexReadGeneration(
   return await acquire(databasePath, excludeMutations ? "retrieval" : "read", signal);
 }
 
-export async function withMemoryIndexMutationGeneration<T>(
+export async function withMemoryIndexGeneration<T>(
   databasePath: string,
+  kind: "mutation" | "write",
   run: () => Promise<T>,
 ): Promise<T> {
-  const release = await acquire(databasePath, "mutation");
-  try {
-    return await run();
-  } finally {
-    await release();
-  }
-}
-
-export async function withMemoryIndexPublishGeneration<T>(
-  databasePath: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const release = await acquire(databasePath, "write");
+  const release = await acquire(databasePath, kind);
   try {
     return await run();
   } finally {

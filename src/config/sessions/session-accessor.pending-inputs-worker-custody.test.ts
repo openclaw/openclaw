@@ -11,6 +11,7 @@ import {
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
+import { withSessionTranscriptWriteLock } from "../../plugin-sdk/session-transcript-runtime.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import {
@@ -266,119 +267,139 @@ it("refreshes every collected source after a non-revoking profile change", async
   });
 });
 
-it("keeps staged input and worker persistence under fresh authority without caller SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = rolePolicyConfig();
-    const client = roleClient("view", "custody-member");
-    const profileId = client.authenticatedUserProfile!.profileId;
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:prepared-custody",
-      sessionId: "custody-session",
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: "another-profile" },
-    });
-    await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
-    const resolved = await resolveSessionMutationAuthorizationAsync({
-      client,
-      method: "chat.send",
-      requestParams: scope,
-      context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-    });
-    expect(resolved.error).toBeNull();
-    const authorization = resolved.authorization!;
-    const queries: string[] = [];
-    const assertCurrent = () => {
-      const host = observeHostDataSql();
-      try {
-        authorization.assertCurrent();
-      } finally {
-        queries.push(...host.queries);
-        host.restore();
-      }
-    };
-    let admitted: SessionPendingInputReceipt | undefined;
-    let unsettled: SessionPendingInputReceipt | undefined;
-    try {
-      admitted = await stageSessionPendingInput(scope, {
-        runId: "prepared-custody",
-        message: {
-          role: "user",
-          content: "Continue with captured custody",
-          timestamp: 100,
-          idempotencyKey: "prepared-custody:user",
-        },
-        assertCurrent,
-        assertAdmittedCurrent: assertCurrent,
-        authority: authorization.admittedInputAuthority,
+it.each(["turn", "locked"] as const)(
+  "keeps staged input and %s persistence under fresh authority without caller session SQL",
+  async (writer) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const client = roleClient("view", "custody-member");
+      const profileId = client.authenticatedUserProfile!.profileId;
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:prepared-custody",
+        sessionId: "custody-session",
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        visibility: "read-only",
+        createdActor: { type: "human", source: "profile", id: "another-profile" },
       });
-      expect(admitted?.state).toBe("queued");
-      unsettled = await stageSessionPendingInput(scope, {
-        runId: "pending-settlement",
-        message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },
-        assertCurrent,
-        assertAdmittedCurrent: assertCurrent,
-        authority: authorization.admittedInputAuthority,
+      await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
+      const resolved = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
       });
-      if (!unsettled) {
-        throw new Error("Expected accepted settlement custody");
-      }
-      const run = <T>(operation: () => T) =>
-        admitted!.runAsync ? admitted!.runAsync(operation) : admitted!.run(operation);
-      const timing: StoreWriterTiming = {};
-      await run(() => runOpenClawAgentWorkerWrite(scope, async () => {}, timing));
-      expect(timing.reentrant).toBe(false);
-      expect(
-        await run(() =>
-          appendExpectedSessionTranscriptTurn(scope, {
-            expectedSessionId: scope.sessionId,
-            sessionFile: "synthetic-custody-session.jsonl",
-            messages: [{ message: admitted!.message }],
-          }),
-        ),
-      ).toMatchObject({ appendedMessages: [{ appended: true }] });
-      expect(queries).toEqual([]);
-      await removeSessionMember(scope, profileId);
-      let dispatched = false;
-      await expect(
-        Promise.resolve().then(() =>
-          run(() => {
-            dispatched = true;
-          }),
-        ),
-      ).rejects.toThrow();
-      expect(dispatched).toBe(false);
-      const database = openOpenClawAgentDatabase(scope);
-      const original = database.db
-        .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
-        .get(scope.sessionKey);
-      if (typeof original?.entry_json !== "string" || typeof original.entry_valid !== "number") {
-        throw new Error("Expected the synthetic canonical session row");
-      }
-      const update = database.db.prepare(
-        "UPDATE session_nodes SET entry_json = ?, entry_valid = ? WHERE session_key = ?",
-      );
+      expect(resolved.error).toBeNull();
+      const authorization = resolved.authorization!;
+      const queries: string[] = [];
+      const assertCurrent = () => {
+        const host = observeHostDataSql();
+        try {
+          authorization.assertCurrent();
+        } finally {
+          queries.push(...host.queries);
+          host.restore();
+        }
+      };
+      let admitted: SessionPendingInputReceipt | undefined;
+      let unsettled: SessionPendingInputReceipt | undefined;
       try {
-        update.run("{", 1, scope.sessionKey);
-        unsettled.finish("interrupted");
-        await unsettled.settled?.();
+        admitted = await stageSessionPendingInput(scope, {
+          runId: "prepared-custody",
+          message: {
+            role: "user",
+            content: "Continue with captured custody",
+            timestamp: 100,
+            idempotencyKey: "prepared-custody:user",
+          },
+          assertCurrent,
+          assertAdmittedCurrent: assertCurrent,
+          authority: authorization.admittedInputAuthority,
+        });
+        expect(admitted?.state).toBe("queued");
+        unsettled = await stageSessionPendingInput(scope, {
+          runId: "pending-settlement",
+          message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },
+          assertCurrent,
+          assertAdmittedCurrent: assertCurrent,
+          authority: authorization.admittedInputAuthority,
+        });
+        if (!unsettled) {
+          throw new Error("Expected accepted settlement custody");
+        }
+        const run = <T>(operation: () => T) =>
+          admitted!.runAsync ? admitted!.runAsync(operation) : admitted!.run(operation);
+        const timing: StoreWriterTiming = {};
+        await run(() => runOpenClawAgentWorkerWrite(scope, async () => {}, timing));
+        expect(timing.reentrant).toBe(false);
         expect(
-          database.db
-            .prepare("SELECT state FROM session_pending_inputs WHERE input_id = ?")
-            .get(unsettled.inputId)?.state,
-        ).toBe("interrupted");
+          await run(() =>
+            writer === "turn"
+              ? appendExpectedSessionTranscriptTurn(scope, {
+                  expectedSessionId: scope.sessionId,
+                  sessionFile: "synthetic-custody-session.jsonl",
+                  messages: [{ message: admitted!.message }],
+                })
+              : withSessionTranscriptWriteLock(scope, (locked) =>
+                  locked.appendMessage({
+                    message: {
+                      ...admitted!.message,
+                      custom: {
+                        toJSON() {
+                          throw new Error("Accepted custody must not serialize supplied input");
+                        },
+                      },
+                    },
+                  }),
+                ).then((result) => ({ appendedMessages: [result] })),
+          ),
+        ).toMatchObject({ appendedMessages: [{ appended: true, message: admitted!.message }] });
+        expect(
+          writer === "turn"
+            ? queries
+            : queries.filter((query) => /\b(?:session_nodes|session_members)\b/.test(query)),
+        ).toEqual([]);
+        await removeSessionMember(scope, profileId);
+        let dispatched = false;
+        await expect(
+          Promise.resolve().then(() =>
+            run(() => {
+              dispatched = true;
+            }),
+          ),
+        ).rejects.toThrow();
+        expect(dispatched).toBe(false);
+        const database = openOpenClawAgentDatabase(scope);
+        const original = database.db
+          .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
+          .get(scope.sessionKey);
+        if (typeof original?.entry_json !== "string" || typeof original.entry_valid !== "number") {
+          throw new Error("Expected the synthetic canonical session row");
+        }
+        const update = database.db.prepare(
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = ? WHERE session_key = ?",
+        );
+        try {
+          update.run("{", 1, scope.sessionKey);
+          unsettled.finish("interrupted");
+          await unsettled.settled?.();
+          expect(
+            database.db
+              .prepare("SELECT state FROM session_pending_inputs WHERE input_id = ?")
+              .get(unsettled.inputId)?.state,
+          ).toBe("interrupted");
+        } finally {
+          update.run(original.entry_json, original.entry_valid, scope.sessionKey);
+        }
       } finally {
-        update.run(original.entry_json, original.entry_valid, scope.sessionKey);
+        unsettled?.finish("interrupted");
+        await unsettled?.settled?.();
+        admitted?.finish("interrupted");
+        await admitted?.settled?.();
       }
-    } finally {
-      unsettled?.finish("interrupted");
-      await unsettled?.settled?.();
-      admitted?.finish("interrupted");
-      await admitted?.settled?.();
-    }
-  });
-});
+    });
+  },
+);

@@ -2,43 +2,12 @@
   --control-height: 38px;
 }
 
-* {
-  box-sizing: border-box;
-}
-[hidden],
 .hidden {
   display: none !important;
 }
-body {
-  min-width: 320px;
-  margin: 0;
-}
-.shell {
-  display: flex;
-  justify-content: center;
-  min-height: 100vh;
-  min-height: 100dvh;
-  padding: 24px;
-}
-.panel {
-  width: min(560px, 100%);
-  margin-block: auto;
-  padding: 24px 32px 28px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--card);
-  box-shadow: var(--shadow-sm);
-}
+
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin-bottom: 24px;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1;
 }
 .brand-mark {
   display: block;
@@ -48,20 +17,9 @@ body {
 svg {
   width: 18px;
   height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex: none;
 }
 h1 {
   margin: 10px 0 8px;
-  color: var(--text-strong);
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
 }
 #description {
   margin: 0;
@@ -155,12 +113,7 @@ h1 {
   line-height: 1.5;
   white-space: normal;
 }
-.welcome-notice,
-.hint {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
+
 .welcome-notice {
   margin: 20px 0;
 }
@@ -244,92 +197,26 @@ button.transport-option.selected {
   gap: 6px;
   min-width: 0;
 }
-.remote-field label,
-.controls > label {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-}
+
 .remote-field input,
 select {
-  width: 100%;
-  min-width: 0;
-  height: var(--control-height);
-  padding: 8px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  color: var(--text-strong);
-  background: var(--card);
-  box-shadow: var(--input-shadow);
   font: inherit;
 }
-input::placeholder {
-  color: var(--muted);
-}
-.select-field {
-  position: relative;
-}
-.select-field select {
-  appearance: none;
-  padding-right: 34px;
-}
-.select-field::after {
-  position: absolute;
-  right: 15px;
-  bottom: calc(var(--control-height) / 2 - 3px);
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  content: "";
-  transform: rotate(45deg);
-  pointer-events: none;
-}
+
 .remote-field input:focus-visible,
 select:focus-visible {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
+
 .remote-field input[aria-invalid="true"] {
   border-color: var(--danger);
 }
-.remote-auth {
-  display: grid;
-  grid-template-columns: 124px minmax(0, 1fr);
-  align-items: end;
-  gap: 12px;
-}
-.remote-credential {
-  position: relative;
-}
-.remote-credential input {
-  padding-right: 42px;
-}
-button.secret-toggle {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 32px;
-  height: 32px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-}
+
 .secret-toggle svg {
   width: 16px;
   height: 16px;
 }
-.secret-toggle[aria-pressed="true"] .secret-hidden {
-  display: none;
-}
+
 .hint {
   margin: 8px 0 0;
 }
@@ -338,9 +225,6 @@ button.secret-toggle {
 }
 .remote-feedback {
   margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .remote-feedback.error {
@@ -361,38 +245,11 @@ button.secret-toggle {
   color: var(--muted);
   font-size: 12px;
 }
-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  color: var(--text);
-  background: var(--bg-elevated);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: default;
-}
+
 button:hover:not(:disabled) {
   background: var(--bg-hover);
 }
-button:disabled,
-input:disabled,
-select:disabled {
-  opacity: 0.5;
-}
-button.primary {
-  padding: 10px 16px;
-  border-color: var(--accent);
-  color: var(--primary-foreground);
-  background: var(--primary);
-  font-size: 14px;
-  font-weight: 600;
-}
+
 button.primary:hover:not(:disabled) {
   background: var(--primary-hover);
 }
@@ -468,11 +325,7 @@ button.button-subtle:hover:not(:disabled) {
   text-align: left;
   background: var(--card);
 }
-.gateway-copy {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
+
 .gateway-name,
 .gateway-endpoint {
   overflow: hidden;
@@ -484,11 +337,7 @@ button.button-subtle:hover:not(:disabled) {
   font-size: 13px;
   font-weight: 500;
 }
-.gateway-endpoint,
-.discovery-empty {
-  color: var(--muted);
-  font-size: 12px;
-}
+
 .gateway-badge {
   align-self: center;
   padding: 3px 6px;
@@ -576,11 +425,7 @@ footer {
   font-size: 13px;
   font-weight: 600;
 }
-.update-copy span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
+
 .update-actions {
   display: flex;
   align-items: center;
@@ -641,21 +486,14 @@ button.update-dismiss svg {
   :root {
     --control-height: 44px;
   }
-  .panel {
-    padding: 20px 20px 24px;
-  }
+
   button.primary {
     min-height: 44px;
   }
-  button.secret-toggle {
-    width: 38px;
-    height: 38px;
-  }
+
 }
 @media (max-width: 560px) {
-  .shell {
-    padding: 16px;
-  }
+
   .connection-badge {
     display: none;
   }
@@ -663,10 +501,7 @@ button.update-dismiss svg {
     flex-direction: column;
     align-items: stretch;
   }
-  .remote-auth {
-    grid-template-columns: 110px minmax(0, 1fr);
-    gap: 8px;
-  }
+
 }
 @media (prefers-reduced-motion: reduce) {
   *,

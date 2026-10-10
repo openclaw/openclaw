@@ -39,6 +39,10 @@ import {
 const PARENT = "agent:main:main";
 const CHILD = "agent:main:subagent:catchup-child";
 const RESULT = "Retained child result: the requested check found three actionable failures.";
+const temporalFact = {
+  kind: "conversation-data",
+  text: expect.stringContaining("## Temporal Context\n"),
+};
 
 describe("parent runtime facts from retained completion obligations", () => {
   const fixture = useSubagentRestartRecoveryFixture();
@@ -151,7 +155,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           }
           expect(JSON.parse(encoded)).toBe(result.slice(0, 2_000));
         } else {
-          expect(facts).toEqual([]);
+          expect(facts).toEqual([temporalFact]);
         }
       }
       expect(subagentRuns.size).toBe(0);
@@ -267,7 +271,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     };
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
-      expect(await buildRuntimeFactsContext(params)).toEqual([]);
+      expect(await buildRuntimeFactsContext(params)).toEqual([temporalFact]);
       const child = makeRestartRecoveryRun({
         runId: "catchup-other-writer",
         childSessionKey: CHILD,

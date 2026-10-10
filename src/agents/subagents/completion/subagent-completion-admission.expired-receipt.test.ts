@@ -12,7 +12,7 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { bindSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
 import {
   blockSubagentCompletionDelivery,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
@@ -81,10 +81,13 @@ describe("requester receipts after completion expiry", () => {
   }
 
   function settle(input: ReturnType<typeof records>, delivered: boolean) {
-    return settleRequesterCompletionBatch({
-      entries: [{ subagent: input.subagent }],
-      outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
-      isCurrent: () => true,
+    return mutateRequesterCompletionBatch({
+      entries: [input.subagent],
+      operation: {
+        kind: "settle",
+        outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
+      },
+      assertCurrent: () => {},
       databaseOptions: { database },
     });
   }

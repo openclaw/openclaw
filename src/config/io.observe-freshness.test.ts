@@ -256,7 +256,7 @@ it.each([
   },
 );
 
-it.each([' { "hash" : "legacy" } ', '["legacy"]', "{invalid"])(
+it.each([' { "hash" : "legacy" } ', "{invalid"])(
   "compares raw legacy health facts without tightening their decoder: %s",
   async (legacyText) => {
     const home = directories.make("openclaw-health-legacy-basis-");

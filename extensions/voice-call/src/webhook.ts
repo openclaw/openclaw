@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
-import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -51,6 +50,7 @@ import {
   StreamDisconnectGrace,
   type StreamDisconnectLifecycle,
 } from "./webhook/stream-disconnect-grace.js";
+import { appendRecentTalkEventMetadata } from "./webhook/talk-event-metadata.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
@@ -63,31 +63,6 @@ const loadRealtimeTranscriptionRuntime = createLazyRuntimeModule(
 const loadResponseGeneratorModule = createLazyRuntimeModule(
   () => import("./response-generator.js"),
 );
-
-function appendRecentTalkEventMetadata(
-  metadata: CallRecord["metadata"],
-  event: TalkEvent,
-): CallRecord["metadata"] {
-  const previous = metadata ?? {};
-  const recent = Array.isArray(previous.recentTalkEvents)
-    ? previous.recentTalkEvents.filter(
-        (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      )
-    : [];
-  recent.push({
-    at: event.timestamp,
-    type: event.type,
-    sessionId: event.sessionId,
-    turnId: event.turnId,
-  });
-  return {
-    ...previous,
-    lastTalkEventAt: event.timestamp,
-    lastTalkEventType: event.type,
-    recentTalkEvents: recent.slice(-10),
-  };
-}
 
 function buildRequestUrl(requestUrl: string | undefined): URL {
   return new URL(requestUrl ?? "/", "http://localhost");
@@ -398,7 +373,7 @@ export class VoiceCallWebhookServer {
           void this.manager
             .updateCallMetadata(current.call, (metadata) =>
               this.getCurrentStream(providerCallId, streamSid)
-                ? appendRecentTalkEventMetadata(metadata, event)
+                ? appendRecentTalkEventMetadata(metadata, event, "streaming")
                 : metadata,
             )
             .catch((error: unknown) => {

@@ -24,7 +24,6 @@ import {
   type PersonalGitHubPublicationRow,
 } from "./github-personal-publication-store.js";
 import {
-  resolveGitHubPublicationWorktreeOwner,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
@@ -287,20 +286,14 @@ export function createPersonalGitHubPublicationCoordinator(
   ): Promise<T> => {
     action.assertCurrent();
     return await placements.withLocalWorkspaceReservation(action, async (assertReservation) => {
-      const { worktree } = await readGitHubPublicationWorktreeOwner(action);
+      const worktreeOwner = await readGitHubPublicationWorktreeOwner(action);
+      const { worktree } = worktreeOwner;
       action.assertCurrent();
       assertReservation();
       const lease = await acquireWorktreeRunLease(worktree.id, { exclusive: true });
       const assertCustody = () => {
         assertReservation();
-        const current = resolveGitHubPublicationWorktreeOwner({
-          ...action,
-          expected: {
-            worktreeId: worktree.id,
-            repositoryFingerprint: worktree.repoFingerprint,
-            branch: worktree.branch,
-          },
-        });
+        const current = worktreeOwner.assertCurrent();
         const workStartError = resolveSessionWorkStartError(
           action.sessionKey,
           current.loaded.entry,

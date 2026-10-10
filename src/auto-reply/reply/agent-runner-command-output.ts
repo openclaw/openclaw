@@ -5,11 +5,7 @@ import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.s
 import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
-/**
- * CLI backends report a tool result as its raw content: a string, or the text
- * blocks the harness streamed. Structured runners send a record instead, so the
- * command projection has to read both or every CLI command result is dropped.
- */
+/** CLI outcomes use raw strings/text blocks; structured runners supply records. */
 function readToolResultText(value: unknown): string | undefined {
   const direct = readStringValue(value);
   if (direct !== undefined) {
