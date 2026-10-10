@@ -108,7 +108,25 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     const query = { agentId: scope.agentId, key: scope.sessionKey };
     try {
       await projection.ensureMaterialized();
-      const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+      const rowReads: string[] = [];
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (databases, consume, lane) =>
+          readDatabases(
+            databases,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  readRowFacts(input) {
+                    rowReads.push(...input.sessionKeys);
+                    return owner.readRowFacts(input);
+                  },
+                })),
+              ),
+            lane,
+          ),
+      );
       const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       await persistSessionTranscriptTurn(scope, {
         messages: [{ message: { role: "user", content: "First input" } }],
@@ -149,7 +167,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
         acpMeta: acp,
         activitySummaryWatermark: readSessionTranscriptWatermark(scope),
       });
-      expect(rowReads).not.toHaveBeenCalled();
+      expect(rowReads).toEqual([]);
       expect(
         sharedReads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts"),
       ).toEqual([]);

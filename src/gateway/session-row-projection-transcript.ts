@@ -106,8 +106,8 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
         row.transcriptAuthority = undefined;
       }
       row.databaseFactsRevision++;
-      // Accepted snapshots must lose their watermark before cold-row or throttle
-      // suppression; an exact read may resume before the next refresh window.
+      // Accepted snapshots must install the committed watermark or revoke it before
+      // cold-row or throttle suppression; an exact read may resume before the next window.
       if (pending) {
         params.refresh(id, retained);
       }
