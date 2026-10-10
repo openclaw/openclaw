@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -24,9 +25,13 @@ import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sha
 import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
-it.each(["before", "after"] as const)(
-  "refuses a sharing locator retargeted %s source preparation while the original store remains",
-  async (phase) => {
+it.each([
+  { phase: "before", listing: "available" },
+  { phase: "after", listing: "available" },
+  { phase: "after", listing: "denied" },
+] as const)(
+  "refuses a sharing locator retargeted $phase source preparation (listing=$listing)",
+  async ({ phase, listing }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:sharing-locator";
       const original = state.statePath("original", "store.main.sqlite");
@@ -57,20 +62,47 @@ it.each(["before", "after"] as const)(
           databaseBirthtime: identity.birthtime,
         },
       };
-      if (phase === "before") {
-        retarget();
-        // Join any unexpectedly accepted reader so the negative control cannot leak custody.
-        await expect(
-          prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
-        ).rejects.toThrow("Session sharing source changed");
-      } else {
-        const prepared = await prepareSessionSharingSource(target, () => {});
-        try {
-          expect(prepared.target?.entry.sessionId).toBe("identical");
+      const readDirectory = fs.readdirSync;
+      let listingDenied = false;
+      const directoryRead =
+        listing === "denied"
+          ? vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+              if (String(args[0]) === alias) {
+                listingDenied = true;
+                throw Object.assign(new Error("Synthetic directory listing denied"), {
+                  code: "EACCES",
+                });
+              }
+              return readDirectory(...args);
+            })
+          : undefined;
+      if (directoryRead) {
+        syncBuiltinESMExports();
+      }
+      try {
+        if (phase === "before") {
           retarget();
-          expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
-        } finally {
-          await prepared.release();
+          // Join any unexpectedly accepted reader so the negative control cannot leak custody.
+          await expect(
+            prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
+          ).rejects.toThrow("Session sharing source changed");
+        } else {
+          const prepared = await prepareSessionSharingSource(target, () => {});
+          try {
+            expect(prepared.target?.entry.sessionId).toBe("identical");
+            if (listing === "denied") {
+              expect(listingDenied).toBe(true);
+            }
+            retarget();
+            expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
+          } finally {
+            await prepared.release();
+          }
+        }
+      } finally {
+        directoryRead?.mockRestore();
+        if (directoryRead) {
+          syncBuiltinESMExports();
         }
       }
     });

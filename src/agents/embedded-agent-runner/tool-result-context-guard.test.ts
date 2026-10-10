@@ -12,6 +12,7 @@ import {
 } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   createMessageCharEstimateCache,
@@ -21,7 +22,6 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
-  markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -403,28 +403,31 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
-  it("projects transcript text for ingest and strips its marker from provider messages", async () => {
+  it("keeps original text for ingestion and replays the recorded model projection", async () => {
     const engine = makeEngine();
     const { run } = hook(engine, { getPrePromptMessageCount: () => 0 });
-    const prompt = makeUser("model-only context\n\nvisible prompt");
-    markTranscriptPromptText(prompt, "visible prompt");
+    const prompt = {
+      ...makeUser("visible prompt"),
+      __openclaw: {
+        modelPromptProjection: { version: 1, text: "model-only context\n\nvisible prompt" },
+      },
+    };
     const transformed = await run([prompt, makeToolResult("one", "result")]);
     expect(engine.afterTurn.mock.calls[0]?.[0].messages[0]).toMatchObject({
       role: "user",
       content: "visible prompt",
     });
-    expect(JSON.stringify(engine.afterTurn.mock.calls[0]?.[0].messages)).not.toContain(
-      "__openclawTranscriptPromptText",
-    );
     expect(engine.assemble.mock.calls[0]?.[0].messages[0]).toMatchObject({
       role: "user",
-      content: "model-only context\n\nvisible prompt",
+      content: "visible prompt",
     });
-    expect(transformed[0]).toMatchObject({
+    expect(normalizeMessagesForLlmBoundary(transformed)[0]).toMatchObject({
       role: "user",
       content: "model-only context\n\nvisible prompt",
     });
-    expect(JSON.stringify(transformed)).not.toContain("__openclawTranscriptPromptText");
+    expect(JSON.stringify(normalizeMessagesForLlmBoundary(transformed))).not.toContain(
+      "modelPromptProjection",
+    );
   });
 
   it("repairs orphan results from an engine returning its working array", async () => {

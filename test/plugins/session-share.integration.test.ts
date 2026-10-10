@@ -203,6 +203,40 @@ async function withCatalogFixture(
 }
 
 describe("session-share node commands", () => {
+  it("refreshes shared metadata without rescanning the inventory on the node thread", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const source = commandFixture();
+      expect((await source.list()).sessions).toEqual([]);
+      const scope = { agentId: "main", sessionKey: "agent:main:shared-cache" };
+      const entry = {
+        sessionId: "shared-cache",
+        updatedAt: 100,
+        label: "Original",
+        category: "Team",
+      };
+      await replaceSessionEntry(scope, entry);
+      expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
+      const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+      const reads = trackSqliteStatementExecutions(db, ["inventory"], (sql) =>
+        sql.includes('from "session_nodes" order by "session_key"') && sql.includes('"entry_json"')
+          ? "inventory"
+          : null,
+      );
+      try {
+        expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
+        expect(reads.counts.inventory).toBe(0);
+        await replaceSessionEntry(scope, { ...entry, label: "Renamed" });
+        expect((await source.list()).sessions).toMatchObject([{ name: "Renamed" }]);
+        await replaceSessionEntry(scope, { ...entry, category: "Private" });
+        expect((await source.list()).sessions).toEqual([]);
+        await replaceSessionEntry(scope, { ...entry, sessionId: "replacement" });
+        expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
+      } finally {
+        reads.restore();
+      }
+    });
+  });
+
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
     await withCatalogFixture(async (receiver) => {
       const source = commandFixture();

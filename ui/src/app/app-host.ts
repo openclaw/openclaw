@@ -5,16 +5,17 @@ import {
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar.ts";
 import "../components/assistant-panel.ts";
 import "../components/modal-dialog.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
-import "../components/resizable-divider.ts";
 import type { RouteId } from "../app-routes.ts";
+import "../components/resizable-divider.ts";
 import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
+import { askBrandLabel } from "../components/theme-brand-label.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -165,13 +166,6 @@ class OpenClawShell
     () => import("../components/sidebar-update-card.ts"),
   );
 
-  private loadSidebarUpdateCard(): void {
-    void this.sidebarUpdateCardImport.load().catch((error: unknown) => {
-      if (isStaleChunkImportError(error)) {
-        void scheduleStaleChunkReload();
-      }
-    });
-  }
   // Lazy: the pairing modal is opened from Settings, not at
   // boot, so its template, icons, and strings stay off the startup chunk.
   // A rejected chunk must stay visible: the overlay is already open, so the
@@ -313,10 +307,10 @@ class OpenClawShell
       .effect(
         () => this.runtime?.router,
         (router) => {
-          this.updateRouteState(selectShellRouteState(router.getState()));
+          this.shellNavigation.updateRouteState(selectShellRouteState(router.getState()));
           return router.subscribeSelector(
             selectShellRouteState,
-            (routeState) => this.updateRouteState(routeState),
+            (routeState) => this.shellNavigation.updateRouteState(routeState),
             equalShellRouteState,
           );
         },
@@ -334,7 +328,7 @@ class OpenClawShell
         () => this.context?.runtimeConfig,
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
-            this.reconcileServerUiPrefs(runtimeConfig);
+            this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
             notify();
           }),
         (runtimeConfig) => {
@@ -342,16 +336,10 @@ class OpenClawShell
           if (snapshot) {
             this.ensureRuntimeConfig(snapshot, runtimeConfig);
           }
-          this.reconcileServerUiPrefs(runtimeConfig);
+          this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
         },
       );
   }
-
-  private readonly reconcileServerUiPrefs = this.shellGateway.reconcileServerUiPrefs.bind(
-    this.shellGateway,
-  );
-  private readonly reconcileCommittedServerUiPrefs =
-    this.shellGateway.reconcileCommittedServerUiPrefs.bind(this.shellGateway);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -372,7 +360,11 @@ class OpenClawShell
         pushServerUiPrefs(runtimeConfig, prefs, {
           profile: this.context?.gateway.snapshot,
           afterCommit: ({ needsRefresh, retainedLocal }) =>
-            this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
+            this.shellGateway.reconcileCommittedServerUiPrefs(
+              runtimeConfig,
+              needsRefresh,
+              retainedLocal,
+            ),
         });
       }
     });
@@ -579,7 +571,7 @@ class OpenClawShell
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = routeId === "custodian" ? t("nav.askOpenClaw") : titleForRoute(routeId);
+    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
@@ -593,6 +585,7 @@ class OpenClawShell
         phase === "reload-required");
     let title = formatDocumentTitle({
       context: primaryContext,
+      brandName: context.theme.branding.brandName,
       attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
       gatewayDisconnected,
     });
@@ -619,7 +612,11 @@ class OpenClawShell
       !customElements.get("openclaw-sidebar-update-card") &&
       this.querySelector("openclaw-sidebar-update-card")
     ) {
-      this.loadSidebarUpdateCard();
+      void this.sidebarUpdateCardImport.load().catch((error: unknown) => {
+        if (isStaleChunkImportError(error)) {
+          void scheduleStaleChunkReload();
+        }
+      });
     }
     const chatPage = this.querySelector<ChatPage>("openclaw-chat-page");
     if (chatPage) {
@@ -671,10 +668,6 @@ class OpenClawShell
   ) {
     void this.shellGateway.ensureAgentsList(snapshot, agents).catch(() => undefined);
   }
-
-  private readonly updateRouteState = this.shellNavigation.updateRouteState.bind(
-    this.shellNavigation,
-  );
 
   override render() {
     this.refreshStoredOutboxSummary();

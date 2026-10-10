@@ -36,27 +36,23 @@ function resolvePairingRecoveryContext(params: {
   remediationHint: string | null;
 } | null {
   const structured = readPairingConnectErrorDetails(params.details);
-  if (structured) {
-    return {
-      requestId: normalizePairingConnectRequestId(structured.requestId) ?? null,
-      reason: structured.reason ?? null,
-      remediationHint: structured.remediationHint
-        ? sanitizeTerminalText(structured.remediationHint)
-        : null,
-    };
-  }
   // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
-  const source = [params.error, params.closeReason]
-    .filter((part) => typeof part === "string" && part.trim().length > 0)
-    .join(" ");
-  const pairing = readConnectPairingRequiredMessage(source);
+  const pairing =
+    structured ??
+    readConnectPairingRequiredMessage(
+      [params.error, params.closeReason]
+        .filter((part) => typeof part === "string" && part.trim().length > 0)
+        .join(" "),
+    );
   if (!pairing) {
     return null;
   }
   return {
     requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
     reason: pairing.reason ?? null,
-    remediationHint: null,
+    remediationHint: structured?.remediationHint
+      ? sanitizeTerminalText(structured.remediationHint)
+      : null,
   };
 }
 

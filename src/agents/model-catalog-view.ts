@@ -8,6 +8,7 @@ import {
 } from "../config/model-provider-config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -168,6 +169,25 @@ export function createModelCatalogView(params: {
       );
     },
   };
+}
+
+/** The picker's view of a catalog snapshot; entries stand in when no route variants exist. */
+export function createModelCatalogSnapshotView(
+  cfg: OpenClawConfig,
+  snapshot: ModelCatalogSnapshot,
+) {
+  return createModelCatalogView({
+    cfg,
+    catalog: snapshot.entries,
+    routeVariants: snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
+  });
+}
+
+/** Transports a logical model was listed on; availability and run auth plan from the same rows. */
+export function listModelCatalogObservedRoutes(
+  variants: readonly Pick<ModelCatalogEntry, "api" | "baseUrl">[],
+): ProviderModelRouteSource[] {
+  return variants.map(({ api, baseUrl }) => ({ api, baseUrl }));
 }
 
 export type ModelCatalogViewFacts = {

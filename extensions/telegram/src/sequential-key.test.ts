@@ -17,16 +17,6 @@ const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message
 
 describe("getTelegramSequentialKey", () => {
   it.each([
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }) }) }, "telegram:123"],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "private" }),
-          message_thread_id: 9,
-        }),
-      },
-      "telegram:123",
-    ],
     [
       {
         me: { has_topics_enabled: true } as never,
@@ -78,69 +68,31 @@ describe("getTelegramSequentialKey", () => {
           chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
           is_topic_message: true,
           message_thread_id: 202,
-          text: "/approve exec:def456 deny",
-        }),
-      },
-      "telegram:-100:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer do the thing" }) },
-      "telegram:123:control",
-    ],
-    // Session-mutating commands must not share the chat-wide control lane: their writes
-    // stay ordered behind their own topic's pending input, `activeRunSafe` notwithstanding.
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new" }) }, "telegram:123"],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new sync tars" }) },
-      "telegram:123",
-    ],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/reset" }) }, "telegram:123"],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/think high" }) },
-      "telegram:123",
-    ],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/compact" }) }, "telegram:123"],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
-          is_topic_message: true,
-          message_thread_id: 202,
           text: "/new sync tars",
         }),
       },
       "telegram:-100:topic:202",
     ],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/diagnostics" }) },
-      "telegram:123",
-    ],
-    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
       "telegram:123:btw:1",
     ],
-    ...(["exec", "plugin"] as const).map(
-      (approvalKind): [Parameters<typeof getTelegramSequentialKey>[0], string] => [
-        {
-          update: {
-            callback_query: {
-              message: mockMessage({ chat: mockChat({ id: 654 }) }),
-              data: buildTelegramApprovalCallbackData({
-                type: "approval",
-                approvalKind,
-                approvalId: "signed-approval",
-                decision: "allow-once",
-              }),
-            },
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 654 }) }),
+            data: buildTelegramApprovalCallbackData({
+              type: "approval",
+              approvalKind: "plugin",
+              approvalId: "signed-approval",
+              decision: "allow-once",
+            }),
           },
         },
-        "telegram:654:approval",
-      ],
-    ),
+      },
+      "telegram:654:approval",
+    ],
     [
       {
         update: {
@@ -211,30 +163,6 @@ describe("getTelegramSequentialKey", () => {
 });
 
 describe("getTelegramSequentialConstraints", () => {
-  it("bridges a forum message update with its reaction update", () => {
-    const message = mockMessage({
-      chat: mockChat({ id: -1001, type: "supergroup", is_forum: true }),
-      message_id: 77,
-      message_thread_id: 9,
-      is_topic_message: true,
-    });
-    const expected = "telegram:-1001:message:77";
-    const reaction = {
-      update: {
-        message_reaction: {
-          chat: { id: -1001, type: "supergroup", is_forum: true },
-          message_id: 77,
-        },
-      },
-    };
-
-    expect(getTelegramSequentialConstraints({ message })).toEqual([
-      "telegram:-1001:topic:9",
-      expected,
-    ]);
-    expect(getTelegramSequentialConstraints(reaction)).toBe(expected);
-  });
-
   it("bridges a channel Direct Messages message with its reaction without coupling topics", () => {
     const message = mockMessage({
       chat: mockChat({

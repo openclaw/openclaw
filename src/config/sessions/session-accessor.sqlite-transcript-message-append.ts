@@ -36,12 +36,14 @@ import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
 } from "./session-accessor.sqlite-transcript-parent.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   readTranscriptAppendPostimage,
   retainTranscriptAppendPostimage,
@@ -258,6 +260,18 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       : options.message;
   if (prepared === undefined) {
     return undefined;
+  }
+
+  if (!pending && options.expectedTranscript) {
+    const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+    const expected = options.expectedTranscript;
+    if (
+      current.generation !== expected.generation ||
+      current.rawSeq !== expected.rawSeq ||
+      current.updatedAt !== expected.updatedAt
+    ) {
+      throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+    }
   }
 
   const messageId =

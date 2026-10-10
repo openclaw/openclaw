@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readDoctorAgentEntries } from "../doctor-agent-config.js";
 import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.js";
 
 const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -34,20 +35,8 @@ function formatLegacyVectorRows(count: number | undefined): string {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
-function readLegacyAgentEntries(config: unknown) {
-  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
-  const listed: unknown[] =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
-  return {
-    keyed: readLegacyObjectRecord(agents?.entries),
-    listed,
-  };
-}
-
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const { keyed, listed } = readLegacyAgentEntries(config);
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const listedIds = listed.flatMap((value) => {
     const id = readLegacyObjectRecord(value)?.id;
     return typeof id === "string" ? [id] : [];
@@ -60,7 +49,7 @@ function readAgentMemorySearch(
   config: unknown,
   agentId: string,
 ): Record<string, unknown> | undefined {
-  const { keyed, listed } = readLegacyAgentEntries(config);
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const keyedEntry = Object.entries(keyed ?? {}).find(
     ([id]) => normalizeAgentId(id) === agentId,
   )?.[1];

@@ -41,6 +41,8 @@ const repositoryScriptEntries = [
   ".github/actions/frozen-node-test-compat/apply.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
+  // Labeler steps import their shared helper through workspace file URLs.
+  ".github/workflows/labeler.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -267,6 +269,8 @@ const repositoryScriptEntries = [
   "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // CI launches the desktop resize proof through its bootstrap path.
+  "scripts/test-desktop-resize-real.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
@@ -302,7 +306,21 @@ function listScriptShimEntries(dir = "scripts"): string[] {
   });
 }
 
-function compileFrvWorkflowConsumers(source: string, filePath: string): string {
+function compileWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
+    return [
+      ...new Set(
+        [
+          ...source.matchAll(
+            /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*pathToFileURL\(`\$\{process\.env\.GITHUB_WORKSPACE\}\/(scripts\/[^`\r\n]+)`\)\.href\s*\)/gu,
+          ),
+        ].map(
+          ([, names, specifier]) =>
+            `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+        ),
+      ),
+    ].join("\n");
+  }
   if (path.resolve(filePath) !== path.resolve(".github/workflows/plugin-prerelease.yml")) {
     return "";
   }
@@ -415,7 +433,6 @@ const rootEntries = [
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
-  "src/agents/compaction-planning.worker.ts!",
   "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
@@ -691,7 +708,7 @@ const ignoredTestSupportFiles = [
 
 const config = {
   compilers: {
-    yml: compileFrvWorkflowConsumers,
+    yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
     mjs: compileNativeProtocolConsumer,
   },

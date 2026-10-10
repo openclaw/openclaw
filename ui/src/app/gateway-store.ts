@@ -135,6 +135,11 @@ export function createApplicationGateway(
   // Snapshot observers can synchronously stop or replace their publishing client.
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
+  const isCurrentHello = (
+    expectedClient: GatewayBrowserClient | null,
+    hello: GatewayHelloOk | null,
+  ) =>
+    isCurrentClient(expectedClient) && snapshot.hello === hello && snapshot.phase === "connected";
   const availability = createAvailabilityIndicators({
     isStopped: () => stopped,
     getSnapshot: () => snapshot,
@@ -199,11 +204,7 @@ export function createApplicationGateway(
     const requestClient = client;
     const hello = snapshot.hello;
     void selfProfile.load().catch((error: unknown) => {
-      if (
-        isCurrentClient(requestClient) &&
-        snapshot.hello === hello &&
-        snapshot.phase === "connected"
-      ) {
+      if (isCurrentHello(requestClient, hello)) {
         setSnapshot({ lastError: formatUiError(error) });
       }
     });
@@ -224,12 +225,7 @@ export function createApplicationGateway(
     ) {
       // Capability updates keep hello identity; reconnects replace it.
       const eventHello = snapshot.hello;
-      const readCurrent = () =>
-        isCurrentClient(eventClient) &&
-        snapshot.hello === eventHello &&
-        snapshot.phase === "connected"
-          ? snapshot
-          : null;
+      const readCurrent = () => (isCurrentHello(eventClient, eventHello) ? snapshot : null);
       void import("./plugin-capabilities.runtime.ts")
         .then(({ refreshPluginCapabilities }) =>
           refreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
@@ -335,12 +331,9 @@ export function createApplicationGateway(
         ? { bootstrapProfile: undefined }
         : {}),
     };
-    const credentialsChanged =
-      nextConnection.gatewayUrl !== connection.gatewayUrl ||
-      nextConnection.token !== connection.token ||
-      nextConnection.password !== connection.password ||
-      nextConnection.bootstrapToken !== connection.bootstrapToken ||
-      nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    const credentialsChanged = (
+      ["gatewayUrl", "token", "password", "bootstrapToken", "bootstrapProfile"] as const
+    ).some((key) => nextConnection[key] !== connection[key]);
     const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;

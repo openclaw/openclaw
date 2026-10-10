@@ -251,8 +251,14 @@ Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.
 The browser uses its session token or paired-device credential; passwords remain
 in memory only. This also works on loopback HTTP, which permits public readers.
-The anonymous private-thread document initially returns `404`, then the browser
-opens the app through the session-entry handoff with a `200` response. No extra
+In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
+protected session-entry app document directly when reopening a chat deep link,
+without first loading the public reader or probing access. Registration is only
+a navigation hint: the protected handoff still checks current permissions.
+Denied access or a login redirect falls back to the public reader. Browsers
+without the worker retain the public document and protected access probe.
+The anonymous private-thread document initially returns `404`, then an admitted
+browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal
 login gate. On non-secure ingress where public transcripts are unavailable,
 token/password deployments serve the app shell directly.

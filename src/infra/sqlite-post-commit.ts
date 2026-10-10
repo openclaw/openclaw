@@ -20,6 +20,17 @@ export type SqliteCommittedPublication = {
   notify: () => void;
 };
 
+function committedPublicationState(
+  publication: SqliteCommittedPublication,
+): PendingTransactionState {
+  return {
+    commit: publication.installFacts,
+    prepareObservers: publication.installProjection,
+    invalidate: publication.invalidate,
+    rollback: () => {},
+  };
+}
+
 /**
  * Installation is synchronous, including failure fencing. Observers cannot turn a
  * committed write into a failed transaction or prevent another owner's receipt.
@@ -88,17 +99,13 @@ function installCommittedState(
 }
 
 /** Use the same phase ordering for an already committed worker receipt. */
-export function publishSqliteCommittedState(publication: SqliteCommittedPublication): void {
+export function publishSqliteCommittedState(
+  publication: SqliteCommittedPublication | readonly SqliteCommittedPublication[],
+): void {
+  const publications = "installFacts" in publication ? [publication] : publication;
   installCommittedState(
-    [
-      {
-        commit: publication.installFacts,
-        prepareObservers: publication.installProjection,
-        invalidate: publication.invalidate,
-        rollback: () => {},
-      },
-    ],
-    [publication.notify],
+    publications.map(committedPublicationState),
+    publications.map((entry) => entry.notify),
   );
 }
 
@@ -110,10 +117,7 @@ export function stageSqliteCommittedPublication(
   if (
     !stageSqliteTransactionState(db, {
       stage: () => {},
-      commit: publication.installFacts,
-      prepareObservers: publication.installProjection,
-      invalidate: publication.invalidate,
-      rollback: () => {},
+      ...committedPublicationState(publication),
     })
   ) {
     return false;
@@ -185,6 +189,36 @@ function rollbackTransactionState(states: PendingTransactionState[], error: unkn
       error,
     );
   }
+}
+
+/** Install a received commit without borrowing a reentrant native transaction's rollback scope. */
+export function withSqliteCommittedPublications<T>(db: DatabaseSync, stage: () => T): T {
+  const outerPublications = pendingPublications.get(db);
+  const outerState = pendingTransactionState.get(db);
+  const publications: Array<() => void> = [];
+  const states: PendingTransactionState[] = [];
+  pendingPublications.set(db, publications);
+  pendingTransactionState.set(db, states);
+  let result: T;
+  try {
+    result = stage();
+  } catch (error) {
+    rollbackTransactionState(states, error);
+    throw error;
+  } finally {
+    if (outerPublications) {
+      pendingPublications.set(db, outerPublications);
+    } else {
+      pendingPublications.delete(db);
+    }
+    if (outerState) {
+      pendingTransactionState.set(db, outerState);
+    } else {
+      pendingTransactionState.delete(db);
+    }
+  }
+  installCommittedState(states, publications);
+  return result;
 }
 
 /** A lost transaction invalidates every savepoint's staged state and observers. */

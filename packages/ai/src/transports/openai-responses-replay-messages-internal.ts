@@ -402,33 +402,27 @@ function convertResponsesMessagesWithStyle(
         (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
           ? resolveResponsesInstructionRole(model)
           : "user";
-      if (typeof msg.content === "string") {
-        messages.push(
-          buildResponsesInputMessage(
-            role,
-            [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-            msg,
-          ),
-        );
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter(
-          (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
-        );
-        if (content.length > 0) {
-          messages.push(buildResponsesInputMessage(role, content, msg));
-        } else if (providerStyle) {
-          continue;
-        }
+      const content: ResponseInputMessageContentList =
+        typeof msg.content === "string"
+          ? [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }]
+          : (
+              msg.content.map((item) =>
+                item.type === "text"
+                  ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
+                  : {
+                      type: "input_image",
+                      detail: "auto",
+                      image_url: `data:${item.mimeType};base64,${item.data}`,
+                    },
+              ) as ResponseInputMessageContentList
+            ).filter(
+              (item) =>
+                providerStyle || model.input.includes("image") || item.type !== "input_image",
+            );
+      if (content.length > 0) {
+        messages.push(buildResponsesInputMessage(role, content, msg));
+      } else if (providerStyle) {
+        continue;
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];

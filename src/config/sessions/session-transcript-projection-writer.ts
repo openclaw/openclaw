@@ -27,6 +27,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { captureIncognitoProjectionBinding } from "./session-incognito-projection.js";
+import {
+  publishUnchangedSessionTranscriptAuthority,
+  publishUnchangedSessionTranscriptReceipts,
+} from "./session-transcript-authority.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
@@ -219,6 +223,7 @@ export async function finalizePreparedProjection(
 ): Promise<boolean> {
   if (publication) {
     const result = await publication.execute({ type: "finalize", input: active });
+    publishUnchangedSessionTranscriptReceipts(result.transcriptPublication);
     if (result.sessionKey !== undefined) {
       sessionChanges.emit({
         storePath: databaseOptions.path,
@@ -250,6 +255,7 @@ export async function finalizePreparedProjection(
             .where("session_id", "=", active.plan.sessionId),
         );
       if (session) {
+        publishUnchangedSessionTranscriptAuthority(database, session.session_key);
         sessionChanges.emit(
           {
             storePath: database.path,

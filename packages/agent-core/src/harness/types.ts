@@ -39,7 +39,11 @@ export function isSummaryProviderError(error: unknown): error is SummaryProvider
   return error instanceof Error && error.name === "SummaryProviderError" && "response" in error;
 }
 
-/** A length stop with no visible summary is deterministic for an unchanged request. */
+/**
+ * The summary request cannot fit its budget: a length stop with no visible
+ * summary, or a summarizer window too small for the request. Either result is
+ * deterministic for an unchanged request, so callers do not retry it.
+ */
 export class SummaryOutputBudgetError extends CompactionError {
   constructor(message: string) {
     super("summarization_failed", message);

@@ -39,15 +39,14 @@ export function buildGatewayRuntimeHints(
   const fileLogHints = fileLog ? [`File logs: ${fileLog}`] : [];
   const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
   if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
-    hints.push(
+    return [
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
         kind: classifySystemdUnavailableDetail(systemdDetail),
         env,
       }),
-    );
-    hints.push(...fileLogHints);
-    return hints;
+      ...fileLogHints,
+    ];
   }
   if (runtime.cachedLabel && platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);

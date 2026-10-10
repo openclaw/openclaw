@@ -9,16 +9,6 @@ export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
 
-function toGlyphs(scale: unknown): string[] {
-  if (Array.isArray(scale)) {
-    return scale.filter((g): g is string => typeof g === "string");
-  }
-  if (typeof scale === "string") {
-    return Array.from(scale);
-  }
-  return [];
-}
-
 function coerceFiniteValue(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") {
     return undefined;
@@ -26,11 +16,7 @@ function coerceFiniteValue(value: unknown): number | undefined {
   return asFiniteNumber(Number(value));
 }
 
-function num(value: unknown): string {
-  const n = coerceFiniteValue(value);
-  if (n === undefined) {
-    return "";
-  }
+function num(n: number): string {
   if (Math.abs(n) >= 1000) {
     const v = n / 1000;
     return Math.abs(v) < 10 ? `${v.toFixed(1)}k` : `${Math.round(v)}k`;
@@ -43,11 +29,7 @@ function fixed(value: unknown, digits: number): string {
   return n === undefined ? "" : n.toFixed(digits);
 }
 
-function dur(value: unknown): string {
-  const raw = coerceFiniteValue(value);
-  if (raw === undefined) {
-    return "";
-  }
+function dur(raw: number): string {
   const s = Math.max(0, Math.trunc(raw));
   if (s >= 86400) {
     return `${(s / 86400).toFixed(1)}d`;
@@ -59,28 +41,18 @@ function dur(value: unknown): string {
   return `${Math.floor(s / 60)}m`;
 }
 
-function pct(value: unknown): string {
-  const n = coerceFiniteValue(value);
-  return n === undefined ? "" : `${Math.round(n)}%`;
-}
-
-function inv(value: unknown): unknown {
-  const n = coerceFiniteValue(value);
-  return n === undefined ? value : 100 - Math.max(0, Math.min(100, n));
-}
-
-function norm(value: unknown): number {
-  return Math.max(0, Math.min(100, coerceFiniteValue(value) ?? 0)) / 100;
-}
-
 function meter(value: unknown, width: number, scale: unknown): string {
-  const glyphs = toGlyphs(scale);
+  const glyphs = Array.isArray(scale)
+    ? scale.filter((glyph): glyph is string => typeof glyph === "string")
+    : typeof scale === "string"
+      ? Array.from(scale)
+      : [];
   if (glyphs.length < 2 || width < 1) {
     return "";
   }
   const empty = expectDefined(glyphs[0], "glyphs entry at 0");
   const full = expectDefined(glyphs[glyphs.length - 1], "glyphs entry at glyphs.length 1");
-  const total = norm(value) * width;
+  const total = (Math.max(0, Math.min(100, coerceFiniteValue(value) ?? 0)) / 100) * width;
   const fullc = Math.trunc(total);
   if (fullc === width) {
     return full.repeat(width);
@@ -102,11 +74,18 @@ function parseBoundedIntegerArg(
 
 type UsageVerb = (value: unknown, args: string[], vocab: Vocab) => unknown;
 
+function numeric(format: (value: number) => unknown, preserveInvalid = false): UsageVerb {
+  return (value) => {
+    const n = coerceFiniteValue(value);
+    return n === undefined ? (preserveInvalid ? value : "") : format(n);
+  };
+}
+
 const VERBS: Record<string, UsageVerb> = {
-  num,
-  dur,
-  pct,
-  inv,
+  num: numeric(num),
+  dur: numeric(dur),
+  pct: numeric((n) => `${Math.round(n)}%`),
+  inv: numeric((n) => 100 - Math.max(0, Math.min(100, n)), true),
   fixed(value, args) {
     const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
     return digits === undefined ? "" : fixed(value, digits);

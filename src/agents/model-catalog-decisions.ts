@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -34,8 +35,10 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
 import {
-  createModelCatalogView,
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
   prepareModelCatalogView,
   selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
@@ -304,6 +307,25 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
+    // Read at evaluation time: selected-account discovery replaces outcomes in place. Entitlement
+    // is per account, so only the listing discovery made with this exact credential applies.
+    accountListedModelIds: (provider, profileId) => {
+      let listed: Set<string> | undefined;
+      for (const outcome of providerOutcomes) {
+        if (
+          outcome.status === "ready" &&
+          outcome.listedModelIds &&
+          outcome.profileId === profileId &&
+          normalizeProviderId(outcome.provider) === provider
+        ) {
+          listed ??= new Set();
+          for (const id of outcome.listedModelIds) {
+            listed.add(normalizeLowercaseStringOrEmpty(id));
+          }
+        }
+      }
+      return listed;
+    },
   });
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const preferredProfileIdForCatalog = params.preferredProfileId || undefined;
@@ -311,13 +333,18 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const runtimeOverride = params.runtimeOverride;
   const normalizeAuthProvider = (provider: string) =>
     resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
+  const isUnlistedWildcardCliModel = createUnlistedClaudeCliWildcardCheck({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entries: () => snapshot.entries,
+  });
   const evaluateStoredEntry = (
     entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
     routeVariants?: readonly ModelCatalogEntry[],
     runtimeId?: string,
   ): ModelAuthAvailabilityEvaluation => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
+    const observedRoutes = listModelCatalogObservedRoutes(routeVariants ?? [entry]);
     const cacheKey = JSON.stringify([
       resolveModelCatalogIdentityKey(entry),
       runtimeId,
@@ -354,6 +381,15 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
     };
     const provider = normalizeProviderId(entry.provider);
+    // The wildcard narrows only what native Claude CLI credentials supplied. A selected or
+    // pinned API account answers for its own models, so a saved account choice keeps them.
+    const listed =
+      !requestedRuntimeId &&
+      resolved.availability === true &&
+      resolved.evidence === "runtime" &&
+      isUnlistedWildcardCliModel(provider, identity?.id ?? entry.id)
+        ? { ...resolved, availability: false }
+        : resolved;
     // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
     // profile discovery tested; widening it would hide routes backed by another valid profile.
     const evaluation: ModelAuthAvailabilityEvaluation = providerOutcomes.some(
@@ -369,7 +405,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           unavailableReason: "auth-failed",
           unavailableUntil: undefined,
         }
-      : resolved;
+      : listed;
     evaluations.set(cacheKey, evaluation);
     return evaluation;
   };
@@ -480,12 +516,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         if (projectedCatalog) {
           return projectedCatalog;
         }
-        const view = createModelCatalogView({
-          cfg: params.cfg,
-          catalog: snapshot.entries,
-          routeVariants:
-            snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
-        });
+        const view = createModelCatalogSnapshotView(params.cfg, snapshot);
         const projection = view.logicalEntries.map((entry) => {
           const routeVariants = view.variantsOf(entry) ?? [entry];
           const host = evaluateEntry(entry, routeVariants);

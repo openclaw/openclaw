@@ -348,22 +348,18 @@ export async function prepareWorkspaceBuildGroup(
       config: input.config,
       env,
       authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
-      syntheticAuthProviderRefs:
+      syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
         catalogMode === "static"
-          ? scopeSyntheticAuthProviderRefs(
-              listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders),
-              options.providerDiscoveryProviderIds,
-            )
-          : scopeSyntheticAuthProviderRefs(
-              resolveRuntimeSyntheticAuthProviderRefs({
-                config: input.config,
-                env,
-                index: pluginMetadataSnapshot.index,
-                registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
-                ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-              }),
-              configuredProviderIds,
-            ),
+          ? listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders)
+          : resolveRuntimeSyntheticAuthProviderRefs({
+              config: input.config,
+              env,
+              index: pluginMetadataSnapshot.index,
+              registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
+              ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+            }),
+        catalogMode === "static" ? options.providerDiscoveryProviderIds : configuredProviderIds,
+      ),
       ...(catalogMode === "static"
         ? {
             resolveSyntheticAuth: (provider: string) =>

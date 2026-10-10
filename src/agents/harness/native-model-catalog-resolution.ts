@@ -26,6 +26,7 @@ function findOwnedEntry(
 
 export type ReadyNativeModelCatalogSelection = {
   entry: ModelCatalogEntry;
+  catalog: ModelCatalogSnapshot;
   assertCurrent?: () => void;
 };
 
@@ -224,5 +225,5 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
   } catch {
     return undefined;
   }
-  return { entry, ...(assertCurrent ? { assertCurrent } : {}) };
+  return { entry, catalog, ...(assertCurrent ? { assertCurrent } : {}) };
 }

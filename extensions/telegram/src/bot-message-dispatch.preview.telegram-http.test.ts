@@ -574,6 +574,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         );
         const card = [...visibleMessages.values()][0] ?? "";
         expect(card.match(/Exec/gu)).toHaveLength(1);
+        expect(card).toContain("🛠️ Exec");
         expect(card).toContain("failed");
       },
       {
@@ -657,37 +658,47 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     },
   );
 
-  it("delivers verbose tool output separately from transient commentary", async () => {
-    const mode = "progress";
-    const toolProgress = true;
-    const verbose = "full";
-    await dispatchProgressTurn(
-      async (options) => {
-        await options?.onItemEvent?.({
-          kind: "preamble",
-          itemId: "verbose-commentary",
-          phase: "end",
-          progressText: "Inspecting the requested files",
-        });
-        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "stdout" });
-        await options?.onToolResult?.({
-          text: "fixture stdout line one\nfixture stdout line two",
-        });
-      },
-      {
-        mode,
-        toolProgress,
-        cfg: { agents: { defaults: { verboseDefault: verbose } } },
-        finalReply: { text: "Inspection complete." },
-      },
-    );
-    const sends = acceptedCalls.filter((call) => call.method === "sendMessage");
-    expect(
-      sends.filter((call) => String(call.fields.text).includes("fixture stdout")),
-    ).toHaveLength(1);
-    expect(sends.filter((call) => call.fields.text === "Inspecting the requested files")).toEqual(
-      [],
-    );
-    expect([...visibleMessages.values()]).toContain("Inspection complete.");
-  });
+  it.each([
+    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true },
+    { verbose: "full", mode: "progress", toolProgress: undefined, visible: true },
+    { verbose: "off", mode: "progress", toolProgress: undefined, visible: false },
+    { verbose: "on", mode: "progress", toolProgress: false, visible: false },
+    { verbose: "full", mode: "progress", toolProgress: true, visible: true },
+    { verbose: "on", mode: "partial", toolProgress: undefined, visible: true },
+    { verbose: "on", mode: "off", toolProgress: undefined, visible: false },
+  ] as const)(
+    "keeps verbose $verbose diagnostics separate from $mode drafts (toolProgress=$toolProgress)",
+    async ({ verbose, mode, toolProgress, visible }) => {
+      const diagnostic =
+        verbose === "full" ? "fixture stdout line one\nfixture stdout line two" : "Exec";
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            itemId: "verbose-commentary",
+            phase: "end",
+            progressText: "Inspecting the requested files",
+          });
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "stdout" });
+          await options?.onToolResult?.({ text: diagnostic });
+        },
+        {
+          mode,
+          toolProgress: true,
+          telegramCfg: {
+            streaming: { mode, progress: { toolProgress }, preview: { toolProgress } },
+          },
+          cfg: { agents: { defaults: { verboseDefault: verbose } } },
+          finalReply: { text: "Inspection complete." },
+        },
+      );
+      expect([...visibleMessages.values()].filter((text) => text === diagnostic)).toHaveLength(
+        visible ? 1 : 0,
+      );
+      expect([...visibleMessages.values()]).toContain("Inspection complete.");
+      if (mode === "progress") {
+        expect([...visibleMessages.values()]).not.toContain("Inspecting the requested files");
+      }
+    },
+  );
 });

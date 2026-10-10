@@ -295,12 +295,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  // Compact needs the canonical model owner before consuming a provider-specific transcript.
-  const compactNeedsModelSelection =
+  // These commands need the selected model's transcript or context budget.
+  const needsModelSelection =
     command.isAuthorizedSender &&
     (command.commandBodyNormalized === "/compact" ||
-      command.commandBodyNormalized.startsWith("/compact "));
-  const commandResult = compactNeedsModelSelection
+      command.commandBodyNormalized.startsWith("/compact ") ||
+      command.commandBodyNormalized.startsWith("/context "));
+  const commandResult = needsModelSelection
     ? { shouldContinue: true, reply: undefined }
     : await (
         await commandsRuntimeLoader.load()

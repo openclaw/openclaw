@@ -114,26 +114,19 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
         mode: "oauth",
       };
     }
-    if (credential.type === "token") {
-      if (
-        !credential.token.trim() ||
-        (credential.expires !== undefined && Date.now() >= credential.expires)
-      ) {
-        return resolveConfiguredOrEnvironment(provider);
-      }
-      return {
-        apiKey: credential.token,
-        discoveryApiKey: toDiscoveryApiKey(credential.token),
-        mode: "token",
-      };
-    }
-    if (!credential.key.trim()) {
+    const apiKey = credential.type === "token" ? credential.token : credential.key;
+    if (
+      !apiKey.trim() ||
+      (credential.type === "token" &&
+        credential.expires !== undefined &&
+        Date.now() >= credential.expires)
+    ) {
       return resolveConfiguredOrEnvironment(provider);
     }
     return {
-      apiKey: credential.key,
-      discoveryApiKey: toDiscoveryApiKey(credential.key),
-      mode: "api_key",
+      apiKey,
+      discoveryApiKey: toDiscoveryApiKey(apiKey),
+      mode: credential.type,
     };
   };
 }
@@ -380,46 +373,29 @@ function resolveConfigBackedProviderAuth(params: {
     value: configuredProviderApiKey,
     defaults: params.config?.secrets?.defaults,
   });
-  if (configuredApiKeyRef) {
-    // Secret refs are preserved as markers. Env refs can still provide a
-    // discovery value from the current process without exposing the secret name's value.
-    if (configuredApiKeyRef.source === "env") {
-      const envVar = configuredApiKeyRef.id.trim();
-      const envValue = params.env?.[envVar]?.trim();
-      return envValue
-        ? {
-            apiKey: envVar,
-            discoveryApiKey: toDiscoveryApiKey(envValue),
-            mode,
-          }
-        : undefined;
-    }
+  if (configuredApiKeyRef && configuredApiKeyRef.source !== "env") {
+    // Non-env refs stay sterile until the runtime materializes them.
     return {
       apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
       mode,
     };
   }
-  if (typeof configuredProviderApiKey !== "string") {
+  const configuredApiKey =
+    configuredApiKeyRef?.id.trim() ??
+    (typeof configuredProviderApiKey === "string" ? configuredProviderApiKey.trim() : undefined);
+  if (configuredApiKey === undefined || (!configuredApiKeyRef && !configuredApiKey)) {
     return undefined;
   }
-  const configuredApiKey = configuredProviderApiKey.trim();
-  if (!configuredApiKey) {
-    return undefined;
-  }
-  if (isKnownEnvApiKeyMarker(configuredApiKey)) {
-    const envValue = params.env?.[configuredApiKey]?.trim();
-    if (envValue) {
-      return {
-        apiKey: configuredApiKey,
-        discoveryApiKey: toDiscoveryApiKey(envValue),
-        mode,
-      };
-    }
+  const discoveryValue =
+    configuredApiKeyRef || isKnownEnvApiKeyMarker(configuredApiKey)
+      ? params.env?.[configuredApiKey]?.trim()
+      : configuredApiKey;
+  if (!discoveryValue) {
     return undefined;
   }
   return {
     apiKey: configuredApiKey,
-    discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
+    discoveryApiKey: toDiscoveryApiKey(discoveryValue),
     mode,
   };
 }

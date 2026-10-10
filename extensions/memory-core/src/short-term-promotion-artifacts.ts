@@ -42,6 +42,19 @@ import {
 export { resolveStorePath as resolveShortTermRecallStorePath } from "./short-term-promotion-store.js";
 export { resolveLockPath as resolveShortTermRecallLockPath } from "./memory-workspace-lock.js";
 
+async function inspectStaleShortTermLock(workspaceDir: string, repair: boolean): Promise<boolean> {
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  const lockEntry = await lockStore.lookup(lockKey);
+  if (!lockEntry || !isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
+    return false;
+  }
+  return repair ? await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry) : true;
+}
+
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;
 }): Promise<ShortTermAuditSummary> {
@@ -106,13 +119,7 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
   }
 
-  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
-    namespace: SHORT_TERM_LOCK_NAMESPACE,
-    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-  });
-  const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
+  if (await inspectStaleShortTermLock(workspaceDir, false)) {
     issues.push({
       severity: "warn",
       code: "recall-lock-stale",
@@ -146,17 +153,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedInvalidEntries = 0;
   let removedDanglingEntries = 0;
   let removedOverflowEntries = 0;
-  let removedStaleLock = false;
-
-  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
-    namespace: SHORT_TERM_LOCK_NAMESPACE,
-    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-  });
-  const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
-    removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
-  }
+  const removedStaleLock = await inspectStaleShortTermLock(workspaceDir, true);
 
   await withMemoryWorkspaceLock(workspaceDir, async () => {
     const raw = await readShortTermStore(workspaceDir, "recall", nowIso);
@@ -184,12 +181,7 @@ export async function repairShortTermPromotionArtifacts(params: {
         delete store.entries[key];
       }
       removedOverflowEntries = enforceShortTermRecallStoreRetention(store);
-      const needsRewrite =
-        removedInvalidEntries > 0 ||
-        removedDanglingEntries > 0 ||
-        removedOverflowEntries > 0 ||
-        before !== JSON.stringify(store.entries);
-      if (needsRewrite) {
+      if (removedInvalidEntries > 0 || before !== JSON.stringify(store.entries)) {
         if (removedDanglingEntries > 0) {
           const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
           for (const key of danglingEntryKeys) {

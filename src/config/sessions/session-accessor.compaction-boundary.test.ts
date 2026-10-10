@@ -9,7 +9,10 @@ import {
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadSessionEntry,
@@ -23,6 +26,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { withIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-boundary-");
@@ -219,6 +223,28 @@ describe("awaited compaction persistence", () => {
       async (prepared) => {
         entered.resolve();
         await release.promise;
+        await withIncognitoSessionBinding(
+          {
+            kind: "absent",
+            agentId: scope.agentId,
+            env: scope.env,
+            authority: { assertCurrent() {} },
+          },
+          async () => {
+            const sql = observeMainThreadSql();
+            try {
+              await expect(
+                persistCompactionBoundaryWithSessionEntryAsync(scope, {
+                  prepared,
+                  transcriptByteCompactionLatch: latch,
+                }),
+              ).rejects.toBeInstanceOf(IncognitoSessionMissingError);
+              sql.expectIdle();
+            } finally {
+              sql.restore();
+            }
+          },
+        );
         return await persistCompactionBoundaryWithSessionEntryAsync(scope, {
           prepared,
           transcriptByteCompactionLatch: latch,
@@ -255,6 +281,7 @@ describe("awaited compaction persistence", () => {
       compactionCount: 1,
       transcriptByteCompactionLatch: latch,
     });
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
 
     await expect(
       persistCompactionBoundaryWithSessionEntryAsync(scope, {

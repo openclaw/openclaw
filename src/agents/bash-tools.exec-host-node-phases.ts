@@ -286,23 +286,15 @@ export async function resolveNodeExecutionTarget(
 
 export function buildNodeSystemRunInvoke(params: {
   target: NodeExecutionTarget;
-  command: string[];
-  rawCommand: string;
-  cwd: string | undefined;
-  agentId: string | undefined;
-  sessionKey: string | undefined;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
+  prepared: PreparedNodeRun;
+  request: ExecuteNodeHostCommandParams;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
   approvalSource?: "ask-fallback";
   runId?: string;
   suppressNotifyOnExit?: boolean;
-  notifyOnExit?: boolean;
-  systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
+  const { prepared, request } = params;
   const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
@@ -312,29 +304,31 @@ export function buildNodeSystemRunInvoke(params: {
     // pending-invoke timer and discards a later node result as `ignored`.
     timeoutMs: params.target.invokeDeadlineMs,
     params: {
-      command: params.command,
-      rawCommand: params.rawCommand,
-      ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
-      ...(params.cwd != null ? { cwd: params.cwd } : {}),
+      command: prepared.argv,
+      rawCommand: prepared.rawCommand,
+      ...(prepared.plan ? { systemRunPlan: prepared.plan } : {}),
+      ...(prepared.cwd != null ? { cwd: prepared.cwd } : {}),
       env: params.target.env,
       executionContext: params.target.executionContext,
       timeoutMs: params.target.runTimeoutMs,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
-      ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
-      ...(params.turnSourceAccountId != null
-        ? { turnSourceAccountId: params.turnSourceAccountId }
+      agentId: prepared.agentId,
+      sessionKey: prepared.sessionKey,
+      ...(request.turnSourceChannel != null
+        ? { turnSourceChannel: request.turnSourceChannel }
         : {}),
-      ...(params.turnSourceThreadId != null
-        ? { turnSourceThreadId: params.turnSourceThreadId }
+      ...(request.turnSourceTo != null ? { turnSourceTo: request.turnSourceTo } : {}),
+      ...(request.turnSourceAccountId != null
+        ? { turnSourceAccountId: request.turnSourceAccountId }
+        : {}),
+      ...(request.turnSourceThreadId != null
+        ? { turnSourceThreadId: request.turnSourceThreadId }
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
       approvalSource: params.approvalSource,
       runId,
       suppressNotifyOnExit:
-        params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
+        params.suppressNotifyOnExit === true || request.notifyOnExit === false ? true : undefined,
     },
     idempotencyKey: crypto.randomUUID(),
   };

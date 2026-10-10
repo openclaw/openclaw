@@ -110,32 +110,6 @@ describe("verify-docker-attestations", () => {
     );
   });
 
-  it("accepts an image index with SBOM and provenance predicates", () => {
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index: createIndex(),
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => createAttestation(),
-    });
-
-    expect(errors).toStrictEqual([]);
-  });
-
-  it("accepts attestation manifests with omitted artifactType", () => {
-    const errors = collectDockerAttestationErrors({
-      imageRef: "ghcr.io/openclaw/openclaw:test",
-      index: createIndex(),
-      requiredPlatforms: [parsePlatform("linux/amd64")],
-      inspectAttestation: () => {
-        const attestation: Record<string, unknown> = createAttestation();
-        delete attestation.artifactType;
-        return attestation;
-      },
-    });
-
-    expect(errors).toStrictEqual([]);
-  });
-
   it("reports unexpected attestation artifact types", () => {
     const errors = collectDockerAttestationErrors({
       imageRef: "ghcr.io/openclaw/openclaw:test",

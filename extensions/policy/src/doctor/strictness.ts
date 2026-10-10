@@ -6,7 +6,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
+import { validPolicyRoutingMatchKinds } from "../policy-routing.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
 import { readExecApprovalAllowlistRequirements } from "./exec-approval-rules.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
@@ -77,24 +77,13 @@ function routingProbesAtLeastAsStrict(candidate: unknown, baseline: unknown): bo
 
 function routingMatchKindsAtLeastAsStrict(candidate: unknown, baseline: unknown): boolean {
   if (baseline === undefined) {
-    return candidate === undefined || validRoutingMatchKinds(candidate);
+    return candidate === undefined || validPolicyRoutingMatchKinds(candidate);
   }
-  if (!validRoutingMatchKinds(candidate) || !validRoutingMatchKinds(baseline)) {
+  if (!validPolicyRoutingMatchKinds(candidate) || !validPolicyRoutingMatchKinds(baseline)) {
     return false;
   }
   const baselineKinds = new Set(baseline);
   return candidate.every((entry) => baselineKinds.has(entry));
-}
-
-function validRoutingMatchKinds(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every(
-      (entry) => typeof entry === "string" && ROUTING_MATCH_KINDS.includes(entry as never),
-    ) &&
-    new Set(value).size === value.length
-  );
 }
 
 function canonicalRoutingRoute(value: unknown): string | undefined {
@@ -154,7 +143,7 @@ function canonicalRoutingPeer(value: unknown): object | undefined | null {
   if (
     !isRecord(value) ||
     Object.keys(value).some((key) => key !== "id" && key !== "kind") ||
-    !(["channel", "direct", "group"] as const).includes(value.kind as never) ||
+    !["channel", "direct", "group"].some((kind) => kind === value.kind) ||
     !nonEmptyString(value.id)
   ) {
     return null;

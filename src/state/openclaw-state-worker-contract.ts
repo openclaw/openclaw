@@ -49,7 +49,11 @@ import type {
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
-import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
+import type {
+  PluginMetadataStateKey,
+  PluginMetadataStateRow,
+  PluginMetadataStateSelector,
+} from "../plugins/installed-plugin-index-row.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -200,8 +204,11 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: SessionGroupCatalogMutationResult;
     };
     "plugins.metadata.read": {
-      input: { selector: PluginMetadataStateSelector; artifactPreservingReadOnly?: boolean };
-      output: { value_json: string } | undefined;
+      input: (
+        | { selector: PluginMetadataStateSelector }
+        | { stateKeys: readonly PluginMetadataStateKey[] }
+      ) & { artifactPreservingReadOnly?: boolean };
+      output: { value_json: string } | PluginMetadataStateRow[] | undefined;
     };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };

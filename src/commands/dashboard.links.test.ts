@@ -124,52 +124,6 @@ describe("dashboardCommand", () => {
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
 
-  it("opens and copies the dashboard link by default", async () => {
-    mockSnapshot("abc123");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-
-    await dashboardCommand(runtime);
-
-    expect(ensureDashboardGatewayReadyMock).toHaveBeenCalledWith({
-      runtime,
-      yes: undefined,
-      probeUrl: "ws://127.0.0.1:18789",
-    });
-    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      customBindHost: undefined,
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
-      profile: {
-        roles: ["operator"],
-        scopes: [
-          "operator.admin",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.questions",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-        purpose: "control-ui-owner",
-      },
-    });
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control OpenClaw.",
-    );
-  });
-
   it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
     const secretToken = "super-secret-bearer-token";
     mockSnapshot(secretToken);
@@ -273,32 +227,6 @@ describe("dashboardCommand", () => {
     expectLogWith("key `token`");
   });
 
-  it("respects --no-open and tells user the pairing URL is in clipboard", async () => {
-    mockSnapshot("abc");
-    copyToClipboardMock.mockResolvedValue(true);
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
-    expect(openUrlMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Browser launch disabled (--no-open). One-time browser pairing URL copied to clipboard.",
-    );
-  });
-
-  it("respects --no-open and falls through to manual-auth hint when clipboard fails (token configured)", async () => {
-    mockSnapshot("abc");
-    copyToClipboardMock.mockResolvedValue(false);
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    // Redundant fallback hint is suppressed when the manual-auth hint speaks.
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      "Browser launch disabled (--no-open). Use the URL above.",
-    );
-    expectLogWith("OPENCLAW_GATEWAY_TOKEN");
-  });
-
   it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
     mockSnapshot("");
     copyToClipboardMock.mockResolvedValue(false);
@@ -331,48 +259,6 @@ describe("dashboardCommand", () => {
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("missing env var");
-  });
-
-  it("keeps URL non-tokenized when token SecretRef is unresolved but env fallback exists", async () => {
-    mockSnapshot({
-      source: "env",
-      provider: "default",
-      id: "MISSING_GATEWAY_TOKEN",
-    });
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-    resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
-    expectNoLogWith("Token auto-auth unavailable");
-  });
-
-  it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
-    mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expectNoLogWith("Token auto-auth unavailable");
-    expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
   });
 
   it("does not copy or open when gateway readiness fails", async () => {

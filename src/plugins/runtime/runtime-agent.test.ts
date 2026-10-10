@@ -7,6 +7,7 @@ import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.j
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
@@ -823,25 +824,22 @@ it("allows deprecated plugin SQL checks once before dispatch while typed guards 
   const state = await createOpenClawTestState({ layout: "state-only" });
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   const ensure = createRuntimeAgent().ensureAgentWorkspace;
-  const originalAdmission = admission.createSqliteWorkerOperationAdmission;
   const originalOperation = workerStore.runOpenClawStateWorkerOperation;
   const originalMkdir = fsPromises.mkdir;
   let phase: string | undefined;
   let workspace: string;
   const events: string[] = [];
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((admit, data) =>
-    originalAdmission((request, grant) => {
-      phase = request.stage;
-      try {
-        admit(request, () => {
-          events.push(`grant:${phase}`);
-          return grant();
-        });
-      } finally {
-        phase = undefined;
-      }
-    }, data),
-  );
+  probe.admission(admission, (request, grant, admit) => {
+    phase = request.stage;
+    try {
+      admit(request, () => {
+        events.push(`grant:${phase}`);
+        return grant();
+      });
+    } finally {
+      phase = undefined;
+    }
+  });
   vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
     (context, operation, options) =>
       originalOperation(

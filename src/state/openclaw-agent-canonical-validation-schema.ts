@@ -147,7 +147,7 @@ function expectedDefinitions(): ReadonlyMap<string, string | null> {
   return definitions;
 }
 
-/** Require the exact invalidation group before an empty pending set can certify readiness. */
+/** Require the canonical admission schema before consuming its pending work. */
 export function assertCanonicalSessionValidationSchema(database: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
   const cookie = schema?.schemaVersion ?? readSqliteSchemaCookie(database);
@@ -203,7 +203,7 @@ function rememberCanonicalSessionValidationSchema(
   validatedSchemas.set(database, { cookie, schema, unregister });
 }
 
-/** The schema owner installs this complete group before seeding pending keys. */
+/** The schema owner installs the pending queue before seeding imported keys. */
 export function canonicalSessionValidationSchemaSql(schema = OPENCLAW_AGENT_SCHEMA_SQL): string {
   return extractSqliteTableSchema(schema, "session_canonical_validation_pending", {
     endMarker: "CREATE TABLE IF NOT EXISTS conversations (",

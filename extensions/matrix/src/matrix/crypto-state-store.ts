@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
@@ -253,7 +254,6 @@ function buildIdbSnapshotRows(
 ): {
   meta: { key: string; value: MatrixIdbSnapshotMeta };
   chunks: { key: string; value: MatrixIdbSnapshotChunk }[];
-  nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
   const chunks = chunkMatrixStateJson(
@@ -271,7 +271,6 @@ function buildIdbSnapshotRows(
   }));
   return {
     chunks,
-    nextChunkKeys: new Set(chunks.map((chunk) => chunk.key)),
     meta: {
       key: idbMetaKey(),
       value: {
@@ -310,14 +309,10 @@ function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {
     value.version === 1 &&
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
-    typeof value.chunkCount === "number" &&
-    Number.isSafeInteger(value.chunkCount) &&
-    value.chunkCount >= 0 &&
-    value.chunkCount <= IDB_SNAPSHOT_MAX_CHUNKS &&
+    asSafeIntegerInRange(value.chunkCount, { min: 0, max: IDB_SNAPSHOT_MAX_CHUNKS }) !==
+      undefined &&
     typeof value.digest === "string" &&
-    typeof value.databaseCount === "number" &&
-    Number.isSafeInteger(value.databaseCount) &&
-    value.databaseCount >= 0 &&
+    asSafeIntegerInRange(value.databaseCount, { min: 0 }) !== undefined &&
     typeof value.persistedAt === "string"
   );
 }

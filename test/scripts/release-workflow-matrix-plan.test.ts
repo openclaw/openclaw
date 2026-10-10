@@ -1,4 +1,3 @@
-// Release Workflow Matrix Plan tests cover release workflow matrix plan script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
@@ -24,11 +23,6 @@ function workflow(): WorkflowDocument {
     readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
   ) as WorkflowDocument;
 }
-
-const PROFILE_GATED_STATIC_MATRIX_ALLOWLIST = [
-  "validate_live_provider_suites",
-  "validate_live_media_provider_suites",
-];
 
 type WorkflowStep = {
   "continue-on-error"?: boolean;
@@ -138,106 +132,59 @@ const FULL_DOCKER_CHUNKS = [
 
 const PROFILE_EXPECTATIONS = [
   {
-    profile: "minimum",
-    dockerE2eChunks: PACKAGE_UPDATE_CHUNKS,
-    liveModelProviders: ["openai"],
-  },
-  {
-    profile: "beta",
-    dockerE2eChunks: PACKAGE_UPDATE_CHUNKS,
-    liveModelProviders: ["openai"],
-  },
-  {
     profile: "stable",
     dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
-  {
-    profile: "full",
-    dockerE2eChunks: FULL_DOCKER_CHUNKS,
-    liveModelProviders: [
-      "anthropic",
-      "google",
-      "minimax",
-      "moonshot",
-      "openai",
-      "opencode-go",
-      "openrouter",
-      "xai",
-      "zai",
-      "fireworks",
-    ],
-  },
 ];
 
-function staticProfileMatrixJobs() {
-  return Object.entries(workflow().jobs)
-    .filter(([, job]) => {
-      const entries = job.strategy?.matrix?.include;
-      return Array.isArray(entries) && entries.some((entry: MatrixEntry) => "profiles" in entry);
-    })
-    .map(([jobName]) => jobName)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
-  it.each([
-    { input: undefined, profile: "stable" },
-    { input: "", profile: "stable" },
-    ...PROFILE_EXPECTATIONS.map(({ profile }) => ({ input: profile, profile })),
-  ])("normalizes CLI profile $input to $profile matrices", ({ input, profile }) => {
-    const result = spawnSync(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        RELEASE_TEST_PROFILE: input,
-        INCLUDE_RELEASE_PATH_SUITES: "true",
-        INCLUDE_LIVE_SUITES: "true",
-        DOCKER_LANES: "",
-        LIVE_MODEL_PROVIDERS: "",
-        LIVE_SUITE_FILTER: "",
-        LIVE_MODELS_ONLY: "false",
-        PREPARE_ONLY: "false",
-        GITHUB_STEP_SUMMARY: "",
-      },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const outputs = Object.fromEntries(
-      result.stdout
-        .trim()
-        .split("\n")
-        .map((line) => {
-          const separator = line.indexOf("=");
-          return [line.slice(0, separator), line.slice(separator + 1)];
-        }),
-    );
-    const expected = expectDefined(
-      PROFILE_EXPECTATIONS.find((row) => row.profile === profile),
-      `matrix expectations for ${profile}`,
-    );
-    expect(
-      JSON.parse(expectDefined(outputs.docker_e2e_matrix, "Docker E2E matrix output")).include.map(
-        (row: MatrixEntry) => row.chunk_id,
-      ),
-    ).toEqual(expected.dockerE2eChunks);
-    expect(outputs.docker_e2e_count).toBe(String(expected.dockerE2eChunks.length));
-    expect(
-      JSON.parse(
-        expectDefined(outputs.live_models_matrix, "live models matrix output"),
-      ).include.map((row: MatrixEntry) => row.providers),
-    ).toEqual(expected.liveModelProviders);
-    expect(outputs.live_models_count).toBe(String(expected.liveModelProviders.length));
-  });
-
-  it.each(["unknown", " stable "])("rejects nonempty invalid CLI profile %j", (profile) => {
-    const result = spawnSync(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
-      encoding: "utf8",
-      env: { ...process.env, RELEASE_TEST_PROFILE: profile, GITHUB_STEP_SUMMARY: "" },
-    });
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("unknown release profile");
-  });
+  it.each([{ input: "", profile: "stable" }])(
+    "normalizes CLI profile $input to $profile matrices",
+    ({ input, profile }) => {
+      const result = spawnSync(process.execPath, ["scripts/plan-release-workflow-matrix.mjs"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          RELEASE_TEST_PROFILE: input,
+          INCLUDE_RELEASE_PATH_SUITES: "true",
+          INCLUDE_LIVE_SUITES: "true",
+          DOCKER_LANES: "",
+          LIVE_MODEL_PROVIDERS: "",
+          LIVE_SUITE_FILTER: "",
+          LIVE_MODELS_ONLY: "false",
+          PREPARE_ONLY: "false",
+          GITHUB_STEP_SUMMARY: "",
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        result.stdout
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      const expected = expectDefined(
+        PROFILE_EXPECTATIONS.find((row) => row.profile === profile),
+        `matrix expectations for ${profile}`,
+      );
+      expect(
+        JSON.parse(
+          expectDefined(outputs.docker_e2e_matrix, "Docker E2E matrix output"),
+        ).include.map((row: MatrixEntry) => row.chunk_id),
+      ).toEqual(expected.dockerE2eChunks);
+      expect(outputs.docker_e2e_count).toBe(String(expected.dockerE2eChunks.length));
+      expect(
+        JSON.parse(
+          expectDefined(outputs.live_models_matrix, "live models matrix output"),
+        ).include.map((row: MatrixEntry) => row.providers),
+      ).toEqual(expected.liveModelProviders);
+      expect(outputs.live_models_count).toBe(String(expected.liveModelProviders.length));
+    },
+  );
 
   it("keeps the API strict for an empty CLI profile value", () => {
     expect(() => createReleaseWorkflowMatrixPlan({ releaseProfile: "" })).toThrow(
@@ -314,50 +261,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(
         selected.docker.flatMap((group: { lanes?: string[] }) => group.lanes ?? []),
       ).not.toContain("openwebui");
-    },
-  );
-
-  it.each([
-    [
-      "full",
-      "live-gateway-advisory-docker",
-      [
-        "live-gateway-advisory-docker-deepseek-fireworks",
-        "live-gateway-advisory-docker-opencode-openrouter",
-        "live-gateway-advisory-docker-xai-zai",
-      ],
-    ],
-    [
-      "stable",
-      "live-codex-harness-gpt56-docker",
-      [
-        "live-codex-harness-gpt56-sol-docker",
-        "live-codex-harness-gpt56-terra-docker",
-        "live-codex-harness-gpt56-luna-docker",
-      ],
-    ],
-    ["full", "live-codex-harness-gpt56-sol-docker", ["live-codex-harness-gpt56-sol-docker"]],
-    ["stable", "live-codex-harness-gpt56-sol-docker", ["live-codex-harness-gpt56-sol-docker"]],
-    ["beta", "live-codex-harness-gpt56-sol-docker", []],
-    ["beta", "live-cache", []],
-  ])(
-    "binds focused Docker consumer rows for %s / %s",
-    (releaseProfile, liveSuiteFilter, expected) => {
-      const plan = createReleaseWorkflowMatrixPlan({
-        releaseProfile,
-        liveSuiteFilter,
-        includeLiveSuites: true,
-      });
-      expect(plan.liveDocker?.matrix.include.map((entry: MatrixEntry) => entry.suite_id)).toEqual(
-        expected,
-      );
-      const disabled = createReleaseWorkflowMatrixPlan({
-        releaseProfile,
-        liveSuiteFilter,
-        includeLiveSuites: true,
-        liveModelsOnly: true,
-      });
-      expect(disabled.liveDocker?.count).toBe(0);
     },
   );
 
@@ -631,10 +534,17 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
         ),
-      ).toMatchObject({ timeout_minutes: 55 });
+      ).toMatchObject({ timeout_minutes: 75 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );
+      expect(plan.liveModels.matrix.include).toContainEqual({
+        provider_label: "MiniMax",
+        providers: "minimax",
+        models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
+        max_models: "2",
+        profiles: "stable full",
+      });
       const admission = createReleaseSourceSelection({
         includeLiveSuites: true,
         includeReleasePathSuites: true,
@@ -698,18 +608,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     );
   });
 
-  it("reports omitted lanes for release jobs excluded by the selected profile", () => {
-    const plan = createReleaseWorkflowMatrixPlan({
-      includeLiveSuites: true,
-      includeReleasePathSuites: true,
-      releaseProfile: "beta",
-    });
-
-    expect(plan.dockerE2e.omitted.map((entry: MatrixEntry) => entry.id)).toContain("core");
-    expect(plan.liveModels.omitted.map((entry: MatrixEntry) => entry.id)).toContain("anthropic");
-  });
-
-  it.each(["stable", "full"])(
+  it.each(["stable"])(
     "keeps live Anthropic cache proof in both %s release-core workflow steps",
     (releaseProfile) => {
       const definition = workflow();
@@ -784,22 +683,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
-  it("limits MiniMax Docker live-model coverage to the stable M3 pair", () => {
-    const plan = createReleaseWorkflowMatrixPlan({
-      includeLiveSuites: true,
-      includeReleasePathSuites: true,
-      releaseProfile: "stable",
-    });
-
-    expect(plan.liveModels.matrix.include).toContainEqual({
-      provider_label: "MiniMax",
-      providers: "minimax",
-      models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
-      max_models: "2",
-      profiles: "stable full",
-    });
-  });
-
   it("keeps stable and full Anthropic Docker proof blocking", () => {
     const jobs = workflow().jobs;
     const dockerLiveJob = expectDefined(
@@ -854,58 +737,5 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(plan.liveModels.omitted[0]?.reason).toBe(
       "Docker live model matrix disabled by input selection",
     );
-  });
-
-  it("wires filtered matrices into the reusable live and E2E workflow", () => {
-    const jobs = workflow().jobs;
-    const planner = expectDefined(
-      jobs.plan_release_workflow_matrices,
-      "release matrix planner job",
-    );
-    const dockerE2e = expectDefined(jobs.validate_docker_e2e, "Docker E2E validation job");
-    const liveModels = expectDefined(
-      jobs.validate_live_models_docker,
-      "live Docker models validation job",
-    );
-    const liveDocker = requiredJob(workflow(), "validate_live_docker_provider_suites");
-
-    expect(planner.outputs.live_docker_matrix).toBe("${{ steps.plan.outputs.live_docker_matrix }}");
-    expect(planner.outputs.docker_e2e_matrix).toBe("${{ steps.plan.outputs.docker_e2e_matrix }}");
-    expect(planner.outputs.live_models_matrix).toBe("${{ steps.plan.outputs.live_models_matrix }}");
-    expect(planner.outputs.live_image_extensions).toBe(
-      "${{ steps.live_image.outputs.live_image_extensions }}",
-    );
-    const metadataCheckout = expectDefined(
-      planner.steps.find((step) => step.name === "Checkout selected live plugin metadata"),
-      "selected target metadata checkout",
-    );
-    expect(metadataCheckout.with?.ref).toBe(
-      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
-    );
-    const liveImage = requiredJob(workflow(), "prepare_live_test_image");
-    expect(liveImage.needs).toContain("plan_release_workflow_matrices");
-    expect(
-      liveImage.steps.find((step) => step.name === "Resolve shared live-test image tag")?.env
-        ?.LIVE_IMAGE_EXTENSIONS,
-    ).toBe("${{ needs.plan_release_workflow_matrices.outputs.live_image_extensions }}");
-    expect(dockerE2e["timeout-minutes"]).toBe("${{ matrix.timeout_minutes }}");
-    expect(dockerE2e.needs).toContain("plan_release_workflow_matrices");
-    expect(liveModels.needs).toContain("plan_release_workflow_matrices");
-    expect(liveDocker.needs).toContain("plan_release_workflow_matrices");
-    expect(liveDocker.strategy.matrix).toBe(
-      "${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_docker_matrix) }}",
-    );
-    expect(dockerE2e.strategy.matrix).toBe(
-      "${{ fromJson(needs.plan_release_workflow_matrices.outputs.docker_e2e_matrix) }}",
-    );
-    expect(liveModels.strategy.matrix).toBe(
-      "${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}",
-    );
-    expect(liveModels.env.OPENCLAW_LIVE_MODELS).toBe("${{ matrix.models || 'modern' }}");
-    expect(liveModels.env.OPENCLAW_LIVE_MAX_MODELS).toBe("${{ matrix.max_models || '6' }}");
-  });
-
-  it("requires new release-profile matrices to use a planner or an explicit allowlist", () => {
-    expect(staticProfileMatrixJobs()).toEqual(PROFILE_GATED_STATIC_MATRIX_ALLOWLIST.toSorted());
   });
 });

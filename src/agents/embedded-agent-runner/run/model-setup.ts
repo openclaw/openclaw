@@ -4,6 +4,7 @@ import { withSessionEntriesFromStoresInWorker } from "../../../config/sessions/s
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import type { ProviderModelRouteSource } from "../../../plugin-sdk/provider-model-types.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -33,6 +34,10 @@ import { selectAgentHarness } from "../../harness/selection.js";
 import { readSessionRuntimeOwnership } from "../../harness/session-runtime-ownership.js";
 import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
+import {
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
+} from "../../model-catalog-view.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
@@ -405,6 +410,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const modelConfigProvider = provider;
   let resolvedModelProvider = provider;
   let modelResolution;
+  let observedRoutes: ProviderModelRouteSource[] | undefined;
   if (nativeModelOwned) {
     const nativeModel = createNativeModelOwnedRuntimeModel({ provider, modelId });
     const catalogModel = nativeCatalogEntry
@@ -447,6 +453,14 @@ export async function resolveEmbeddedRunModelSetup(params: {
       model: catalogModel,
       ...createEmptyAgentDiscoveryStores(),
     };
+    const routeCatalog = nativeCatalogSelection?.catalog;
+    const routeVariants =
+      routeCatalog &&
+      createModelCatalogSnapshotView(runParams.config ?? {}, routeCatalog).variantsOf({
+        provider,
+        id: modelId,
+      });
+    observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
     const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider,
@@ -508,6 +522,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     ...(nativeCatalogSelection?.assertCurrent
       ? { assertNativeModelSelectionCurrent: nativeCatalogSelection.assertCurrent }
       : {}),
+    observedRoutes,
     nativeSessionRuntime,
     modelConfigProvider,
     model,

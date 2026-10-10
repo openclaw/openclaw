@@ -82,15 +82,10 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-type RootMemoryStatResult = Awaited<ReturnType<typeof statIfExists>>;
-
 async function statIfExists(filePath: string) {
   try {
     const stat = await fs.promises.stat(filePath);
-    if (!stat.isFile()) {
-      return { exists: false };
-    }
-    return { exists: true, bytes: stat.size };
+    return stat.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
   } catch (err) {
     if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
       return { exists: false };
@@ -115,14 +110,11 @@ async function detectRootMemoryFiles(workspaceDir: string) {
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
   const entries = await listWorkspaceEntries(resolvedWorkspace);
-  const [canonical, legacy] = await Promise.all([
-    entries.has(CANONICAL_ROOT_MEMORY_FILENAME)
-      ? statIfExists(canonicalPath)
-      : Promise.resolve<RootMemoryStatResult>({ exists: false }),
-    entries.has(LEGACY_ROOT_MEMORY_FILENAME)
-      ? statIfExists(legacyPath)
-      : Promise.resolve<RootMemoryStatResult>({ exists: false }),
-  ]);
+  const inspect = (filePath: string): ReturnType<typeof statIfExists> =>
+    entries.has(path.basename(filePath))
+      ? statIfExists(filePath)
+      : Promise.resolve({ exists: false });
+  const [canonical, legacy] = await Promise.all([inspect(canonicalPath), inspect(legacyPath)]);
   return {
     workspaceDir: resolvedWorkspace,
     canonicalPath,
@@ -261,9 +253,8 @@ async function migrateLegacyRootMemoryFile(
     await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
   }
   return {
+    ...unchanged,
     changed: true,
-    canonicalPath: detection.canonicalPath,
-    legacyPath: detection.legacyPath,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
   };

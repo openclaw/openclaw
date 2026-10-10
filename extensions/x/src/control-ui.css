@@ -127,10 +127,14 @@
   gap: var(--space-4);
 }
 
-.x-replies__guest-header h2 {
+.x-replies h2 {
   margin: 0;
   color: var(--text-strong);
   font-size: 18px;
+}
+
+.x-replies__github {
+  margin: var(--space-5) 0;
 }
 
 .x-replies__guest-header p {

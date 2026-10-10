@@ -38,6 +38,7 @@ import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/stor
 import { summarizeTranscripts } from "../transcripts/summary.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const dirs = useStateDatabaseTempDirs();
 
@@ -375,18 +376,13 @@ it.each(
     const failure = new TranscriptsSummaryChangedError();
     let current = true;
     const requests: workerAdmission.SqliteWorkerAdmissionRequest["stage"][] = [];
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observer = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          requests.push(request.stage);
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const observer = probe.admission(workerAdmission, (request, grant, admit) => {
+      requests.push(request.stage);
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     const assertCurrent = () => {
       if (!current) {
         throw failure;

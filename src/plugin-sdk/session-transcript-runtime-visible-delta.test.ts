@@ -25,7 +25,7 @@ import {
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";

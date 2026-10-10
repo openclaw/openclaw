@@ -77,9 +77,9 @@ function expectAdmittedSchemaObjects(database: DatabaseSync) {
   const facts = getAdmittedSqliteSchemaFacts(database);
   expect(facts?.tables.has("session_nodes")).toBe(true);
   expect(facts?.indexes).toContain("idx_agent_session_nodes_updated_at");
-  expect(facts?.triggers?.get("session_nodes_canonical_pending_after_update")).toEqual({
-    table: "session_nodes",
-    sql: expect.stringContaining("INSERT INTO session_canonical_validation_pending"),
+  expect(facts?.triggers?.get("session_entry_snapshots_after_update")).toEqual({
+    table: "session_entry_snapshots",
+    sql: expect.stringContaining("UPDATE session_nodes SET snapshot_revision"),
   });
   return facts;
 }

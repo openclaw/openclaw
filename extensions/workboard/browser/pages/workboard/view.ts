@@ -38,6 +38,7 @@ import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   dispatchSummaryMessage,
   refreshStatusLabel,
@@ -285,12 +286,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                           : "workboard.dispatchHelp",
                       )}
                       ?disabled=${state.dispatching || workboardHasActiveWrites(state)}
-                      @click=${() =>
-                        dispatchWorkboard({
-                          host: props.host,
-                          client: props.client,
-                          requestUpdate: props.onRequestUpdate,
-                        })}
+                      @click=${() => dispatchWorkboard(workboardMutationContext(props))}
                     >
                       ${icons.play}<span class="workboard-action-label"
                         >${t("workboard.dispatch")}</span

@@ -33,11 +33,10 @@ export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
 
 async function installCompletionForDoctor(
   { shell, cachePath }: ShellCompletionStatus,
-  cliName: string,
   action: "installed" | "upgraded",
 ): Promise<void> {
   try {
-    await installCompletion(shell, true, cliName);
+    await installCompletion(shell, true, CLI_NAME);
     const reloadCommand = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));
     note(
       `Shell completion ${action}. Restart your shell or run: ${reloadCommand}`,
@@ -204,11 +203,7 @@ export async function doctorShellCompletion(
     note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
     return;
   }
-  await installCompletionForDoctor(
-    status,
-    CLI_NAME,
-    status.usesSlowPattern ? "upgraded" : "installed",
-  );
+  await installCompletionForDoctor(status, status.usesSlowPattern ? "upgraded" : "installed");
 }
 
 /** Ensures the shell completion cache exists without prompting during setup/update flows. */
@@ -217,9 +212,7 @@ export async function ensureCompletionCacheExists(
   options: CompletionCacheGenerationOptions,
 ): Promise<boolean> {
   const shell = options.shell ?? resolveShellFromEnv();
-  const cacheExists = await completionCacheExists(shell, binName);
-
-  if (cacheExists) {
+  if (await completionCacheExists(shell, binName)) {
     return true;
   }
 

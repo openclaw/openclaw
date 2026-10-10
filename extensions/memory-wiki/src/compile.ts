@@ -1238,7 +1238,7 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.removedCount > 0;
   const dashboardState = await readMemoryWikiDashboardState(params.config);
   params.signal?.throwIfAborted();
-  const dashboardNeedsCompile = dashboardState.state !== "ready";
+  let dashboardNeedsCompile = dashboardState.state !== "ready";
   if (!params.config.ingest.autoCompile) {
     if (importChanged || dashboardNeedsCompile) {
       setMemoryWikiDashboardState(params.config, { state: "compile-required" });
@@ -1247,6 +1247,13 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   }
 
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
+  if (!importChanged && !missingIndexes && dashboardNeedsCompile) {
+    // Another compiler can replace our publication without changing sources.
+    // Validate and adopt its durable cache before deciding to rebuild it.
+    await initializeMemoryWikiVault(params.config, { signal: params.signal });
+    await activateExistingMemoryWikiVault(params.config, params.signal);
+    dashboardNeedsCompile = (await readMemoryWikiDashboardState(params.config)).state !== "ready";
+  }
   params.signal?.throwIfAborted();
   if (!importChanged && !missingIndexes && !dashboardNeedsCompile) {
     return { refreshed: false, reason: "no-import-changes" };
