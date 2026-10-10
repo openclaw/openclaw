@@ -64,6 +64,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
   actor: Actor;
   isDraining: () => boolean;
   isAvailable: () => boolean;
+  retireIdle?: () => Promise<void> | undefined;
   dispatch: (
     payload: Buffer,
     signal: AbortSignal | undefined,
@@ -72,13 +73,36 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     createAdmission: SqliteWorkerAdmissionFactory | undefined,
     requestClass: string,
   ) => Promise<unknown>;
-  release: () => Promise<void>;
+  release: (reclaiming: boolean) => Promise<void>;
 }) {
   let closed: Promise<void> | undefined;
+  let reclaiming = false;
   const pending = new Set<Promise<unknown>>();
   const client: StoreClient = {
     actor: owner.actor,
     close: () => store.close(),
+    retireIdle: owner.retireIdle
+      ? () => {
+          if (client.sealed || client.scopes.size || pending.size) {
+            return undefined;
+          }
+          reclaiming = true;
+          let retirement: Promise<void> | undefined;
+          try {
+            retirement = owner.retireIdle?.();
+          } catch (error) {
+            reclaiming = false;
+            throw error;
+          }
+          if (!retirement) {
+            reclaiming = false;
+            return undefined;
+          }
+          return retirement.finally(() => {
+            reclaiming = false;
+          });
+        }
+      : undefined,
     sealed: owner.isDraining(),
     isAvailable: owner.isAvailable,
     scopes: new Set(),
@@ -140,7 +164,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         closed = (async () => {
           await Promise.allSettled(client.scopes);
           await Promise.allSettled(pending);
-          await owner.release();
+          await owner.release(reclaiming);
         })().catch((error: unknown) => {
           closed = undefined;
           throw error;
