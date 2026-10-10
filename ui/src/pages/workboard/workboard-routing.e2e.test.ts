@@ -149,10 +149,10 @@ suite.define(() => {
       expect(await pinnedWorkboard.locator(".nav-item__children, .nav-item--child").count()).toBe(
         0,
       );
-      await workboardEntry.locator('.nav-item--child[href="/workboard/ops"]').waitFor();
       const boardEntry = sidebar.locator(".sidebar-pages__entry").filter({
         has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
       });
+      await boardEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
       await boardEntry.getByRole("button", { name: "Pin", exact: true }).click();
       const pinnedBoard = sidebar.locator(
         '.sidebar-rail [data-sidebar-entry="plugin:workboard/board-ops"] a',

@@ -368,9 +368,12 @@ describe("AppSidebar interleaved zone", () => {
     expect(openPage).toHaveBeenCalledWith({ id: "review" });
   });
 
-  it("keeps nested plugin links in block flow before the following sidebar entry", async () => {
+  it("keeps plugin destinations flat in Pages and separate from ordered rail pins", async () => {
     const stylesheet = document.createElement("style");
-    stylesheet.textContent = readStyleSheet("ui/src/styles/sidebar-reorder.css");
+    stylesheet.textContent = [
+      readStyleSheet("ui/src/styles/sidebar-reorder.css"),
+      readStyleSheet("ui/src/styles/sidebar-rail.css"),
+    ].join("\n");
     document.head.append(stylesheet);
     const originalLocation = window.location.href;
     onTestFinished(() => {
@@ -379,53 +382,78 @@ describe("AppSidebar interleaved zone", () => {
     });
     window.history.replaceState(null, "", "/plugin?plugin=example&id=notes");
     const { sidebar, context } = await mountZone();
-    pluginNavigation(context, sidebar, ["boards", "review", "notes"], false, (id) =>
-      id === "boards" ? {} : { parent: "boards" },
+    const openPage = pluginNavigation(
+      context,
+      sidebar,
+      ["boards", "review", "notes"],
+      false,
+      (id) => (id === "boards" ? {} : { parent: "boards" }),
     );
     sidebar.sidebarEntries = ["plugin:example/boards", "plugin:example/notes", "route:usage"];
     await selectSidebarView(sidebar, "pages");
-    const entry = sidebar.querySelector<HTMLElement>(
-      '.sidebar-pages [data-sidebar-entry="plugin:example/boards"]',
-    )!;
-    await entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
-    expect(entry.querySelectorAll(".nav-item--child")).toHaveLength(2);
-    // The catalog owns nested links; the personal rail owns one icon per reference.
-    const railEntry = sidebar.querySelector<HTMLElement>(
-      '.sidebar-rail [data-sidebar-entry="plugin:example/boards"]',
-    )!;
-    await railEntry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
-    expect(railEntry.querySelectorAll("a")).toHaveLength(1);
-    expect(railEntry.querySelector(".nav-item__children")).toBeNull();
-    expect(railEntry.querySelector("a")?.getAttribute("aria-label")).toBe("boards");
-    const group = entry.querySelector<HTMLElement>(".nav-item-group")!;
-    const parent = group.querySelector("a")!;
-    const children = group.querySelector<HTMLElement>(".nav-item__children")!;
-    expect(group.parentElement?.tagName).toBe("OPENCLAW-PLUGIN-CONTRIBUTIONS");
-    expect(group.firstElementChild).toBe(parent);
-    expect(parent.nextElementSibling).toBe(children);
-    expect(entry.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
-    expect(
-      entry.querySelector('[aria-current="page"]')?.classList.contains("nav-item--child"),
-    ).toBe(true);
-    expect(getComputedStyle(entry).display).toBe("flex");
-    expect(getComputedStyle(group).display).toBe("block");
-    expect(children.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      parent.getBoundingClientRect().bottom - 1,
-    );
-    expect(entry.getBoundingClientRect().height).toBeGreaterThanOrEqual(
-      parent.getBoundingClientRect().height + children.getBoundingClientRect().height - 1,
-    );
-    expect(entry.querySelector(".sidebar-reorder-menu")).toBeNull();
-    expect(
-      sidebar.querySelector(
-        '.sidebar-rail [data-sidebar-entry="plugin:example/boards"] .sidebar-reorder-menu',
+    const pages = sidebar.querySelector<HTMLElement>(".sidebar-pages")!;
+    const entries = [
+      ...pages.querySelectorAll<HTMLElement>('[data-sidebar-entry^="plugin:example/"]'),
+    ];
+    await Promise.all(
+      entries.map(
+        (entry) => entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete,
       ),
-    ).not.toBeNull();
-    const following = entry.closest(".sidebar-pages__entry")!.nextElementSibling!;
-    expect(following.querySelector('[data-sidebar-entry="plugin:example/review"]')).not.toBeNull();
-    expect(following.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      children.getBoundingClientRect().bottom - 1,
     );
+    expect(entries.map((entry) => entry.dataset.sidebarEntry)).toEqual([
+      "plugin:example/boards",
+      "plugin:example/review",
+      "plugin:example/notes",
+    ]);
+    expect(
+      entries.flatMap((entry) =>
+        [...entry.querySelectorAll("a")].map((link) => link.getAttribute("href")),
+      ),
+    ).toEqual([
+      "/plugin?plugin=example&id=boards",
+      "/plugin?plugin=example&id=review",
+      "/plugin?plugin=example&id=notes",
+    ]);
+    expect(
+      pages.querySelectorAll(".nav-item-group, .nav-item__children, .nav-item--child"),
+    ).toHaveLength(0);
+    expect(pages.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    const selected = entries[2]!.querySelector<HTMLAnchorElement>('a[aria-current="page"]')!;
+    expect(selected.getAttribute("aria-label")).toBe("notes");
+    expect(selected.classList.contains("nav-item--active")).toBe(true);
+    selected.click();
+    expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "notes" });
+    // JSDOM owns structure and CSS contracts; real browser siblings own pixel geometry.
+    for (const entry of entries) {
+      const row = entry.closest<HTMLElement>(".sidebar-pages__entry")!;
+      const pin = row.querySelector<HTMLButtonElement>(".sidebar-pages__pin")!;
+      expect(row.firstElementChild).toBe(entry);
+      expect(entry.nextElementSibling).toBe(pin);
+      expect(getComputedStyle(row).display).toBe("flex");
+      expect(getComputedStyle(row).alignItems).toBe("center");
+      expect(getComputedStyle(entry).display).toBe("flex");
+      expect(getComputedStyle(entry).flexGrow).toBe("1");
+      expect(getComputedStyle(pin).flexShrink).toBe("0");
+      expect(getComputedStyle(pin).flexBasis).toBe("28px");
+      expect(entry.querySelector(".sidebar-reorder-menu")).toBeNull();
+    }
+    // Pinned references remain separate icon controls, with their own reorder menus.
+    for (const id of ["boards", "notes"]) {
+      const railEntry = sidebar.querySelector<HTMLElement>(
+        `.sidebar-rail [data-sidebar-entry="plugin:example/${id}"]`,
+      )!;
+      await railEntry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
+      expect(railEntry.querySelectorAll("a")).toHaveLength(1);
+      expect(railEntry.querySelector(".nav-item__children")).toBeNull();
+      expect(railEntry.querySelector("a")?.getAttribute("aria-label")).toBe(id);
+      expect(getComputedStyle(railEntry).flexDirection).toBe("column");
+      expect(railEntry.querySelector(".sidebar-reorder-menu")).not.toBeNull();
+    }
+    expect(
+      [...sidebar.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
+        (entry) => entry.dataset.sidebarEntry,
+      ),
+    ).toEqual(sidebar.sidebarEntries);
     expect(sidebar.sidebarEntries).toEqual([
       "plugin:example/boards",
       "plugin:example/notes",

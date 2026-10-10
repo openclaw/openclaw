@@ -59,7 +59,8 @@ describe("AppSidebar main-chat metadata", () => {
     )!;
     // Subscription admission precedes the render that commits the main-row metadata.
     await vi.waitFor(() => {
-      expect(header.querySelector(".session-owner-chip")).not.toBeNull();
+      // Upstream #168575 makes the agent avatar the header’s only identity.
+      expect(header.querySelector(".session-owner-chip")).toBeNull();
       expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
       expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
       expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
