@@ -5,7 +5,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -84,7 +84,7 @@ describe("shared-state content version facts", () => {
         observation.queries.filter((sql) =>
           /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql.trim()),
         ),
-      ).toHaveLength(3);
+      ).toHaveLength(0);
     } finally {
       observation.restore();
     }
@@ -129,7 +129,7 @@ describe("shared-state content version facts", () => {
     expect(read(database)).toBe(11);
     update.run("12", CONTENT_VERSION_KEY);
     expect(read(database)).toBe(12);
-    runSqlitePinnedReadSnapshotSync(database, () => {
+    runSqliteSchemaReadSnapshotSync(database, () => {
       expect(read(database)).toBe(12);
       update.run("13", CONTENT_VERSION_KEY);
       expect(read(database)).toBe(12);

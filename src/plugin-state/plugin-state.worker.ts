@@ -1,6 +1,5 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
-import { runSqliteOwnedStateOperationSync } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
@@ -122,45 +121,41 @@ export function executePluginStateCommand(
       if (!handler) {
         throw new Error("Plugin state operation was not prepared");
       }
-      return runSqliteOwnedStateOperationSync(options.path, () => {
-        if (command.input.writeStores.length === 0) {
-          const result = withPluginStateDatabaseReadOnly(
-            "lookup",
-            (store) => {
-              const run = () => executePluginStateOperation(store, command.input, handler);
-              return store.db.isTransaction
-                ? run()
-                : runSqliteDeferredTransactionSync(store.db, run);
-            },
-            options,
-          );
-          if (!result) {
-            throw new Error("Plugin state operation source is no longer available");
-          }
-          return ok(result);
-        }
-        const database = openDatabase();
-        return ok(
-          runOpenClawStateWriteTransaction(
-            (store) => {
-              admit("transaction");
-              const result = withPluginStateWorkerReceipt(
-                store.db,
-                () => executePluginStateOperation(store, command.input, handler),
-                (completed): PluginStateOperationCommit => ({
-                  pluginStateOperation: {
-                    receiptId: command.input.receiptId,
-                    validUntil: completed.validUntil,
-                  },
-                }),
-              );
-              admit("commit");
-              return result;
-            },
-            { ...options, database },
-          ),
+      if (command.input.writeStores.length === 0) {
+        const result = withPluginStateDatabaseReadOnly(
+          "lookup",
+          (store) => {
+            const run = () => executePluginStateOperation(store, command.input, handler);
+            return store.db.isTransaction ? run() : runSqliteDeferredTransactionSync(store.db, run);
+          },
+          options,
         );
-      });
+        if (!result) {
+          throw new Error("Plugin state operation source is no longer available");
+        }
+        return ok(result);
+      }
+      const database = openDatabase();
+      return ok(
+        runOpenClawStateWriteTransaction(
+          (store) => {
+            admit("transaction");
+            const result = withPluginStateWorkerReceipt(
+              store.db,
+              () => executePluginStateOperation(store, command.input, handler),
+              (completed): PluginStateOperationCommit => ({
+                pluginStateOperation: {
+                  receiptId: command.input.receiptId,
+                  validUntil: completed.validUntil,
+                },
+              }),
+            );
+            admit("commit");
+            return result;
+          },
+          { ...options, database },
+        ),
+      );
     } catch (error) {
       return failure(error);
     }

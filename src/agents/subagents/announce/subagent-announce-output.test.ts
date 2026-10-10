@@ -13,7 +13,9 @@ import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
 
 type CallGateway = typeof import("../../../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
-type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry;
+type ReadSessionEntry = (
+  ...args: Parameters<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
+) => Awaited<ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>>;
 type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
 type ResolveAgentIdFromSessionKey =

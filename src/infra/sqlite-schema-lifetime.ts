@@ -39,12 +39,16 @@ export function observeSchemaLifetime(
     invalidate(owner);
     owner.scopeRevision = scope.revision;
   }
-  if ((owner.transactionalSchema || owner.transactionalFacts) && !database.isTransaction) {
+  if (
+    (owner.transactionalSchema || owner.transactionalTempSchema || owner.transactionalFacts) &&
+    !database.isTransaction
+  ) {
     if (owner.transactionalSchema) {
       publishSchemaChange(database, owner);
     }
     invalidate(owner);
     owner.transactionalSchema = false;
+    owner.transactionalTempSchema = false;
     owner.transactionalFacts = false;
   }
   return scopeChanged;

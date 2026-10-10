@@ -187,7 +187,7 @@ function readCatalogIdentity(db: DatabaseSync, input: UserProfileCatalogIdentity
   };
 }
 
-/** Admission refreshes foreign commits; only unchanged, unpinned reader revisions retain pages. */
+/** Committed writer revisions retain pages only while the read remains unchanged and unpinned. */
 export function readUserProfileCatalogIdentity(
   db: DatabaseSync,
   input: UserProfileCatalogIdentityInput,
@@ -202,7 +202,7 @@ export function readUserProfileCatalogIdentity(
       registerNodeSqliteDisposeCallback(db, () => retainedPages.delete(db));
     } else if (
       retained.schema !== revision.schema ||
-      retained.dataVersion !== revision.dataVersion ||
+      retained.writeRevision !== revision.writeRevision ||
       retained.mutationRevision !== revision.mutationRevision
     ) {
       Object.assign(retained, revision);
@@ -216,6 +216,7 @@ export function readUserProfileCatalogIdentity(
   const result = readCatalogIdentity(db, input);
   if (
     revision &&
+    getSqliteReadOperationRevision(db) === revision &&
     retained &&
     result.profiles.size <= MAX_RETAINED_PROFILES &&
     [...result.profiles.values()].every((profile) => profile.ok)

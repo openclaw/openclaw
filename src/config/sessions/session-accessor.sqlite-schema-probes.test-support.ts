@@ -9,13 +9,22 @@ import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-pr
 
 const key = "agent:main:probe";
 
-export function measureSessionSchemaProbes(database: { agentId: string; db: DatabaseSync }) {
+export function measureSessionSchemaProbes(
+  database: { agentId: string; db: DatabaseSync },
+  label?: string,
+) {
   const reads = {
-    cache: () =>
-      readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(key)
-        ?.sessionId === "probe",
-    exact: () =>
-      readExactSessionEntryRowValidated(database, key, "list")?.entry.sessionId === "probe",
+    cache: () => {
+      const entry = readSessionEntryCache(database, {
+        cache: true,
+        projection: "list",
+      }).entries.get(key);
+      return entry?.sessionId === "probe" && entry.label === label;
+    },
+    exact: () => {
+      const entry = readExactSessionEntryRowValidated(database, key, "list")?.entry;
+      return entry?.sessionId === "probe" && entry.label === label;
+    },
     owner: () => hasSqliteSessionOwnerColumns(database.db),
   };
   return Object.fromEntries(
@@ -138,7 +147,10 @@ export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => bo
 }
 
 export type SessionProbeOperations = {
-  read: { input: undefined; output: ReturnType<typeof measureSessionSchemaProbes> };
+  read: {
+    input: { label?: string } | undefined;
+    output: ReturnType<typeof measureSessionSchemaProbes>;
+  };
 };
 
 export function createSqliteWorkerBackend(
@@ -150,7 +162,7 @@ export function createSqliteWorkerBackend(
     throw new Error("Session probe database is missing");
   }
   return {
-    execute: () => measureSessionSchemaProbes(opened.database),
+    execute: (command) => measureSessionSchemaProbes(opened.database, command.input?.label),
     close: opened.database.close,
   };
 }

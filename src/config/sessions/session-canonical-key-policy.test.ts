@@ -1,16 +1,19 @@
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
+import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
-  admitSqliteSchema,
-  readSqliteDataVersion,
-  runSqliteReadOperationSync,
-} from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
+} from "../../infra/sqlite-transaction.js";
+import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -72,7 +75,7 @@ describe("canonical main-key policy facts", () => {
     },
   );
 
-  it("reuses current policy across read transactions and refreshes after savepoint rollback", () => {
+  it("keeps current policy inside read transactions and refreshes after savepoint rollback", () => {
     const { db, read } = fixture();
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
@@ -84,9 +87,6 @@ describe("canonical main-key policy facts", () => {
             }
           });
         }
-        expect(
-          observation.queries.filter((sql) => sql.includes('from "session_key_contract"')),
-        ).toHaveLength(0);
       });
       runSqliteDeferredTransactionSync(db, () => {
         const isVersionProbe = (sql: string) =>
@@ -157,53 +157,71 @@ describe("canonical main-key policy facts", () => {
     expect(read()).toBe("partial");
   });
 
-  it.each(["pinned", "transaction"] as const)(
-    "observes foreign commits after %s snapshots",
-    (kind) => {
-      const filename = path.join(tempDirs.make("canonical-policy-"), "agent.sqlite");
-      const { db, read } = fixture(filename);
-      db.exec("PRAGMA journal_mode=WAL");
-      const peer = new DatabaseSync(filename);
-      databases.push(peer);
-      peer.exec("UPDATE session_key_contract SET main_key = 'foreign'");
-      expect(read()).toBe("foreign");
-      const runSnapshot =
-        kind === "pinned" ? runSqlitePinnedReadSnapshotSync : runSqliteDeferredTransactionSync;
-      runSnapshot(db, () => {
-        expect(read()).toBe("foreign");
+  it("observes worker policy commits around native snapshots without freshness probes", async () => {
+    const filename = path.join(tempDirs.make("canonical-policy-"), "agent.sqlite");
+    const { db, read } = fixture(filename);
+    db.exec("PRAGMA journal_mode=WAL");
+    const peer = openNodeSqliteDatabase(filename);
+    databases.push(peer);
+    const broker = new SqliteWorkerBroker();
+    const probes = trackSqliteStatementExecutions(db, ["fresh"], (sql) =>
+      /\bdata_version\b/iu.test(sql) ? "fresh" : null,
+    );
+    try {
+      const store = await broker.open<AdmissionOperations>({
+        moduleUrl: new URL(
+          "../../infra/sqlite-database-admission.worker.test-support.ts",
+          import.meta.url,
+        ),
+        databasePath: filename,
+        input: undefined,
+      });
+      const commit = (mainKey: "worker" | "fresh") =>
+        broker.runOperation(store!, (scope) =>
+          scope.execute({
+            type: "writeRows",
+            input: {
+              sql: `UPDATE session_key_contract SET main_key = '${mainKey}'`,
+            },
+          }),
+        );
+      await commit("worker");
+      expect(read()).toBe("worker");
+      runSqliteReadSnapshotSync(db, () => {
+        expect(read()).toBe("worker");
         peer.exec("UPDATE session_key_contract SET main_key = 'later'");
-        expect(read()).toBe("foreign");
+        expect(read()).toBe("worker");
       });
       expect(read()).toBe("later");
-      runSqliteReadOperationSync(db, () => {
-        expect(read()).toBe("later");
-        const before = readSqliteDataVersion(db);
-        peer.exec("UPDATE session_key_contract SET main_key = 'fresh'");
-        expect(readSqliteDataVersion(db)).not.toBe(before);
-        expect(read()).toBe("fresh");
-      });
-    },
-  );
+      await commit("fresh");
+      expect(read()).toBe("fresh");
+      expect(probes.counts.fresh).toBe(0);
+    } finally {
+      probes.restore();
+      await broker.close();
+    }
+  });
 
-  it("refreshes after native BEGIN and pins facts before subsequent foreign commits", () => {
+  it("refreshes after native BEGIN and pins facts before subsequent sibling commits", () => {
     const filename = path.join(tempDirs.make("canonical-policy-pin-"), "agent.sqlite");
     const { db, read } = fixture(filename);
     db.exec("PRAGMA journal_mode=WAL");
-    const peer = new DatabaseSync(filename);
+    const peer = openNodeSqliteDatabase(filename);
     databases.push(peer);
     runSqliteReadOperationSync(db, () => {
       expect(read()).toBe("main");
       db.exec("BEGIN");
       try {
-        peer.exec("UPDATE session_key_contract SET main_key = 'before-probe'");
+        peer.exec("UPDATE session_key_contract SET main_key = 'before-read'");
         runSqliteReadOperationSync(db, () => {
-          peer.exec("UPDATE session_key_contract SET main_key = 'after-probe'");
-          expect(read()).toBe("before-probe");
+          expect(read()).toBe("before-read");
+          peer.exec("UPDATE session_key_contract SET main_key = 'after-read'");
+          expect(read()).toBe("before-read");
         });
       } finally {
         db.exec("COMMIT");
       }
-      expect(read()).toBe("after-probe");
+      expect(read()).toBe("after-read");
       peer.exec("UPDATE session_key_contract SET main_key = 'next-transaction'");
       runSqliteDeferredTransactionSync(db, () => {
         expect(read()).toBe("next-transaction");
@@ -221,7 +239,7 @@ describe("canonical main-key policy facts", () => {
       CREATE TRIGGER abort_policy BEFORE INSERT ON policy_abort
       BEGIN SELECT RAISE(ROLLBACK, 'policy rollback'); END;`);
       admitSqliteSchema(db);
-      const peer = new DatabaseSync(filename);
+      const peer = openNodeSqliteDatabase(filename);
       databases.push(peer);
       runSqliteReadOperationSync(db, () => {
         db.exec("BEGIN");
@@ -255,7 +273,7 @@ describe("canonical main-key policy facts", () => {
     const filename = path.join(tempDirs.make("canonical-policy-batch-"), "agent.sqlite");
     const { db, read } = fixture(filename);
     db.exec("PRAGMA journal_mode=WAL");
-    const peer = new DatabaseSync(filename);
+    const peer = openNodeSqliteDatabase(filename);
     databases.push(peer);
     const observed: string[] = [];
     db.function("read_policy", () => {
