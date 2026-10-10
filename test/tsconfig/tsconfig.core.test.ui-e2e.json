@@ -7,8 +7,10 @@
   },
   "include": [
     "../../ui/src/main.ts",
+    "../../ui/src/main.tsx",
     "../../ui/src/e2e/**/*.test.ts",
     "../../ui/src/e2e/**/*.test.tsx",
-    "../../ui/src/test-helpers/control-ui-e2e*.test.ts"
+    "../../ui/src/test-helpers/control-ui-e2e*.test.ts",
+    "../../ui/src/test-helpers/control-ui-e2e*.test.tsx"
   ]
 }

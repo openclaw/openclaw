@@ -286,43 +286,85 @@ export function FilterSelect<Value extends string>(props: {
     </div>
   );
 }
-export function FilterChoices<Value extends string>(props: {
-  label: string;
-  value: Value;
-  options: readonly {
-    value: Value;
-    label: string;
-    icon: keyof typeof icons;
-    title?: string;
-  }[];
-  onChange: (value: Value) => void;
+function DisplayChoice<Field extends "viewMode" | "layout" | "emptyColumnMode">(props: {
+  state: WorkboardUiState;
+  revision?: number;
+  requestUpdate?: () => void;
+  field: Field;
+  labelKey: string;
+  options: readonly (readonly [WorkboardUiState[Field], string, keyof typeof icons, string?])[];
 }) {
+  const state = () => {
+    void props.revision;
+    return props.state;
+  };
   return (
     <div class="workboard-filter-choice">
-      <span class="workboard-filter-section__label">{props.label}</span>
-      <div class="workboard-view-toggle" role="group" aria-label={props.label}>
-        <For each={props.options} keyed={(option) => option.value}>
+      <span class="workboard-filter-section__label">{t(`workboard.${props.labelKey}`)}</span>
+      <div class="workboard-view-toggle" role="group" aria-label={t(`workboard.${props.labelKey}`)}>
+        <For each={props.options} keyed={(option) => option[0]}>
           {(option) => (
             <button
-              class={[
-                "btn",
-                {
-                  "is-active": props.value === option().value,
-                },
-              ]}
+              class={["btn", { "is-active": state()[props.field] === option()[0] }]}
               type="button"
-              aria-pressed={props.value === option().value ? "true" : "false"}
-              aria-label={option().title ?? option().label}
-              title={option().title ?? option().label}
-              onClick={() => props.onChange(option().value)}
+              aria-pressed={state()[props.field] === option()[0] ? "true" : "false"}
+              aria-label={t(`workboard.${option()[3] ?? option()[1]}`)}
+              title={t(`workboard.${option()[3] ?? option()[1]}`)}
+              onClick={() => {
+                state()[props.field] = option()[0];
+                if (props.field === "emptyColumnMode") {
+                  state().expandedEmptyStatuses.clear();
+                }
+                props.requestUpdate?.();
+              }}
             >
-              <span aria-hidden="true">{icons[option().icon]}</span>
-              <span>{option().label}</span>
+              <span aria-hidden="true">{icons[option()[2]]}</span>
+              <span>{t(`workboard.${option()[1]}`)}</span>
             </button>
           )}
         </For>
       </div>
     </div>
+  );
+}
+export function DisplayChoices(props: StatusFilterProps) {
+  return (
+    <>
+      <DisplayChoice
+        state={props.state}
+        revision={props.revision}
+        requestUpdate={props.requestUpdate}
+        field="viewMode"
+        labelKey="filterLayout"
+        options={[
+          ["board", "viewBoard", "kanban"],
+          ["list", "viewList", "list"],
+        ]}
+      />
+      <DisplayChoice
+        state={props.state}
+        revision={props.revision}
+        requestUpdate={props.requestUpdate}
+        field="layout"
+        labelKey="filterDensity"
+        options={[
+          ["comfortable", "densityComfortable", "layoutComfortable"],
+          ["compact", "densityCompact", "layoutCompact"],
+        ]}
+      />
+      <DisplayChoice
+        state={props.state}
+        revision={props.revision}
+        requestUpdate={props.requestUpdate}
+        field="emptyColumnMode"
+        labelKey="emptyColumns"
+        options={[
+          ["show", "emptyColumnsShow", "eye", "showEmptyColumns"],
+          ["collapse", "emptyColumnsCollapse", "minimize", "collapseEmptyColumns"],
+          ["hide", "emptyColumnsHide", "eyeOff", "hideEmptyColumns"],
+        ]}
+      />
+    </>
   );
 }
 export function MultiFilter<Value extends string>(props: {

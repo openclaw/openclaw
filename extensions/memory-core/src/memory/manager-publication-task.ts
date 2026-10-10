@@ -76,6 +76,14 @@ export type MemoryPublicationOperations = {
     input: { operation: string; expectedRevision: number };
     output: MemoryPublicationResult<boolean>;
   };
+  "cache.write.inline": {
+    input: {
+      header: MemoryEmbeddingCacheHeader;
+      entries: MemoryEmbeddingCacheEntry[];
+      expectedRevision: number;
+    };
+    output: MemoryPublicationResult<boolean>;
+  };
   "cache.clear": {
     input: { identities: MemoryIndexProviderIdentity[]; expectedRevision: number };
     output: MemoryPublicationResult<boolean>;

@@ -14,6 +14,7 @@ export type IncognitoSessionFacts = {
   capability?: SessionEntryCurrentFacts;
   chatMetadataRevision?: string;
   entryReadRevision?: string;
+  initializationFingerprint?: string;
   delivery?: Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery">;
   media?: Pick<
     SessionEntry,
@@ -49,6 +50,8 @@ export type IncognitoSessionFacts = {
   policy?: Pick<
     SessionEntry,
     | "sessionId"
+    | "lifecycleRevision"
+    | "skillLibrarySelections"
     | "sandbox"
     | "sandboxMode"
     | "createdActor"
@@ -58,7 +61,6 @@ export type IncognitoSessionFacts = {
     | "execHost"
     | "execNode"
     | "execCwd"
-    | "skillLibrarySelections"
     | "pluginOwnerId"
     | "agentHarnessId"
   >;

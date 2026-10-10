@@ -28,7 +28,7 @@ import {
   StatusTabs,
   MobileStatusPicker,
   FilterSelect,
-  FilterChoices,
+  DisplayChoices,
   MultiFilter,
   type ActiveFilter,
 } from "./view-filter-controls.tsx";
@@ -491,66 +491,10 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
                   </div>
                 ) : null}
                 <div class="workboard-filter-display">
-                  <FilterChoices
-                    label={t("workboard.filterLayout")}
-                    value={state().viewMode}
-                    options={[
-                      { value: "board", label: t("workboard.viewBoard"), icon: "kanban" },
-                      { value: "list", label: t("workboard.viewList"), icon: "list" },
-                    ]}
-                    onChange={(value) => {
-                      state().viewMode = value;
-                      props.onRequestUpdate?.();
-                    }}
-                  />
-                  <FilterChoices
-                    label={t("workboard.filterDensity")}
-                    value={state().layout}
-                    options={[
-                      {
-                        value: "comfortable",
-                        label: t("workboard.densityComfortable"),
-                        icon: "layoutComfortable",
-                      },
-                      {
-                        value: "compact",
-                        label: t("workboard.densityCompact"),
-                        icon: "layoutCompact",
-                      },
-                    ]}
-                    onChange={(value) => {
-                      state().layout = value;
-                      props.onRequestUpdate?.();
-                    }}
-                  />
-                  <FilterChoices
-                    label={t("workboard.emptyColumns")}
-                    value={state().emptyColumnMode}
-                    options={[
-                      {
-                        value: "show",
-                        label: t("workboard.emptyColumnsShow"),
-                        icon: "eye",
-                        title: t("workboard.showEmptyColumns"),
-                      },
-                      {
-                        value: "collapse",
-                        label: t("workboard.emptyColumnsCollapse"),
-                        icon: "minimize",
-                        title: t("workboard.collapseEmptyColumns"),
-                      },
-                      {
-                        value: "hide",
-                        label: t("workboard.emptyColumnsHide"),
-                        icon: "eyeOff",
-                        title: t("workboard.hideEmptyColumns"),
-                      },
-                    ]}
-                    onChange={(value) => {
-                      state().emptyColumnMode = value;
-                      state().expandedEmptyStatuses.clear();
-                      props.onRequestUpdate?.();
-                    }}
+                  <DisplayChoices
+                    state={state()}
+                    revision={props.revision}
+                    requestUpdate={props.onRequestUpdate}
                   />
                 </div>
                 <MultiFilter

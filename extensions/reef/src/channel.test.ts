@@ -20,12 +20,12 @@ import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generateIdentity } from "../protocol/index.js";
+import { generateIdentity, seal, signReceipt } from "../protocol/index.js";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import { reefPlugin } from "./channel.js";
 import { handleReefCommand } from "./commands.js";
 import { resolveReefConfig } from "./config-schema.js";
-import { reefKeys } from "./flow.test-helpers.js";
+import { allow, peerTrust, reefKeys } from "./flow.test-helpers.js";
 import { ReefFriendManager } from "./friends.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { getActiveReef, setReefRuntime } from "./runtime.js";
@@ -36,6 +36,13 @@ import {
 } from "./state.js";
 import { ReefInboxConnection, ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
+
+const legacyDispatch = vi.hoisted(() => vi.fn(async (_params: unknown) => {}));
+// mock-isolation: A released dispatcher ignores host hooks; Reef must guard its own handoff.
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  dispatchInboundDirectDm: legacyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression: () => ({ suppressed: false }),
+}));
 
 describe("Reef inbound dispatch content", () => {
   it("keeps provenance model-visible without storing it in the transcript body", () => {
@@ -146,7 +153,7 @@ describe("Reef message-tool threading", () => {
 describe("Reef conversation directory", () => {
   let stateDir = "";
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetPluginStateStoreForTests();
     // openclaw-temp-dir: allow Reef directory tests need an on-disk state root; afterEach removes it.
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-directory-"));
@@ -163,17 +170,17 @@ describe("Reef conversation directory", () => {
       });
     setReefRuntime(runtime);
     const identity = generateIdentity();
-    openReefTrustStore(runtime, resolveReefConfig({ channels: { reef: { handle: "clawd" } } })).set(
-      "molty",
-      {
-        autonomy: "bounded",
-        ed25519PublicKey: identity.signing.publicKey,
-        x25519PublicKey: identity.encryption.publicKey,
-        keyEpoch: 1,
-        safetyNumberChanged: false,
-        approvedAt: 1_752_537_600_000,
-      },
-    );
+    await openReefTrustStore(
+      runtime,
+      resolveReefConfig({ channels: { reef: { handle: "clawd" } } }),
+    ).set("molty", {
+      autonomy: "bounded",
+      ed25519PublicKey: identity.signing.publicKey,
+      x25519PublicKey: identity.encryption.publicKey,
+      keyEpoch: 1,
+      safetyNumberChanged: false,
+      approvedAt: 1_752_537_600_000,
+    });
   });
 
   afterEach(async () => {
@@ -237,11 +244,13 @@ describe("Reef gateway account ownership", () => {
   };
   const controllers: AbortController[] = [];
   const inboxDrains: ReturnType<typeof createDeferred<void>>[] = [];
+  const inboxConnections: ReefInboxConnection[] = [];
   let inboxStarted = createDeferred<void>();
   const accountTasks: Promise<unknown>[] = [];
   let stateDir = "";
 
   beforeEach(async () => {
+    legacyDispatch.mockClear();
     resetPluginStateStoreForTests();
     inboxStarted = createDeferred<void>();
     activeReefSlot.clearRuntime();
@@ -272,7 +281,10 @@ describe("Reef gateway account ownership", () => {
     vi.spyOn(ReefTransportClient.prototype, "listFriends").mockResolvedValue({ friendships: [] });
     // Startup reconciliation polls REST before the mocked inbox loop starts.
     vi.spyOn(ReefTransportClient.prototype, "pull").mockResolvedValue({ entries: [], cursor: 0 });
-    vi.spyOn(ReefInboxConnection.prototype, "start").mockImplementation(() => {
+    vi.spyOn(ReefInboxConnection.prototype, "start").mockImplementation(function (
+      this: ReefInboxConnection,
+    ) {
+      inboxConnections.push(this);
       const drain = createDeferred<void>();
       inboxDrains.push(drain);
       inboxStarted.resolve();
@@ -288,6 +300,7 @@ describe("Reef gateway account ownership", () => {
     for (const drain of inboxDrains.splice(0)) {
       drain.resolve();
     }
+    inboxConnections.splice(0);
     await Promise.allSettled(accountTasks.splice(0));
     // Count only: failed assertions must not dump signed request headers.
     const relayRequests = vi.mocked(fetch).mock.calls.length;
@@ -330,6 +343,123 @@ describe("Reef gateway account ownership", () => {
     }
     return send({ cfg, accountId: "default", to: "@molty", text });
   }
+
+  it.each([false, true])(
+    "rejects inbound trust revocation after delivered lookup before legacy dispatch (revoked=%s)",
+    async (revoked) => {
+      await startAccount().ready;
+      const { flow } = getActiveReef();
+      const peer = generateIdentity();
+      await flow.options.trust.set("molty", peerTrust(peer));
+      vi.spyOn(flow.options.guard, "classify").mockResolvedValue({
+        ...allow,
+        model: cfg.channels.reef.guard.pinnedModel,
+      });
+      const acknowledge = vi
+        .spyOn(ReefTransportClient.prototype, "acknowledge")
+        .mockResolvedValue({ result: "deleted" });
+      const status = flow.options.delivered.status.bind(flow.options.delivered);
+      vi.spyOn(flow.options.delivered, "status").mockImplementationOnce(async (id) => {
+        const result = await status(id);
+        if (revoked) {
+          await flow.options.trust.remove("molty");
+        }
+        return result;
+      });
+      const envelope = seal({
+        id: "01JZ0000000000000000000170",
+        from: "molty#1",
+        to: "clawd#1",
+        body: { text: "private coordination" },
+        senderSigningSecretKey: peer.signing.secretKey,
+        recipientEncryptionPublicKey: flow.options.keys.encryption.publicKey,
+      });
+      vi.spyOn(ReefTransportClient.prototype, "pull")
+        .mockResolvedValue({ entries: [], cursor: 1 })
+        .mockResolvedValueOnce({
+          entries: [
+            { seq: 1, id: envelope.id, peer: "molty", kind: "message", envelope, ts: envelope.ts },
+          ],
+          cursor: 1,
+        });
+      const result = inboxConnections[0]!.poll();
+      if (revoked) {
+        await expect(result).rejects.toThrow("Plugin state operation receipt is no longer current");
+      } else {
+        await result;
+      }
+      expect(legacyDispatch).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(acknowledge).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    },
+  );
+
+  it.each([false, true])(
+    "rechecks rejection trust at the legacy host handoff after reservation (revoked=%s)",
+    async (revoked) => {
+      await startAccount().ready;
+      const { flow } = getActiveReef();
+      const peer = generateIdentity();
+      const trust = flow.options.trust;
+      await trust.set("molty", peerTrust(peer));
+      const id = "01JZ0000000000000000000171";
+      const bodyHash = "a".repeat(64);
+      const prepared = (await trust.prepareOutboundDelivery("molty", id))!;
+      await prepared.record({
+        bodyHash,
+        recipient: {
+          ed25519PublicKey: peer.signing.publicKey,
+          x25519PublicKey: peer.encryption.publicKey,
+          keyEpoch: 1,
+        },
+      });
+      let reserved = false;
+      const read = trust.readOutboundDelivery.bind(trust);
+      vi.spyOn(trust, "readOutboundDelivery").mockImplementationOnce(async (...args) => {
+        const settlement = await read(...args);
+        if (!settlement) {
+          throw new Error("missing fixture delivery");
+        }
+        const reserve = settlement.recovery.reserve.bind(settlement.recovery);
+        settlement.recovery.reserve = async (state) => {
+          const result = await reserve(state);
+          reserved = true;
+          if (revoked) {
+            await trust.remove("molty");
+          }
+          return result;
+        };
+        return settlement;
+      });
+      const receipt = signReceipt(
+        { id, bodyHash, auditHead: "b".repeat(64), status: "rejected", category: "guard_deny" },
+        peer.signing.secretKey,
+      );
+      vi.spyOn(ReefTransportClient.prototype, "pull")
+        .mockResolvedValue({ entries: [], cursor: 1 })
+        .mockResolvedValueOnce({
+          entries: [
+            {
+              seq: 1,
+              id,
+              peer: "molty",
+              kind: "receipt",
+              receipt,
+              ts: Math.floor(Date.now() / 1000),
+            },
+          ],
+          cursor: 1,
+        });
+      await inboxConnections[0]!.poll();
+      expect(reserved).toBe(true);
+      expect(legacyDispatch).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      const remaining = await read("molty", id);
+      if (revoked) {
+        expect(remaining?.delivery.rejection?.notice).toBeDefined();
+      } else {
+        expect(remaining).toBeUndefined();
+      }
+    },
+  );
 
   it("retires outbound, command, and pairing authority before account shutdown drains", async () => {
     const account = startAccount();

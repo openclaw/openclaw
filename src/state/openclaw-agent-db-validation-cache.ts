@@ -11,7 +11,6 @@ import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
   adoptSqliteSchemaFacts,
   getAdmittedSqliteSchemaFacts,
-  getSqliteReadOperationRevision,
   registerSqliteSchemaMutationListener,
 } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
@@ -145,7 +144,9 @@ export function adoptOpenClawAgentDatabaseSchema(
   // The physical receipt is checked above; current read admission supplies the same
   // schema markers as native adoption, even when a sibling retained its own catalog.
   const admitted =
-    reuseIntegrity && schema ? getSqliteReadOperationRevision(database.db)?.schema : undefined;
+    reuseIntegrity && schema && !database.db.isTransaction
+      ? getAdmittedSqliteSchemaFacts(database.db)
+      : undefined;
   const adopted = Boolean(
     reuseIntegrity &&
     schema &&
