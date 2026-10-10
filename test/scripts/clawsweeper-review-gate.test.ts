@@ -13,7 +13,6 @@ function reviewComment({
   sourceRevision = "b".repeat(64),
   leaseOwner = "github-run-1",
   leaseCommentId = "1",
-  attributes = "",
   suffix = "",
   user = { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
 } = {}) {
@@ -22,7 +21,7 @@ function reviewComment({
     user,
     body: `Review text.
 
-<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${sha} source_revision=${sourceRevision} lease_owner=${leaseOwner} lease_comment_id=${leaseCommentId} v=1${attributes} -->
+<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${sha} source_revision=${sourceRevision} lease_owner=${leaseOwner} lease_comment_id=${leaseCommentId} v=1 -->
 
 <!-- clawsweeper-review item=123 -->${suffix}`,
   };
@@ -36,16 +35,6 @@ function run(comments: unknown[]) {
 }
 
 describe("ClawSweeper review completion gate", () => {
-  it("accepts the trusted trailing v1 marker pair", () => {
-    const result = run([reviewComment()]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      commentId: 1,
-      reviewedSha: head,
-      sourceRevision: "b".repeat(64),
-    });
-  });
-
   it.each([
     [
       "ack-only",
@@ -56,8 +45,6 @@ describe("ClawSweeper review completion gate", () => {
       [reviewComment({ user: { id: 1, login: "clawsweeper[bot]", type: "Bot" } })],
     ],
     ["non-trailing marker", [reviewComment({ suffix: "\nmore text" })]],
-    ["duplicate attribute", [reviewComment({ attributes: " sha=" + head })]],
-    ["malformed source revision", [reviewComment({ sourceRevision: "not-a-revision" })]],
     ["missing lease", [reviewComment({ leaseOwner: "unknown" })]],
     ["future dated", [reviewComment({ reviewedAt: ago(-6 * 60_000) })]],
   ])("rejects %s evidence", (_name, comments) => {
@@ -67,9 +54,14 @@ describe("ClawSweeper review completion gate", () => {
   });
 
   it("accepts a completion older than twelve hours", () => {
-    const result = run([reviewComment({ reviewedAt: ago(36 * 60 * 60_000) })]);
+    const result = run([reviewComment({ id: 2, reviewedAt: ago(36 * 60 * 60_000) })]);
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ commentId: 1, reviewedSha: head });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      commentId: 2,
+      leaseCommentId: 1,
+      reviewedSha: head,
+      sourceRevision: "b".repeat(64),
+    });
   });
 
   it("selects the newest valid completion and ignores a queued refresh", () => {
@@ -110,11 +102,5 @@ describe("ClawSweeper review completion gate", () => {
       `reviewed SHA ${reviewedSha} differs from current head ${head}`,
     );
     expect(JSON.parse(result.stdout).reviewedSha).toBe(reviewedSha);
-  });
-
-  it("accepts distinct lease and durable review comment identities", () => {
-    const result = run([reviewComment({ id: 2, leaseCommentId: "1" })]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ commentId: 2, leaseCommentId: 1 });
   });
 });

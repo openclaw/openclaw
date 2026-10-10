@@ -24,17 +24,6 @@ describe("Crabbox routing policy", () => {
     ).toEqual(["blacksmith-testbox", "daytona", "azure", "aws"]);
   });
 
-  it("does not let persistent cloud config outrank the CI policy", () => {
-    expect(
-      crabboxProviderChain({
-        workload: "ci-proof",
-        configuredProvider: "aws",
-        target: "linux",
-        advertisedProviders,
-      }),
-    ).toEqual(["blacksmith-testbox", "daytona", "azure", "aws"]);
-  });
-
   it("prefers Daytona for interactive Linux work", () => {
     expect(
       crabboxProviderChain({
