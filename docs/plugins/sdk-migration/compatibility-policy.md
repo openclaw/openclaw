@@ -499,6 +499,24 @@ exports retain their signatures and behavior for existing consumers until remova
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
 compatibility registry; these readers emit no runtime warnings.
 
+The prepared incognito actor adapters remain inactive for ordinary unbound
+calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and
+selector reads retain that actor; a selected missing actor returns the normal
+missing result, while a retained ended actor rejects. Archive discovery returns
+no durable artifacts for that actor. Private transcripts are not added to the
+durable Memory ingestion corpus.
+
+The synchronous `loadMemorySessionMetadata` and
+`loadMemorySessionMetadataBatch` helpers remain durable ingestion admission
+guards. `statSessionEntrySync`, batch transcript stats, and synchronous archive
+and selector readers retain their existing native/offline contracts. Explicitly
+bound actor calls refuse synchronous database access with
+`IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
+`loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
+Worker snapshot kernels and supplied transcript statistics remain synchronous;
+this preparation does not change production incognito selection or the
+released synchronous full-row session getter.
+
 ### Memory read missing results
 
 Memory managers now return `status: "ok"` for successful excerpts and

@@ -1,3 +1,4 @@
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeTabIconPreference,
   normalizeUiAppearancePreference,
@@ -33,6 +34,7 @@ export async function writeProfileAppearancePrefs(
   client: GatewayBrowserClient | null,
   preferences: ServerUiPrefs,
   canDispatch: boolean,
+  expectedBackground?: BackgroundPreference | null,
 ): Promise<
   Awaited<ReturnType<RuntimeConfigCapability["runExternalMutation"]>> & { batch: ServerUiPrefs }
 > {
@@ -52,6 +54,14 @@ export async function writeProfileAppearancePrefs(
       ok: false,
       reason: "unavailable",
       error: "Profile preferences are unavailable.",
+      batch,
+    };
+  }
+  if (batch.background !== undefined && expectedBackground === undefined) {
+    return {
+      ok: false,
+      reason: "unavailable",
+      error: "Background preferences have not loaded.",
       batch,
     };
   }
@@ -80,10 +90,20 @@ export async function writeProfileAppearancePrefs(
         isAppearancePref(key) ? [[UI_APPEARANCE_PREFERENCE_KEYS[key], value]] : [],
       ),
     );
-    const result = await saveUserPreferences(client, { entries });
+    const result = await saveUserPreferences(client, {
+      entries,
+      ...(batch.background !== undefined
+        ? { expectedEntries: { [UI_APPEARANCE_PREFERENCE_KEYS.background]: expectedBackground } }
+        : {}),
+    });
     return result.status === "ok"
       ? { ok: true, value: result, refresh: { ok: true }, batch }
-      : { ok: false, reason: "rejected", error: "Profile preferences are unavailable.", batch };
+      : {
+          ok: false,
+          reason: result.status === "conflict" ? "conflict" : "rejected",
+          error: "Profile preferences are unavailable.",
+          batch,
+        };
   } catch (error) {
     const rejected =
       error instanceof GatewayRequestError &&

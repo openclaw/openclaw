@@ -367,11 +367,13 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
+  brandName?: string;
   gatewayDisconnected?: boolean;
 }): string {
-  const base = options.context.endsWith("OpenClaw")
+  const brandName = options.brandName ?? "OpenClaw";
+  const base = options.context.endsWith(brandName)
     ? options.context
-    : `${options.context} — OpenClaw`;
+    : `${options.context} — ${brandName}`;
   if (options.gatewayDisconnected) {
     return `(${t("connection.disconnectedTitle")}) ${base}`;
   }

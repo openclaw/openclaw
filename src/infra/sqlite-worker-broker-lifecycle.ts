@@ -28,6 +28,10 @@ import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 type RuntimeSource = { moduleUrl: string; carrierUrl: URL; sourceLoaderUrl?: string };
 
+function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+}
+
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
   explicitSqliteCloseReleasesNativeResources,
@@ -91,10 +95,6 @@ export function createSqliteWorkerLifecycle({
     return prepared;
   }
 
-  function beginClose(): number {
-    return ++closeEpoch;
-  }
-
   async function finishClose(epoch: number, succeeded: boolean): Promise<void> {
     const results = await Promise.allSettled([
       ...[...preparedRuntimes].flatMap(([prepared, runtime]) =>
@@ -106,9 +106,7 @@ export function createSqliteWorkerLifecycle({
       ),
       ...[...slots].filter((slot) => !reservedSlots.has(slot)).map(retireEmpty),
     ]);
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
+    const errors = cleanupFailures(results);
     if (errors.length) {
       await Promise.allSettled([...preparedRuntimes.keys()].map((prepared) => prepared.release()));
       throwSqliteLifecycleErrors(errors, "SQLite prepared runtime cleanup failed");
@@ -130,7 +128,7 @@ export function createSqliteWorkerLifecycle({
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
-    const epoch = beginClose();
+    const epoch = ++closeEpoch;
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     inputAdmission.invalidatePreparations();
     for (const waiting of waiters) {
@@ -148,9 +146,7 @@ export function createSqliteWorkerLifecycle({
       const results = await Promise.allSettled(
         [...actors.values()].map((actor) => closeActor(actor)),
       );
-      errors.push(
-        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-      );
+      errors.push(...cleanupFailures(results));
       await inputAdmission.joinPreparations();
     } catch (error) {
       errors.push(error);
@@ -368,9 +364,7 @@ export function createSqliteWorkerLifecycle({
     await Promise.all(retained.map(async (actor) => await actor.settlement));
     return async () => {
       const results = await retirement;
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
+      const errors = cleanupFailures(results);
       throwSqliteLifecycleErrors(errors, "Retained SQLite worker cleanup failed");
       await Promise.all(
         [...slots]
@@ -424,9 +418,7 @@ export function createSqliteWorkerLifecycle({
     actor.retirement = (async () => {
       const results = await Promise.allSettled(clients.map((client) => client.close()));
       await actor.settlement;
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
+      const errors = cleanupFailures(results);
       if (!errors.length) {
         try {
           await closeActor(actor);

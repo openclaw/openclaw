@@ -203,7 +203,9 @@ export function prepareSqliteDatabaseAdmission(
         exchange(filename, true);
         const opened = prepareSqliteDatabaseAdmission(filename);
         if (managed && opened === undefined) {
-          throw new Error("SQLite worker file creation requires host authority", { cause: error });
+          throw new Error(`SQLite worker file creation requires host authority: ${filename}`, {
+            cause: error,
+          });
         }
         return opened;
       }
@@ -525,28 +527,23 @@ export function publishSqliteDatabaseAdmission<T>(
   const publish = (publishedRevision = revision) =>
     publishFact(record, key, value, publishedRevision);
   const native = getSqliteNativeAdmissionFacts(database);
-  if (native) {
-    native.set(key.name, {
-      value,
-      revision,
-      schemaDependent: key.schemaDependent === true,
-      ddlRevision: state.ddlRevisions.get(database) ?? 0,
-    });
-    return;
-  }
-  if (!database.isTransaction) {
+  if (!native && !database.isTransaction) {
     publish();
     return;
   }
-  const local = state.local.get(database) ?? new Map<string, StagedAdmissionFact>();
-  state.local.set(database, local);
-  const previous = local.get(key.name);
   const staged: StagedAdmissionFact = {
     value,
     revision,
     schemaDependent: key.schemaDependent === true,
     ddlRevision: state.ddlRevisions.get(database) ?? 0,
   };
+  if (native) {
+    native.set(key.name, staged);
+    return;
+  }
+  const local = state.local.get(database) ?? new Map<string, StagedAdmissionFact>();
+  state.local.set(database, local);
+  const previous = local.get(key.name);
   const restore = () => {
     if (state.local.get(database) !== local) {
       return;
@@ -637,7 +634,7 @@ export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void 
 }
 
 export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
-  // Native cleanup may close before corruption reaches the owner; revoke that exact file.
+  // A close failure can report corruption after native disposal; keep revocation on that file.
   const record = state.connections.get(database) ?? admission(database);
   if (record) {
     const cell = new Int32Array(record.generation);
@@ -718,7 +715,8 @@ export function captureSqliteDatabaseAdmissions(
     const facts = new Map([...record.facts].filter(([, fact]) => valid(record, fact)));
     if (cursor) {
       const cell = new Int32Array(record.generation);
-      const revision = `${Atomics.load(cell, 0)}:${Atomics.load(cell, 1)}:${Atomics.load(cell, 4)}:${[...record.writers.keys()].join(",")}:${[...record.writeScopes.keys()].join("\0")}:${[...facts.values()].map((fact) => fact.publication).join(",")}`;
+      // A reused inode starts a new custody generation even when its counters match.
+      const revision = `${record.generationId}:${Atomics.load(cell, 0)}:${Atomics.load(cell, 1)}:${Atomics.load(cell, 4)}:${[...record.writers.keys()].join(",")}:${[...record.writeScopes.keys()].join("\0")}:${[...facts.values()].map((fact) => fact.publication).join(",")}`;
       if (cursor.get(record.identity) === revision) {
         continue;
       }

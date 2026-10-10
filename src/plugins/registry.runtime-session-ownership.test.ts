@@ -28,6 +28,41 @@ function createApis(runtime: PluginRuntime, config: OpenClawConfig = {}) {
 }
 
 describe("plugin registry runtime session ownership", () => {
+  it.each(["key", "id"] as const)(
+    "fences a managed asynchronous %s read when its plugin retires before disclosure",
+    async (selection) => {
+      const runtime = createPluginRuntime();
+      const pending = createDeferredCore<SessionEntry | undefined>();
+      const entry = { sessionId: "managed", updatedAt: 1 };
+      runtime.agent.session.getSessionEntryAsync = () => pending.promise;
+      runtime.agent.session.getSessionEntryByIdAsync = async () => {
+        const selectedEntry = await pending.promise;
+        return selectedEntry
+          ? { sessionKey: "agent:main:managed", entry: selectedEntry }
+          : undefined;
+      };
+      const registry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "managed-reader",
+        source: "/plugins/managed-reader/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = registry.createApi(record, { config: {} });
+      const reading =
+        selection === "key"
+          ? api.runtime.agent.session.getSessionEntryAsync({ sessionKey: "agent:main:managed" })
+          : api.runtime.agent.session.getSessionEntryByIdAsync({
+              agentId: "main",
+              sessionId: "managed",
+            });
+      revokePluginRecord(registry.registry, record);
+      pending.resolve(entry);
+      await expect(reading).rejects.toThrow("runtime is no longer active");
+    },
+  );
+
   it.each(["factory", "read", "snapshot"] as const)(
     "revokes a session listing reader when its plugin retires during %s",
     async (phase) => {

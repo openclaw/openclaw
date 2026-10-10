@@ -16,12 +16,13 @@ import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thin
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
+import { resolveContextTokens } from "./model-selection-context.js";
 import {
   createInitialState,
   makeConfiguredModel,
   makeEntry,
 } from "./model-selection.inputs.test-support.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { createModelSelectionState } from "./model-selection.js";
 
 type PersistReplySessionEntry =
   (typeof import("./session-entry-persistence.js"))["persistReplySessionEntry"];

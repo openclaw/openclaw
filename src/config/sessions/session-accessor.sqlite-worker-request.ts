@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -400,7 +400,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
               // before returning this writer section; preliminary admissions release separately.
               await requested.released.promise;
               if (metadata?.failure) {
-                throw metadata.failure;
+                throw toErrorObject(metadata.failure, "SQLite worker admission failed");
               }
               return completed && !workerError && !transportError && !params.getFailure?.()
                 ? result

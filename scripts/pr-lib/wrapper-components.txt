@@ -38,6 +38,7 @@ packages/gateway-protocol/src/schema/worker-session-tools.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
+packages/gateway-protocol/src/session-communication.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
@@ -177,6 +178,7 @@ scripts/lib/gateway-server-test-plan.mts
 scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
 scripts/lib/managed-child-process.mts
+scripts/lib/managed-cleanup-handoff.mts
 scripts/lib/managed-windows-job-entrypoint.mts
 scripts/lib/managed-windows-job-launcher.mts
 scripts/lib/managed-windows-job.mts
@@ -332,6 +334,7 @@ src/agents/worktrees/preparation-timing.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts
+src/agents/worktrees/registry-publication.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
 src/agents/worktrees/registry-run-end.ts
@@ -340,6 +343,7 @@ src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
+src/agents/sandbox/registry-publication.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts
@@ -634,6 +638,7 @@ src/config/sessions/session-incognito-transcript-contract.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-pending-input-operations.types.ts
@@ -744,6 +749,7 @@ src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
 src/gateway/worker-environments/placement-state.ts
+src/gateway/worker-environments/placement-turn-authority.receipt.ts
 src/gateway/worker-environments/placement-turn-authority.ts
 src/gateway/worker-environments/placement-workspace-journal.ts
 src/gateway/worker-environments/placement-workspace-journal.types.ts
@@ -1011,6 +1017,7 @@ src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
+src/infra/sqlite-file-generation-worker.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
@@ -1071,6 +1078,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-snapshot.ts
+src/infra/sqlite-source-fence-contract.ts
+src/infra/sqlite-source-fence.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-source-revision.ts
 src/infra/sqlite-source-revision.worker.ts
@@ -1093,6 +1102,7 @@ src/infra/sqlite-worker-broker.ts
 src/infra/sqlite-worker-input-admission.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
+src/infra/sqlite-worker-database-admission-relay.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
@@ -1379,6 +1389,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
@@ -1615,6 +1626,7 @@ src/shared/regexp.ts
 src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
+src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
@@ -1625,6 +1637,7 @@ src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
+src/state/agent-database-preparation-context.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts

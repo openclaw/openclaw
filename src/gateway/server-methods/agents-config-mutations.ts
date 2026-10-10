@@ -1,3 +1,4 @@
+import { createAgent } from "../../agents/agent-create.js";
 import { hasAgentRosterProperty, tryResolveSoleAgentId } from "../../agents/agent-roster.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -7,7 +8,7 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { mutateConfigFileWithRetry } from "../../config/config.js";
+import { mutateConfigFileWithRetry, transformConfigFileWithRetry } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
 import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
@@ -72,6 +73,20 @@ export function isImplicitAgentModelUpdate(
     isModelOnlyUpdate(params) &&
     params.agentRuntime !== undefined
   );
+}
+
+export function createAgentConfigEntry(
+  params: Omit<Parameters<typeof createAgent>[0], "transformConfig">,
+  writeOptions?: ConfigWriteOptions,
+) {
+  return createAgent({
+    ...params,
+    transformConfig: (mutation) =>
+      transformConfigFileWithRetry({
+        ...mutation,
+        writeOptions: copyRuntimeConfigWriteApplication(writeOptions, mutation.writeOptions ?? {}),
+      }),
+  });
 }
 
 export async function updateAgentConfigEntry(

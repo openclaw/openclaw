@@ -217,33 +217,32 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
       pending = sessionTranscriptIndexNeedsReconcile(db, sessionId);
     } else {
       for (const [index, table] of projectionTables.entries()) {
-        const removed =
-          withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .deleteFrom(table)
-                .where(
+        const budget = remainingRows[index]!;
+        const rows = executeSqliteQuerySync(
+          db,
+          kysely
+            .selectFrom(table)
+            .select("rowid as rowId")
+            .where("session_id", "=", sessionId)
+            .limit(budget + 1),
+        ).rows;
+        unfinished ||= rows.length > budget;
+        const selected = rows.slice(0, budget);
+        // Empty cleanup must not publish a write receipt that invalidates clean search hits.
+        if (selected.length > 0) {
+          const removed =
+            withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+              executeSqliteQuerySync(
+                db,
+                kysely.deleteFrom(table).where(
                   "rowid",
                   "in",
-                  kysely
-                    .selectFrom(table)
-                    .select("rowid")
-                    .where("session_id", "=", sessionId)
-                    .limit(remainingRows[index]!),
+                  selected.map((row) => row.rowId),
                 ),
-            ),
-          ).numAffectedRows ?? 0n;
-        remainingRows[index]! -= Number(removed);
-        unfinished ||=
-          executeSqliteQueryTakeFirstSync(
-            db,
-            kysely
-              .selectFrom(table)
-              .select("session_id")
-              .where("session_id", "=", sessionId)
-              .limit(1),
-          ) !== undefined;
+              ),
+            ).numAffectedRows ?? 0n;
+          remainingRows[index]! -= Number(removed);
+        }
       }
     }
     // Cleanup triggers can requeue this session; consume only after its final observation.

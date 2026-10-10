@@ -303,40 +303,28 @@ describe("registerPluginHttpRoute", () => {
     expect(adminRoute?.gatewayMethodDispatchAllowed).toBe(true);
   });
 
-  it("returns noop unregister when path is missing", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
-    const unregister = registerPluginHttpRoute({
-      path: "",
-      auth: "plugin",
-      handler: vi.fn(),
-      registry,
-      accountId: "default",
-      log: (msg) => logs.push(msg),
-    });
-
-    expect(registry.httpRoutes).toHaveLength(0);
-    expect(logs).toEqual(['plugin: webhook path missing for account "default"']);
-    unregister();
-  });
-
-  it("throws when strict lifecycle registration has no path", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
-
-    expect(() =>
-      registerPluginHttpRoute({
+  it.each([false, true])("rejects a missing path (strict: %s)", (throwOnFailure) => {
+    const { registry, logs, register } = createLoggedRouteHarness();
+    const registerMissingPath = () =>
+      register({
         path: "",
         auth: "plugin",
-        handler: vi.fn(),
-        registry,
         accountId: "default",
-        throwOnFailure: true,
-        log: (msg) => logs.push(msg),
-      }),
-    ).toThrow('plugin: webhook path missing for account "default"');
+        throwOnFailure,
+      });
+
+    let unregister: (() => void) | undefined;
+    if (throwOnFailure) {
+      expect(registerMissingPath).toThrow('plugin: webhook path missing for account "default"');
+    } else {
+      unregister = registerMissingPath();
+    }
     expect(registry.httpRoutes).toHaveLength(0);
     expect(logs).toEqual(['plugin: webhook path missing for account "default"']);
+    if (!throwOnFailure) {
+      expect(unregister).toBeTypeOf("function");
+    }
+    unregister?.();
   });
 
   it("treats canonical exact-path aliases as one route", () => {
@@ -609,38 +597,52 @@ describe("registerPluginHttpRoute", () => {
   it.each([
     {
       name: "source-aware replacement cannot evict a source-less route",
-      existingSource: undefined,
-      replacementSource: "demo-webhook",
+      existing: { pluginId: "demo", source: undefined },
+      replacement: { pluginId: "demo", source: "demo-webhook" },
     },
     {
       name: "source-less replacement cannot evict a source-aware route",
-      existingSource: "demo-webhook",
-      replacementSource: undefined,
+      existing: { pluginId: "demo", source: "demo-webhook" },
+      replacement: { pluginId: "demo", source: undefined },
     },
-  ])("$name", ({ existingSource, replacementSource }) => {
+    {
+      name: "throws when strict registration cannot replace another plugin's route",
+      existing: { pluginId: "demo-a", source: undefined },
+      replacement: { pluginId: "demo-b", source: undefined },
+    },
+    {
+      name: "anonymous replacement cannot evict an owned route",
+      existing: { pluginId: "demo-a", source: undefined },
+      replacement: { pluginId: undefined, source: undefined },
+    },
+    {
+      name: "an owned replacement cannot evict an anonymous route",
+      existing: { pluginId: undefined, source: undefined },
+      replacement: { pluginId: "demo-a", source: undefined },
+    },
+  ])("$name", ({ existing, replacement }) => {
     const { registry, register } = createLoggedRouteHarness();
     const existingHandler = vi.fn();
     register({
       path: "/plugins/demo",
       auth: "plugin",
       handler: existingHandler,
-      pluginId: "demo",
-      source: existingSource,
+      ...existing,
     });
 
     expect(() =>
       register({
         path: "/plugins/demo",
         auth: "plugin",
-        pluginId: "demo",
-        source: replacementSource,
+        ...replacement,
         replaceExisting: true,
         throwOnFailure: true,
       }),
     ).toThrow("plugin: route replacement denied");
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.handler).toBe(existingHandler);
-    expect(registry.httpRoutes[0]?.source).toBe(existingSource);
+    expect(registry.httpRoutes[0]?.pluginId).toBe(existing.pluginId);
+    expect(registry.httpRoutes[0]?.source).toBe(existing.source);
   });
 
   it.each([
@@ -659,59 +661,6 @@ describe("registerPluginHttpRoute", () => {
       replaceExisting,
       expectedLogFragment,
     });
-  });
-
-  it("throws when strict registration cannot replace another plugin's route", () => {
-    const { registry, register } = createLoggedRouteHarness();
-    register({
-      path: "/plugins/demo",
-      auth: "plugin",
-      pluginId: "demo-a",
-    });
-
-    expect(() =>
-      register({
-        path: "/plugins/demo",
-        auth: "plugin",
-        replaceExisting: true,
-        throwOnFailure: true,
-        pluginId: "demo-b",
-      }),
-    ).toThrow("plugin: route replacement denied");
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.pluginId).toBe("demo-a");
-  });
-
-  it.each([
-    {
-      name: "anonymous replacement cannot evict an owned route",
-      existingPluginId: "demo-a",
-      replacementPluginId: undefined,
-    },
-    {
-      name: "an owned replacement cannot evict an anonymous route",
-      existingPluginId: undefined,
-      replacementPluginId: "demo-a",
-    },
-  ])("$name", ({ existingPluginId, replacementPluginId }) => {
-    const { registry, register } = createLoggedRouteHarness();
-    register({
-      path: "/plugins/demo",
-      auth: "plugin",
-      pluginId: existingPluginId,
-    });
-
-    expect(() =>
-      register({
-        path: "/plugins/demo",
-        auth: "plugin",
-        replaceExisting: true,
-        throwOnFailure: true,
-        pluginId: replacementPluginId,
-      }),
-    ).toThrow("plugin: route replacement denied");
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.pluginId).toBe(existingPluginId);
   });
 
   it("preserves shipped anonymous-to-anonymous lifecycle replacement", () => {

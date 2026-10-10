@@ -129,6 +129,29 @@ export async function admitFollowupTurn(params: {
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
     kind: "queued_followup",
+    // Settings writers can refresh this queued source while admission waits.
+    // Copy only selection at the admission owner’s writer fence, before any
+    // source-adoption await. Session identity and authority keep their original
+    // bindings; later preference edits cannot alter this detached turn selection.
+    captureRunSelection: () => {
+      const selected = params.queued.run;
+      run = {
+        ...run,
+        provider: selected.provider,
+        model: selected.model,
+        requestedRouteResolution: selected.requestedRouteResolution,
+        hasAutoFallbackProvenance: selected.hasAutoFallbackProvenance,
+        autoFallbackPrimaryProbe: selected.autoFallbackPrimaryProbe
+          ? { ...selected.autoFallbackPrimaryProbe }
+          : undefined,
+        hasSessionModelOverride: selected.hasSessionModelOverride,
+        modelOverrideSource: selected.modelOverrideSource,
+        authProfileId: selected.authProfileId,
+        authProfileIdSource: selected.authProfileIdSource,
+        thinkLevel: selected.thinkLevel,
+        thinkingCatalog: selected.thinkingCatalog,
+      };
+    },
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
@@ -142,6 +165,8 @@ export async function admitFollowupTurn(params: {
     return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
+  const selectionEntry = admission.sessionEntry ?? initialEntry;
+  const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
   try {
@@ -219,7 +244,10 @@ export async function admitFollowupTurn(params: {
     }
     run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
-      entry: activeEntry,
+      // Reconcile the probe against the same admitted preferences, not a newer
+      // selection published while source adoption awaited. Lifecycle checks and
+      // compaction still consume fresh session state independently above/below.
+      entry: admittedSelectionEntry,
       sessionKey: replySessionKey,
     });
     const queued: FollowupRun = { ...params.queued, run };

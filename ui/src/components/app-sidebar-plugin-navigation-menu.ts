@@ -32,11 +32,6 @@ export function renderSidebarPluginNavigationMenuForController(controller: Sideb
         }
       }
     },
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.pluginNavigationMenuPosition === position) {
-        controller.closePositionedMenu("pluginNavigation", { restoreFocus });
-      }
-    },
+    ...controller.positionedMenuHandlers("pluginNavigation"),
   });
 }

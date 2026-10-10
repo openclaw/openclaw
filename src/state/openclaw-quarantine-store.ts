@@ -17,9 +17,9 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
+import { readSqliteFileGenerationSync } from "../infra/sqlite-file-generation-worker.js";
 import {
   parseSqliteFileGeneration,
-  readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
@@ -122,6 +122,7 @@ export function readOpenClawAgentIntegrityVerification(
   env: NodeJS.ProcessEnv = process.env,
   consume = false,
 ): OpenClawAgentIntegrityVerification | undefined {
+  const storePath = resolveQuarantineStorePath(env);
   const read = (database: DatabaseSync) => {
     const query = getNodeSqliteKysely<IntegrityDatabase>(database);
     const row = executeSqliteQueryTakeFirstSync(
@@ -157,14 +158,16 @@ export function readOpenClawAgentIntegrityVerification(
   };
   if (consume) {
     // Failure cannot admit a writer while leaving an old clean receipt reusable.
+    if (statSync(storePath, { throwIfNoEntry: false }) === undefined) {
+      return undefined;
+    }
     return withQuarantineWriter(env, (database) =>
       runSqliteImmediateTransactionSync(database, () => read(database), {
-        databaseLabel: resolveQuarantineStorePath(env),
+        databaseLabel: storePath,
         operationLabel: "quarantine.integrity.consume",
       }),
     );
   }
-  const storePath = resolveQuarantineStorePath(env);
   if (!existsSync(storePath)) {
     return undefined;
   }
@@ -251,6 +254,9 @@ export function clearOpenClawAgentIntegrityVerification(
   if (runtimeProof === "revoke") {
     invalidateOpenClawAgentDatabaseValidation(pathname);
   }
+  if (statSync(resolveQuarantineStorePath(env), { throwIfNoEntry: false }) === undefined) {
+    return;
+  }
   withQuarantineWriter(env, (database) =>
     runSqliteImmediateTransactionSync(
       database,
@@ -315,6 +321,9 @@ export function markOpenClawAgentIntegrityClean(
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
     return "file-changed";
+  }
+  if (statSync(resolveQuarantineStorePath(env), { throwIfNoEntry: false }) === undefined) {
+    return "verification-missing";
   }
   return withQuarantineWriter(env, (database) => {
     const query = getNodeSqliteKysely<IntegrityDatabase>(database);
@@ -511,7 +520,7 @@ function readQuarantineDecision(
       throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
     }
     try {
-      const currentGeneration = readStableSqliteFileGeneration(path.resolve(pathname));
+      const currentGeneration = readSqliteFileGenerationSync(path.resolve(pathname));
       if (!sameSqliteFileGeneration(verifiedGeneration, currentGeneration)) {
         return undefined;
       }

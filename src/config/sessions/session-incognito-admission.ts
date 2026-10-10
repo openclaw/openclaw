@@ -54,7 +54,8 @@ type IncognitoReceiptOperation =
   | "session.rewrite.commit"
   | "session.event.append"
   | "session.correction.commit"
-  | "session.lock.replace";
+  | "session.lock.replace"
+  | "session.workerTranscript.commit";
 
 export function readIncognitoGrantFacts<Key extends keyof IncognitoSessionOperations>(
   received: unknown,

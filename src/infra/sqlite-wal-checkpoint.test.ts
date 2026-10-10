@@ -240,7 +240,7 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(() => reader.next()).toThrow(RangeError);
       expect(db.isTransaction).toBe(false);
       expect(maintenance.inspectIdle?.()).toBe("retire");
-      expect(maintenance.health?.activeReaders).toEqual([]);
+      expect(readSqliteReaderDiagnosticsForPath(databasePath).activeReaders).toEqual([]);
       expect(() => assertNoActiveSqliteReaders(db, "native idle probe")).not.toThrow();
       reader.return?.();
       expect(maintenance.inspectIdle?.()).toBe("healthy");

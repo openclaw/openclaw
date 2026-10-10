@@ -8,6 +8,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
+import {
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
@@ -18,6 +22,7 @@ import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { captureIncognitoSessionMutationFacts } from "./session-sharing-incognito.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
@@ -103,6 +108,12 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         return;
       }
       const sourceCfg = context.getRuntimeConfig();
+      const binding = captureIncognitoSessionBinding({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+      });
+      const actorFacts =
+        binding && captureIncognitoSessionMutationFacts(binding, target.sessionKey, true);
       const initialSharingTarget = resolveSessionSharingTarget({
         cfg: sourceCfg,
         sessionKey: target.sessionKey,
@@ -150,17 +161,28 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       const assertSourceCurrent: SessionSourceAssertion = Object.assign(
         () => {
           assertLifetimeCurrent();
-          if (!companionTargetIsVisible(target, client, context)) {
+          if (
+            !companionTargetIsVisible(
+              target,
+              client,
+              context,
+              actorFacts ? { target: actorFacts.readCurrent().target } : undefined,
+            )
+          ) {
             refuseSource();
           }
         },
         // The source may be incognito even when Side chat's private execution is durable.
-        isIncognitoSessionKey(target.sessionKey)
+        isIncognitoSessionKey(target.sessionKey) && !binding
           ? { nativeSource: true }
           : {
               async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
                 assertLifetimeCurrent();
-                const read = await prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent);
+                const read = await (binding
+                  ? withIncognitoSessionBinding(binding, () =>
+                      prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent),
+                    )
+                  : prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent));
                 const assertCurrent = () => {
                   assertLifetimeCurrent();
                   read.assertCurrent();
@@ -187,25 +209,32 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
                 }
                 return {
                   assertCurrent,
-                  checks: [
-                    {
-                      predicate: {
-                        source: read.source,
-                        sessionKey: sourceTarget.storeKey,
-                        fields: ["sessionId", "createdActor", "visibility", "incognito"],
-                        expected: read.target?.entry,
-                      },
-                      refuse: refuseSource,
-                    },
-                  ],
+                  checks: read.actorSource
+                    ? []
+                    : [
+                        {
+                          predicate: {
+                            source: read.source,
+                            sessionKey: sourceTarget.storeKey,
+                            fields: ["sessionId", "createdActor", "visibility", "incognito"],
+                            expected: read.target?.entry,
+                          },
+                          refuse: refuseSource,
+                        },
+                      ],
                   release: read.release,
                 };
               },
             },
       );
       let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let retainedSource: PreparedSessionSourceAuthority | undefined;
       try {
         assertInputCurrent?.();
+        if (binding) {
+          retainedSource = await assertSourceCurrent.prepareSessionSource?.();
+          retainedSource?.assertCurrent();
+        }
         capturedOperator = await captureGatewayOperatorRunAuthority({
           client,
           context,
@@ -226,6 +255,8 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
           ...(signal ? { signal } : {}),
         });
+        retainedSource?.assertCurrent();
+        assertSourceCurrent();
         capturedOperator?.authority.assertCurrent();
         respond(true, result);
       } catch (error) {
@@ -262,6 +293,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         );
       } finally {
         capturedOperator?.release();
+        await retainedSource?.release?.();
       }
     },
   ),

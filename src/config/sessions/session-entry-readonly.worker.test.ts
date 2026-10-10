@@ -1,6 +1,14 @@
-import { mkdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { backup, type DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   isSessionNodePayloadSelect,
@@ -151,7 +159,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
   });
 });
 
-it("resolves runtime targets without freshness probes and rejects owner-observed schema changes", async () => {
+it("resolves runtime targets through an admitted reader without freshness probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionId = "runtime-target-session";
@@ -186,14 +194,17 @@ it("resolves runtime targets without freshness probes and rejects owner-observed
       queries.restore();
     }
 
-    const peer = nodeSqlite.openNodeSqliteDatabase(database.path);
+    const replacement = `${database.path}.replacement`;
+    await backup(database.db, replacement);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(replacement);
     try {
       peer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
-      await expect(read()).rejects.toThrow("newer schema version");
     } finally {
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
       peer.close();
     }
+    renameSync(replacement, database.path);
+    await expect(read()).rejects.toThrow("newer schema version");
   });
 });
 
