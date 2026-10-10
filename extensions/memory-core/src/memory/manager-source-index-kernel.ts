@@ -7,12 +7,10 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   runSqliteImmediateTransactionSync,
+  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
-import {
-  markMemoryVectorRebuildRequired,
-  memoryTableExists,
-} from "./manager-vector-rebuild-state.js";
+import { markMemoryVectorRebuildRequired } from "./manager-vector-rebuild-state.js";
 import { createMemoryVectorWriter } from "./manager-vector-write.js";
 
 const MAX_VECTOR_POINT_DELETES = 32;
@@ -249,7 +247,7 @@ export class MemorySourceIndexKernel {
   }
 
   private deleteVectors(pathname: string, source: MemorySource, ids?: readonly string[]): void {
-    if (!memoryTableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
+    if (!tableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
       return;
     }
     if (!this.state.vector.enabled || this.state.vector.available !== true) {

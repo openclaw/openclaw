@@ -24,11 +24,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
-import type {
-  AgentDatabaseExecutionScope,
-  OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -61,38 +57,129 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-it("shares cold database admission with an immediate heartbeat", async () => {
-  const agentId = "heartbeat-admission";
-  const scope = {
-    agentId,
-    env: state.env,
-    storePath: state.sessionsDir(agentId) + "/sessions.json",
-    sessionKey: `agent:${agentId}:hook`,
+function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {}) {
+  return { agentId: "ops", env: state.env, storePath, sessionKey: "global", ...scope };
+}
+
+function holdExecution(
+  stage:
+    | "while-queued"
+    | "before-open"
+    | "after-row"
+    | "after-release"
+    | "after-discovery-cleanup"
+    | "reply",
+  shouldHold: (execution: OpenClawAgentDatabaseExecution) => boolean = () => true,
+  once = stage === "reply",
+) {
+  const gate = {
+    entered: createDeferredCore(),
+    release: createDeferredCore(),
+    armed: stage !== "reply",
+    executionReleased: false,
+    restore: () => intercept.mockRestore(),
   };
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const hold = async (execution: OpenClawAgentDatabaseExecution) => {
+    if (gate.armed && shouldHold(execution)) {
+      gate.armed = !once;
+      gate.entered.resolve();
+      await gate.release.promise;
+    }
+  };
   const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
-  let held = false;
   const intercept = vi
     .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
       const execution = capture(...args);
-      return {
-        ...execution,
-        async prepare(source: AgentDatabaseRequestExecutionSource): Promise<void> {
-          if (!held && execution.agentId === agentId) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
+      if (stage === "while-queued") {
+        gate.entered.resolve();
+      }
+      const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
+      if (stage === "before-open") {
+        overrides.prepare = async (source) => {
+          await hold(execution);
           await execution.prepare(source);
+        };
+      } else if (stage === "after-row" || stage === "reply") {
+        overrides.runExisting = (source, operation, options) =>
+          execution.runExisting(
+            source,
+            async (worker) => {
+              const execute: typeof worker.execute = async (command, requestOptions) => {
+                const result = await worker.execute(command, requestOptions);
+                await hold(execution);
+                return result;
+              };
+              const result = await operation(stage === "reply" ? { execute } : worker);
+              if (stage === "after-row") {
+                await hold(execution);
+              }
+              return result;
+            },
+            options,
+          );
+      } else if (stage === "after-release" || stage === "after-discovery-cleanup") {
+        overrides.release = async () => {
+          await execution.release();
+          gate.executionReleased = true;
+          if (stage === "after-release") {
+            await hold(execution);
+          }
+        };
+      }
+      return { ...execution, ...overrides };
+    });
+  return gate;
+}
+
+function interceptRegistryRead(onError: (error: unknown) => void) {
+  const prepare = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
+  return vi
+    .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
+    .mockImplementation((...args) => {
+      const snapshot = prepare(...args);
+      return {
+        ...snapshot,
+        assertCurrent() {
+          try {
+            snapshot.assertCurrent();
+          } catch (error) {
+            onError(error);
+            throw error;
+          }
         },
       };
     });
+}
+
+async function readFirstSession(
+  kind: "read" | "admission",
+  scope: SessionAccessScope,
+  assertCurrent?: () => void,
+) {
+  if (kind === "read") {
+    return readSessionEntryInWorker(scope, assertCurrent);
+  }
+  const loaded = await loadSessionEntryForAdmission(scope, { assertCurrent });
+  try {
+    loaded.databaseClaim.assertCurrent();
+    return loaded.entry;
+  } finally {
+    await loaded.databaseClaim.release();
+  }
+}
+
+it("shares cold database admission with an immediate heartbeat", async () => {
+  const agentId = "heartbeat-admission";
+  const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
+    agentId,
+    sessionKey: `agent:${agentId}:hook`,
+  });
+  const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
   const first = readSessionEntryInWorker(scope);
   let heartbeat: Promise<Awaited<ReturnType<typeof resolveHeartbeatSession>>> | undefined;
   try {
-    await awaitGateBeforeSettlement(entered.promise, first, "Hook admission was not held");
+    await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
     heartbeat = Promise.resolve(
       resolveHeartbeatSession(
         { session: { store: scope.storePath } },
@@ -103,39 +190,37 @@ it("shares cold database admission with an immediate heartbeat", async () => {
       ),
     );
     void heartbeat.catch(() => {});
-    release.resolve();
+    gate.release.resolve();
     await expect(first).resolves.toBeUndefined();
     await expect(heartbeat).resolves.toMatchObject({ entry: undefined });
   } finally {
-    release.resolve();
+    gate.release.resolve();
     await Promise.allSettled([first, heartbeat]);
-    intercept.mockRestore();
+    gate.restore();
   }
 });
 
 it("preserves heartbeat entries and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
     const agentId = `heartbeat-${reader}`;
-    const scope = {
+    const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
       agentId,
-      env: state.env,
-      storePath: state.sessionsDir(agentId) + "/sessions.json",
       sessionKey: `agent:${agentId}:main`,
-    };
+    });
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
     const cfg = { session: { store: scope.storePath } };
+    const expected = {
+      sessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+      suppressOriginatingContext: false,
+    };
     expect(fs.existsSync(databasePath)).toBe(false);
     if (reader === "native") {
       expect(loadSessionEntry(scope)).toBeUndefined();
     } else {
       await expect(
         resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-      ).resolves.toEqual({
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-        suppressOriginatingContext: false,
-        entry: undefined,
-      });
+      ).resolves.toEqual({ ...expected, entry: undefined });
     }
     expect(fs.existsSync(databasePath)).toBe(true);
     expect(fs.existsSync(scope.storePath)).toBe(false);
@@ -152,25 +237,18 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     expect(native).toMatchObject(entry);
     await expect(
       resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-    ).resolves.toEqual({
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      suppressOriginatingContext: false,
-      entry: native,
-    });
+    ).resolves.toEqual({ ...expected, entry: native });
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
 
 it("refuses a successor registration instead of extending the captured pending join", async () => {
   const agentId = "bounded-registration";
-  const scope = {
+  const scope = storedScope(state.statePath("pending-registration", agentId, "sessions.json"), {
     agentId,
     defaultAgentId: agentId,
-    env: state.env,
-    storePath: state.statePath("pending-registration", agentId, "sessions.json"),
     sessionKey: `agent:${agentId}:missing`,
-  };
+  });
   const agentPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
   const capture = () =>
     registryListing.captureOpenClawAgentDatabaseRegistration({
@@ -182,35 +260,21 @@ it("refuses a successor registration instead of extending the captured pending j
   const successor = capture();
   const repeatedJoin = createDeferredCore<Error>();
   let joined = false;
-  const prepare = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
-  const discovery = vi
-    .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-    .mockImplementation((...args) => {
-      const snapshot = prepare(...args);
-      return {
-        ...snapshot,
-        assertCurrent() {
-          try {
-            snapshot.assertCurrent();
-          } catch (error) {
-            if (error instanceof registryListing.AgentDatabaseRegistryPendingError) {
-              const settle = error.waitForSettlement;
-              vi.spyOn(error, "waitForSettlement").mockImplementation(async () => {
-                if (joined) {
-                  repeatedJoin.resolve(new Error("Discovery joined the successor registration"));
-                  return settle();
-                }
-                joined = true;
-                first.finish();
-                await settle();
-                successor.begin();
-              });
-            }
-            throw error;
-          }
-        },
-      };
-    });
+  const discovery = interceptRegistryRead((error) => {
+    if (error instanceof registryListing.AgentDatabaseRegistryPendingError) {
+      const settle = error.waitForSettlement;
+      vi.spyOn(error, "waitForSettlement").mockImplementation(async () => {
+        if (joined) {
+          repeatedJoin.resolve(new Error("Discovery joined the successor registration"));
+          return settle();
+        }
+        joined = true;
+        first.finish();
+        await settle();
+        successor.begin();
+      });
+    }
+  });
   first.begin();
   const reading = readSessionEntryInWorker(scope).catch((error: unknown) => error);
   try {
@@ -234,13 +298,11 @@ it.each(
   "waits for pending first registration before a fresh $kind (caller revoked=$revoked)",
   async ({ kind, revoked }) => {
     const agentId = `pending-${kind}-${revoked}`;
-    const scope = {
+    const scope = storedScope(state.statePath("pending-registration", agentId, "sessions.json"), {
       agentId,
       defaultAgentId: agentId,
-      env: state.env,
-      storePath: state.statePath("pending-registration", agentId, "sessions.json"),
       sessionKey: `agent:${agentId}:missing`,
-    };
+    });
     const registered = createDeferredCore();
     const release = createDeferredCore();
     const blocked = createDeferredCore();
@@ -284,43 +346,15 @@ it.each(
       }
     };
     let second: Promise<unknown> | undefined;
-    let restoreDiscovery: (() => void) | undefined;
+    let discovery: ReturnType<typeof interceptRegistryRead> | undefined;
     try {
       await awaitGateBeforeSettlement(registered.promise, first, "First registration was not held");
-      const prepare = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
-      const discovery = vi
-        .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-        .mockImplementation((...args) => {
-          const snapshot = prepare(...args);
-          return {
-            ...snapshot,
-            assertCurrent() {
-              try {
-                snapshot.assertCurrent();
-              } catch (error) {
-                if (error instanceof registryListing.AgentDatabaseRegistryChangedError) {
-                  blocked.resolve();
-                }
-                throw error;
-              }
-            },
-          };
-        });
-      restoreDiscovery = () => discovery.mockRestore();
-      second = (async () => {
-        if (kind === "read") {
-          return readSessionEntryInWorker(scope, assertCallerCurrent);
+      discovery = interceptRegistryRead((error) => {
+        if (error instanceof registryListing.AgentDatabaseRegistryChangedError) {
+          blocked.resolve();
         }
-        const loaded = await loadSessionEntryForAdmission(scope, {
-          assertCurrent: assertCallerCurrent,
-        });
-        try {
-          loaded.databaseClaim.assertCurrent();
-          return loaded.entry;
-        } finally {
-          await loaded.databaseClaim.release();
-        }
-      })();
+      });
+      second = readFirstSession(kind, scope, assertCallerCurrent);
       void second.catch(() => {});
       await awaitGateBeforeSettlement(
         blocked.promise,
@@ -338,7 +372,7 @@ it.each(
     } finally {
       release.resolve();
       await Promise.allSettled([first, second]);
-      restoreDiscovery?.();
+      discovery?.mockRestore();
       registration.mockRestore();
     }
   },
@@ -352,18 +386,7 @@ it.each(["read", "admission"] as const)(
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
     expect(fs.existsSync(databasePath)).toBe(false);
     const results = await Promise.allSettled(
-      Array.from({ length: 15 }, async () => {
-        if (kind === "read") {
-          return await readSessionEntryInWorker(scope);
-        }
-        const loaded = await loadSessionEntryForAdmission(scope);
-        try {
-          loaded.databaseClaim.assertCurrent();
-          return loaded.entry;
-        } finally {
-          await loaded.databaseClaim.release();
-        }
-      }),
+      Array.from({ length: 15 }, () => readFirstSession(kind, scope)),
     );
     expect(results).toEqual(
       Array.from({ length: 15 }, () => ({ status: "fulfilled", value: undefined })),
@@ -373,63 +396,28 @@ it.each(["read", "admission"] as const)(
 );
 
 it("preserves logical and physical owners without parent SQLite calls", async () => {
-  const custom = state.statePath("logical-read", "sessions.json");
   const canonical = state.sessionsDir("ops") + "/sessions.json";
-  const cases: Array<{ scope: SessionAccessScope; writerAgent: string; sessionId: string }> = [
-    {
-      scope: {
-        agentId: "ops",
-        storePath: state.statePath("unregistered", "sessions.json"),
-        sessionKey: "global",
-      },
-      writerAgent: "ops",
-      sessionId: "unregistered",
-    },
-    {
-      scope: { agentId: "ops", storePath: custom, sessionKey: "global" },
-      writerAgent: "ops",
-      sessionId: "global",
-    },
-    {
-      scope: { agentId: "ops", storePath: custom, sessionKey: "unknown" },
-      writerAgent: "ops",
-      sessionId: "unknown",
-    },
-    {
-      scope: { agentId: "ops", storePath: custom, sessionKey: "main" },
-      writerAgent: "ops",
-      sessionId: "main",
-    },
-    {
-      scope: {
-        agentId: "ops",
-        storePath: custom,
-        sessionKey: "agent:ops:matrix:group:!Room:example.org",
-      },
-      writerAgent: "ops",
-      sessionId: "opaque",
-    },
-    {
-      scope: { storePath: canonical, sessionKey: "topic" },
-      writerAgent: "ops",
-      sessionId: "inferred",
-    },
-    {
-      scope: {
+  const customScope = storedScope(state.statePath("logical-read", "sessions.json"));
+  const unregistered = storedScope(state.statePath("unregistered", "sessions.json"));
+  const sharedPhysical = { ...customScope, storePath: state.statePath("shared.sqlite") };
+  const cases: Array<[sessionId: string, scope: SessionAccessScope, writerAgent?: string]> = [
+    ["unregistered", unregistered],
+    ["global", customScope],
+    ["unknown", { ...customScope, sessionKey: "unknown" }],
+    ["main", { ...customScope, sessionKey: "main" }],
+    ["opaque", { ...customScope, sessionKey: "agent:ops:matrix:group:!Room:example.org" }],
+    ["inferred", { storePath: canonical, sessionKey: "topic" }],
+    [
+      "configured-default",
+      {
         defaultAgentId: "ops",
         storePath: state.statePath("default-owner", "sessions.json"),
         sessionKey: "global",
       },
-      writerAgent: "ops",
-      sessionId: "configured-default",
-    },
-    {
-      scope: { agentId: "ops", storePath: state.statePath("shared.sqlite"), sessionKey: "global" },
-      writerAgent: "main",
-      sessionId: "shared-physical-main",
-    },
+    ],
+    ["shared-physical-main", sharedPhysical, "main"],
   ];
-  for (const { scope, writerAgent, sessionId } of cases) {
+  for (const [sessionId, scope, writerAgent = "ops"] of cases) {
     replaceSessionEntrySync(
       { ...scope, agentId: writerAgent, env: state.env },
       {
@@ -444,13 +432,9 @@ it("preserves logical and physical owners without parent SQLite calls", async ()
       },
     );
   }
-  const unregistered = cases[0]!;
-  const unregisteredTarget = toDatabaseOptions(
-    resolveSqliteScope({ ...unregistered.scope, env: state.env }),
-  );
   unregisterOpenClawAgentDatabase({
     agentId: "ops",
-    path: resolveOpenClawAgentSqlitePath(unregisteredTarget),
+    path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(unregistered))),
     env: state.env,
   });
   await closeOpenClawAgentDatabasesAsync();
@@ -466,8 +450,8 @@ it("preserves logical and physical owners without parent SQLite calls", async ()
     calibration.close();
     sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
     observer.reset();
-    for (const { scope, sessionId } of cases) {
-      expect(await readSessionEntryInWorker({ ...scope, env: state.env }, () => {})).toMatchObject({
+    for (const [sessionId, scope] of cases) {
+      expect(await readSessionEntryInWorker({ ...scope, env: state.env })).toMatchObject({
         sessionId,
         pendingFinalDelivery: { text: "retained final", intentId: sessionId },
       });
@@ -481,15 +465,9 @@ it("preserves logical and physical owners without parent SQLite calls", async ()
 it.each(["before-consume", "after-consume"])(
   "retains a read across an unrelated registry change %s",
   async (stage) => {
-    const scope = {
-      agentId: "ops",
-      env: state.env,
-      storePath: state.statePath("consumed-read", stage, "sessions.json"),
-      sessionKey: "global",
-    };
+    const scope = storedScope(state.statePath("consumed-read", stage, "sessions.json"));
     replaceSessionEntrySync(scope, { sessionId: "consumed-session", updatedAt: 1 });
-    const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
-    const unrelatedPath = unrelated.path;
+    const unrelatedPath = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env }).path;
     await closeOpenClawAgentDatabasesAsync();
     let registryChange: Promise<void> | undefined;
     let consumed = 0;
@@ -530,12 +508,12 @@ it.each(["before-consume", "after-consume"])(
 it("retains the captured relative locator and environment across worker preparation", async () => {
   const originalCwd = process.cwd();
   const storePath = state.statePath("relative", "sessions.json");
-  const scope = { agentId: "ops", env: { ...state.env }, storePath, sessionKey: "global" };
+  const scope = storedScope(storePath, { env: { ...state.env } });
   replaceSessionEntrySync(scope, { sessionId: "captured-location", updatedAt: 1 });
-  const reading = readSessionEntryInWorker(
-    { ...scope, storePath: path.relative(originalCwd, storePath) },
-    () => {},
-  );
+  const reading = readSessionEntryInWorker({
+    ...scope,
+    storePath: path.relative(originalCwd, scope.storePath),
+  });
   try {
     scope.env.OPENCLAW_STATE_DIR = state.statePath("later-environment");
     process.chdir(state.stateDir);
@@ -546,18 +524,13 @@ it("retains the captured relative locator and environment across worker preparat
   }
 });
 
-it("keeps creating and writable schema-repair admission for a logical read", async () => {
+it("keeps writable schema-repair admission for a logical read", async () => {
   const scope = { agentId: "creating", env: state.env, sessionKey: "global" };
-  const databasePath = resolveOpenClawAgentSqlitePath(scope);
-  expect(fs.existsSync(databasePath)).toBe(false);
-  await expect(readSessionEntryInWorker(scope, () => {})).resolves.toBeUndefined();
-  expect(fs.existsSync(databasePath)).toBe(true);
-  await closeOpenClawAgentDatabasesAsync();
   const database = openOpenClawAgentDatabase(scope);
   database.db.exec("DROP INDEX idx_agent_session_nodes_label");
   await closeOpenClawAgentDatabasesAsync();
-  await expect(readSessionEntryInWorker(scope, () => {})).resolves.toBeUndefined();
-  const inspect = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  await expect(readSessionEntryInWorker(scope)).resolves.toBeUndefined();
+  const inspect = openNodeSqliteDatabase(database.path, { readOnly: true });
   try {
     expect(
       inspect
@@ -607,7 +580,7 @@ it("refuses malformed folded candidate state while retaining the healthy request
     await expect(Promise.resolve().then(() => loadSessionEntry(scope))).rejects.toMatchObject({
       code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
     });
-    await expect(readSessionEntryInWorker(scope, () => {})).rejects.toMatchObject({
+    await expect(readSessionEntryInWorker(scope)).rejects.toMatchObject({
       code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
     });
   } finally {
@@ -627,24 +600,17 @@ it.each([
 ] as const)(
   "refuses $change replacement $stage ($registration registration)",
   async ({ stage, change, registration }) => {
-    const scope = {
-      agentId: "ops",
-      env: state.env,
-      storePath: state.statePath(stage, change, registration, "sessions.json"),
-      sessionKey: "global",
-    };
+    const scope = storedScope(state.statePath(stage, change, registration, "sessions.json"));
     replaceSessionEntrySync(scope, { sessionId: "selected-row", updatedAt: 1 });
     const target = toDatabaseOptions(resolveSqliteScope(scope));
     if (change === "file") {
       await closeOpenClawAgentDatabasesAsync();
     }
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let executionReleased = false;
+    const gate = holdExecution(stage);
     const holdDiscoveryCleanup = async () => {
-      if (stage === "after-discovery-cleanup" && executionReleased) {
-        entered.resolve();
-        await release.promise;
+      if (stage === "after-discovery-cleanup" && gate.executionReleased) {
+        gate.entered.resolve();
+        await gate.release.promise;
       }
     };
     const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
@@ -661,57 +627,12 @@ it.each([
         await rotate();
         await holdDiscoveryCleanup();
       });
-    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
-    const intercept = vi
-      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-      .mockImplementation((...args) => {
-        const execution = capture(...args);
-        if (stage === "while-queued") {
-          entered.resolve();
-        }
-        return {
-          ...execution,
-          async prepare(source: AgentDatabaseRequestExecutionSource): Promise<void> {
-            if (stage === "before-open") {
-              entered.resolve();
-              await release.promise;
-            }
-            await execution.prepare(source);
-          },
-          async runExisting<T>(
-            source: AgentDatabaseRequestExecutionSource,
-            operation: (worker: AgentDatabaseExecutionScope) => Promise<T>,
-            options?: Parameters<OpenClawAgentDatabaseExecution["runExisting"]>[2],
-          ): Promise<T | undefined> {
-            return execution.runExisting(
-              source,
-              async (worker) => {
-                const result = await operation(worker);
-                if (stage === "after-row") {
-                  entered.resolve();
-                  await release.promise;
-                }
-                return result;
-              },
-              options,
-            );
-          },
-          async release() {
-            await execution.release();
-            executionReleased = true;
-            if (stage === "after-release") {
-              entered.resolve();
-              await release.promise;
-            }
-          },
-        };
-      });
     const writerEntered = createDeferredCore();
     const priorWriter =
       stage === "while-queued"
         ? runOpenClawAgentWorkerWrite(target, async () => {
             writerEntered.resolve();
-            await release.promise;
+            await gate.release.promise;
           })
         : undefined;
     if (priorWriter) {
@@ -727,10 +648,12 @@ it.each([
       (error: unknown) => ({ value: undefined, error }),
     );
     void reading.then((result) => {
-      entered.reject(result.error ?? new Error("Logical read completed before its held boundary"));
+      gate.entered.reject(
+        result.error ?? new Error("Logical read completed before its held boundary"),
+      );
     });
     try {
-      await entered.promise;
+      await gate.entered.promise;
       const databasePath = resolveOpenClawAgentSqlitePath(target);
       if (change === "registry") {
         unregisterOpenClawAgentDatabase({ agentId: "ops", path: databasePath, env: state.env });
@@ -747,15 +670,15 @@ it.each([
           env: state.env,
         });
       }
-      release.resolve();
+      gate.release.resolve();
       const result = await reading;
       expect(result.value).toBeUndefined();
       expect(result.error).toBeInstanceOf(Error);
     } finally {
-      release.resolve();
+      gate.release.resolve();
       await reading;
       await priorWriter;
-      intercept.mockRestore();
+      gate.restore();
       closeIntercept.mockRestore();
       rotateIntercept.mockRestore();
     }
@@ -791,12 +714,10 @@ it.each(
 );
 
 function createCohortFixture(name: string) {
-  const scope = {
+  const scope = storedScope(state.statePath("admitted-cohort", name, "sessions.json"), {
     agentId: "cohort",
-    env: state.env,
-    storePath: state.statePath("admitted-cohort", name, "sessions.json"),
     sessionKey: `agent:cohort:${name}`,
-  };
+  });
   const entry = { sessionId: name, lifecycleRevision: "original", updatedAt: 1 };
   replaceSessionEntrySync(scope, entry);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
@@ -811,51 +732,6 @@ async function admitCohort(scope: SessionAccessScope) {
     throw new Error("Expected a durable admission reader");
   }
   return { claim, reader: claim.reader };
-}
-
-function holdCohortReply() {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  let armed = false;
-  const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
-  const intercept = vi
-    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-    .mockImplementation((...args) => {
-      const execution = capture(...args);
-      return {
-        ...execution,
-        async runExisting<T>(
-          source: AgentDatabaseRequestExecutionSource,
-          operation: (worker: AgentDatabaseExecutionScope) => Promise<T>,
-          options?: Parameters<OpenClawAgentDatabaseExecution["runExisting"]>[2],
-        ): Promise<T | undefined> {
-          return execution.runExisting(
-            source,
-            async (worker) => {
-              const execute: typeof worker.execute = async (command, requestOptions) => {
-                const result = await worker.execute(command, requestOptions);
-                if (armed) {
-                  armed = false;
-                  entered.resolve();
-                  await release.promise;
-                }
-                return result;
-              };
-              return operation({ execute });
-            },
-            options,
-          );
-        },
-      };
-    });
-  return {
-    entered,
-    release,
-    arm: () => {
-      armed = true;
-    },
-    restore: () => intercept.mockRestore(),
-  };
 }
 
 it("refreshes admitted cohorts after a known write and a foreign membership commit between phases", async () => {
@@ -988,7 +864,13 @@ it.each(["native mutation", "caller revocation"] as const)(
     if (change === "native mutation") {
       addSessionMember(scope, { identityId: "native-member", addedBy: "owner", addedAt: 1 });
     }
-    const gate = holdCohortReply();
+    const mutateMembership = () => {
+      const mutation = database.db
+        .prepare("UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ?")
+        .run(scope.sessionKey);
+      expect(mutation.changes).toBe(1);
+    };
+    const gate = holdExecution("reply");
     let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
     let reading: Promise<unknown> | undefined;
     const consume = vi.fn();
@@ -996,7 +878,7 @@ it.each(["native mutation", "caller revocation"] as const)(
     try {
       const admitted = await admitCohort(scope);
       claim = admitted.claim;
-      gate.arm();
+      gate.armed = true;
       reading = admitted.reader.withRead(
         { sessionKeys: [scope.sessionKey], includeMembers: true },
         () => {
@@ -1014,10 +896,7 @@ it.each(["native mutation", "caller revocation"] as const)(
       );
       if (change === "native mutation") {
         // The synchronous SDK can write without entering the FIFO or publishing sessionChanges.
-        const mutation = database.db
-          .prepare("UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ?")
-          .run(scope.sessionKey);
-        expect(mutation.changes).toBe(1);
+        mutateMembership();
       } else {
         allowed = false;
       }
@@ -1028,10 +907,7 @@ it.each(["native mutation", "caller revocation"] as const)(
       expect(consume).not.toHaveBeenCalled();
       if (change === "native mutation") {
         const mutateDuringConsumption = vi.fn(() => {
-          const mutation = database.db
-            .prepare("UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ?")
-            .run(scope.sessionKey);
-          expect(mutation.changes).toBe(1);
+          mutateMembership();
           return "must not escape the final witness";
         });
         await expect(
@@ -1052,69 +928,31 @@ it.each(["native mutation", "caller revocation"] as const)(
   },
 );
 
-it.each(["release", "close"] as const)(
-  "joins an accepted cohort reply before completing %s",
-  async (ending) => {
-    const { scope, database } = createCohortFixture(`join-${ending}`);
-    const gate = holdCohortReply();
-    let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
-    let reading: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    const consume = vi.fn();
-    try {
-      const admitted = await admitCohort(scope);
-      claim = admitted.claim;
-      gate.arm();
-      reading = admitted.reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume);
-      void reading.catch(() => {});
-      await awaitGateBeforeSettlement(
-        gate.entered.promise,
-        reading,
-        "Cohort settled before its reply gate",
-      );
-      let closed = false;
-      closing = (
-        ending === "release"
-          ? claim.release()
-          : closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId)
-      ).then(() => {
-        closed = true;
-      });
-      await expect(
-        admitted.reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/released|closed|revoked/iu);
-      expect(closed).toBe(false);
-      gate.release.resolve();
-      await expect(reading).rejects.toThrow(/released|closed|revoked/iu);
-      await closing;
-      expect(closed).toBe(true);
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      gate.release.resolve();
-      await Promise.allSettled([...(reading ? [reading] : []), ...(closing ? [closing] : [])]);
-      await claim?.release();
-      gate.restore();
-    }
-  },
-);
-
-it.for(["release", "physical close"] as const)(
-  "cancels and joins a host-queued cohort before %s completes",
-  async (ending, { signal }) => {
-    const { scope, database, entry } = createCohortFixture(
-      `host-queued-${ending.replaceAll(" ", "-")}`,
-    );
-    const { claim, reader } = await admitCohort(scope);
-    const entered = createDeferredCore();
-    const releaseWriter = createDeferredCore();
-    const consume = vi.fn();
-    let writer: Promise<void> | undefined;
-    let reading: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    try {
+it.for(
+  (["reply", "host-queued"] as const).flatMap((phase) =>
+    (["release", "close"] as const).map((ending) => ({ phase, ending })),
+  ),
+)("joins a $phase cohort before completing $ending", async ({ phase, ending }, { signal }) => {
+  const { scope, database, entry } = createCohortFixture(`${phase}-${ending}`);
+  const gate = phase === "reply" ? holdExecution("reply") : undefined;
+  const entered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const consume = vi.fn();
+  let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
+  let writer: Promise<void> | undefined;
+  let reading: Promise<unknown> | undefined;
+  let closing: Promise<void> | undefined;
+  try {
+    const admitted = await admitCohort(scope);
+    claim = admitted.claim;
+    const { reader } = admitted;
+    const request = { sessionKeys: [scope.sessionKey] };
+    if (gate) {
+      gate.armed = true;
+    } else {
       await expect(
         reader.withRead(
-          { sessionKeys: [scope.sessionKey] },
+          request,
           () => {},
           (read) => {
             expect(read.entries[0]?.entry.sessionId).toBe(entry.sessionId);
@@ -1129,42 +967,57 @@ it.for(["release", "physical close"] as const)(
         awaitGateBeforeSettlement(entered.promise, writer, "Host FIFO blocker did not enter"),
         signal,
       );
-      reading = reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume);
-      let readSettled = false;
-      void reading.then(
-        () => {
-          readSettled = true;
-        },
-        () => {
-          readSettled = true;
-        },
-      );
-      let closed = false;
-      closing = (
-        ending === "release"
-          ? claim.release()
-          : closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId)
-      ).then(() => {
-        expect(readSettled).toBe(true);
-        closed = true;
-      });
-      // Cancellation settles the queued phase while the unrelated predecessor still holds FIFO.
-      await expect(withinTest(reading, signal)).rejects.toThrow(/released|closed|revoked/iu);
-      await expect(
-        reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/released|closed|revoked/iu);
-      releaseWriter.resolve();
-      await withinTest(writer, signal);
-      await withinTest(closing, signal);
-      expect(closed).toBe(true);
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      releaseWriter.resolve();
-      await Promise.allSettled([writer, reading, closing]);
-      await claim.release();
     }
-  },
-);
+    reading = reader.withRead(request, () => {}, consume);
+    let readSettled = false;
+    const markReadSettled = () => {
+      readSettled = true;
+    };
+    void reading.then(markReadSettled, markReadSettled);
+    if (gate) {
+      await awaitGateBeforeSettlement(
+        gate.entered.promise,
+        reading,
+        "Cohort settled before its reply gate",
+      );
+    }
+    let closed = false;
+    closing = (
+      ending === "release"
+        ? claim.release()
+        : closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId)
+    ).then(() => {
+      if (!gate) {
+        expect(readSettled).toBe(true);
+      }
+      closed = true;
+    });
+    if (!gate) {
+      // Queued cancellation settles while the unrelated predecessor still holds FIFO.
+      await expect(withinTest(reading, signal)).rejects.toThrow(/released|closed|revoked/iu);
+    }
+    await expect(reader.withRead(request, () => {}, consume)).rejects.toThrow(
+      /released|closed|revoked/iu,
+    );
+    if (gate) {
+      expect(closed).toBe(false);
+      gate.release.resolve();
+      await expect(reading).rejects.toThrow(/released|closed|revoked/iu);
+    } else {
+      releaseWriter.resolve();
+      await withinTest(writer!, signal);
+    }
+    await withinTest(closing, signal);
+    expect(closed).toBe(true);
+    expect(consume).not.toHaveBeenCalled();
+  } finally {
+    gate?.release.resolve();
+    releaseWriter.resolve();
+    await Promise.allSettled([writer, reading, closing]);
+    await claim?.release();
+    gate?.restore();
+  }
+});
 
 it("leaves absent storage absent when a read-only phase has no admitted cohort", async () => {
   const scope = { agentId: "readonly-absent-cohort", env: state.env, sessionKey: "global" };

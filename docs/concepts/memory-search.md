@@ -96,7 +96,9 @@ flowchart LR
   paths, basenames, and filename stems rank ahead of partial path matches,
   while snippets and body keyword scores still come from note content.
 
-If only one path is available, the other runs alone.
+If only one path is available, the other runs alone. Keyword boosts stay bounded
+without clipping distinct lexical scores to the same maximum, so relevance
+continues to influence ranking when dated notes decay.
 
 The builtin engine then applies deterministic ranking:
 

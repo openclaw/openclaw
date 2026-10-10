@@ -1,4 +1,4 @@
-import { realpathSync, statSync, type BigIntStats } from "node:fs";
+import { fstatSync, readdirSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
@@ -210,4 +210,30 @@ export function assertExistingDatabaseIdentity(
     key: expected,
     birthtime: expectedBirthtime,
   });
+}
+
+export function isSoleDatabaseFileDescriptor(descriptor: number, file: BigIntStats): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  try {
+    for (const name of readdirSync("/proc/self/fd")) {
+      if (!/^\d+$/u.test(name) || Number(name) === descriptor) {
+        continue;
+      }
+      try {
+        const other = fstatSync(Number(name), { bigint: true });
+        if (other.dev === file.dev && other.ino === file.ino) {
+          return false;
+        }
+      } catch (error) {
+        if (!hasErrnoCode(error, "EBADF")) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

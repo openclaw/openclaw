@@ -125,26 +125,32 @@ it.each([false, true])(
   async (reclaimed) => {
     const root = dirs.make("backup-scratch-create-open-");
     const open = nodeSqlite.openNodeSqliteDatabase;
+    const createDirectory = privateDirectory.createPrivateSqliteTempDirectory;
     let failedDirectory: string | undefined;
     let nativeFailure: unknown;
-    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-      if (failedDirectory) {
-        return open(location, options);
-      }
-      failedDirectory = path.dirname(location);
-      if (reclaimed) {
-        fsSync.rmSync(failedDirectory, { recursive: true });
-      }
-      try {
-        return open(
-          reclaimed ? location : path.join(failedDirectory, "missing", "owner.sqlite"),
-          options,
+    vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementationOnce(
+      async (...args) => {
+        const directory = await createDirectory(...args);
+        vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(
+          (location, options) => {
+            failedDirectory = directory;
+            if (reclaimed) {
+              fsSync.rmSync(directory, { recursive: true });
+            }
+            try {
+              return open(
+                reclaimed ? location : path.join(directory, "missing", "owner.sqlite"),
+                options,
+              );
+            } catch (error) {
+              nativeFailure = error;
+              throw error;
+            }
+          },
         );
-      } catch (error) {
-        nativeFailure = error;
-        throw error;
-      }
-    });
+        return directory;
+      },
+    );
     let scratch: Awaited<ReturnType<typeof createBackupScratchDirectory>> | undefined;
     try {
       const outcome = await createBackupScratchDirectory(root).then(
