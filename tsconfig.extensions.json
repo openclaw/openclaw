@@ -4,7 +4,9 @@
     // Plugin production indexed reads must account for missing entries.
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "tsBuildInfoFile": ".artifacts/tsgo-cache/extensions.tsbuildinfo"
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/extensions.tsbuildinfo",
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web"
   },
   "include": ["src/**/*.d.ts", "ui/src/**/*.d.ts", "extensions/**/*"],
   "exclude": [

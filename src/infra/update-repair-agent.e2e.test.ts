@@ -153,7 +153,7 @@ async function runRepairEnvelope(
               ...context
             } = params.context;
             // v2026.9.4 sends neither an authority object nor context.phase after
-            // activation. The candidate must defer both released message shapes.
+            // activation. The candidate must still accept that shipped message.
             child.send({
               type: "start",
               runId: "released-update-run",
@@ -161,7 +161,6 @@ async function runRepairEnvelope(
               target: params.target,
               failure: context,
               context: {
-                ...(params.context.phase === "validating" ? { phase: "validating" } : {}),
                 beforeVersion,
                 targetVersion,
                 symptoms,
@@ -238,11 +237,10 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
 
 describe("update repair with a local model provider", () => {
   it.each([
-    { phase: "validating", entry: "released-parent" },
     { phase: "verifying", entry: "released-parent" },
     { phase: "verifying", entry: "manual" },
     { phase: "validating", entry: "turn" },
-    { phase: "verifying", entry: "turn" },
+    { phase: "verifying", entry: "revoked-turn" },
     { phase: "verifying", entry: "wrong-receiver-turn" },
     { phase: "verifying", entry: "unowned-turn" },
     { phase: "verifying", entry: "unidentified-turn" },
@@ -297,6 +295,15 @@ describe("update repair with a local model provider", () => {
                 }
                 if (body.tools?.some((tool) => tool.name === "exec") && !issuedRepair) {
                   issuedRepair = true;
+                  if (entry === "revoked-turn") {
+                    // Remove the requester's owner permission while inference is awaiting.
+                    const current = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+                    await fs.writeFile(
+                      state.configPath,
+                      JSON.stringify({ ...current, commands: { ownerAllowFrom: ["other-owner"] } }),
+                    );
+                    diagnostics.record("requester-revoked");
+                  }
                   writeRepairToolCall(response, "exec");
                   diagnostics.record("provider-exec-response");
                   return;
@@ -391,7 +398,7 @@ describe("update repair with a local model provider", () => {
               } else if (run) {
                 recordUpdateRunPhase(run.runId, "repairing", undefined, { env: ledgerEnv });
               }
-              // The released parent may target a copied rehearsal or omit context.phase.
+              // Delegated turns can target a rehearsal; released parents omit context.phase.
               await fs.symlink(
                 path.join(process.cwd(), "dist"),
                 path.join(state.workspaceDir, "dist"),
@@ -499,6 +506,16 @@ describe("update repair with a local model provider", () => {
               if (entry === "unidentified-turn") {
                 await expect(runTurn()).rejects.toThrow("worker exited 1");
                 expect(requests).toEqual([]);
+                await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                return;
+              }
+              if (entry === "revoked-turn") {
+                const result = await runTurn();
+                expect(result, JSON.stringify(result)).toMatchObject({
+                  status: "aborted",
+                  reason: "requester-revoked",
+                });
+                expect(issuedRepair).toBe(true);
                 await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
                 return;
               }

@@ -115,6 +115,9 @@ export function registerHarnessCompletionRecoveryCases(
     "transcript-read-failure",
     "reserved-successor",
     "human-before-recovery",
+    "failed",
+    "timeout",
+    "killed",
   ])(
     "recovers the admitted harness completion after %s execution is interrupted",
     async (phase) => {
@@ -142,7 +145,12 @@ export function registerHarnessCompletionRecoveryCases(
           sourceChannel: "internal",
           sourceSessionKey: taskRunId,
         } as const;
-        const entry = mainSessionEntry({ lifecycleRevision: "revision-1" });
+        const entry = mainSessionEntry({
+          lifecycleRevision: "revision-1",
+          ...(phase === "failed" || phase === "timeout" || phase === "killed"
+            ? { status: phase }
+            : {}),
+        });
         const binding = await captureAdmittedHarnessCompletionForTest({
           agentId: "main",
           sessionKey,
@@ -254,7 +262,7 @@ export function registerHarnessCompletionRecoveryCases(
           await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
           expect(callGateway).not.toHaveBeenCalled();
           expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-            status: "running",
+            status: "interrupted",
             abortedLastRun: true,
             restartRecoveryHarnessCompletion: binding,
             restartRecoveryDeliverySourceRunId: sourceRunId,
@@ -274,7 +282,7 @@ export function registerHarnessCompletionRecoveryCases(
           await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
           expect(callGateway).not.toHaveBeenCalled();
           expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-            status: "running",
+            status: "interrupted",
             restartRecoveryHarnessCompletion: binding,
             restartRecoveryDeliverySourceRunId: sourceRunId,
           });
@@ -305,7 +313,7 @@ export function registerHarnessCompletionRecoveryCases(
     await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       pendingFinalDelivery,
     });
@@ -422,7 +430,10 @@ export function registerHarnessCompletionRecoveryCases(
     const sessionKey = "agent:main:telegram:group:-100:topic:41818";
     await writeStore(sessionsDir, {
       [sessionKey]: {
-        ...runningSessionEntry("topic-41818-session"),
+        ...runningSessionEntry("topic-41818-session", {
+          status: "interrupted",
+          restartRecoveryDeliveryRunId: "human-run-2",
+        }),
         abortedLastRun: true,
         restartRecoveryRuns: [{ runId: "human-run-2", lifecycleGeneration: "generation-old" }],
       },

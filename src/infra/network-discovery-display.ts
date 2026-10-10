@@ -5,14 +5,13 @@ import { pickPrimaryTailnetIPv4 } from "./tailnet.js";
 
 // Display helpers are best-effort wrappers around network discovery. Startup
 // and config output should keep rendering even when interface probes fail.
-function summarizeDisplayNetworkError(error: unknown): string {
-  if (error instanceof Error) {
-    const message = error.message.trim();
-    if (message) {
-      return message;
-    }
+function displayNetworkWarning(error: unknown, warningPrefix?: string): { warning?: string } {
+  const prefix = warningPrefix?.trim();
+  if (!prefix) {
+    return {};
   }
-  return "network interface discovery failed";
+  const message = error instanceof Error ? error.message.trim() : "";
+  return { warning: `${prefix}: ${message || "network interface discovery failed"}.` };
 }
 
 function fallbackBindHostForDisplay(bindMode: GatewayBindMode, customBindHost?: string): string {
@@ -42,9 +41,7 @@ export function inspectBestEffortPrimaryTailnetIPv4(params?: { warningPrefix?: s
   try {
     return { tailnetIPv4: pickPrimaryTailnetIPv4() };
   } catch (error) {
-    const prefix = params?.warningPrefix?.trim();
-    const warning = prefix ? `${prefix}: ${summarizeDisplayNetworkError(error)}.` : undefined;
-    return { tailnetIPv4: undefined, ...(warning ? { warning } : {}) };
+    return { tailnetIPv4: undefined, ...displayNetworkWarning(error, params?.warningPrefix) };
   }
 }
 
@@ -59,11 +56,10 @@ export async function resolveBestEffortGatewayBindHostForDisplay(params: {
       bindHost: await resolveGatewayBindHost(params.bindMode, params.customBindHost),
     };
   } catch (error) {
-    const prefix = params.warningPrefix?.trim();
-    const warning = prefix ? `${prefix}: ${summarizeDisplayNetworkError(error)}.` : undefined;
+    const warning = displayNetworkWarning(error, params.warningPrefix);
     return {
       bindHost: fallbackBindHostForDisplay(params.bindMode, params.customBindHost),
-      ...(warning ? { warning } : {}),
+      ...warning,
     };
   }
 }

@@ -96,19 +96,15 @@ function collectInjectedWorkspaceFilePaths(value: unknown): string[] {
 function collectCachedSnapshotPaths(entry: SessionEntry): CachedSnapshotPath[] {
   const snapshot = entry.skillsSnapshot as Record<string, unknown> | undefined;
   const report = entry.systemPromptReport as Record<string, unknown> | undefined;
-  const paths: CachedSnapshotPath[] = [];
-  for (const location of extractSkillLocations(snapshot?.prompt)) {
-    paths.push({ field: "skillsSnapshot.prompt", path: location });
-  }
-  for (const location of collectResolvedSkillPaths(snapshot?.resolvedSkills)) {
-    paths.push({ field: "skillsSnapshot.resolvedSkills", path: location });
-  }
-  if (isRecord(report)) {
-    for (const location of collectInjectedWorkspaceFilePaths(report.injectedWorkspaceFiles)) {
-      paths.push({ field: "systemPromptReport.injectedWorkspaceFiles", path: location });
-    }
-  }
-  return paths;
+  const sources: Array<[SnapshotPathSource, string[]]> = [
+    ["skillsSnapshot.prompt", extractSkillLocations(snapshot?.prompt)],
+    ["skillsSnapshot.resolvedSkills", collectResolvedSkillPaths(snapshot?.resolvedSkills)],
+    [
+      "systemPromptReport.injectedWorkspaceFiles",
+      isRecord(report) ? collectInjectedWorkspaceFilePaths(report.injectedWorkspaceFiles) : [],
+    ],
+  ];
+  return sources.flatMap(([field, paths]) => paths.map((location) => ({ field, path: location })));
 }
 
 function isAbsolutePathLike(value: string): boolean {
@@ -351,9 +347,6 @@ export async function noteSessionSnapshotHealth(params: SessionSnapshotScanOptio
         )} -> ${shortenHomePath(finding.expectedPath)}`,
       );
       shown += 1;
-      if (shown >= 10) {
-        break;
-      }
     }
     if (shown >= 10) {
       break;

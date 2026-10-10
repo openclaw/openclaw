@@ -9,8 +9,8 @@ import { recoverRestartAbortedMainSessions } from "../agents/main-session-recove
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import {
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
+  SubagentCompletionSourceChangedError,
 } from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
@@ -247,8 +247,9 @@ it(
         {
           sessionId,
           updatedAt: Date.now() - 10_000,
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
+          mainRestartRecovery: { cycleId: "before-reset", revision: 1, chargedAttempts: 0 },
         },
       );
       clearSessionStoreCacheForTest();
@@ -409,8 +410,9 @@ it(
       );
       await patchSessionEntryCore({ storePath, sessionKey }, (entry) => ({
         ...entry,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "after-reset", revision: 1, chargedAttempts: 0 },
         updatedAt: Date.now() - 10_000,
       }));
       await addRecoveryChild(currentChildMarker);
@@ -475,7 +477,7 @@ it(
           requesterSessionKey: sessionKey,
           settledEntry: entry,
           transitionBatch: async (batch, next, onPublished) => {
-            const result = await mutateRequesterSettleWakeBatch({
+            const result = await mutateRequesterCompletionBatch({
               entries: batch,
               operation: { kind: "transition", state: next },
               context: captureOpenClawStateWorkerContext(),
@@ -491,17 +493,24 @@ it(
             if (!outcome) {
               throw new Error("Saved batch did not produce a delivery outcome");
             }
-            const result = await settleRequesterCompletionBatch({
-              entries: batch.map((subagent) => ({ subagent })),
-              outcome,
-              isCurrent: () =>
-                batch.every((member) => {
-                  const current = subagentRuns.get(member.runId);
-                  return (
-                    isSameSubagentRun(current, member) &&
-                    current?.requesterSettleWake?.rearmGeneration === rearmGeneration
+            const result = await mutateRequesterCompletionBatch({
+              entries: batch,
+              operation: { kind: "settle", outcome },
+              assertCurrent: () => {
+                if (
+                  !batch.every((member) => {
+                    const current = subagentRuns.get(member.runId);
+                    return (
+                      isSameSubagentRun(current, member) &&
+                      current?.requesterSettleWake?.rearmGeneration === rearmGeneration
+                    );
+                  })
+                ) {
+                  throw new SubagentCompletionSourceChangedError(
+                    "Subagent completion owner changed before settlement",
                   );
-                }),
+                }
+              },
             });
             expect(result.publication).toBe("published");
             onCommitted?.();

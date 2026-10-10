@@ -67,7 +67,7 @@ describe("worker placement move schema", () => {
     expect(withoutMoveTable.placements.get("session-move")).toMatchObject({ state: "active" });
     expect(withoutMoveTable.moves.size).toBe(0);
     database.db.exec(previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length));
-    const begun = store.beginPlacementMove({
+    const begun = await store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
       target: {

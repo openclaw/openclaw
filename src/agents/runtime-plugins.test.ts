@@ -272,9 +272,14 @@ describe("agent runtime plugin registries", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps catalog registries exact with broader reusable scope=%s",
-    (broader) => {
+  it.each([
+    { purpose: "model-catalog" as const, broader: false },
+    { purpose: "model-catalog" as const, broader: true },
+    { purpose: "isolated-completion" as const, broader: false },
+    { purpose: "isolated-completion" as const, broader: true },
+  ])(
+    "keeps $purpose registries exact with broader reusable scope=$broader",
+    ({ purpose, broader }) => {
       const reusableRegistry = createEmptyPluginRegistry();
       reusableRegistry.plugins.push(createPluginRecord({ id: "catalog-provider" }));
       if (broader) {
@@ -293,7 +298,7 @@ describe("agent runtime plugin registries", () => {
         config: {},
         basePluginIds: ["catalog-provider"],
         reusableRegistry,
-        purpose: "model-catalog",
+        purpose,
       });
 
       expect(registry).toBe(broader ? primaryRegistry : reusableRegistry);

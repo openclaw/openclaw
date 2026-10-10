@@ -77,6 +77,12 @@ type RuntimeSessionStoreReadParams = {
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
   readOnly?: boolean;
+  /** Restrict results to exact persisted keys while retaining canonical listing validation. */
+  sessionKeys?: readonly string[];
+  /** Set false to skip derived participant identities and counts when reading metadata. */
+  includeParticipants?: boolean;
+  /** Capture the admitted store's physical identity; access policy remains caller-owned. */
+  captureSource?: (assertCurrent: () => void) => void;
 };
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -397,18 +403,44 @@ export type PluginRuntimeCore = {
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
+      /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
+      getSessionEntryAsync: (
+        params: RuntimeSessionStoreReadParams,
+      ) => Promise<RuntimeSessionEntry | undefined>;
+      /** Complete public entry for a visible current ID in the selected physical store. */
+      getSessionEntryByIdAsync: (
+        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & {
+          sessionId: string;
+          /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+          orderBy?: "updatedAt";
+        },
+      ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      createSessionEntryListReader: (params: {
+        agentId: string;
+        storePath: string;
+        env?: NodeJS.ProcessEnv;
+      }) => Promise<
+        () => Promise<{
+          entries: RuntimeSessionStoreEntrySummary[];
+          assertCurrent: () => void;
+        }>
+      >;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
+      prepareSessionEntryPatch: typeof import("../../plugin-sdk/session-store-runtime.js").prepareSessionEntryPatch;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       runWithWorkAdmission: <T>(
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;

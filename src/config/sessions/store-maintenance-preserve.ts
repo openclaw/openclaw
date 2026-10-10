@@ -1,16 +1,18 @@
 // Maintenance preserve providers protect runtime-owned sessions from pruning/capping.
 import type { SubagentMaintenanceDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
+import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
+import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
   collectActiveSessionWorkAdmissions,
   collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
   resolveSessionMaintenancePreserveKeys,
-  type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
 type PreparedSessionMaintenancePreserveKeys = {
@@ -84,9 +86,7 @@ export async function prepareSessionMaintenancePreservation(
       preserveKeysProviders.size !== registrations.length ||
       registrations.some((registration) => !preserveKeysProviders.has(registration))
     ) {
-      throw new SessionMaintenancePreservationConflictError(
-        "Session maintenance providers changed during preparation",
-      );
+      throw new SqliteSessionMutationConflictError("session maintenance");
     }
   };
   try {
@@ -103,6 +103,10 @@ export async function prepareSessionMaintenancePreservation(
     const capture = (sessionKeys?: readonly string[]): SessionMaintenancePreservationSnapshot => {
       assertProvidersCurrent();
       const keys = new Set<string>();
+      addSessionMaintenancePreserveKeys(
+        keys,
+        iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+      );
       for (const facts of prepared) {
         const values =
           sessionKeys !== undefined && facts.refreshCandidates

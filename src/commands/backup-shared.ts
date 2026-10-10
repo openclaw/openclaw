@@ -29,10 +29,10 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
+import { recordBackupRunOutcomeWithOwner } from "./backup-outcome.js";
 import {
   createBackupResourcePlan,
   type BackupAgentRoot,
@@ -47,12 +47,12 @@ export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 
 export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,
-  params: Parameters<typeof recordBackupRunOutcome>[0],
+  params: Parameters<typeof recordBackupRunOutcomeWithOwner>[0],
 ): Promise<void> {
   try {
     // A rejected private input must not be reopened for best-effort outcome writes.
     assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
-    await recordBackupRunOutcome(params);
+    await recordBackupRunOutcomeWithOwner(params);
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
@@ -306,7 +306,7 @@ async function resolveBackupPlanFromPaths(params: {
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const skipped: SkippedBackupAsset[] = [];
   const seenCanonicalPaths = new Set<string>();
-  for (const candidate of [...candidates].toSorted(compareCandidates)) {
+  for (const candidate of candidates.toSorted(compareCandidates)) {
     // Check both the original selection and the already resolved target before deduplication.
     const privateSelection = isUpdateCapturePath(candidate.sourcePath, stateDir);
     const privateTarget =
@@ -407,15 +407,11 @@ async function resolveBackupPlanFromPaths(params: {
 }
 
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
-  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
-  if (depthDelta !== 0) {
-    return depthDelta;
-  }
-  const priorityDelta = BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind];
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.canonicalPath.localeCompare(right.canonicalPath);
+  return (
+    left.canonicalPath.length - right.canonicalPath.length ||
+    BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind] ||
+    left.canonicalPath.localeCompare(right.canonicalPath)
+  );
 }
 
 // Managed skill roots support operator-created directory links outside the root.

@@ -11,7 +11,7 @@ Docker is **optional**. Use it for an isolated, throwaway Gateway environment or
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
-Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+Hosting mutually untrusted users? Run a separate Gateway for each trust boundary, ideally under separate OS users or hosts. See [Security trust model](/gateway/security/trust-model).
 
 ## Prerequisites
 
@@ -343,6 +343,12 @@ runtime. Ordinary source builds generate its runtime through the separate
 external-plugin build path; root npm artifacts continue to exclude it. Selected
 plugins must compile successfully; unselected external plugin source and
 runtime output are pruned.
+
+The install layer stages every workspace's `package.json` so frozen-lockfile
+validation can check the complete workspace. The build stage installs workspace
+dependencies needed to compile plugin assets; the production stage installs only
+core, shared packages, and required or selected plugins. Staging a plugin manifest
+does not select that plugin for the runtime image.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo Gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is

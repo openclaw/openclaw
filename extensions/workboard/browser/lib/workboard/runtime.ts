@@ -1,9 +1,16 @@
 import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { WORKBOARD_DRAFT_DEFAULTS } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
+
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+};
 
 export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
@@ -99,10 +106,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  delete runtime.cardsRevision;
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {
@@ -133,20 +137,8 @@ function createDefaultState(): WorkboardUiState {
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
     lastRefreshError: null,
-    draftOpen: false,
-    draftDiscardOpen: false,
+    ...WORKBOARD_DRAFT_DEFAULTS,
     draftSaving: false,
-    editingCardId: null,
-    editingCardBase: null,
-    draftTitle: "",
-    draftNotes: "",
-    draftStatus: "todo",
-    draftPriority: "normal",
-    draftLabels: "",
-    draftAgentId: "",
-    draftSessionKey: "",
-    draftTemplateId: "",
-    draftCommentBody: "",
     detailCardId: null,
     detailTab: "overview",
     detailCommentBody: "",

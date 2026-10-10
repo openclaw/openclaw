@@ -28,6 +28,15 @@
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-reading-indicator--brand {
+  animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
+}
+
+.chat-reading-indicator--brand > openclaw-theme-brand-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .chat-reading-indicator--neutral {
   gap: 3px;
 }
@@ -122,6 +131,8 @@ button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is
 }
 
 .chat-turn-recap__claw {
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   color: var(--accent);
@@ -286,126 +297,103 @@ button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is
   animation: chatWorkingClawSouthpaw 1.2s ease-in-out var(--claw-surprise-delay) 1;
 }
 
-.chat-reading-indicator--flurry svg {
+.chat-reading-indicator--flurry svg,
+.chat-reading-indicator--spin svg,
+.chat-reading-indicator--shadowbox svg,
+.chat-reading-indicator--backflip svg,
+.chat-reading-indicator--zen svg,
+.chat-reading-indicator--drummer svg,
+.chat-reading-indicator--peekaboo svg,
+.chat-reading-indicator--nodoff svg,
+.chat-reading-indicator--curious svg,
+.chat-reading-indicator--omnom svg,
+.chat-reading-indicator--fakeout svg {
   animation:
     chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawFlex 650ms ease-out var(--claw-surprise-delay) 2;
+    var(--claw-surprise-body) var(--claw-surprise-duration, 1.2s)
+      var(--claw-surprise-body-easing, ease-out) var(--claw-surprise-delay)
+      var(--claw-surprise-count, 1);
 }
 
-.chat-reading-indicator--flurry svg .claw-icon__jaw {
+.chat-reading-indicator--flurry svg .claw-icon__jaw,
+.chat-reading-indicator--shadowbox svg .claw-icon__jaw,
+.chat-reading-indicator--zen svg .claw-icon__jaw,
+.chat-reading-indicator--drummer svg .claw-icon__jaw,
+.chat-reading-indicator--peekaboo svg .claw-icon__jaw,
+.chat-reading-indicator--nodoff svg .claw-icon__jaw,
+.chat-reading-indicator--curious svg .claw-icon__jaw,
+.chat-reading-indicator--omnom svg .claw-icon__jaw,
+.chat-reading-indicator--fakeout svg .claw-icon__jaw {
   animation:
     chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawSnip 650ms ease-out var(--claw-surprise-delay) 2;
+    var(--claw-surprise-jaw) var(--claw-surprise-duration, 1.2s) ease-out var(--claw-surprise-delay)
+      var(--claw-surprise-count, 1);
+}
+
+.chat-reading-indicator--flurry {
+  --claw-surprise-body: chatWorkingClawFlex;
+  --claw-surprise-jaw: chatWorkingClawSnip;
+  --claw-surprise-duration: 650ms;
+  --claw-surprise-count: 2;
 }
 
 /* Fake 3D: perspective() + rotateY reads as a spinning coin at 18px. Linear
    timing keeps the single revolve steady; the jaw keeps its snip cycle. */
-.chat-reading-indicator--spin svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawSpin 900ms linear var(--claw-surprise-delay) 1;
+.chat-reading-indicator--spin {
+  --claw-surprise-body: chatWorkingClawSpin;
+  --claw-surprise-duration: 900ms;
+  --claw-surprise-body-easing: linear;
 }
 
-.chat-reading-indicator--shadowbox svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawCombo 1.2s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--shadowbox {
+  --claw-surprise-body: chatWorkingClawCombo;
+  --claw-surprise-jaw: chatWorkingClawJaw;
 }
 
-.chat-reading-indicator--shadowbox svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawJaw 1.2s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--backflip {
+  --claw-surprise-body: chatWorkingClawBackflip;
+  --claw-surprise-duration: 900ms;
 }
 
-.chat-reading-indicator--backflip svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawBackflip 900ms ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--zen {
+  --claw-surprise-body: chatWorkingClawZenBreath;
+  --claw-surprise-jaw: chatWorkingClawZenSnip;
+  --claw-surprise-duration: 2.4s;
+  --claw-surprise-body-easing: ease-in-out;
 }
 
-.chat-reading-indicator--zen svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawZenBreath 2.4s ease-in-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--drummer {
+  --claw-surprise-body: chatWorkingClawDrumRock;
+  --claw-surprise-jaw: chatWorkingClawDrumHit;
 }
 
-.chat-reading-indicator--zen svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawZenSnip 2.4s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--peekaboo {
+  --claw-surprise-body: chatWorkingClawPeekaboo;
+  --claw-surprise-jaw: chatWorkingClawPeekabooJaw;
 }
 
-.chat-reading-indicator--drummer svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawDrumRock 1.2s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--nodoff {
+  --claw-surprise-body: chatWorkingClawNodOff;
+  --claw-surprise-jaw: chatWorkingClawNodOffJaw;
+  --claw-surprise-duration: 2.8s;
 }
 
-.chat-reading-indicator--drummer svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawDrumHit 1.2s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--curious {
+  --claw-surprise-body: chatWorkingClawCurious;
+  --claw-surprise-jaw: chatWorkingClawCuriousJaw;
+  --claw-surprise-duration: 1.8s;
 }
 
-.chat-reading-indicator--peekaboo svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawPeekaboo 1.2s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--omnom {
+  --claw-surprise-body: chatWorkingClawOmNom;
+  --claw-surprise-jaw: chatWorkingClawOmNomJaw;
+  --claw-surprise-duration: 1.8s;
 }
 
-.chat-reading-indicator--peekaboo svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawPeekabooJaw 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--nodoff svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawNodOff 2.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--nodoff svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawNodOffJaw 2.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--curious svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawCurious 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--curious svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawCuriousJaw 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--omnom svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawOmNom 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--omnom svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawOmNomJaw 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--fakeout svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawFakeOut 2.4s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--fakeout svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawFakeOutJaw 2.4s ease-out var(--claw-surprise-delay) 1;
+.chat-reading-indicator--fakeout {
+  --claw-surprise-body: chatWorkingClawFakeOut;
+  --claw-surprise-jaw: chatWorkingClawFakeOutJaw;
+  --claw-surprise-duration: 2.4s;
 }
 
 @keyframes chatWorkingClawSouthpaw {
@@ -763,13 +751,11 @@ button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-working-indicator {
-    animation: none;
-  }
-
   /* Includes the bubble itself: the southpaw surprise animates the bubble,
      not the svg, and must stay still under reduced motion too. */
+  .chat-working-indicator,
   .chat-reading-indicator,
+  .chat-reading-indicator--brand,
   .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,
   .chat-reading-indicator svg .claw-icon__jaw {

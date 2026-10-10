@@ -20,7 +20,8 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -33,6 +34,8 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { createAdmittedSessionEntryCohortReader } from "./session-entry-read-ordered.js";
+import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
 import {
   captureIncognitoSessionBinding,
   captureIncognitoSessionTopology,
@@ -42,10 +45,23 @@ import { captureSessionStoreReadCandidates } from "./session-store-target-invent
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+type SessionAdmissionEntryIdentity = Readonly<
+  Pick<SessionEntry, "sessionId" | "lifecycleRevision">
+>;
+export type SessionAdmissionTransition = Readonly<{
+  previous?: SessionAdmissionEntryIdentity;
+  current: SessionAdmissionEntryIdentity;
+}>;
+
 type WorkerSessionAdmissionClaim = {
   kind: "worker";
   identity: string;
   incarnation: string;
+  reader?: SessionEntryCohortReader;
+  afterTransition?(
+    transition: SessionAdmissionTransition,
+    assertOwnerCurrent: () => void,
+  ): Promise<WorkerSessionAdmissionClaim>;
   isCurrent(): boolean;
   assertCurrent(): void;
   release(): Promise<void>;
@@ -105,7 +121,8 @@ export async function loadSessionEntryForAdmission(
       kind: "ephemeral",
       agentId: resolved.agentId,
       env,
-      authority: current,
+      // The returned claim retains the physical owner, independently of its caller's admission.
+      authority: { assertCurrent: () => actor.assertCurrent() },
       existingOnly: true,
       signal: preparation.signal,
     });
@@ -120,7 +137,6 @@ export async function loadSessionEntryForAdmission(
       if (released) {
         throw new Error("Incognito admission claim is released");
       }
-      current.assertCurrent();
       borrowed.assertCurrent();
     };
     const release = () => {
@@ -260,12 +276,13 @@ export async function loadSessionEntryForAdmission(
               await owner.refreshBeforeDispatch(() => execution.assertCurrent());
               assertSourceCurrent();
               await execution.prepare(source, preparation.signal);
-              const entry = await execution.runExisting(source, (worker) =>
+              const sessionKey = resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId);
+              const initial = await execution.runExisting(source, (worker) =>
                 worker.execute(
                   {
                     type: "session.entry.read",
                     input: {
-                      sessionKey: resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId),
+                      sessionKeys: [sessionKey],
                     },
                   },
                   { signal: preparation.signal },
@@ -273,23 +290,89 @@ export async function loadSessionEntryForAdmission(
               );
               await owner.revalidateTarget();
               assertSourceCurrent();
-              const generation = execution.captureGenerationClaim();
-              let release: Promise<void> | undefined;
-              claim = {
-                kind: "worker",
-                identity: generation.identity,
-                incarnation: generation.incarnation,
-                assertCurrent: () => generation.assertCurrent(),
-                isCurrent() {
-                  try {
+              if (!initial) {
+                throw new Error("Session admission lost its selected database");
+              }
+              const entry = initial.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+              const nativeIncarnation = initial.databaseIdentity.incarnation;
+              const createClaim = (
+                borrowed: OpenClawAgentDatabaseExecution,
+                admittedEntry: SessionAdmissionEntryIdentity | undefined,
+              ): WorkerSessionAdmissionClaim => {
+                const generation = borrowed.captureGenerationClaim();
+                const admitted = admittedEntry && {
+                  sessionId: admittedEntry.sessionId,
+                  lifecycleRevision: admittedEntry.lifecycleRevision,
+                };
+                return {
+                  kind: "worker",
+                  identity: generation.identity,
+                  incarnation: generation.incarnation,
+                  reader: admitted
+                    ? createAdmittedSessionEntryCohortReader({
+                        execution: borrowed,
+                        generation,
+                        database: { ...target.database, env },
+                        sessionKey,
+                        logicalAgentId: target.logicalAgentId,
+                        storePaths: [storePath, target.sourcePath],
+                        expected: {
+                          incarnation: nativeIncarnation,
+                          sessions: [{ sessionKey, ...admitted }],
+                        },
+                      })
+                    : undefined,
+                  assertCurrent: () => generation.assertCurrent(),
+                  isCurrent() {
+                    try {
+                      generation.assertCurrent();
+                      return true;
+                    } catch {
+                      return false;
+                    }
+                  },
+                  release: () => borrowed.release(),
+                  async afterTransition({ previous, current }, assertOwnerCurrent) {
                     generation.assertCurrent();
-                    return true;
-                  } catch {
-                    return false;
-                  }
-                },
-                release: () => (release ??= execution.release()),
+                    assertOwnerCurrent();
+                    if (
+                      previous?.sessionId !== admitted?.sessionId ||
+                      previous?.lifecycleRevision !== admitted?.lifecycleRevision
+                    ) {
+                      throw new Error("Session transition changed its admitted predecessor");
+                    }
+                    const expectedIdentity = borrowed.fileIdentity;
+                    if (!expectedIdentity) {
+                      throw new Error("Session transition lost its admitted physical identity");
+                    }
+                    const successor = captureOpenClawAgentDatabaseExecution(
+                      { ...options, path: borrowed.path },
+                      { expectedIdentity, requestedPath: storePath },
+                    );
+                    try {
+                      // Borrow this prepared generation only; never open a replacement at the path.
+                      const next = successor.capturePreparedGenerationClaim();
+                      if (
+                        !next ||
+                        next.identity !== generation.identity ||
+                        next.incarnation !== generation.incarnation
+                      ) {
+                        throw new Error("Session transition changed its native generation");
+                      }
+                      generation.assertCurrent();
+                      assertOwnerCurrent();
+                      return createClaim(successor, {
+                        sessionId: current.sessionId,
+                        lifecycleRevision: current.lifecycleRevision,
+                      });
+                    } catch (error) {
+                      await successor.release();
+                      throw error;
+                    }
+                  },
+                };
               };
+              claim = createClaim(execution, entry);
               transferred = true;
               return { entry, databaseClaim: claim };
             } finally {

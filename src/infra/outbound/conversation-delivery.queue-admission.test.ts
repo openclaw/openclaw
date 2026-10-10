@@ -31,8 +31,8 @@ import type { PluginHookHandlerMap } from "../../plugins/types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import {
@@ -97,7 +97,7 @@ describe("conversation completion through the real delivery queue", () => {
     onTestFinished(async () => {
       await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     });
-    registerConversationAddresses(scope, [
+    await registerConversationAddresses(scope, [
       { ...conversation, deliveryTarget: conversation.target },
     ]);
     await beginConversationDeliveryOperation(scope, {
@@ -410,7 +410,7 @@ describe("conversation completion through the real delivery queue", () => {
     });
     const config = { agents: { entries: { main: {} } }, session: { store: scope.storePath } };
     const operationId = "real-queue-admission";
-    registerConversationAddresses(scope, [
+    await registerConversationAddresses(scope, [
       { ...conversation, deliveryTarget: conversation.target },
     ]);
     const started = createDeferred<{

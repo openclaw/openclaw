@@ -291,12 +291,10 @@ function coerceWithJsonSchema(
     }
   }
 
-  if (Array.isArray(schema.anyOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.anyOf, root, refs);
-  }
-
-  if (Array.isArray(schema.oneOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.oneOf, root, refs);
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    if (Array.isArray(schema[keyword])) {
+      nextValue = coerceWithUnionSchema(nextValue, schema[keyword], root, refs);
+    }
   }
 
   const schemaTypes = getSchemaTypes(schema, root);

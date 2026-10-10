@@ -1,7 +1,9 @@
 import http from "node:http";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import * as fileAccessRuntime from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createPluginRuntimeMock,
   createPluginRegistry,
@@ -30,9 +32,9 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
+import { replaceTranscriptEvents } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
@@ -75,7 +77,7 @@ import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
 } from "../src/sessions/session-state-events.js";
-import { readSessionUpstreamLink } from "../src/sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "../src/sessions/session-upstream-links.kernel.js";
 import { runSessionUpstreamMonitorTick } from "../src/sessions/session-upstream-monitor.test-support.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -1185,8 +1187,18 @@ describe("canonical descendant lifecycle through real owners", () => {
       const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(await events()).toEqual(before);
-      const link = expectDefined(readSessionUpstreamLink(key, "main"), "child link");
-      const root = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
+      const link = expectDefined(
+        readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main"),
+        "child link",
+      );
+      const root = expectDefined(
+        readSessionUpstreamLinkInDatabase(
+          openOpenClawStateDatabase().db,
+          source.sessionKey,
+          "main",
+        ),
+        "root link",
+      );
       expect(link).toMatchObject({
         threadId: root.threadId,
         upstreamRef: root.upstreamRef,
@@ -1314,8 +1326,14 @@ describe("canonical descendant lifecycle through real owners", () => {
               key.endsWith(`:${firstBinding.threadId}`),
             ),
           ).toBe(false);
-          const link = readSessionUpstreamLink(source.sessionKey, "main");
-          expect(readSessionUpstreamLink(firstKey, "main")).toMatchObject({
+          const link = readSessionUpstreamLinkInDatabase(
+            openOpenClawStateDatabase().db,
+            source.sessionKey,
+            "main",
+          );
+          expect(
+            readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, firstKey, "main"),
+          ).toMatchObject({
             threadId: link?.threadId,
             marker: { turnId: null, userMessageCount: 0 },
           });
@@ -2021,4 +2039,78 @@ describe("canonical descendant lifecycle through real owners", () => {
     },
     180_000,
   );
+  it("PROOF canonical fork under wall-clock skew keeps the rollout observation deadline monotonic", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      await fixture.turn(source.sessionKey, "canonical");
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const traces: Array<Record<string, unknown>> = [];
+      for (const delta of [-90_000, 90_000]) {
+        // Real timers and real performance.now throughout; only Date.now is skewed.
+        // The skew opens when the production reader roots the sessions directory
+        // (after its deadline seed, before its remaining-budget read) and closes
+        // when the reader arms its deadline timer.
+        const realDateNow = Date.now;
+        let skewActive = false;
+        let rootTriggered = false;
+        const rootOriginal = fileAccessRuntime.root;
+        const rootSpy = vi.spyOn(fileAccessRuntime, "root").mockImplementation(((...args) => {
+          // Platform-aware: the sessions dir basename is "sessions" on POSIX and
+          // Windows alike (path.join produces backslashes on Windows), so match
+          // the basename instead of a hard-coded "/sessions" suffix.
+          if (!rootTriggered && path.basename(args[0]) === "sessions") {
+            rootTriggered = true;
+            skewActive = true;
+            Date.now = () => realDateNow() + delta;
+          }
+          return rootOriginal(...args);
+        }) as typeof fileAccessRuntime.root);
+        const originalSetTimeout = globalThis.setTimeout;
+        let readerArmedDelay: number | undefined;
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+          callback: (...cbArgs: unknown[]) => void,
+          timeout?: number,
+          ...args: unknown[]
+        ) => {
+          if (skewActive) {
+            skewActive = false;
+            Date.now = realDateNow;
+            readerArmedDelay = timeout ?? 0;
+          }
+          return originalSetTimeout(() => callback(...args), timeout);
+        }) as typeof setTimeout);
+        const startedAt = performance.now();
+        let result: { ok: boolean; key?: string; message?: string } | undefined;
+        try {
+          result = await fork(source.sessionKey, selected.entryId);
+        } finally {
+          Date.now = realDateNow;
+          rootSpy.mockRestore();
+          setTimeoutSpy.mockRestore();
+        }
+        traces.push({
+          wallClockDeltaMs: delta,
+          rootTriggered,
+          forkOk: result?.ok,
+          ...(result?.message ? { forkMessage: result.message.slice(0, 100) } : {}),
+          forkElapsedMs: Math.round(performance.now() - startedAt),
+          readerArmedDelayMs: readerArmedDelay,
+          // Real CodexAppServerClient JSON-RPC methods hit via fromTransportForTests.
+          clientMethods: fixture.native.calls.map((call) => call.method),
+        });
+      }
+      console.log("PROOF_TRACE " + JSON.stringify(traces));
+      expect(traces.map((trace) => trace.forkOk)).toEqual([true, true]);
+      for (const trace of traces) {
+        // The regression validates the budget contract, not disk latency: the
+        // post-fix reader arms its monotonic deadline timer at
+        // max(1, deadline - performance.now()), which stays within the 5s budget
+        // and is never inflated by wall-clock skew. There is no fixed lower bound
+        // (slow lstat/root/open legitimately consume part of the budget while the
+        // fork still succeeds within it), so only the upper budget bound is asserted.
+        expect(trace.readerArmedDelayMs).toBeGreaterThanOrEqual(1);
+        expect(trace.readerArmedDelayMs).toBeLessThanOrEqual(5_000);
+      }
+    });
+  }, 180_000);
 });

@@ -33,7 +33,6 @@ const GATEWAY_LOCAL_OWNER_WAIT_MS = 150_000;
 type ProcessOwner = {
   released: Promise<void>;
   resolveReleased: () => void;
-  token: symbol;
 };
 
 const processOwners = new Map<string, ProcessOwner>();
@@ -64,7 +63,6 @@ async function reserveProcessOwner(params: {
       const owner: ProcessOwner = {
         released: released.promise,
         resolveReleased: released.resolve,
-        token: Symbol(params.ownerPath),
       };
       processOwners.set(params.ownerPath, owner);
       return owner;
@@ -88,7 +86,7 @@ async function reserveProcessOwner(params: {
 }
 
 function abandonProcessOwner(ownerPath: string, owner: ProcessOwner): void {
-  if (processOwners.get(ownerPath)?.token !== owner.token) {
+  if (processOwners.get(ownerPath) !== owner) {
     return;
   }
   processOwners.delete(ownerPath);
@@ -114,40 +112,38 @@ async function acquireOwnerLease(params: {
   });
   let fileLock: FileLockHandle;
   let attempt = 0;
-  while (true) {
-    if (params.signal?.aborted) {
-      abandonProcessOwner(ownerPath, processOwner);
-      throw ownershipCancelledError(params.signal);
-    }
-    try {
-      fileLock = await acquireFileLock(ownerPath, {
-        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-        stale: OWNER_LOCK_STALE_MS,
-        // The shared lock wrapper reclaims only a definitely dead PID and removes
-        // the exact unchanged sidecar. Live or ambiguous owners remain fail-closed.
-        staleRecovery: "remove-if-unchanged",
-      });
-      break;
-    } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      if (code === FILE_LOCK_STALE_ERROR_CODE) {
-        abandonProcessOwner(ownerPath, processOwner);
-        throw new WhatsAppConnectionOwnerBusyError(params.authDir, { cause: error });
-      }
-      if (code !== FILE_LOCK_TIMEOUT_ERROR_CODE || attempt >= params.retries) {
-        abandonProcessOwner(ownerPath, processOwner);
-        if (code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
-          throw new WhatsAppConnectionOwnerBusyError(params.authDir, { cause: error });
-        }
-        throw error;
-      }
-      const delayMs = Math.min(100 * 1.5 ** attempt, 1_000);
-      attempt += 1;
-      await sleepWithAbort(delayMs, params.signal).catch(() => {
-        abandonProcessOwner(ownerPath, processOwner);
+  try {
+    while (true) {
+      if (params.signal?.aborted) {
         throw ownershipCancelledError(params.signal);
-      });
+      }
+      try {
+        fileLock = await acquireFileLock(ownerPath, {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          stale: OWNER_LOCK_STALE_MS,
+          // The shared lock wrapper reclaims only a definitely dead PID and removes
+          // the exact unchanged sidecar. Live or ambiguous owners remain fail-closed.
+          staleRecovery: "remove-if-unchanged",
+        });
+        break;
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        if (code !== FILE_LOCK_TIMEOUT_ERROR_CODE || attempt >= params.retries) {
+          if (code === FILE_LOCK_TIMEOUT_ERROR_CODE || code === FILE_LOCK_STALE_ERROR_CODE) {
+            throw new WhatsAppConnectionOwnerBusyError(params.authDir, { cause: error });
+          }
+          throw error;
+        }
+        const delayMs = Math.min(100 * 1.5 ** attempt, 1_000);
+        attempt += 1;
+        await sleepWithAbort(delayMs, params.signal).catch(() => {
+          throw ownershipCancelledError(params.signal);
+        });
+      }
     }
+  } catch (error) {
+    abandonProcessOwner(ownerPath, processOwner);
+    throw error;
   }
   let releasePromise: Promise<void> | null = null;
   return {

@@ -13,16 +13,14 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
   borrowOpenClawAgentDatabase,
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import {
-  AgentDatabaseExecutionAdmissionClosedError,
-  type OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,

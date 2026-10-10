@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   loadAgentFileContent,
   overwriteAgentFile,
@@ -21,11 +22,8 @@ function createState(client: GatewayBrowserClient): FilesState {
     agents: { recordFile: vi.fn(() => null) },
     agentFilesLoading: false,
     agentFilesError: null,
-    agentFileContents: {},
-    agentFileBaseVersions: {},
-    agentFileVersions: {},
+    agentFileEditors: {},
     agentFileConflict: null,
-    agentFileDrafts: {},
     agentFileSaving: false,
     agentFileWriteRevisions: new Map(),
   };
@@ -63,7 +61,7 @@ describe("agent file requests", () => {
 
       expect(await saveAgentFile(state, "main", "AGENTS.md", "unread replacement")).toBe(false);
       expect(request).toHaveBeenCalledTimes(1);
-      expect(state.agentFileContents).toEqual({});
+      expect(agentFileValues(state, "content")).toEqual({});
       if (phase === "pending") {
         read.resolve(fileResult("", "a".repeat(64)));
         expect(await load).toBe(true);
@@ -82,7 +80,7 @@ describe("agent file requests", () => {
         content: "new instructions",
         expectedHash: "a".repeat(64),
       });
-      expect(state.agentFileContents["AGENTS.md"]).toBe("new instructions");
+      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("new instructions");
     },
   );
 
@@ -98,12 +96,12 @@ describe("agent file requests", () => {
           ...fileResult(draft, "b".repeat(64)),
         });
       const state = createState(createTestGatewayClient(request));
-      state.agentFileDrafts = { "AGENTS.md": draft };
-      state.agentFileVersions = { "AGENTS.md": { hash: "a".repeat(64) } };
+      setAgentFileValues(state, "draft", { "AGENTS.md": draft });
+      setAgentFileValues(state, "version", { "AGENTS.md": { hash: "a".repeat(64) } });
       const load = loadAgentFileContent(state, "main", "AGENTS.md");
       resetAgentFile(state, "AGENTS.md");
-      expect(state.agentFileDrafts["AGENTS.md"]).toBe(draft);
-      expect(state.agentFileVersions["AGENTS.md"]).toEqual({ hash: "a".repeat(64) });
+      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(draft);
+      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: "a".repeat(64) });
 
       expect(await saveAgentFile(state, "main", "AGENTS.md", draft)).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
@@ -114,8 +112,8 @@ describe("agent file requests", () => {
       });
       read.resolve(fileResult("older content", "a".repeat(64)));
       expect(await load).toBe(false);
-      expect(state.agentFileDrafts["AGENTS.md"]).toBe(draft);
-      expect(state.agentFileContents["AGENTS.md"]).toBe(draft);
+      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(draft);
+      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe(draft);
     },
   );
 
@@ -134,16 +132,16 @@ describe("agent file requests", () => {
       const state = createState(createTestGatewayClient(request));
 
       await loadAgentFileContent(state, "main", "AGENTS.md");
-      state.agentFileDrafts = { "AGENTS.md": "dirty draft" };
+      setAgentFileValues(state, "draft", { "AGENTS.md": "dirty draft" });
       await loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
-      expect(state.agentFileDrafts["AGENTS.md"]).toBe("dirty draft");
-      expect(state.agentFileVersions["AGENTS.md"]).toEqual(
+      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("dirty draft");
+      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual(
         missing ? { missing: true } : { hash: loadedHash },
       );
 
       resetAgentFile(state, "AGENTS.md");
-      expect(state.agentFileDrafts["AGENTS.md"]).toBe("external update");
-      state.agentFileDrafts = { "AGENTS.md": "edited after reset" };
+      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("external update");
+      setAgentFileValues(state, "draft", { "AGENTS.md": "edited after reset" });
       await saveAgentFile(state, "main", "AGENTS.md", "edited after reset");
 
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
@@ -168,7 +166,7 @@ describe("agent file requests", () => {
         ...fileResult("old draft", "c".repeat(64)),
       }));
       const state = createState(createTestGatewayClient(request));
-      state.agentFileDrafts = { "AGENTS.md": "old draft" };
+      setAgentFileValues(state, "draft", { "AGENTS.md": "old draft" });
       state.agents.recordFile = vi.fn(() => {
         if (scope === "client") {
           state.client = createTestGatewayClient(replacementRequest);
@@ -198,11 +196,11 @@ describe("agent file requests", () => {
         ),
       } as unknown as GatewayBrowserClient;
       const state = createState(client);
-      state.agentFileContents = { "AGENTS.md": "original" };
-      state.agentFileDrafts = { "AGENTS.md": "original" };
+      setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+      setAgentFileValues(state, "draft", { "AGENTS.md": "original" });
 
       const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
-      state.agentFileDrafts = { "AGENTS.md": "saved" };
+      setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
       expect(await saveAgentFile(state, "main", "AGENTS.md", "saved")).toBe(true);
       if (completion === "read error") {
         read.reject(new Error("obsolete read failed"));
@@ -210,8 +208,8 @@ describe("agent file requests", () => {
         read.resolve(fileResult("original"));
       }
       expect(await load).toBe(false);
-      expect(state.agentFileContents).toEqual({ "AGENTS.md": "saved" });
-      expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "saved" });
+      expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
+      expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
       expect(state.agentFilesError).toBeNull();
       expect(state.agentFilesLoading).toBe(false);
     },
@@ -226,8 +224,8 @@ describe("agent file requests", () => {
       ),
     } as unknown as GatewayBrowserClient;
     const state = createState(client);
-    state.agentFileContents = { "AGENTS.md": "original" };
-    state.agentFileDrafts = { "AGENTS.md": "saved" };
+    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+    setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
 
     const save = saveAgentFile(state, "main", "AGENTS.md", "saved");
     const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
@@ -235,8 +233,8 @@ describe("agent file requests", () => {
     expect(await save).toBe(true);
     read.resolve(fileResult("original"));
     expect(await load).toBe(false);
-    expect(state.agentFileContents).toEqual({ "AGENTS.md": "saved" });
-    expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "saved" });
+    expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
+    expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
     expect(state.agentFilesLoading).toBe(false);
     expect(state.agentFileSaving).toBe(false);
   });
@@ -249,15 +247,15 @@ describe("agent file requests", () => {
       .mockResolvedValueOnce({ ok: true, ...fileResult("saved") })
       .mockResolvedValueOnce(fileResult("external update"));
     const state = createState({ request } as unknown as GatewayBrowserClient);
-    state.agentFileContents = { "AGENTS.md": "original" };
+    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
     const load = loadAgentFileContent(state, "main", "SOUL.md");
     await saveAgentFile(state, "main", "AGENTS.md", "saved");
     read.resolve({ ...fileResult("soul"), file: { ...fileResult("soul").file, name: "SOUL.md" } });
     expect(await load).toBe(true);
-    expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "saved", "SOUL.md": "soul" });
+    expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved", "SOUL.md": "soul" });
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md", { force: true })).toBe(true);
-    expect(state.agentFileDrafts["AGENTS.md"]).toBe("external update");
+    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("external update");
   });
 
   it("keeps a failed save and its dirty draft visible after an older read settles", async () => {
@@ -267,14 +265,14 @@ describe("agent file requests", () => {
       .mockReturnValueOnce(read.promise)
       .mockRejectedValueOnce(new Error("workspace write failed"));
     const state = createState({ request } as unknown as GatewayBrowserClient);
-    state.agentFileContents = { "AGENTS.md": "original" };
-    state.agentFileDrafts = { "AGENTS.md": "unsaved" };
+    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+    setAgentFileValues(state, "draft", { "AGENTS.md": "unsaved" });
     const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
     expect(await saveAgentFile(state, "main", "AGENTS.md", "unsaved")).toBe(false);
     read.resolve(fileResult("old"));
     expect(await load).toBe(false);
-    expect(state.agentFileContents["AGENTS.md"]).toBe("original");
-    expect(state.agentFileDrafts["AGENTS.md"]).toBe("unsaved");
+    expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
+    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("unsaved");
     expect(state.agentFilesError).toBe("workspace write failed");
   });
 
@@ -295,12 +293,12 @@ describe("agent file requests", () => {
 
     oldRead.resolve(fileResult("old"));
     await oldLoad;
-    expect(state.agentFileContents).toEqual({});
+    expect(agentFileValues(state, "content")).toEqual({});
     expect(state.agentFilesLoading).toBe(true);
 
     nextRead.resolve(fileResult("new"));
     await nextLoad;
-    expect(state.agentFileContents).toEqual({ "AGENTS.md": "new" });
+    expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "new" });
     expect(state.agentFilesLoading).toBe(false);
   });
 
@@ -308,7 +306,7 @@ describe("agent file requests", () => {
     const saved = createDeferred<AgentsFilesSetResult>();
     const oldClient = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
     const state = createState(oldClient);
-    state.agentFileDrafts = { "AGENTS.md": "old" };
+    setAgentFileValues(state, "draft", { "AGENTS.md": "old" });
     const save = saveAgentFile(state, "main", "AGENTS.md", "old");
 
     if (owner === "client") {
@@ -321,7 +319,7 @@ describe("agent file requests", () => {
     saved.resolve({ ok: true, ...fileResult("old") });
     await save;
 
-    expect(state.agentFileContents).toEqual({});
+    expect(agentFileValues(state, "content")).toEqual({});
     expect(state.agentFileSaving).toBe(false);
     expect(state.agents.recordFile).not.toHaveBeenCalled();
   });
@@ -330,16 +328,16 @@ describe("agent file requests", () => {
     const saved = createDeferred<AgentsFilesSetResult>();
     const client = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
     const state = createState(client);
-    state.agentFileContents = { "AGENTS.md": "original" };
-    state.agentFileDrafts = { "AGENTS.md": "submitted" };
+    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+    setAgentFileValues(state, "draft", { "AGENTS.md": "submitted" });
 
     const save = saveAgentFile(state, "main", "AGENTS.md", "submitted");
-    state.agentFileDrafts = { "AGENTS.md": "typed while saving" };
+    setAgentFileValues(state, "draft", { "AGENTS.md": "typed while saving" });
     saved.resolve({ ok: true, ...fileResult("submitted") });
     await save;
 
-    expect(state.agentFileContents).toEqual({ "AGENTS.md": "submitted" });
-    expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "typed while saving" });
+    expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "submitted" });
+    expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "typed while saving" });
     expect(state.agentFileSaving).toBe(false);
   });
 
@@ -360,7 +358,7 @@ describe("agent file requests", () => {
     const state = createState({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
-    state.agentFileDrafts = { "AGENTS.md": "original\noperator note" };
+    setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
     expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
     expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
 
@@ -375,9 +373,9 @@ describe("agent file requests", () => {
     ];
     expect(request.mock.calls[1]).toEqual(setCall);
     expect(request.mock.calls[2]).toEqual(setCall);
-    expect(state.agentFileContents["AGENTS.md"]).toBe("original");
-    expect(state.agentFileVersions["AGENTS.md"]).toEqual({ hash: loadedHash });
-    expect(state.agentFileDrafts["AGENTS.md"]).toBe("original\noperator note");
+    expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
+    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
+    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\noperator note");
     expect(state.agentFileConflict).toBe("AGENTS.md");
     expect(state.agentFilesError).toContain("changed since it was read");
     expect(state.agentFileSaving).toBe(false);
@@ -401,12 +399,12 @@ describe("agent file requests", () => {
     const state = createState({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
-    state.agentFileDrafts = { "AGENTS.md": "original\noperator note" };
+    setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
     expect(await loadAgentFileContent(state, "main", "AGENTS.md", { force: true })).toBe(true);
 
-    expect(state.agentFileContents["AGENTS.md"]).toBe("original\nagent appended");
-    expect(state.agentFileDrafts["AGENTS.md"]).toBe("original\noperator note");
-    expect(state.agentFileVersions["AGENTS.md"]).toEqual({ hash: loadedHash });
+    expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original\nagent appended");
+    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\noperator note");
+    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
 
     expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
 
@@ -434,8 +432,8 @@ describe("agent file requests", () => {
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
     expect(await loadAgentFileContent(state, "main", "AGENTS.md", { force: true })).toBe(true);
 
-    expect(state.agentFileDrafts["AGENTS.md"]).toBe("original\nagent appended");
-    expect(state.agentFileVersions["AGENTS.md"]).toEqual({ hash: currentHash });
+    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\nagent appended");
+    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: currentHash });
   });
 
   it("keeps an outstanding conflict through an ordinary refresh that spares the draft", async () => {
@@ -455,14 +453,14 @@ describe("agent file requests", () => {
     const state = createState({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
-    state.agentFileDrafts = { "AGENTS.md": "original\noperator note" };
+    setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
     expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
     expect(state.agentFileConflict).toBe("AGENTS.md");
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md", { force: true })).toBe(true);
 
     expect(state.agentFileConflict).toBe("AGENTS.md");
-    expect(state.agentFileVersions["AGENTS.md"]).toEqual({ hash: loadedHash });
+    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
   });
 
   it.each([false, true])(
@@ -490,7 +488,7 @@ describe("agent file requests", () => {
       const state = createState({ request } as unknown as GatewayBrowserClient);
 
       expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
-      state.agentFileDrafts = { "AGENTS.md": "original\noperator note" };
+      setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
       expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(
         false,
       );
@@ -500,9 +498,13 @@ describe("agent file requests", () => {
         "agents.files.get",
         { agentId: "main", name: "AGENTS.md" },
       ]);
-      expect(state.agentFileContents["AGENTS.md"]).toBe(missing ? "" : "original\nagent appended");
-      expect(state.agentFileDrafts["AGENTS.md"]).toBe(missing ? "" : "original\nagent appended");
-      expect(state.agentFileVersions["AGENTS.md"]).toEqual(
+      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe(
+        missing ? "" : "original\nagent appended",
+      );
+      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(
+        missing ? "" : "original\nagent appended",
+      );
+      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual(
         missing ? { missing: true } : { hash: currentHash },
       );
       expect(state.agentFileConflict).toBeNull();
@@ -539,7 +541,7 @@ describe("agent file requests", () => {
       const state = createState({ request } as unknown as GatewayBrowserClient);
 
       expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
-      state.agentFileDrafts = { "AGENTS.md": "original\noperator note" };
+      setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
       expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(
         false,
       );
@@ -556,8 +558,8 @@ describe("agent file requests", () => {
           ...(missing ? { expectedMissing: true } : { expectedHash: currentHash }),
         },
       ]);
-      expect(state.agentFileContents["AGENTS.md"]).toBe("original\noperator note");
-      expect(state.agentFileVersions["AGENTS.md"]).toEqual({ hash: writtenHash });
+      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original\noperator note");
+      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: writtenHash });
       expect(state.agentFileConflict).toBeNull();
       expect(state.agentFilesError).toBeNull();
     },

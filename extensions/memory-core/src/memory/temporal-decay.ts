@@ -25,40 +25,6 @@ function applyTemporalDecayToScore(params: {
   return params.score * Math.exp(-(Math.LN2 / halfLifeDays) * clampedAge);
 }
 
-function parseMemoryDateFromPath(filePath: string): Date | null {
-  const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  const match = DATED_MEMORY_PATH_RE.exec(normalized);
-  if (!match) {
-    return null;
-  }
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const timestamp = Date.UTC(year, month - 1, day);
-  const parsed = new Date(timestamp);
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return parsed;
-}
-
-function isEvergreenMemoryPath(filePath: string): boolean {
-  const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  if (normalized === "MEMORY.md" || normalized === "USER.md") {
-    return true;
-  }
-  if (!normalized.startsWith("memory/")) {
-    return false;
-  }
-  return !DATED_MEMORY_PATH_RE.test(normalized);
-}
-
 async function extractTimestamp(params: {
   filePath: string;
   source?: string;
@@ -72,13 +38,29 @@ async function extractTimestamp(params: {
     const mtime = params.sessionSourceMtimes?.get(params.filePath);
     return mtime !== undefined && Number.isFinite(mtime) ? new Date(mtime) : null;
   }
-  const fromPath = parseMemoryDateFromPath(params.filePath);
-  if (fromPath) {
-    return fromPath;
+  const normalized = params.filePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const match = DATED_MEMORY_PATH_RE.exec(normalized);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() === month - 1 &&
+      parsed.getUTCDate() === day
+    ) {
+      return parsed;
+    }
   }
 
   // Memory root/topic files are evergreen knowledge and should not decay.
-  if (params.source === "memory" && isEvergreenMemoryPath(params.filePath)) {
+  if (
+    params.source === "memory" &&
+    (normalized === "MEMORY.md" ||
+      normalized === "USER.md" ||
+      (normalized.startsWith("memory/") && !match))
+  ) {
     return null;
   }
 

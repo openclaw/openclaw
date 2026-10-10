@@ -249,7 +249,10 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       const publicationSnapshot =
         initialAuthorization.tier === "maintainer" &&
         resolveXAccount(cfg, account.accountId).config.autoPublishWorkSessions === true
-          ? await openXAllowlist(core).readSnapshot(account.accountId)
+          ? await openXAllowlist(core).readSnapshot(
+              account.accountId,
+              resolveXAccount(cfg, account.accountId).config.verifiedFromGitHub,
+            )
           : undefined;
       const publicThread =
         publicationSnapshot &&
@@ -327,7 +330,6 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
           kind: "group",
           id: post.conversation_id,
           label: thread.label,
-          link: { url: `https://x.com/${handle}/status/${post.id}`, label: "View on X" },
         },
         route: {
           agentId: route.agentId,
@@ -343,6 +345,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
             authorization.tier,
             post.author_id,
             thread.users.find((user) => user.id === post.author_id),
+            authorization.github,
           )}\n${thread.bodyForAgent}`,
         },
       });

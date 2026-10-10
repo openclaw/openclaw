@@ -70,7 +70,6 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
     await replaceSessionEntry(target, {
       sessionId: event.sessionId,
       lifecycleRunId: event.runId,
-      status: "running",
       startedAt: 1_000,
       updatedAt: 1_000,
     });
@@ -82,7 +81,7 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
         await releaseWriter.promise;
         return { label: "accepted before shutdown" };
       },
-      { skipMaintenance: true, workerGuard: {} },
+      { skipMaintenance: true },
     );
     await withinTest(writerEntered.promise, signal);
     const boards = new SqliteBoardStore({

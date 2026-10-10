@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -89,7 +88,6 @@ function resolveSummaryModelSelection(
   };
 }
 
-/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;

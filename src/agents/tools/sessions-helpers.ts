@@ -29,6 +29,7 @@ export {
   resolveMainSessionAlias,
   resolveSessionReference,
   resolveVisibleSessionReference,
+  isSessionToolMainAlias,
   isExpectedSessionLookupMiss,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
@@ -66,6 +67,7 @@ export const SessionListRowSchema = Type.Object(
       "derivedTitle",
       "lastMessagePreview",
       "parentSessionKey",
+      "sidebarRoot",
       "model",
       "contextTokens",
       "totalTokens",

@@ -2,11 +2,11 @@ import { expect, it, vi } from "vitest";
 import { renderConfigView } from "./config-view.test-support.ts";
 
 it("renders the external-link preference off by default and applies a personal change", () => {
-  const setOpenLinksExternally = vi.fn();
+  const onAppearanceChange = vi.fn();
   const { container } = renderConfigView({
     activeSection: "__appearance__",
     includeSections: ["__appearance__"],
-    setOpenLinksExternally,
+    onAppearanceChange,
   });
   const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
     (candidate) =>
@@ -17,5 +17,5 @@ it("renders the external-link preference off by default and applies a personal c
   expect(toggle?.checked).toBe(false);
   expect(row?.textContent).toContain("Saved in this browser only.");
   row?.click();
-  expect(setOpenLinksExternally).toHaveBeenCalledWith(true);
+  expect(onAppearanceChange).toHaveBeenCalledWith({ openLinksExternally: true });
 });

@@ -10,13 +10,14 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { currentThemeBranding } from "../../components/neutral-mark.ts";
-import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import "../../components/tooltip.ts";
+import { renderThemeBrandIcon } from "../../components/theme-brand-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatDateMs, formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
@@ -38,28 +39,28 @@ const SHORT_COMMIT_LENGTH = 12;
 
 // Docs-first where a docs page exists; GitHub/Discord match the native
 // macOS/iOS About screens (AboutSettings.swift, SettingsProTabSections.swift).
-const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> = [
-  { href: "https://openclaw.ai", icon: icons.globe, label: () => t("aboutPage.linkWebsite") },
-  { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("aboutPage.linkDocs") },
+const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> = [
+  { href: "https://openclaw.ai", icon: icons.globe, labelKey: "aboutPage.linkWebsite" },
+  { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "aboutPage.linkDocs" },
   {
     href: "https://github.com/openclaw/openclaw",
     icon: brandIcons.github,
-    label: () => t("aboutPage.linkGitHub"),
+    labelKey: "aboutPage.linkGitHub",
   },
   {
     href: COMMUNITY_DISCORD_URL,
     icon: brandIcons.discord,
-    label: () => t("aboutPage.linkDiscord"),
+    labelKey: "aboutPage.linkDiscord",
   },
   {
     href: "https://x.com/openclaw",
     icon: brandIcons.x,
-    label: () => t("aboutPage.linkX"),
+    labelKey: "aboutPage.linkX",
   },
   {
     href: "https://docs.openclaw.ai/releases",
     icon: icons.scrollText,
-    label: () => t("aboutPage.linkChangelog"),
+    labelKey: "aboutPage.linkChangelog",
   },
 ];
 
@@ -131,8 +132,10 @@ function renderHero(props: AboutProps) {
   return html`
     <section class="about-hero">
       ${
-        currentThemeBranding().mascot === "none"
-          ? html`<span class="about-hero__mark--neutral" aria-hidden="true">${icons.mark}</span>`
+        currentThemeBranding().brandIcon !== "claw"
+          ? html`<span class="about-hero__mark--neutral" aria-hidden="true"
+              >${renderThemeBrandIcon()}</span
+            >`
           : html`<button
               type="button"
               class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
@@ -143,7 +146,7 @@ function renderHero(props: AboutProps) {
               ${renderLobsterSvg(look)}
             </button>`
       }
-      <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
+      <h2 class="about-hero__name">${currentThemeBranding().brandName}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
       ${
         props.buildInfo.version
@@ -151,7 +154,7 @@ function renderHero(props: AboutProps) {
           : nothing
       }
       <nav class="about-hero__links" aria-label=${t("aboutPage.linksLabel")}>
-        ${ABOUT_LINKS.map(
+        ${(currentThemeBranding().communityLinks ? ABOUT_LINKS : []).map(
           (link) => html`
             <a
               class="about-hero__link"
@@ -160,7 +163,7 @@ function renderHero(props: AboutProps) {
               rel=${buildExternalLinkRel()}
             >
               <span class="about-hero__link-icon" aria-hidden="true">${link.icon}</span>
-              <span>${link.label()}</span>
+              <span>${t(link.labelKey)}</span>
             </a>
           `,
         )}

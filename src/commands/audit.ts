@@ -352,23 +352,18 @@ function contextLineageLines(context: ExecutionIdentityContextV1): string[] {
     return [fieldLine("Parent", "absent")];
   }
   return [
-    fieldLine(
-      "Parent context",
-      lineage.parentContextId ? "present" : "unknown",
-      lineage.parentContextId,
-    ),
-    fieldLine(
-      "Parent execution",
-      lineage.parentExecutionId ? "present" : "unknown",
-      lineage.parentExecutionId,
-    ),
-    fieldLine("Parent run", lineage.parentRunId ? "present" : "unknown", lineage.parentRunId),
-    fieldLine(
-      "Parent agent",
-      lineage.parentAgentPrincipal ? "present" : "unknown",
-      lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
-    ),
-    fieldLine("Delegation", lineage.delegationRef ? "present" : "unknown", lineage.delegationRef),
+    ...(
+      [
+        ["Parent context", lineage.parentContextId],
+        ["Parent execution", lineage.parentExecutionId],
+        ["Parent run", lineage.parentRunId],
+        [
+          "Parent agent",
+          lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
+        ],
+        ["Delegation", lineage.delegationRef],
+      ] as const
+    ).map(([label, value]) => fieldLine(label, value ? "present" : "unknown", value)),
     fieldLine("Depth", "present", String(lineage.depth)),
   ];
 }
@@ -416,20 +411,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
     "",
     "Identity",
   ];
-  if (result.identity.state === "present") {
-    const identityLines = contextIdentityLines(result.identity.context);
-    lines.push(
-      `  Context: ${safe(result.identity.context.contextId)}`,
-      `  Created: ${timestampMsToIsoString(result.identity.context.createdAt) ?? String(result.identity.context.createdAt)}`,
-      ...identityLines.slice(0, 8),
-      "",
-      "Authority",
-      ...identityLines.slice(8),
-      "",
-      "Lineage",
-      ...contextLineageLines(result.identity.context),
-    );
-  } else if (result.identity.state === "ambiguous") {
+  if (result.identity.state === "ambiguous") {
     lines.push(
       `  Reason: ${safe(result.identity.reasonCode)}`,
       ...result.identity.candidates.map(
@@ -444,15 +426,29 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
       fieldLine("Parent", "unknown"),
     );
   } else {
+    const identity = result.identity;
+    const identityLines =
+      identity.state === "present"
+        ? contextIdentityLines(identity.context)
+        : unavailableIdentityLines(identity.state);
+    if (identity.state === "present") {
+      lines.push(
+        `  Context: ${safe(identity.context.contextId)}`,
+        `  Created: ${timestampMsToIsoString(identity.context.createdAt) ?? String(identity.context.createdAt)}`,
+      );
+    } else {
+      lines.push(`  Reason: ${safe(identity.reasonCode)}`);
+    }
     lines.push(
-      `  Reason: ${safe(result.identity.reasonCode)}`,
-      ...unavailableIdentityLines(result.identity.state).slice(0, 8),
+      ...identityLines.slice(0, 8),
       "",
       "Authority",
-      ...unavailableIdentityLines(result.identity.state).slice(8),
+      ...identityLines.slice(8),
       "",
       "Lineage",
-      fieldLine("Parent", result.identity.state),
+      ...(identity.state === "present"
+        ? contextLineageLines(identity.context)
+        : [fieldLine("Parent", identity.state)]),
     );
   }
   lines.push("", "Decisions");

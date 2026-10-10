@@ -12,13 +12,13 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
@@ -199,7 +199,7 @@ vi.mock("../../internal-session-effects.js", () => ({
 describe("subagent registry seam flow", () => {
   let mod: SubagentRegistryHarness;
   let bindWakeMutation: Awaited<ReturnType<typeof mockRegistryRequesterWakeMutation>>;
-  const recoveryRuntime: GatewayRecoveryRuntime = {
+  const recoveryRuntime = createMockGatewayRecoveryRuntime({
     dispatchSessionMethod: async <T>(
       method: string,
       params: unknown,
@@ -217,8 +217,7 @@ describe("subagent registry seam flow", () => {
         params: params as unknown as Record<string, unknown>,
         timeoutMs,
       }) as never,
-    sendRecoveryNotice: vi.fn(),
-  };
+  });
   const activateRegistry = () => activateSubagentRegistryWithRecoveryRuntime(mod, recoveryRuntime);
   const hydrateAndActivateRegistry = async () => {
     await mod.initSubagentRegistry();
@@ -659,7 +658,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
-        status: "running",
         lifecycleRunId: "newer-run",
         abortedLastRun: false,
       }),
@@ -768,15 +766,12 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
     await hydrateAndActivateRegistry();
     await Promise.resolve();
     expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
       [],
     );
 
-    suspension?.release();
     expect(releaseSwarmRun("slot-active")).toBe(true);
     await waitForFast(() => {
       const agentCalls = mocks.callGateway.mock.calls.filter(
@@ -1094,7 +1089,7 @@ describe("subagent registry seam flow", () => {
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: startedAt,
-        status: "running",
+        status: undefined,
       }),
     };
     const settleRootWork = observeRootWork();
@@ -1292,7 +1287,7 @@ describe("subagent registry seam flow", () => {
       if (source === "boundary wait" || source === "session") {
         mocks.entries = {
           "agent:main:subagent:child": createSessionEntry({
-            status: source === "session" ? "done" : "running",
+            status: source === "session" ? "done" : undefined,
             updatedAt: createdAt + (sessionEnd ?? 0),
             ...(sessionStart === undefined ? {} : { startedAt: createdAt + sessionStart }),
             ...(sessionEnd === undefined ? {} : { endedAt: createdAt + sessionEnd }),
@@ -1375,7 +1370,7 @@ describe("subagent registry seam flow", () => {
     });
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
-        status: "running",
+        status: undefined,
         updatedAt: createdAt + 61_000,
         startedAt: observedStartedAt,
       }),
@@ -2080,7 +2075,7 @@ describe("subagent registry seam flow", () => {
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: Date.now(),
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
       }),
     };

@@ -4,8 +4,7 @@ import type { Virtualizer } from "@tanstack/virtual-core";
 export class TranscriptRowRefs {
   private readonly refs = new Map<string, (element?: Element) => void>();
   private pruneQueued = false;
-  private pendingRows = new Map<HTMLElement, string>();
-  private measureQueued = false;
+  private pendingRows: Map<HTMLElement, string> | null = null;
 
   constructor(
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -16,17 +15,16 @@ export class TranscriptRowRefs {
   ) {}
 
   private queueMountedRow(element: HTMLElement, key: string): void {
-    this.pendingRows.set(element, key);
-    if (this.measureQueued) {
+    if (this.pendingRows) {
+      this.pendingRows.set(element, key);
       return;
     }
-    this.measureQueued = true;
+    const pendingRows = new Map([[element, key]]);
+    this.pendingRows = pendingRows;
     // Lit refs run before connection. Register only the committed, current rows;
     // TanStack's ResizeObserver owns their first post-layout measurement.
     queueMicrotask(() => {
-      const pendingRows = this.pendingRows;
-      this.pendingRows = new Map();
-      this.measureQueued = false;
+      this.pendingRows = null;
       for (const [row, rowKey] of pendingRows) {
         if (
           row.isConnected &&
@@ -78,6 +76,6 @@ export class TranscriptRowRefs {
 
   clear(): void {
     this.refs.clear();
-    this.pendingRows.clear();
+    this.pendingRows?.clear();
   }
 }

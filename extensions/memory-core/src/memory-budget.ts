@@ -191,19 +191,8 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const blocks = parseMemoryBlocks(existingMemory);
   const promotionEntries = blocks
-    .flatMap((block, index) =>
-      block.kind === "promotion"
-        ? [
-            {
-              index,
-              date: block.date,
-              length: block.text.length,
-              entryCount: block.entryCount,
-            },
-          ]
-        : [],
-    )
-    .toSorted((a, b) => a.date.localeCompare(b.date));
+    .flatMap((block, index) => (block.kind === "promotion" ? [{ block, index }] : []))
+    .toSorted((a, b) => a.block.date.localeCompare(b.block.date));
 
   if (promotionEntries.length === 0) {
     return { compacted: existingMemory, droppedDates: [] };
@@ -211,7 +200,10 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const droppedIndices = new Set<number>();
   const droppedDates: string[] = [];
-  const totalEntryCount = promotionEntries.reduce((total, entry) => total + entry.entryCount, 0);
+  const totalEntryCount = promotionEntries.reduce(
+    (total, { block }) => total + block.entryCount,
+    0,
+  );
   const maxLossFraction = Math.max(0, Math.min(1, params.maxPriorEntryLossFraction ?? 1));
   let droppedEntryCount = 0;
   let projectedExistingSize = existingMemory.length;
@@ -219,20 +211,23 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
   // newline along with the block text so the projection stays honest.
   const blockSeparatorCost = blocks.length > 1 ? 1 : 0;
 
-  for (const entry of promotionEntries) {
+  for (const { block, index } of promotionEntries) {
     if (projectedExistingSize + newSection.length <= effectiveBudget) {
       break;
     }
     if (
       totalEntryCount > 0 &&
-      (droppedEntryCount + entry.entryCount) / totalEntryCount > maxLossFraction
+      (droppedEntryCount + block.entryCount) / totalEntryCount > maxLossFraction
     ) {
       break;
     }
-    droppedIndices.add(entry.index);
-    droppedDates.push(entry.date);
-    droppedEntryCount += entry.entryCount;
-    projectedExistingSize = Math.max(0, projectedExistingSize - entry.length - blockSeparatorCost);
+    droppedIndices.add(index);
+    droppedDates.push(block.date);
+    droppedEntryCount += block.entryCount;
+    projectedExistingSize = Math.max(
+      0,
+      projectedExistingSize - block.text.length - blockSeparatorCost,
+    );
   }
 
   if (droppedIndices.size === 0) {

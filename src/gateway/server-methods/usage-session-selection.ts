@@ -162,46 +162,6 @@ function buildStoreBySessionIdentity(
   return { storeByIdentity, familyOwners };
 }
 
-function withUsageGrouping(
-  base: Omit<UsageSessionSelection, "instances">,
-  groupingMode: UsageGroupingMode,
-  familyOwners: ReadonlyMap<string, StoredUsageSession>,
-  discoveredByIdentity: ReadonlyMap<string, { sessionId: string; sessionFile: string }>,
-): UsageSessionSelection {
-  const currentInstance = { sessionId: base.sessionId, sessionFile: base.sessionFile };
-  if (groupingMode !== "family") {
-    return { ...base, instances: [currentInstance] };
-  }
-  // Historical ids belong to this agent; identical ids owned by other agents stay separate.
-  const includedSessionIds = [
-    ...new Set(
-      [base.sessionId, ...(base.storeEntry?.usageFamilySessionIds ?? [])]
-        .map(normalizeOptionalString)
-        .filter((id): id is string => Boolean(id)),
-    ),
-  ].filter(
-    (id) =>
-      id === base.sessionId ||
-      familyOwners.get(usageSessionIdentity(base.agentId, id))?.entry.sessionId === base.sessionId,
-  );
-  return {
-    ...base,
-    // Discovery owns SQLite/archive precedence; loading must not guess storage
-    // from the current instance, because one family can span both sources.
-    instances: includedSessionIds.flatMap((id) => {
-      const instance =
-        id === base.sessionId
-          ? currentInstance
-          : discoveredByIdentity.get(usageSessionIdentity(base.agentId, id));
-      return instance ? [instance] : [];
-    }),
-    scope: "family",
-    sessionFamilyKey: base.storeEntry?.usageFamilyKey ?? base.key,
-    currentSessionId: base.sessionId,
-    includedSessionIds,
-  };
-}
-
 export async function selectUsageSessions(params: {
   config: OpenClawConfig;
   agentId?: string;
@@ -254,6 +214,43 @@ export async function selectUsageSessions(params: {
       session,
     ]),
   );
+  function withUsageGrouping(
+    base: Omit<UsageSessionSelection, "instances">,
+  ): UsageSessionSelection {
+    const currentInstance = { sessionId: base.sessionId, sessionFile: base.sessionFile };
+    if (groupingMode !== "family") {
+      return { ...base, instances: [currentInstance] };
+    }
+    // Historical ids belong to this agent; identical ids owned by other agents stay separate.
+    const includedSessionIds = [
+      ...new Set(
+        [base.sessionId, ...(base.storeEntry?.usageFamilySessionIds ?? [])]
+          .map(normalizeOptionalString)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ].filter(
+      (id) =>
+        id === base.sessionId ||
+        familyOwners.get(usageSessionIdentity(base.agentId, id))?.entry.sessionId ===
+          base.sessionId,
+    );
+    return {
+      ...base,
+      // Discovery owns SQLite/archive precedence; loading must not guess storage
+      // from the current instance, because one family can span both sources.
+      instances: includedSessionIds.flatMap((id) => {
+        const instance =
+          id === base.sessionId
+            ? currentInstance
+            : discoveredByIdentity.get(usageSessionIdentity(base.agentId, id));
+        return instance ? [instance] : [];
+      }),
+      scope: "family",
+      sessionFamilyKey: base.storeEntry?.usageFamilyKey ?? base.key,
+      currentSessionId: base.sessionId,
+      includedSessionIds,
+    };
+  }
   const now = Date.now();
 
   const mergedEntries: UsageSessionSelection[] = [];
@@ -325,20 +322,15 @@ export async function selectUsageSessions(params: {
     }
     if (updatedAt !== undefined) {
       mergedEntries.push(
-        withUsageGrouping(
-          {
-            key: resolvedStoreKey,
-            agentId: agentIdFromKey,
-            sessionId,
-            sessionFile,
-            label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
-            updatedAt,
-            storeEntry,
-          },
-          groupingMode,
-          familyOwners,
-          discoveredByIdentity,
-        ),
+        withUsageGrouping({
+          key: resolvedStoreKey,
+          agentId: agentIdFromKey,
+          sessionId,
+          sessionFile,
+          label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
+          updatedAt,
+          storeEntry,
+        }),
       );
     }
   } else {
@@ -390,20 +382,15 @@ export async function selectUsageSessions(params: {
         entry = target.entry ?? entry;
       }
       mergedEntries.push(
-        withUsageGrouping(
-          {
-            key,
-            agentId: discovered.agentId,
-            sessionId: entry.sessionId,
-            sessionFile,
-            label: resolveGatewaySessionDisplayName(key, entry),
-            updatedAt: entry.updatedAt ?? discovered.mtime,
-            storeEntry: entry,
-          },
-          groupingMode,
-          familyOwners,
-          discoveredByIdentity,
-        ),
+        withUsageGrouping({
+          key,
+          agentId: discovered.agentId,
+          sessionId: entry.sessionId,
+          sessionFile,
+          label: resolveGatewaySessionDisplayName(key, entry),
+          updatedAt: entry.updatedAt ?? discovered.mtime,
+          storeEntry: entry,
+        }),
       );
       if (groupingMode === "family") {
         selectedFamilies.add(familyIdentity);

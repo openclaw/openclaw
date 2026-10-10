@@ -18,7 +18,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -243,7 +244,7 @@ function holdInitialRead(kind: CleanupKind) {
   const release = createDeferredCore();
   mutation.current?.readerReleases.add(release.resolve);
   const originalEntry = sessionReads.withSessionEntryReadOnlyInWorker;
-  const originalExpired = sessionReads.readExpiredCronRunEntriesInWorker;
+  const originalExpired = maintenanceReads.readExpiredCronRunEntriesInWorker;
   const read =
     kind === "continuation"
       ? vi
@@ -257,7 +258,7 @@ function holdInitialRead(kind: CleanupKind) {
             }),
           )
       : vi
-          .spyOn(sessionReads, "readExpiredCronRunEntriesInWorker")
+          .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
           .mockImplementationOnce(async (...args) => {
             const result = await originalExpired(...args);
             entered.resolve();

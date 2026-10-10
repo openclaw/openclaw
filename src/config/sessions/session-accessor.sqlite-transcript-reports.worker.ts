@@ -14,10 +14,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import {
-  advanceCliHistoryBoundaryRangeInTransaction,
-  type CliHistoryWriterFacts,
-} from "./session-accessor.sqlite-cli-history-boundary.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   SessionTranscriptContextVersion,
@@ -30,8 +28,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import {
   appendAbortedSessionTranscriptPartialInTransaction,
-  settleStartupSessionInTransaction,
-  inspectStartupSessionSettlementOwner,
   appendSelectedTranscriptReportInTransaction,
   prepareTranscriptReportSelection,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
@@ -40,7 +36,6 @@ import type {
   PreparedTranscriptReport,
   TranscriptReportCommit,
   TranscriptReportWorkerOperations,
-  StartupSessionSettlementOutcome,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
@@ -139,26 +134,15 @@ export function bindSqliteWorkerBackend(
             throw new Error("Transcript report lost its canonical database owner");
           }
           admit("transaction");
-          if (
-            command.type === "startupSettlement" &&
-            inspectStartupSessionSettlementOwner(resolved, command.input) === "retained"
-          ) {
-            // Registry recovery owns this predecessor; no session or receipt write was attempted.
-            admit("commit");
-            inspectStartupSessionSettlementOwner(resolved, command.input);
-            return ok({ committed: false, projectionNeedsReconcile: false, outcome: "retained" });
-          }
           const refusal = readRefusal();
           if (refusal) {
             admit("commit");
             return err(refusal);
           }
-          const firstSeq =
-            target.cliWriter &&
-            !(command.type === "startupSettlement" && command.input.kind === "archive")
-              ? (readTranscriptContextVersionInTransaction(database, resolved.sessionId).rawSeq ??
-                  -1) + 1
-              : undefined;
+          const firstSeq = target.cliWriter
+            ? (readTranscriptContextVersionInTransaction(database, resolved.sessionId).rawSeq ??
+                -1) + 1
+            : undefined;
           let projectionNeedsReconcile = false;
           const projection = {
             scheduleProjectionReconcile: false as const,
@@ -167,15 +151,7 @@ export function bindSqliteWorkerBackend(
             },
           };
           let abortedPartial: AbortedSessionTranscriptPartialResult | undefined;
-          let startupOutcome: Exclude<StartupSessionSettlementOutcome, "retained"> = "unchanged";
-          if (command.type === "startupSettlement") {
-            startupOutcome = settleStartupSessionInTransaction(
-              database,
-              resolved,
-              command.input,
-              projection,
-            );
-          } else if (command.type === "abortedPartial") {
+          if (command.type === "abortedPartial") {
             abortedPartial = appendAbortedSessionTranscriptPartialInTransaction(
               database,
               resolved,
@@ -221,19 +197,9 @@ export function bindSqliteWorkerBackend(
             );
           }
           let commitGranted = false;
-          const assertStartupOwnerless = () => {
-            if (
-              command.type === "startupSettlement" &&
-              inspectStartupSessionSettlementOwner(resolved, command.input) === "retained"
-            ) {
-              throw new Error("a retained run/task owns this session");
-            }
-          };
           const authorizeCommit = () => {
             if (!commitGranted) {
-              assertStartupOwnerless();
               admit("commit");
-              assertStartupOwnerless();
               commitGranted = true;
             }
           };
@@ -261,9 +227,6 @@ export function bindSqliteWorkerBackend(
             committed: true,
             projectionNeedsReconcile,
             cliHistoryChanged,
-            ...(command.type === "startupSettlement"
-              ? { sessionEntryChanged: startupOutcome !== "unchanged", outcome: startupOutcome }
-              : {}),
             ...(abortedPartial
               ? {
                   abortedPartial,

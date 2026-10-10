@@ -10,8 +10,7 @@ import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   resolveReplyOperatorAuthorityKey,
-  resolveReplyScreenToolTarget,
-  resolveReplyThemeProfileId,
+  resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
 import {
@@ -40,6 +39,17 @@ export function hasExclusiveTurnAdmission(
   admission: "exclusive";
 } {
   return lifecycle?.admission === "exclusive";
+}
+
+export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
+  const owners = new Set(
+    items.flatMap((item) =>
+      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
+    ),
+  );
+  if (owners.size > 1) {
+    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
+  }
 }
 
 function resolveTurnAdoptionLifecycleDeliveryKey(
@@ -234,10 +244,14 @@ export async function prepareNextDeliveryGroup(
           index < 0
             ? undefined
             : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
+        const storageKey = resolveFollowupDeliveryStorageKey(item);
+        const personalTargets = profile
+          ? resolveReplyPersonalToolTargets(item, profile)
+          : undefined;
         const key = JSON.stringify([
-          resolveFollowupDeliveryStorageKey(item),
-          profile ? stableStringify(resolveReplyScreenToolTarget(item, profile) ?? null) : "null",
-          profile ? (resolveReplyThemeProfileId(item, profile) ?? "") : "",
+          storageKey,
+          personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
+          personalTargets?.themeProfileId ?? "",
         ]);
         if (firstKey !== undefined && key !== firstKey) {
           break;
@@ -292,22 +306,11 @@ type FollowupRuntimeMetadata = Pick<
   | "runObservers"
 >;
 
-function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
-  return (
-    item.currentInboundEventKind === "room_event" ||
-    item.currentInboundAudio === true ||
-    Boolean(item.currentInboundContext)
-  );
-}
-
 function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length === 0) {
-    return undefined;
-  }
-  if (contexts.length === 1) {
+  if (contexts.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -379,7 +382,12 @@ export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
-  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  const currentTurnSource = items.find(
+    (item) =>
+      item.currentInboundEventKind === "room_event" ||
+      item.currentInboundAudio === true ||
+      Boolean(item.currentInboundContext),
+  );
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
@@ -429,6 +437,19 @@ export function resolveOverflowSummaryInboundEventKind(
     : undefined;
 }
 
+export function getFollowupOriginRouting(source: FollowupRun) {
+  return {
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+  };
+}
+
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
@@ -450,14 +471,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
-    originatingChannel: source.originatingChannel,
-    originatingTo: source.originatingTo,
-    originatingAccountId: source.originatingAccountId,
-    originatingThreadId: source.originatingThreadId,
-    originatingChatId: source.originatingChatId,
-    originatingReplyToId: source.originatingReplyToId,
-    originatingReplyToMode: source.originatingReplyToMode,
-    originatingChatType: source.originatingChatType,
+    ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,

@@ -10,6 +10,10 @@ import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ConversationRef,
+  SessionBindingInspection,
+} from "../../infra/outbound/session-binding.types.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { ChatType } from "../chat-type.js";
@@ -465,6 +469,13 @@ export type ChannelMessagingAdapter = {
     | { kind: "unavailable" }
     | null
     | undefined;
+  /** Prepare current binding reads together; returned resolvers are consumed synchronously in input order. */
+  prepareConversationRouteOwners?: (
+    params: readonly Parameters<
+      NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
+    >[0][],
+    inspectBindings: (refs: readonly ConversationRef[]) => readonly SessionBindingInspection[],
+  ) => readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[];
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */

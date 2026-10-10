@@ -132,7 +132,6 @@ export {
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   ensureTranscriptGenerationsForCanonicalRepair,
-  hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
   listSessionChildEntriesReadOnly,
@@ -177,6 +176,7 @@ export {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   markSessionAbortTarget,
+  matchesSessionAbortTargetOwner,
   recordInboundSessionMeta,
   resolveSessionAbortTarget,
   resolveSessionParentForkDecision,
@@ -228,7 +228,6 @@ export {
 } from "./session-accessor.reset.js";
 export {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
@@ -256,8 +255,6 @@ export {
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
   replaceSessionWithBranchedTranscript,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
@@ -266,6 +263,7 @@ export {
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
 export {

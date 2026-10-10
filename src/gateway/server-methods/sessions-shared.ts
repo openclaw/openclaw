@@ -12,33 +12,50 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../worker-environments/placement-session-runtime.js";
-import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
-import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  readSessionWorkerPlacementAsync,
+  resolveWorkerPlacementArchiveRestoreError,
+  type SessionWorkerPlacementContext,
+} from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 export { sessionLog } from "../session-log.js";
 
-export function resolveSessionWorkerPlacementPatchError(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  context: SessionWorkerPlacementContext;
-  entry: SessionEntry | undefined;
-  key: string;
-  patch: SessionsPatchParams;
-  sessionKey: string;
-  validateModelRuntime: boolean;
-}): string | undefined {
-  const placement = params.entry?.sessionId
-    ? params.context.workerSessionPlacementService
-        ?.getMany([params.entry.sessionId])
-        .get(params.entry.sessionId)
-    : undefined;
+export async function prepareSessionWorkerPlacementPatchError(
+  params: Parameters<typeof resolveSessionWorkerPlacementPatchError>[0],
+) {
+  const placement = await readSessionWorkerPlacementAsync({
+    context: params.context,
+    sessionId: params.entry?.sessionId,
+  });
+  return resolveSessionWorkerPlacementPatchError(params, { placement });
+}
+
+export function resolveSessionWorkerPlacementPatchError(
+  params: {
+    agentId: string;
+    cfg: OpenClawConfig;
+    context: SessionWorkerPlacementContext;
+    entry: SessionEntry | undefined;
+    key: string;
+    patch: SessionsPatchParams;
+    sessionKey: string;
+    validateModelRuntime: boolean;
+  },
+  prepared?: { placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>> },
+): string | undefined {
+  const placement = prepared
+    ? prepared.placement
+    : params.entry?.sessionId
+      ? params.context.workerSessionPlacementService
+          ?.getMany([params.entry.sessionId])
+          .get(params.entry.sessionId)
+      : undefined;
   if (!placement || placement.state === "local") {
     return undefined;
   }
@@ -81,10 +98,6 @@ export function resolveSessionWorkerPlacementPatchError(params: {
     ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
     : `Session ${params.key} cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
 }
-
-export const loadSessionsRuntimeModule = createLazyRuntimeModule(
-  () => import("./sessions.runtime.js"),
-);
 
 export function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const normalized = normalizeOptionalString(

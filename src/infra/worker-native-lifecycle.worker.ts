@@ -12,6 +12,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { BrokerNativeResourceCloseError } from "../process/spawn-broker/resource-protocol.js";
+import "./worker-ancestry.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";
@@ -176,6 +177,10 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   }
   const lifetime: NativeLifetime = { worker, joined: false };
   workers.set(id, lifetime);
+  const fail = (error: unknown) => {
+    send({ type: "error", id, error });
+    stop(id, lifetime);
+  };
   try {
     if (resourcePorts && descriptor) {
       const resourcePort = resourcePorts.port1;
@@ -185,10 +190,7 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
           descriptor.attachment,
           resourcePort,
           (response) => send({ type: "resource-message", id, response }),
-          (error) => {
-            send({ type: "error", id, error });
-            stop(id, lifetime);
-          },
+          fail,
         ),
       };
     }
@@ -202,10 +204,7 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   worker.on("messageerror", (error: unknown) => {
     send({ type: "messageerror", id, error });
   });
-  worker.on("error", (error) => {
-    send({ type: "error", id, error });
-    stop(id, lifetime);
-  });
+  worker.on("error", fail);
   worker.once("exit", (code) => {
     // A child can exit before postMessage transfers its startup endpoint.
     taskPort?.close();
@@ -226,8 +225,7 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   } catch (error) {
     taskPort?.close();
     // Construction succeeded: only the real worker/resource join can release custody.
-    send({ type: "error", id, error });
-    stop(id, lifetime);
+    fail(error);
   }
 }
 

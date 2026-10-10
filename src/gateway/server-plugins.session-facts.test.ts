@@ -1,8 +1,13 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
-import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -575,6 +580,10 @@ describe("trusted plugin selected session facts", () => {
         await fixture.subscriptions.pollNow();
         expect(fixture.load).toHaveBeenCalledTimes(attempts + 1);
         expect(retried.retryAt).toBe(now + 120_000);
+        await fixture.seed(sessionKey, fixture.profile.id, { label: "Changed stored metadata" });
+        await selected();
+        await fixture.subscriptions.pollNow();
+        expect(fixture.load).toHaveBeenCalledTimes(attempts + 2);
         await fixture.seed(sessionKey, fixture.profile.id, {
           lifecycleRevision: "replacement-generation",
           worktree: {
@@ -679,14 +688,26 @@ describe("trusted plugin session facts", () => {
       expect((await list(fixture.client)).sessions.map(({ key }) => key)).toEqual([sessionKey]);
     }));
 
-  it("projects admitted session identity, trajectory and canonical PR states", () =>
+  it("projects identity, registry-backed liveness, trajectory and canonical PR states", () =>
     withFixture(async (fixture) => {
       const privateKey = "agent:main:private-change";
       const queuedKey = "agent:main:queued-change";
       await fixture.seed(privateKey, fixture.other.id, { visibility: "draft" });
       await fixture.seed(queuedKey, fixture.profile.id, {
-        status: "queued",
         worktree: { id: "queued-worktree", branch: "queued", repoRoot: "/synthetic/repository" },
+        status: "failed",
+        lastRunError: "Old failure",
+      });
+      const runId = "session-facts-queued-run";
+      registerAgentRunContext(runId, {
+        agentId: "main",
+        sessionKey: queuedKey,
+        projectSessionActive: true,
+      });
+      const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      onTestFinished(() => {
+        releaseWait?.();
+        clearAgentRunContext(runId);
       });
       fixture.load.mockResolvedValueOnce({
         pullRequests: [
@@ -740,6 +761,10 @@ describe("trusted plugin session facts", () => {
           { key: queuedKey, run: "active" },
         ],
       });
+      releaseWait?.();
+      expect((await read(fixture, [queuedKey])).sessions[0]?.run).toBe("active");
+      clearAgentRunContext(runId);
+      expect((await read(fixture, [queuedKey])).sessions[0]?.run).toBe("failed");
       const listener = vi.fn();
       const unsubscribe = runtime.gateway.subscribeSessionChanges(listener);
       try {
@@ -775,34 +800,6 @@ describe("trusted plugin session facts", () => {
       await fixture.subscriptions.pollNow();
       expect((await read(fixture, [sessionKey])).warnings).toBeUndefined();
       expect(fixture.load).toHaveBeenCalledTimes(2);
-    }));
-
-  it("uses live run liveness instead of a persisted running status", () =>
-    withFixture(async (fixture) => {
-      const staleKey = "agent:main:stale-running";
-      const activeKey = "agent:main:live-running";
-      const queuedKey = "agent:main:queued-input";
-      await fixture.seed(staleKey, fixture.profile.id, { status: "running" });
-      await fixture.seed(activeKey, fixture.profile.id, {
-        status: "failed",
-        lastRunError: "Old failure",
-      });
-      await fixture.seed(queuedKey, fixture.profile.id, { status: "queued" });
-      registerAgentRunContext("facts-live-run", {
-        agentId: "main",
-        sessionKey: activeKey,
-        projectSessionActive: true,
-      });
-      try {
-        expect((await read(fixture, [staleKey, activeKey, queuedKey])).sessions).toMatchObject([
-          { key: staleKey, run: "idle" },
-          { key: activeKey, run: "active" },
-          { key: queuedKey, run: "active" },
-        ]);
-      } finally {
-        clearAgentRunContext("facts-live-run");
-      }
-      expect((await read(fixture, [activeKey])).sessions[0]?.run).toBe("failed");
     }));
 
   it.each([false, true])(

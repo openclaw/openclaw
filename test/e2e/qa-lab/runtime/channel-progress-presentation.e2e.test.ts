@@ -717,7 +717,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       headers: inbound.providerHeaders,
       body: JSON.stringify(inbound.providerBody),
     });
-    expect(injected.ok).toBe(true);
+    expect(injected.ok, await injected.clone().text()).toBe(true);
     if (adapter.manifest.provider !== "slack") {
       throw new Error("expected Slack fixture");
     }
@@ -755,11 +755,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const remainingMessages = [...api.messages.values()].map((message) => message.text);
     expect(remainingMessages).toEqual([finalText]);
     const modelRequests = (await fs.readFile(requestLog, "utf8")).trim().split("\n").map(parseBody);
-    const toolResultCounts = modelRequests.map(
-      (request) =>
-        (Array.isArray(request.messages) ? request.messages : [])
-          .map(asRecord)
-          .filter((message) => message.role === "tool").length,
+    // The shared provider log also records requests outside Chat Completions.
+    const toolResultCounts = modelRequests.flatMap((request) =>
+      Array.isArray(request.messages)
+        ? [request.messages.map(asRecord).filter((message) => message.role === "tool").length]
+        : [],
     );
     expect(toolResultCounts).toEqual([0, 1, 2]);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
@@ -1778,7 +1778,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
       expect(progressText).toContain(HEADLINE);
       const slackCard = channel === "slack" && !native && !compact;
       const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
-      if (!tools) {
+      if (!tools && channel === "discord") {
+        // Quiet progress retains bounded operation status without command details.
+        const updates = progressWrites.map(({ body }) => body.content);
+        const running = `${HEADLINE}\n\nExec: running`;
+        expect(updates).toContain(running);
+        for (const update of updates) {
+          expect([HEADLINE, running, `${HEADLINE}\n\nLast activity: Exec`]).toContain(update);
+        }
+      } else if (!tools) {
         expect(progressText).not.toMatch(expectedToolRow);
       } else if (channel !== "slack" || !native) {
         expect(progressText).toMatch(expectedToolRow);

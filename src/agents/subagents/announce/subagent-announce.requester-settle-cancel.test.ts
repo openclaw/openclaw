@@ -4,7 +4,7 @@ import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "../r
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-runtime.js";
+import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import {
   createChatAbortContext,
   invokeChatAbortHandler,

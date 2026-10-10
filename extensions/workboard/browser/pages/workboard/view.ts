@@ -5,6 +5,7 @@ import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { groupWorkboardCardsByStatus } from "../../lib/workboard/derived.ts";
 import "../../styles/workboard.css";
 import {
   dispatchWorkboard,
@@ -13,8 +14,6 @@ import {
   getWorkboardState,
   workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
-  type WorkboardCard,
-  type WorkboardStatus,
 } from "../../lib/workboard/index.ts";
 import {
   agentDisplayName,
@@ -31,7 +30,7 @@ import {
   renderStatusTabs,
   renderMobileStatusPicker,
   renderFilterSelect,
-  renderFilterChoices,
+  renderDisplayChoices,
   renderMultiFilter,
   type ActiveFilter,
 } from "./view-filter-controls.ts";
@@ -39,6 +38,7 @@ import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   dispatchSummaryMessage,
   refreshStatusLabel,
@@ -83,13 +83,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
   const visibleError = workboardErrorMessage(state, props.pageError);
   const writable = canMutate(props);
   const selectedCards = state.cards.filter((card) => state.selectedCardIds.has(card.id));
-  const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
-  for (const status of state.statuses) {
-    byStatus.set(status, []);
-  }
-  for (const card of filtered) {
-    byStatus.get(card.status)?.push(card);
-  }
+  const byStatus = groupWorkboardCardsByStatus(filtered, state.statuses);
   const visibleStatuses = state.statuses.filter(
     (status) =>
       (!state.statusFilter.size || state.statusFilter.has(status)) &&
@@ -292,12 +286,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                           : "workboard.dispatchHelp",
                       )}
                       ?disabled=${state.dispatching || workboardHasActiveWrites(state)}
-                      @click=${() =>
-                        dispatchWorkboard({
-                          host: props.host,
-                          client: props.client,
-                          requestUpdate: props.onRequestUpdate,
-                        })}
+                      @click=${() => dispatchWorkboard(workboardMutationContext(props))}
                     >
                       ${icons.play}<span class="workboard-action-label"
                         >${t("workboard.dispatch")}</span
@@ -483,67 +472,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                       </div>`
                 }
                 <div class="workboard-filter-display">
-                  ${renderFilterChoices({
-                    label: t("workboard.filterLayout"),
-                    value: state.viewMode,
-                    options: [
-                      { value: "board", label: t("workboard.viewBoard"), icon: "kanban" },
-                      { value: "list", label: t("workboard.viewList"), icon: "list" },
-                    ],
-                    onChange: (value) => {
-                      state.viewMode = value;
-                      props.onRequestUpdate?.();
-                    },
-                  })}
-                  ${renderFilterChoices({
-                    label: t("workboard.filterDensity"),
-                    value: state.layout,
-                    options: [
-                      {
-                        value: "comfortable",
-                        label: t("workboard.densityComfortable"),
-                        icon: "layoutComfortable",
-                      },
-                      {
-                        value: "compact",
-                        label: t("workboard.densityCompact"),
-                        icon: "layoutCompact",
-                      },
-                    ],
-                    onChange: (value) => {
-                      state.layout = value;
-                      props.onRequestUpdate?.();
-                    },
-                  })}
-                  ${renderFilterChoices({
-                    label: t("workboard.emptyColumns"),
-                    value: state.emptyColumnMode,
-                    options: [
-                      {
-                        value: "show",
-                        label: t("workboard.emptyColumnsShow"),
-                        icon: "eye",
-                        title: t("workboard.showEmptyColumns"),
-                      },
-                      {
-                        value: "collapse",
-                        label: t("workboard.emptyColumnsCollapse"),
-                        icon: "minimize",
-                        title: t("workboard.collapseEmptyColumns"),
-                      },
-                      {
-                        value: "hide",
-                        label: t("workboard.emptyColumnsHide"),
-                        icon: "eyeOff",
-                        title: t("workboard.hideEmptyColumns"),
-                      },
-                    ],
-                    onChange: (value) => {
-                      state.emptyColumnMode = value;
-                      state.expandedEmptyStatuses.clear();
-                      props.onRequestUpdate?.();
-                    },
-                  })}
+                  ${renderDisplayChoices(state, props.onRequestUpdate)}
                 </div>
                 ${renderMultiFilter({
                   label: t("workboard.fieldPriority"),

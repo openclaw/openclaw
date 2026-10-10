@@ -9,122 +9,180 @@ import { readTranscriptEventRows } from "../config/sessions/session-accessor.sql
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import { appendTranscriptMessageSnapshotSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { appendSessionTranscriptMessageByIdentityStrict } from "./session-transcript-runtime.js";
+import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentityStrict,
+  withSessionTranscriptWrite,
+  withSessionTranscriptWriteLock,
+} from "./session-transcript-runtime.js";
 
-const delivery = vi.hoisted((): { afterCommit?: (type: string) => void } => ({}));
+const delivery = vi.hoisted((): { beforeTurnCommit?: () => void } => ({}));
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const result = await worker.execute(command, commandOptions);
-                  delivery.afterCommit?.(command.type);
-                  return result;
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    captureOpenClawAgentDatabaseExecution: Object.assign(
+      (
+        ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
+      ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
+        const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
+        return {
+          ...owner,
+          get fileIdentity() {
+            return owner.fileIdentity;
+          },
+          runExisting: (source, operation, options) =>
+            owner.runExisting(
+              source,
+              (worker) =>
+                operation({
+                  execute: async (command, commandOptions) => {
+                    if (command.type === "session.turn.commit") {
+                      delivery.beforeTurnCommit?.();
+                    }
+                    return await worker.execute(command, commandOptions);
+                  },
+                }),
+              options,
+            ),
+        };
+      },
+      actual.captureOpenClawAgentDatabaseExecution,
+    ),
   };
 });
 
 afterEach(() => {
-  delivery.afterCommit = undefined;
+  delivery.beforeTurnCommit = undefined;
   vi.restoreAllMocks();
 });
 
-it("rejects compound async preparation before invoking any preparer", async () => {
+it("retains durable callback ordering and warns once per plugin across legacy writes and reloads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const f = await seed(env);
-    const prepare = vi.fn(async (message: unknown) => message);
-    for (const keys of [
-      ["same", "same"],
-      ["first", "second"],
-    ]) {
-      await expect(
-        appendExpectedSessionTranscriptTurn(f.scope, {
-          expectedSessionId: f.scope.sessionId,
-          sessionFile: "synthetic-session.jsonl",
-          messages: keys.map((idempotencyKey) => ({
-            message: { role: "assistant", content: idempotencyKey, idempotencyKey },
-            workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
-          })),
-        }),
-      ).rejects.toThrow(
-        "Awaited transcript preparation requires one message without transaction predicates",
-      );
-    }
-    expect(prepare).not.toHaveBeenCalled();
-    expect(f.events()).toEqual([]);
-  });
-});
-
-it("retains synchronous same-store SDK guards in the native adapter", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const f = await seed(env);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const instances = [
+      new PluginInstance("transcript-compat-first"),
+      new PluginInstance("transcript-compat-second"),
+      new PluginInstance("transcript-compat-first"),
+    ];
     const guard = vi.fn(() => {
+      expect(f.database.db.isTransaction).toBe(true);
       expect(readExactSessionEntryRow(f.database, f.scope.sessionKey)?.entry.sessionId).toBe(
         f.scope.sessionId,
       );
     });
-    await expect(
-      appendSessionTranscriptMessageByIdentityStrict({
-        ...f.scope,
-        message: { role: "assistant", content: "guarded" },
-        beforeFreshMessageCommit: guard,
-      }),
-    ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
-    expect(guard).toHaveBeenCalledOnce();
+    try {
+      for (const instance of instances) {
+        await instance.run(async () => {
+          await expect(
+            appendSessionTranscriptMessageByIdentityStrict({
+              ...f.scope,
+              message: { role: "assistant", content: "guarded" },
+              beforeFreshMessageCommit: guard,
+            }),
+          ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+          await withSessionTranscriptWriteLock(f.scope, () => undefined);
+        });
+      }
+      expect(guard).toHaveBeenCalledTimes(3);
+      expect(warning).toHaveBeenCalledTimes(2);
+      for (const plugin of ["transcript-compat-first", "transcript-compat-second"]) {
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining(`Plugin ${plugin}:`), {
+          code: "DEP_SESSION_PERSISTENCE",
+          type: "DeprecationWarning",
+        });
+      }
+      for (const [message] of warning.mock.calls) {
+        expect(message).toContain("preparation.prepareMessage / preparation.source");
+        expect(message).toContain("next Plugin SDK major");
+      }
+    } finally {
+      warning.mockRestore();
+      await Promise.all(instances.map((instance) => instance.dispose()));
+    }
   });
 });
 
-it("prepares a message once when its authority selects the native adapter", async () => {
+it("refuses legacy incognito callbacks while prepared unbound writes retain the native owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const f = await seed(env);
-    let preparations = 0;
-    const first = { role: "assistant", content: "original", idempotencyKey: "first" };
-    const prepare = vi.fn(async () => ({ ...first, content: `prepared ${++preparations}` }));
-    const nativeSource: SessionSourceAssertion = Object.assign(() => {}, {
-      async prepareSessionSource() {
-        return { nativeSource: true, assertCurrent() {}, checks: [] };
-      },
-    });
+    const target = {
+      agentId: "main",
+      sessionId: "private",
+      sessionKey: "agent:main:dashboard:incognito-private",
+      env,
+    };
+    const prepare = vi.fn((message: unknown) => message);
+    const guard = vi.fn();
+    const locked = vi.fn();
+    const message = { role: "assistant", content: "private" };
+    const expected = /preparation\.prepareMessage \/ preparation\.source/u;
     await expect(
-      appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
-        messages: [
-          {
-            message: first,
-            workerPreparation: {
-              prepareMessageAfterIdempotencyCheckAsync: prepare,
-              beforeFreshMessageCommit: nativeSource,
-            },
-          },
-        ],
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...target,
+        message,
+        prepareMessageAfterIdempotencyCheck: prepare,
       }),
-    ).resolves.toMatchObject({
-      appendedMessages: [{ message: { content: "prepared 1" } }],
+    ).rejects.toThrow(expected);
+    await expect(
+      appendSessionTranscriptMessageByIdentity({
+        ...target,
+        message,
+        beforeFreshMessageCommit: guard,
+      }),
+    ).rejects.toThrow(expected);
+    await expect(withSessionTranscriptWriteLock(target, locked)).rejects.toThrow(expected);
+    await expect(withCodexSessionTranscriptMirrorWriteLock(target, locked)).rejects.toThrow(
+      expected,
+    );
+    expect(prepare).not.toHaveBeenCalled();
+    expect(guard).not.toHaveBeenCalled();
+    expect(locked).not.toHaveBeenCalled();
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const candidate = { ...message, idempotencyKey: "native-private" };
+    const prepareNative = vi.fn(async (value: typeof candidate) => ({
+      ...value,
+      content: "native prepared",
+    }));
+    const events = await withSessionTranscriptWrite(target, async (transcript) => {
+      const options = {
+        eventId: "native-private",
+        message: candidate,
+        idempotencyLookup: "scan" as const,
+        preparation: { prepareMessage: prepareNative },
+      };
+      await expect(transcript.appendMessage(options)).resolves.toMatchObject({
+        appended: true,
+        messageId: "native-private",
+        message: { content: "native prepared" },
+      });
+      await expect(transcript.appendMessage(options)).resolves.toMatchObject({
+        appended: false,
+        messageId: "native-private",
+        message: { content: "native prepared" },
+      });
+      await expect(
+        transcript.appendMessage({
+          message: { ...message, idempotencyKey: "suppressed" },
+          preparation: { prepareMessage: async () => undefined },
+        }),
+      ).resolves.toBeUndefined();
+      return await transcript.readEvents();
     });
-    expect(prepare).toHaveBeenCalledOnce();
+    expect(prepareNative).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({
+      type: "message",
+      id: "native-private",
+      message: { content: "native prepared" },
+    });
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
   });
 });
 
@@ -166,7 +224,7 @@ it("prepares strict appends without caller-thread SQL and retains the released s
       const result = await appendSessionTranscriptMessageByIdentityStrict({
         ...scope,
         message: { role: "assistant", content: "original", idempotencyKey: "strict-key" },
-        prepareMessageAfterIdempotencyCheckAsync: prepare,
+        preparation: { prepareMessage: prepare },
       });
       expect(result).toMatchObject({
         kind: "result",
@@ -236,7 +294,7 @@ it.each([false, true])(
       const appending = appendSessionTranscriptMessageByIdentityStrict({
         ...scope,
         message,
-        beforeFreshMessageCommit,
+        preparation: { source: beforeFreshMessageCommit },
       });
       if (foreignReplay) {
         await expect(appending).resolves.toMatchObject({
@@ -256,51 +314,40 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "commits an async prepared message against its transaction-entry version (foreignWrite=%s)",
-  async (foreignWrite) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const f = await seed(env);
-      const prepare = vi.fn(async (message: unknown) => {
-        if (foreignWrite && prepare.mock.calls.length === 1) {
-          expect(
-            appendTranscriptMessageSnapshotSync(f.scope, {
-              message: { role: "assistant", content: "foreign" },
-              eventId: "foreign",
-            }).ok,
-          ).toBe(true);
-        }
-        return message;
-      });
-      const appending = appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
-        messages: [
-          {
-            eventId: "prepared",
-            message: { role: "assistant", content: "prepared", idempotencyKey: "prepared" },
-            workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
-          },
-        ],
-      });
-      if (foreignWrite) {
-        await expect(appending).rejects.toThrow(
-          "SQLite transcript changed while preparing rewrite",
-        );
-      } else {
-        await expect(appending).resolves.toMatchObject({
-          appendedMessages: [{ appended: true, messageId: "prepared" }],
-        });
+it("rejects an async prepared message after a foreign transcript write", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const f = await seed(env);
+    const prepare = vi.fn(async (message: unknown) => {
+      if (prepare.mock.calls.length === 1) {
+        expect(
+          appendTranscriptMessageSnapshotSync(f.scope, {
+            message: { role: "assistant", content: "foreign" },
+            eventId: "foreign",
+          }).ok,
+        ).toBe(true);
       }
-      expect(
-        f
-          .events()
-          .filter((event) => event.type === "message")
-          .map((event) => event.id),
-      ).toEqual(foreignWrite ? ["foreign"] : ["prepared"]);
+      return message;
     });
-  },
-);
+    const appending = appendExpectedSessionTranscriptTurn(f.scope, {
+      expectedSessionId: f.scope.sessionId,
+      sessionFile: "synthetic-session.jsonl",
+      messages: [
+        {
+          eventId: "prepared",
+          message: { role: "assistant", content: "prepared", idempotencyKey: "prepared" },
+          workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
+        },
+      ],
+    });
+    await expect(appending).rejects.toThrow("SQLite transcript changed while preparing rewrite");
+    expect(
+      f
+        .events()
+        .filter((event) => event.type === "message")
+        .map((event) => event.id),
+    ).toEqual(["foreign"]);
+  });
+});
 
 it("replays a skipped async preparation after a foreign transcript append", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -309,16 +356,14 @@ it("replays a skipped async preparation after a foreign transcript append", asyn
     expect(appendTranscriptMessageSnapshotSync(f.scope, { message, eventId: "existing" }).ok).toBe(
       true,
     );
-    let preparations = 0;
-    delivery.afterCommit = (type) => {
-      if (type === "session.turn.prepare" && ++preparations === 2) {
-        expect(
-          appendTranscriptMessageSnapshotSync(f.scope, {
-            message: { role: "assistant", content: "foreign" },
-            eventId: "foreign",
-          }).ok,
-        ).toBe(true);
-      }
+    delivery.beforeTurnCommit = () => {
+      delivery.beforeTurnCommit = undefined;
+      expect(
+        appendTranscriptMessageSnapshotSync(f.scope, {
+          message: { role: "assistant", content: "foreign" },
+          eventId: "foreign",
+        }).ok,
+      ).toBe(true);
     };
     const prepare = vi.fn(async (value: unknown) => value);
     await expect(

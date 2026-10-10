@@ -8,6 +8,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import {
   readSessionTranscriptSummaryAsync,
   type SessionTranscriptReadScope,
@@ -46,7 +47,6 @@ export async function reconcileInvalidHarnessCompletion(
       const claim = entry.restartRecoveryHarnessCompletion;
       if (
         entry.sessionId !== params.entry.sessionId ||
-        entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         !claim ||
         claim.taskId !== params.entry.restartRecoveryHarnessCompletion?.taskId ||
@@ -219,7 +219,9 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   const expectedRecoverySourceRunId = normalizeOptionalString(
     params.entry.restartRecoveryDeliverySourceRunId,
   );
-  const endedAt = Date.now();
+  const settled =
+    isTerminalSessionStatus(params.entry.status) && params.entry.status !== "interrupted";
+  const endedAt = settled ? (params.entry.endedAt ?? Date.now()) : Date.now();
   const lifecyclePatch: SessionTranscriptTurnLifecyclePatch = {
     ...buildMainSessionRecoverySettlementPatch({
       entry: params.entry,
@@ -227,14 +229,16 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
       terminalSourceRunId: expectedRecoverySourceRunId,
     }),
     lifecycleRunId: undefined,
-    lastRunId: resolveRestartRecoveryTerminalClientRunId(params.entry),
+    lastRunId: settled
+      ? params.entry.lastRunId
+      : resolveRestartRecoveryTerminalClientRunId(params.entry),
     endedAt,
     pendingFinalDelivery: undefined,
     runtimeMs:
       typeof params.entry.startedAt === "number"
         ? Math.max(0, endedAt - params.entry.startedAt)
         : undefined,
-    status: "done",
+    status: settled ? params.entry.status : "done",
     updatedAt: endedAt,
   };
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
@@ -342,7 +346,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
           updateMode: "none",
         },
       );
-      const completed = persisted.sessionEntry?.status === "done";
+      const completed = persisted.sessionEntry?.status === lifecyclePatch.status;
       if (completed) {
         mainSessionRecoveryLog.info(
           `reconciled delivered terminal reply after restart: ${params.sessionKey}`,
@@ -363,7 +367,6 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         entry.sessionId !== params.entry.sessionId ||
         (params.pendingFinalDeliveryIntentId !== undefined &&
           entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId) ||
-        entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==

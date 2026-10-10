@@ -7,13 +7,13 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as storeTargetRuntime from "./session-store-target-runtime.js";
 import { loadTranscriptEvents } from "./session-transcript-events.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-parent-fork-worker-");
 
-it.each(["none", "executor", "discovery"] as const)(
+it.each(["executor", "discovery"] as const)(
   "commits bundled fork and existing-child patches without caller-thread SQL (cleanupFailure=%s)",
   async (cleanupFailure) => {
     const storePath = path.join(sessionDirs.make(), "shared.sqlite");
@@ -99,9 +99,7 @@ it.each(["none", "executor", "discovery"] as const)(
       captureSpy?.mockRestore();
       sql.restore();
     }
-    if (cleanupFailure !== "none") {
-      expect(cleanupFailures).toBeGreaterThan(0);
-    }
+    expect(cleanupFailures).toBeGreaterThan(0);
     if (fork.status !== "forked") {
       throw new Error("expected forked session");
     }

@@ -12,6 +12,7 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
+import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -188,6 +189,7 @@ export function createPageState(
   page: ChatPageElement,
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
+  const invalidate = () => renderLifecycle.invalidate();
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
@@ -196,6 +198,17 @@ export function createPageState(
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
+  const bootstrapIdentity =
+    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl) &&
+    appConfig.assistantIdentity.agentId ===
+      resolveAgentIdForSession({
+        sessionKey: initialSessionKey,
+        assistantAgentId: context.agentSelection.state.selectedId,
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      })
+      ? appConfig.assistantIdentity
+      : null;
   const state = {
     uploadConfig: context.config,
     captureComposerRecoveryReload: () => {
@@ -207,10 +220,13 @@ export function createPageState(
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
     settings,
-    assistantName: appConfig.assistantIdentity.name,
-    assistantAvatar: null,
-    assistantAvatarStatus: null,
-    assistantAvatarReason: null,
+    // Unscoped names retain the gateway-wide fallback.
+    assistantName:
+      bootstrapIdentity?.name ??
+      (appConfig.assistantIdentity.agentId ? "" : appConfig.assistantIdentity.name),
+    assistantAvatar: bootstrapIdentity?.avatar ?? null,
+    assistantAvatarStatus: bootstrapIdentity?.avatarStatus ?? null,
+    assistantAvatarReason: bootstrapIdentity?.avatarReason ?? null,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -255,6 +271,7 @@ export function createPageState(
     chatRunError: null,
     agentsError: null,
     chatStreamSegments: [],
+    chatReasoning: null,
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
@@ -328,7 +345,7 @@ export function createPageState(
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,
-    requestUpdate: () => renderLifecycle.invalidate(),
+    requestUpdate: invalidate,
     // Background warming gates on these edges. Session-event reloads never
     // re-render the page, so no update can carry the fact to it.
     transcriptLoadingChanged: () =>
@@ -385,10 +402,13 @@ export function createPageState(
     }
     return handleSendChat(state, messageOverride, options, submissionAction);
   };
-  state.handleAbortChat = async (options) => {
-    await handleAbortChat(state, options);
-    renderLifecycle.invalidate();
-  };
+  const runAndInvalidate =
+    <Arg>(action: (host: ChatPageHost, argument: Arg) => Promise<unknown>) =>
+    async (argument: Arg) => {
+      await action(state, argument);
+      renderLifecycle.invalidate();
+    };
+  state.handleAbortChat = runAndInvalidate(handleAbortChat);
   state.removeQueuedMessage = (id) => {
     if (cancelPendingQueuedChatInput(state, id)) {
       return;
@@ -407,14 +427,8 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.retryQueuedChatMessage = async (id) => {
-    await retryQueuedChatMessage(state, id);
-    renderLifecycle.invalidate();
-  };
-  state.steerQueuedChatMessage = async (id) => {
-    await steerQueuedChatMessage(state, id);
-    renderLifecycle.invalidate();
-  };
+  state.retryQueuedChatMessage = runAndInvalidate(retryQueuedChatMessage);
+  state.steerQueuedChatMessage = runAndInvalidate(steerQueuedChatMessage);
   state.moveQueuedChatMessage = (id, targetId) => {
     moveQueuedChatMessage(state, id, targetId);
     renderLifecycle.invalidate();
@@ -446,10 +460,7 @@ export function createPageState(
         mentionsOverride: edit.mentions,
         resumeQueuedMessageEditId: edit.id,
       })
-      .then(
-        () => renderLifecycle.invalidate(),
-        () => renderLifecycle.invalidate(),
-      );
+      .then(invalidate, invalidate);
   };
   state.cancelQueuedChatMessageEdit = () => {
     if (cancelQueuedMessageEdit(state)) {

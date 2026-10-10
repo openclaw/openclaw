@@ -15,9 +15,15 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("restart recovery claim successors", () => {
-  it.each([false, true])(
-    "transfers an aborted Control UI claim unless ownership is lost (%s)",
-    async (losesOwnership) => {
+  it.each([
+    { outcome: "unsettled", status: undefined, transfers: true, losesOwnership: false },
+    { outcome: "interrupted", status: "interrupted", transfers: true, losesOwnership: false },
+    { outcome: "killed", status: "killed", transfers: false, losesOwnership: false },
+    { outcome: "failed", status: "failed", transfers: false, losesOwnership: false },
+    { outcome: "interrupted", status: "interrupted", transfers: false, losesOwnership: true },
+  ] as const)(
+    "handles an aborted $outcome Control UI claim (ownership lost: $losesOwnership)",
+    async ({ status, transfers, losesOwnership }) => {
       const scope = {
         storePath: path.join(tempDirs.make("openclaw-reply-claim-successor-"), "sessions.json"),
         sessionKey: "agent:main:main",
@@ -31,10 +37,11 @@ describe("restart recovery claim successors", () => {
         restartRecoveryDeliverySourceRunId: "interrupted-run",
         restartRecoverySourceIngress: "control-ui",
         sessionId: "session",
-        status: "running",
+        status,
         updatedAt: 1,
       };
       await replaceSessionEntry(scope, entry);
+      const before = loadSessionEntry(scope);
       let didSetEntry = false;
       let replacement: ReturnType<typeof updateSessionEntry> | undefined;
       const controller = createReplyRestartRecoveryClaimController({
@@ -70,6 +77,9 @@ describe("restart recovery claim successors", () => {
           restartRecoveryDeliveryRunId: "replacement-run",
           restartRecoveryDeliverySourceRunId: "replacement-run",
         });
+      } else if (!transfers) {
+        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        expect(loadSessionEntry(scope)).toEqual(before);
       } else {
         expect(outcome).toBe("admitted");
         expect(loadSessionEntry(scope)).toMatchObject({
@@ -78,8 +88,8 @@ describe("restart recovery claim successors", () => {
           restartRecoveryDeliverySourceRunId: "queued-run",
           restartRecoverySourceIngress: "control-ui",
           restartRecoveryTerminalRunIds: ["interrupted-run"],
-          status: "running",
         });
+        expect(loadSessionEntry(scope)?.status).toBeUndefined();
       }
     },
   );
@@ -99,7 +109,7 @@ describe("restart recovery claim successors", () => {
       restartRecoveryDeliverySourceRunId: "interrupted-control-ui-run",
       restartRecoverySourceIngress: "control-ui",
       sessionId,
-      status: "running",
+      status: "interrupted",
       updatedAt: 1,
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
@@ -138,6 +148,7 @@ describe("restart recovery claim successors", () => {
     await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
     const admittedRunId = loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId;
     expect(admittedRunId).toEqual(expect.any(String));
+    expect(loadSessionEntry({ storePath, sessionKey })?.status).toBeUndefined();
     await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
     await controller.checkpointBeforeAgentReply({
       state: "handled-reply",

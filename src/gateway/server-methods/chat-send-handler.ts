@@ -11,7 +11,7 @@ import type {
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
-import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -24,22 +24,16 @@ import {
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import {
-  prepareGatewaySkillAuthoring,
-  invalidateSkillAuthoringForOtherRequester,
-} from "../skill-library-authoring.js";
-import {
-  terminalizeRestartSafeChatAdmission,
-  type RestartSafeChatTerminalState,
-} from "./chat-restart-recovery.js";
+import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
+import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import {
   bindChatSendPreparedMediaCustody,
@@ -52,6 +46,7 @@ import {
   createChatSendMessageInjectionStarter,
   settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
+import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
@@ -63,16 +58,6 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
-
-type ChatSendInternalOptions = {
-  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
-  goalResume?: SessionGoalOperation & { action: "resume" };
-  trustedSystemInput?: boolean;
-  transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  toolsAllow?: string[];
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
-};
 
 const mediaDocumentContextLoader = createLazyImportLoader(
   () => import("../../media-understanding/file-context.js"),
@@ -86,7 +71,6 @@ async function handleChatSendWithOptions(
 ): Promise<void> {
   const {
     req,
-    params,
     respond,
     context,
     client,
@@ -99,7 +83,7 @@ async function handleChatSendWithOptions(
   const isDirectExternalUser =
     externalAuthorityAdmission !== undefined && isDirectGatewayUserClient(client);
   const setup = await prepareAndAdmitChatSend(
-    { params, respond, context, client, hasCurrentClientAuthority, sessionMutationAuthorization },
+    handlerOptions,
     onAdmissionOwned,
     { ...options, isDirectExternalUser },
     diagnostics,
@@ -123,10 +107,8 @@ async function handleChatSendWithOptions(
   } = admission;
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
+    ...setup,
     client,
-    request,
-    session,
-    admission,
     respond,
     context,
   });
@@ -137,14 +119,18 @@ async function handleChatSendWithOptions(
     admission,
     attachments: preparedAttachments.value,
   });
-  if (activeRunAbort.controller.signal.aborted) {
-    finishAbortedChatSend();
-    return;
-  }
-  // Attachment preparation can suspend. Recheck immediately before the
-  // synchronous ACK path so aborts and hot routing reloads cannot cross it.
-  if (sessionRoutingChanged(context.getRuntimeConfig())) {
-    admission.rejectSessionRoutingChanged();
+  const settleInterruptedPreparation = () => {
+    if (activeRunAbort.controller.signal.aborted) {
+      finishAbortedChatSend();
+    } else if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      admission.rejectSessionRoutingChanged();
+    } else {
+      return false;
+    }
+    return true;
+  };
+  // Attachment preparation can suspend; settle cancellation before the synchronous ACK path.
+  if (settleInterruptedPreparation()) {
     return;
   }
   const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
@@ -207,26 +193,33 @@ async function handleChatSendWithOptions(
     : undefined;
 
   const admissionStartedAt = Date.now();
-  const terminalizeRestartSafeAdmission = async (
-    terminalState: RestartSafeChatTerminalState,
-  ): Promise<boolean> =>
-    await terminalizeRestartSafeChatAdmission({
-      admittedSessionId,
-      clientRunId,
-      sessionKey,
-      startedAt: admissionStartedAt,
-      storePath,
-      ...terminalState,
-    });
-  let pendingStageAttempted = false;
+  const terminalizeRestartSafeAdmission = (terminalState: RestartSafeChatTerminalState) =>
+    admission.settleTerminal({ ...terminalState, startedAt: admissionStartedAt });
+  // sessions.create invokes chat only after committing a fresh session. Its eligible
+  // initial input transfers custody with the transcript and restart claim, not before.
+  const commitInitialInput =
+    req.method === "sessions.create" &&
+    restartSafeAdmission !== undefined &&
+    !restartSafeAdmission.retryExpectedState;
+  let inputAdmissionAttempted = false;
   let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
+  let releaseBeforeDispatch: void | (() => void) = undefined;
   try {
-    const assertInputAdmissionCurrent = () => {
-      admission.assertClientUploadAllowed?.();
+    const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
       admission.assertSessionTargetCurrent();
-      sessionMutationCommitGuard?.();
+      if (sessionRoutingChanged(context.getRuntimeConfig())) {
+        throw new Error("Session routing changed before input admission; refresh and retry.");
+      }
     };
+    const assertInputAdmissionCurrent = composeSessionSourceAssertion(
+      [sessionMutationCommitGuard],
+      (assertSource) => {
+        admission.assertClientUploadAllowed?.();
+        assertCustodyLifetimeCurrent();
+        assertSource();
+      },
+    );
     assertInputAdmissionCurrent();
     const goalCommitGuard = request.goalOperation
       ? createChatSendGoalCommitGuard({
@@ -239,29 +232,32 @@ async function handleChatSendWithOptions(
         })
       : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      admission,
+      ...setup,
       client,
-      request,
-      session,
       transcript: options?.transcript,
       isDirectExternalUser,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
-      assertOriginalInputCommit: assertInputAdmissionCurrent,
+      assertOriginalInputCommit: composeSessionSourceAssertion([
+        assertInputAdmissionCurrent,
+        // Ordinary chat can bind a session created after request authorization.
+        commitInitialInput ? sessionMutationAuthorization?.assertCurrent : undefined,
+      ]),
       goalCommitGuard,
     });
     const {
-      persist: persistGatewayUserTurnTranscript,
+      persist: persistUserTurnTranscript,
       recorder: userTurnRecorder,
       replyContextFieldsPromise,
     } = userTurn;
+    const persistGatewayUserTurnTranscript = (
+      ...args: Parameters<typeof persistUserTurnTranscript>
+    ) => admission.withInputCommitPublication(() => persistUserTurnTranscript(...args));
     bindPreparedMediaRecorder(userTurnRecorder);
     phase?.mark("preparation");
     const preparedUserTurn = prepareChatSendUserTurn({
-      request,
-      session,
-      admission,
+      ...setup,
       attachments: preparedAttachments.value,
       client,
       logGateway: context.logGateway,
@@ -305,23 +301,19 @@ async function handleChatSendWithOptions(
       }
     });
     phase?.mark("persist");
+    let approvedInput: PersistedUserTurnMessage | undefined;
     if (
       entry?.sessionId &&
       userTurn.baseInput.display !== false &&
       (!systemInputProvenance || systemInputProvenance.kind === "external_user") &&
       !isInternalTextSlashCommandTurn &&
-      !request.goalOperation
+      !request.goalOperation &&
+      !restartSafeAdmission?.retryExpectedState &&
+      !commitInitialInput
     ) {
       // ACK transfers input custody. Persist approved source bytes before
-      // either a direct runtime or the in-memory collector can accept them.
-      pendingStageAttempted = true;
-      const assertCustodyLifetimeCurrent = () => {
-        admission.assertWorkAdmissionCurrent();
-        admission.assertSessionTargetCurrent();
-        if (sessionRoutingChanged(context.getRuntimeConfig())) {
-          throw new Error("Session routing changed before input admission; refresh and retry.");
-        }
-      };
+      // dispatch; a validated durable retry already owns its transcript input.
+      inputAdmissionAttempted = true;
       const assertCustodyCurrent = () => {
         assertCustodyLifetimeCurrent();
         if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
@@ -376,13 +368,7 @@ async function handleChatSendWithOptions(
       if (!staged) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
-      const approved = userTurnRecorder.getPendingInputMessage?.();
-      const text =
-        extractTextFromChatContent(approved?.content, {
-          joinWith: "\n",
-          normalizeText: (value) => value,
-        }) ?? "";
-      preparedUserTurn.applyApprovedText(text);
+      approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
         context,
         { sessionKey, agentId: selectedAgent.agentId, reason: "send" },
@@ -391,7 +377,11 @@ async function handleChatSendWithOptions(
     }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
+      inputAdmissionAttempted ||= commitInitialInput;
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
+      if (commitInitialInput) {
+        approvedInput = persistedUserTurn?.message;
+      }
       const goalOperation = request.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
@@ -438,8 +428,8 @@ async function handleChatSendWithOptions(
       // retries adopt the durable turn without submitting it twice.
       if (
         !persistedUserTurn ||
-        persistedUserTurn.sessionEntry?.status !== "running" ||
-        persistedUserTurn.sessionEntry.restartRecoveryDeliveryRunId !== clientRunId
+        persistedUserTurn.sessionEntry?.restartRecoveryDeliveryRunId !== clientRunId ||
+        persistedUserTurn.sessionEntry.restartRecoveryDeliverySourceRunId !== clientRunId
       ) {
         throw new Error("chat turn was not durably admitted");
       }
@@ -450,6 +440,7 @@ async function handleChatSendWithOptions(
         activeRunAbort.controller.abort(createAgentRunRestartAbortError());
       }
       if (activeRunAbort.controller.signal.aborted) {
+        // No runtime adopted this durable input; retain its same-ID restart retry.
         if (
           !(await terminalizeRestartSafeAdmission({
             retryable: activeRunAbort.entry?.abortStopReason === "restart",
@@ -468,6 +459,14 @@ async function handleChatSendWithOptions(
         admission.rejectSessionRoutingChanged();
         return;
       }
+    }
+    if (approvedInput) {
+      preparedUserTurn.applyApprovedText(
+        extractTextFromChatContent(approvedInput.content, {
+          joinWith: "\n",
+          normalizeText: (value) => value,
+        }) ?? "",
+      );
     }
 
     phase?.mark("preparation");
@@ -498,11 +497,8 @@ async function handleChatSendWithOptions(
               return { status: "failed" as const };
             })
         : undefined;
-    if (activeRunAbort.controller.signal.aborted) {
-      return finishAbortedChatSend();
-    }
-    if (sessionRoutingChanged(context.getRuntimeConfig())) {
-      return admission.rejectSessionRoutingChanged();
+    if (settleInterruptedPreparation()) {
+      return;
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       operatorAuthority: admission.operatorAuthority,
@@ -530,11 +526,8 @@ async function handleChatSendWithOptions(
     phase?.mark("replyContext");
     if (preAckReplyContextPromise) {
       applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
-      if (activeRunAbort.controller.signal.aborted) {
-        return finishAbortedChatSend();
-      }
-      if (sessionRoutingChanged(context.getRuntimeConfig())) {
-        return admission.rejectSessionRoutingChanged();
+      if (settleInterruptedPreparation()) {
+        return;
       }
     }
     assertInputAdmissionCurrent();
@@ -560,6 +553,18 @@ async function handleChatSendWithOptions(
       prepareAttachmentsMs,
       chatSendTraceAttributes,
     });
+    if (options?.beforeDispatch) {
+      assertInputAdmissionCurrent();
+      releaseBeforeDispatch = await options.beforeDispatch({
+        runId: clientRunId,
+        assertCurrent: assertInputAdmissionCurrent,
+        assertWorkAdmissionCurrent: () => {
+          admission.assertClientUploadAllowed?.();
+          admission.assertWorkAdmissionCurrent();
+        },
+      });
+      assertInputAdmissionCurrent();
+    }
     context.addChatRun(clientRunId, {
       sessionKey,
       agentId: selectedAgent.agentId,
@@ -592,33 +597,34 @@ async function handleChatSendWithOptions(
     diagnostics.acknowledge();
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
+    // Dispatch owns execution from this point, including deferred and collected turns.
+    releaseBeforeDispatch = undefined;
     startChatDispatch({
+      ...setup,
       replyAdmissionTicket,
       diagnostics,
       admissionStartedAt,
-      admission,
       attachments: preparedAttachments.value,
       client,
       context,
       toolsAllow: options?.toolsAllow,
       prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
-      skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
-      prepareSkillLibraryAuthoring: () =>
-        prepareGatewaySkillAuthoring(
-          {
-            client,
-            context,
-            sessionMutationCommitGuard: () => {
-              sessionMutationCommitGuard?.();
-              admission.assertWorkAdmissionCurrent();
-            },
+      skillLibrary: {
+        sessionKey,
+        owner: {
+          client,
+          context,
+          sessionMutationCommitGuard: () => {
+            sessionMutationCommitGuard?.();
+            admission.assertWorkAdmissionCurrent();
           },
-          sessionKey,
+        },
+        isHumanTurn:
           !options &&
-            !systemInputProvenance &&
-            !reconnectResumeRequested &&
-            request.turnKind === "main",
-        ),
+          !systemInputProvenance &&
+          !reconnectResumeRequested &&
+          request.turnKind === "main",
+      },
       cronCreatorAuthority,
       assertDashboardReadCurrent,
       externalAuthorityAdmission,
@@ -628,8 +634,6 @@ async function handleChatSendWithOptions(
         preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
-      request,
-      session,
       terminalizeRestartSafeAdmission,
       timing: {
         chatSendAckedAtMs,
@@ -639,11 +643,12 @@ async function handleChatSendWithOptions(
       userTurn,
     });
   } catch (err) {
+    releaseBeforeDispatch?.();
     replyAdmissionTicket?.release();
     await handleChatSendSetupError({
       // Uncommitted Goal admissions may retry with their original identity. Committed
       // outcomes replay from the durable receipt instead of this transient error cache.
-      cacheResult: request.goalOperation === undefined && !pendingStageAttempted,
+      cacheResult: request.goalOperation === undefined && !inputAdmissionAttempted,
       admission,
       context,
       error: err,
@@ -693,24 +698,13 @@ export async function handleSessionGoalResumeChat(
   await handleChatSendWithOptions(options, undefined, undefined, { goalResume: operation });
 }
 
-/** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
-export async function handleChatSendWithSkillWorkshopProposalRevision(
-  options: GatewayRequestHandlerOptions,
-  proposalRevision: SkillWorkshopProposalRevisionConstraint,
-): Promise<void> {
-  await handleChatSendWithOptions(options, undefined, undefined, {
-    toolsAllow: ["skill_workshop"],
-    skillWorkshopProposalRevision: { ...proposalRevision },
-  });
-}
-
 /** Dispatches Gateway-authored system input without widening the public chat-send contract. */
 export async function handleTrustedInternalChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   inputOptions?: Pick<
     ChatSendInternalOptions,
-    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage"
+    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage" | "beforeDispatch"
   >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {

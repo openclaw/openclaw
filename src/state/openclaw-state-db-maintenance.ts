@@ -15,6 +15,11 @@ import {
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { VERSION } from "../version.js";
 import {
+  getStateRuntimeSchemaAdmission,
+  getStateSchemaVersionAdmission,
+  publishStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
+import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -35,7 +40,7 @@ import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
+  type StateSchemaVersionFacts,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
@@ -84,7 +89,12 @@ export function prepareStateDatabaseSchemaRepair(
 ): () => string[] {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
   const assertWriteAllowed = () =>
-    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+    assertOpenClawStateWriteAllowed({
+      database,
+      databasePath: pathname,
+      env,
+      inspectOwnership: true,
+    });
   const admit = () => {
     assertSupportedStateSchemaVersion(database, pathname);
     if (danglingWorkshopIndex) {
@@ -144,6 +154,10 @@ export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
   options: { pathname: string },
 ): { schema_version?: unknown } {
+  const admitted = getStateSchemaVersionAdmission(database);
+  if (admitted && getStateRuntimeSchemaAdmission(database)) {
+    return { schema_version: admitted.userVersion };
+  }
   const hasMetadataTable = tableExists(database, "schema_meta");
   let metadata;
   try {
@@ -174,11 +188,17 @@ export function assertOpenClawStateDatabaseOwner(
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
-  options: { pathname: string },
+  options: { pathname: string; schemaVersions?: StateSchemaVersionFacts },
   readTable?: SqliteTableContractReader,
 ): void {
-  const userVersion = assertSupportedStateSchemaVersion(database, options.pathname);
-  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  const userVersion = assertSupportedStateSchemaVersion(
+    database,
+    options.pathname,
+    options.schemaVersions,
+  );
+  const contentVersion =
+    options.schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
+  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
@@ -206,7 +226,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
   options: { pathname: string; version: OpenClawStateMigrationVersion },
 ): void {
   const userVersion = readSqliteUserVersion(database);
-  if (readStateSchemaMigrationVersion(database) !== options.version) {
+  if (readStateSchemaContentVersion(database) !== options.version) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
     );
@@ -257,6 +277,10 @@ export function markCurrentStateSchemaVersion(
   }
   const version = resolveStateSchemaVersionToPublish(db);
   db.exec(`PRAGMA user_version = ${version};`);
+  publishStateSchemaVersionAdmission(db, {
+    userVersion: version,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
   if (
     tableExists(db, "schema_meta") &&
     ["meta_key", "schema_version", "updated_at"].every((column) =>
@@ -363,143 +387,6 @@ function migrateGitHubPublicationRequesterAuthority(
   return changed;
 }
 
-// v15 collection cleanup released a dropped skill's claim so a path recreated by hand
-// stayed user-owned. Doctor relocates every applied create into the Workshop directory,
-// so released rows turn stale before the marker leaves with its column.
-const RELEASED_WORKSHOP_CLAIM_REASON =
-  "Skill Workshop released this skill in a collection review; the path stays user-owned.";
-
-function migrateSkillWorkshopCollectionReviewOwnership(db: DatabaseSync): void {
-  const retainedObjects = db
-    .prepare(`
-    SELECT sql FROM sqlite_schema
-    WHERE tbl_name = 'skill_workshop_collection_reviews'
-      AND type IN ('index', 'trigger') AND sql IS NOT NULL
-      AND name NOT IN ('idx_skill_workshop_collection_reviews_workspace_time',
-                       'idx_skill_workshop_collection_reviews_owner_time')
-    ORDER BY type, name
-  `)
-    .all();
-  db.exec(`
-    CREATE TABLE skill_workshop_collection_reviews_v16 (
-      review_id TEXT NOT NULL PRIMARY KEY,
-      owner_agent_id TEXT NOT NULL,
-      backup_id TEXT NOT NULL,
-      create_time INTEGER NOT NULL,
-      kept_names_json TEXT NOT NULL,
-      written_names_json TEXT NOT NULL,
-      dropped_json TEXT NOT NULL
-    ) STRICT;
-  `);
-  if (tableExists(db, "skill_workshop_proposals")) {
-    db.exec(`
-    INSERT INTO skill_workshop_collection_reviews_v16 (
-      review_id, owner_agent_id, backup_id, create_time,
-      kept_names_json, written_names_json, dropped_json
-    )
-    SELECT review.review_id,
-           (
-             SELECT MIN(proposal.owner_agent_id)
-             FROM skill_workshop_proposals AS proposal
-             WHERE proposal.workspace_dir = review.workspace_dir
-               AND proposal.owner_agent_id IS NOT NULL
-               AND (
-                 SELECT COUNT(DISTINCT owner_agent_id)
-                 FROM skill_workshop_proposals AS matching
-                 WHERE matching.workspace_dir = review.workspace_dir
-                   AND matching.owner_agent_id IS NOT NULL
-               ) = 1
-           ),
-           review.backup_id,
-           review.create_time,
-           review.kept_names_json,
-           review.written_names_json,
-           review.dropped_json
-    FROM skill_workshop_collection_reviews AS review
-    WHERE (
-      SELECT COUNT(DISTINCT proposal.owner_agent_id)
-      FROM skill_workshop_proposals AS proposal
-      WHERE proposal.workspace_dir = review.workspace_dir
-        AND proposal.owner_agent_id IS NOT NULL
-    ) = 1;
-    `);
-  }
-  db.exec(`
-    DROP TABLE skill_workshop_collection_reviews;
-    ALTER TABLE skill_workshop_collection_reviews_v16
-      RENAME TO skill_workshop_collection_reviews;
-    CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
-      ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
-  `);
-  for (const object of retainedObjects) {
-    if (typeof object.sql === "string") {
-      db.exec(object.sql);
-    }
-  }
-}
-
-/** Remove row provenance after the Workshop directory becomes the ownership boundary. */
-function migrateSkillWorkshopDirectoryOwnership(
-  db: DatabaseSync,
-  previousVersion: number,
-): boolean {
-  if (previousVersion >= 16) {
-    return false;
-  }
-  const proposalColumns = ["workspace_dir", "claim_released_time"].filter((column) =>
-    tableHasColumn(db, "skill_workshop_proposals", column),
-  );
-  const reviewHasWorkspace = tableHasColumn(
-    db,
-    "skill_workshop_collection_reviews",
-    "workspace_dir",
-  );
-  if (proposalColumns.length === 0 && !reviewHasWorkspace) {
-    return false;
-  }
-  if (proposalColumns.includes("claim_released_time")) {
-    const released = db
-      .prepare(
-        "SELECT proposal_id, record_json FROM skill_workshop_proposals WHERE claim_released_time IS NOT NULL",
-      )
-      // SAFETY: v15 declares both selected proposal columns as TEXT NOT NULL.
-      .all() as Array<{ proposal_id: string; record_json: string }>;
-    if (released.length > 0) {
-      const staleAt = new Date().toISOString();
-      const update = db.prepare(
-        `UPDATE skill_workshop_proposals
-           SET record_json = ?, status = 'stale', updated_at = ?, stale_at = ?, status_reason = ?
-         WHERE proposal_id = ?`,
-      );
-      for (const row of released) {
-        // SAFETY: the v15 Workshop writer stores a proposal object in record_json.
-        const record = JSON.parse(row.record_json) as Record<string, unknown>;
-        const staleRecord = {
-          ...record,
-          status: "stale",
-          updatedAt: staleAt,
-          staleAt,
-          statusReason: RELEASED_WORKSHOP_CLAIM_REASON,
-        };
-        update.run(
-          JSON.stringify(staleRecord),
-          staleAt,
-          staleAt,
-          RELEASED_WORKSHOP_CLAIM_REASON,
-          row.proposal_id,
-        );
-      }
-    }
-  }
-  if (reviewHasWorkspace) {
-    migrateSkillWorkshopCollectionReviewOwnership(db);
-  }
-  for (const column of proposalColumns) {
-    db.exec(`ALTER TABLE skill_workshop_proposals DROP COLUMN ${column};`);
-  }
-  return true;
-}
-
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
@@ -513,10 +400,6 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateConversationBindingTargets,
     applied: "Removed redundant conversation binding target projections (v15)",
-  },
-  {
-    migrate: migrateSkillWorkshopDirectoryOwnership,
-    applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
   },
   {
     migrate: migratePreparedWorkerOwnership,
@@ -596,6 +479,10 @@ export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): 
   const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
   const schemaVersion = resolveStateSchemaVersionToPublish(db);
   db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  publishStateSchemaVersionAdmission(db, {
+    userVersion: schemaVersion,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
   executeSqliteQuerySync(
     db,
     kysely

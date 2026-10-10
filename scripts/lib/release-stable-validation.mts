@@ -5,6 +5,7 @@ import {
   pollRelease,
   probeCapabilities,
   ReleaseRefusal,
+  requireReleaseValue as requireValue,
   shellCommand,
   type ReleaseContext,
 } from "./release-stable-state.mts";
@@ -12,13 +13,6 @@ import { parseJson, positiveInteger, readReleaseRun } from "./release-stable-wor
 
 const DRY_SHA = "a".repeat(40);
 const HOUR = 60 * 60 * 1_000;
-
-function requireValue(value: string | undefined, name: string): string {
-  if (!value) {
-    throw new Error(`Missing ${name}; complete the preceding release phase.`);
-  }
-  return value;
-}
 
 async function ensureToolingTag(ctx: ReleaseContext, sha: string): Promise<string> {
   let tag = ctx.state.validate.toolingTag;

@@ -120,7 +120,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
+  const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
@@ -166,8 +166,6 @@ export function buildCliAgentSystemPrompt(params: {
     toolNames: params.tools.map((tool) => tool.name),
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
-    userTimezone,
-    userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -190,20 +188,14 @@ export function resolveSystemPromptUsage(params: {
   systemPrompt?: string;
 }): string | null {
   const systemPrompt = params.systemPrompt?.trim();
-  if (!systemPrompt) {
-    return null;
-  }
   const when = params.backend.systemPromptWhen ?? "first";
-  if (when === "never") {
-    return null;
-  }
-  if (when === "first" && !params.isNewSession) {
-    return null;
-  }
   if (
-    !params.backend.systemPromptArg?.trim() &&
-    !params.backend.systemPromptFileArg?.trim() &&
-    !params.backend.systemPromptFileConfigKey?.trim()
+    !systemPrompt ||
+    when === "never" ||
+    (when === "first" && !params.isNewSession) ||
+    (!params.backend.systemPromptArg?.trim() &&
+      !params.backend.systemPromptFileArg?.trim() &&
+      !params.backend.systemPromptFileConfigKey?.trim())
   ) {
     return null;
   }

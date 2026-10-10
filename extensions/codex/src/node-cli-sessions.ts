@@ -132,11 +132,30 @@ export async function listCodexCliSessionsOnNode(params: {
   filter?: string;
   limit?: number;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
-  const node = await resolveCodexCliNode({
-    runtime: params.runtime,
-    requestedNode: params.requestedNode,
-    command: CODEX_CLI_SESSIONS_LIST_COMMAND,
-  });
+  const { runtime, requestedNode } = params;
+  const command = CODEX_CLI_SESSIONS_LIST_COMMAND;
+  const list = await runtime.nodes.list(requestedNode ? undefined : { connected: true });
+  const requested = requestedNode?.trim();
+  const candidates = list.nodes.filter((node) =>
+    requested
+      ? [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested)
+      : node.connected === true && node.commands?.includes(command),
+  );
+  if (candidates.length === 0) {
+    throw new Error(
+      requested
+        ? `Codex CLI node ${requested} was not found.`
+        : "No connected node exposes Codex CLI session commands.",
+    );
+  }
+  const usable = candidates.filter((node) => node.commands?.includes(command));
+  if (usable.length === 0) {
+    throw new Error(`Node ${requested ?? "candidate"} does not expose ${command}.`);
+  }
+  if (usable.length > 1) {
+    throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
+  }
+  const node = expectDefined(usable[0], "single usable Codex CLI node");
   const raw = await params.runtime.nodes.invoke({
     nodeId: readNodeId(node),
     command: CODEX_CLI_SESSIONS_LIST_COMMAND,
@@ -178,6 +197,7 @@ export async function resumeCodexCliSessionOnNode(params: {
   sessionId: string;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
@@ -185,9 +205,14 @@ export async function resumeCodexCliSessionOnNode(params: {
   let catalogAgentId: string | undefined;
   let catalogHomeId: string | undefined;
   if (params.sessionKey) {
+    const storePath =
+      params.storePath ??
+      params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
       await import("./session-catalog-node-adoption.js");
-    const entry = params.runtime.agent.session.getSessionEntry({
+    const entry = await params.runtime.agent.session.getSessionEntryAsync({
+      agentId: params.agentId,
+      storePath,
       sessionKey: params.sessionKey,
       readConsistency: "latest",
     });
@@ -566,38 +591,6 @@ function readResponseItemMessageText(parsed: Record<string, unknown>): string | 
 function readSessionIdFromFilename(file: string): string | undefined {
   const match = path.basename(file).match(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
   return match?.[0];
-}
-
-async function resolveCodexCliNode(params: {
-  runtime: PluginRuntime;
-  requestedNode?: string;
-  command: string;
-}): Promise<CodexCliSessionNodeInfo> {
-  const list = await params.runtime.nodes.list(
-    params.requestedNode ? undefined : { connected: true },
-  );
-  const requested = params.requestedNode?.trim();
-  const candidates = list.nodes.filter((node) => {
-    if (requested) {
-      return [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested);
-    }
-    return node.connected === true && node.commands?.includes(params.command);
-  });
-  if (candidates.length === 0) {
-    throw new Error(
-      requested
-        ? `Codex CLI node ${requested} was not found.`
-        : "No connected node exposes Codex CLI session commands.",
-    );
-  }
-  const usable = candidates.filter((node) => node.commands?.includes(params.command));
-  if (usable.length === 0) {
-    throw new Error(`Node ${requested ?? "candidate"} does not expose ${params.command}.`);
-  }
-  if (usable.length > 1) {
-    throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
-  }
-  return expectDefined(usable[0], "single usable Codex CLI node");
 }
 
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {

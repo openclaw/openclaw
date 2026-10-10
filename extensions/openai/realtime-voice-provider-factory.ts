@@ -14,7 +14,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { projectRealtimeVoicePublicProjection } from "./provider-policy-api.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
+import {
+  createOpenAIRealtimeClientSecret,
+  resolveOpenAIRealtimeRequestHeaders,
+} from "./realtime-provider-shared.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
@@ -309,19 +312,16 @@ async function createOpenAIRealtimeBrowserSession(
     },
     context,
   );
-  const headers = context.resolveProviderRequestHeaders({
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1/realtime/calls",
-    capability: "audio",
-    transport: "http",
-    defaultHeaders: {},
-  });
+  const headers = resolveOpenAIRealtimeRequestHeaders(
+    context,
+    "https://api.openai.com/v1/realtime/calls",
+  );
   // Strip server-side-only attribution headers: browser direct fetches to
   // api.openai.com fail CORS preflight when these are present (only
   // authorization,content-type are allowed by the endpoint's CORS policy).
   const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator", "version"]);
   const browserHeaders = Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
+    Object.entries(headers).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
   );
   const offerHeaders = Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
   return {
@@ -444,27 +444,18 @@ export function buildOpenAIRealtimeVoiceProvider(
         return false;
       }
       const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-      if (isOpenAIGptLiveModel(model)) {
-        return (
-          options?.quicksilverBrowserSessionBroker !== undefined &&
-          (hasOpenAIRealtimePlatformAuthInput(
-            { configuredApiKey: config.apiKey, cfg, agentId },
-            context,
-          ) ||
-            (isOpenAIGptLiveSubscriptionModel(model) &&
-              hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
-        );
+      const isGptLive = isOpenAIGptLiveModel(model);
+      const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
+      if (isGptLive && !hasBroker) {
+        return false;
       }
       return (
         hasOpenAIRealtimePlatformAuthInput(
-          {
-            configuredApiKey: config.apiKey,
-            cfg,
-            agentId,
-          },
+          { configuredApiKey: config.apiKey, cfg, agentId },
           context,
         ) ||
-        (options?.quicksilverBrowserSessionBroker !== undefined &&
+        (hasBroker &&
+          (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },

@@ -44,8 +44,6 @@ type SqliteSessionImportRowsParams = Pick<
   repairLegacyTranscript?: boolean;
   /** Doctor-discovered history cannot replace the current logical session or window owner. */
   historicalOnly?: boolean;
-  /** Unverified recovery history may only bootstrap an empty destination. */
-  requireEmptyStore?: boolean;
   preserveExactStoredKey?: boolean;
   entry: SessionEntry;
   legacyAcpMigrationSource?: LegacyAcpMigrationSource;
@@ -194,7 +192,6 @@ export async function importSqliteSessionRowsBatch(
     return [];
   }
   const prepared = params.map(resolveSqliteSessionImport);
-  const requireEmptyStore = params.some((row) => row.requireEmptyStore);
   const resolved = prepared[0]!.resolved;
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
   if (
@@ -234,22 +231,8 @@ export async function importSqliteSessionRowsBatch(
           importParams.beforePersistentApply?.();
         }
         return runOpenClawAgentWriteTransaction(
-          (database) => {
-            if (
-              requireEmptyStore &&
-              executeSqliteQueryTakeFirstSync(
-                database.db,
-                getSessionKysely(database.db)
-                  .selectFrom("session_nodes")
-                  .select("session_key")
-                  .limit(1),
-              )
-            ) {
-              throw new Error(
-                "Session recovery history cannot be verified; SQLite destination is not empty",
-              );
-            }
-            return prepared.map((row, source) =>
+          (database) =>
+            prepared.map((row, source) =>
               importSqliteSessionRowsInTransaction(
                 database,
                 row,
@@ -257,8 +240,7 @@ export async function importSqliteSessionRowsBatch(
                 source,
                 repairs.get(source),
               ),
-            );
-          },
+            ),
           toDatabaseOptions(resolved),
           { operationLabel: "session.import.batch" },
         );

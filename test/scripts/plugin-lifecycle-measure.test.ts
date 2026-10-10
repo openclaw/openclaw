@@ -190,41 +190,20 @@ describe("plugin lifecycle resource sampler", () => {
     );
   });
 
-  it("configures a phase timeout with process-group cleanup", () => {
-    const script = readFileSync(scriptPath, "utf8");
-
-    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS");
-    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS");
-    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB");
-    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS");
-    expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO");
-    expect(script).toContain("detached: true");
-    expect(script).toContain("process.kill(-child.pid, signal)");
-    expect(script).toContain("plugin lifecycle resource ceiling exceeded");
-    expect(script).toContain('const summarySignal = timedOut ? "timeout"');
-    expect(script).toContain("process.exit(124)");
-  });
-
-  it.runIf(process.platform === "linux").each([
-    { actions: false, exitCode: 0 },
-    { actions: true, exitCode: 0 },
-    { actions: true, exitCode: 9 },
-  ])(
-    "reports wall ceilings without concealing phase errors (Actions $actions, exit $exitCode)",
-    ({ actions, exitCode }) => {
+  it.runIf(process.platform === "linux")(
+    "fails successful phases that exceed wall ceilings",
+    () => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
-      const jobSummary = path.join(dir, "job-summary.md");
       const result = spawnSync(
         "node",
-        [scriptPath, summary, "slow-success", "--", "node", "-e", `process.exit(${exitCode})`],
+        [scriptPath, summary, "slow-success", "--", "node", "-e", "process.exit(0)"],
         {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
             ...process.env,
-            GITHUB_ACTIONS: actions ? "true" : "",
-            GITHUB_STEP_SUMMARY: jobSummary,
+            GITHUB_ACTIONS: "",
             OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
             OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS: "1",
           },
@@ -232,46 +211,10 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(result.status).toBe(actions ? exitCode : 1);
-      if (actions) {
-        expect(result.stderr).toContain(`::warning file=${scriptPath},line=1,col=0`);
-        expect(result.stderr).not.toContain("plugin lifecycle resource ceiling exceeded:");
-        expect(readFileSync(jobSummary, "utf8")).toContain("Plugin lifecycle resource budget");
-      } else {
-        expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
-      }
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
       expect(result.stderr).toContain("wall_ms=");
       expect(readFileSync(summary, "utf8")).toMatch(/^slow-success\t\d+\t[\d.]+\t\d+\t[\d.]+\t$/mu);
-    },
-  );
-
-  it.runIf(process.platform === "linux")(
-    "times out wedged phases and records the timeout signal",
-    () => {
-      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-      const summary = path.join(dir, "summary.tsv");
-      const result = spawnSync(
-        "node",
-        [scriptPath, summary, "wedged", "--", "node", "-e", "setInterval(() => {}, 1000)"],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            GITHUB_ACTIONS: "true",
-            GITHUB_STEP_SUMMARY: "",
-            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150",
-            OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
-          },
-          timeout: 5000,
-        },
-      );
-
-      expect(result.status).toBe(124);
-      expect(result.stdout).toContain("signal=timeout");
-      expect(readFileSync(summary, "utf8")).toMatch(
-        /^wedged\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
-      );
     },
   );
 

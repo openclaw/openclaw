@@ -13,7 +13,6 @@ interface ExportCommandSessionTarget {
   agentId: string;
   entry: SessionEntry;
   sessionId: string;
-  sessionFile: string;
   sessionKey: string;
   storePath: string;
 }
@@ -55,7 +54,7 @@ export function resolveExportCommandSessionTarget(
   }
 
   try {
-    const sessionFile = resolveSessionFilePathCore(
+    resolveSessionFilePathCore(
       sessionId,
       entry,
       resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
@@ -63,7 +62,6 @@ export function resolveExportCommandSessionTarget(
     return {
       agentId: targetAgentId,
       entry,
-      sessionFile,
       sessionId,
       sessionKey: params.sessionKey,
       storePath,
