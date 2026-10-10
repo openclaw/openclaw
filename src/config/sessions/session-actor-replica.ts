@@ -76,13 +76,12 @@ const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"),
           ? readPreparedSessionEntryChange(change, sessionKey)
           : undefined;
       const source = readPreparedSessionEntryPublicationSource(change);
-      const unchangedEntry =
+      const unchangedMarker =
         !prepared &&
         !("all" in change) &&
         !change.factsInvalidated &&
-        (!change.facts || change.facts.kind === "unchanged")
-          ? cell.entry
-          : undefined;
+        (!change.facts || change.facts.kind === "unchanged");
+      const unchangedEntry = unchangedMarker ? cell.entry : undefined;
       discard(cell);
       if (unchangedEntry) {
         // Transcript/metadata markers do not revoke an installed entry receipt.
@@ -118,7 +117,7 @@ const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"),
       }
       // Keep a bounded empty slot through pending publication so its complete
       // entry receipt can install without retaining a reader handle.
-      if (!change.factsInvalidated) {
+      if (!change.factsInvalidated && !unchangedMarker) {
         forgetUnused(cell);
       }
     }
