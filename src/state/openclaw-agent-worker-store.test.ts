@@ -158,14 +158,18 @@ it("V2 retains owner authority through commit even when the operation guard rema
     {
       version: 2,
       assertCurrent() {
-        if (!current) throw new Error("V2 owner revoked");
+        if (!current) {
+          throw new Error("V2 owner revoked");
+        }
       },
     },
     {
       moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
       input: undefined,
       onAdmitted(request) {
-        if (request.stage === "transaction") current = false;
+        if (request.stage === "transaction") {
+          current = false;
+        }
       },
     },
   );
