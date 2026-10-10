@@ -13,6 +13,7 @@ import {
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { createForwardedMessagePreview } from "./chat-forwarded-preview.ts";
 import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
 import { renderMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
 
@@ -58,8 +59,6 @@ function shouldCollapseUserMessage(markdown: string): boolean {
   );
 }
 
-const FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT = 3;
-
 type MessageOverflowMeasurement = {
   element: HTMLElement;
   read: () => (() => void) | undefined;
@@ -89,7 +88,7 @@ function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): v
   });
 }
 
-function messageOverflowRef(expanded: boolean, forwarded: boolean) {
+function messageOverflowRef(expanded: boolean) {
   let resizeObserver: ResizeObserver | null = null;
   let onFontsLoaded: (() => void) | undefined;
   let measurement: MessageOverflowMeasurement | undefined;
@@ -126,7 +125,7 @@ function messageOverflowRef(expanded: boolean, forwarded: boolean) {
       // Test the full preview before a partial-line cut can create its own overflow.
       const scrollHeight = element.scrollHeight;
       const overflows = scrollHeight > element.clientHeight + 1;
-      if (!forwarded && !expanded && overflows && text && element.clientWidth > 0) {
+      if (!expanded && overflows && text && element.clientWidth > 0) {
         const origin = element.getBoundingClientRect().top - element.scrollTop;
         const defaultLineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
         const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
@@ -183,14 +182,7 @@ function messageOverflowRef(expanded: boolean, forwarded: boolean) {
           fadeSize = `${lastLine.clamp - lastLine.top - lastLine.lineHeight * MESSAGE_PREVIEW_FADE_START_FRACTION}px`;
         }
       }
-      const hidden =
-        !expanded &&
-        (forwarded && text
-          ? scrollHeight <=
-            Number.parseFloat(getComputedStyle(text).lineHeight) *
-              FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT +
-              1
-          : !overflows);
+      const hidden = !expanded && !overflows;
       return () => {
         if (generation !== currentGeneration) {
           return;
@@ -282,7 +274,7 @@ export function renderMessageMarkdown(
       </div>
     `;
   }
-  return renderMessageDisclosure(markdown, messageKey, opts, text, parts);
+  return renderMessageDisclosure(markdown, messageKey, opts, text, parts, media);
 }
 
 function renderMessageDisclosure(
@@ -291,6 +283,7 @@ function renderMessageDisclosure(
   opts: MessageTextOptions,
   text: ReturnType<typeof html>,
   parts: readonly string[],
+  media?: MarkdownMedia,
 ) {
   if (
     !opts.onToggleUserMessageExpanded ||
@@ -303,6 +296,12 @@ function renderMessageDisclosure(
 
   const disclosureId = `${opts.isForwarded ? "forwarded" : "user"}-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  const preview = opts.isForwarded
+    ? createForwardedMessagePreview(parts.join(""), media?.prefix)
+    : null;
+  if (opts.isForwarded && preview === null) {
+    return text;
+  }
   return html`
     <div
       class="chat-message-disclosure ${opts.isForwarded ? "chat-message-disclosure--forwarded" : ""} ${expanded ? "is-expanded" : ""}"
@@ -310,10 +309,16 @@ function renderMessageDisclosure(
       <div
         class="chat-message-disclosure__content"
         ${guard([...parts, expanded, opts.isForwarded], () =>
-          ref(messageOverflowRef(expanded, Boolean(opts.isForwarded))),
+          opts.isForwarded ? nothing : ref(messageOverflowRef(expanded)),
         )}
       >
-        ${text}
+        ${
+          preview !== null && !expanded
+            ? html`<div class="chat-text" dir=${detectTextDirection(source)}>
+                ${renderMarkdownMedia(preview, media)}
+              </div>`
+            : text
+        }
       </div>
       <button
         class="chat-message-disclosure__toggle"
