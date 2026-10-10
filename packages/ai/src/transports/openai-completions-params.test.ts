@@ -1,10 +1,14 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
+import type { AiProviderRequestCapabilities } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Context, Model, Tool } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
-import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  detectOpenAICompletionsCompat,
+  resolveOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
 import {
   buildOpenAICompletionsParams,
   buildOpenAICompletionsRequest,
@@ -93,7 +97,7 @@ describe("OpenAI completions output budgets", () => {
           },
           { maxTokens: 0 },
         ),
-        "max_completion_tokens",
+        "max_tokens",
         64_000,
       ],
       [
@@ -124,7 +128,7 @@ describe("OpenAI completions output budgets", () => {
           undefined,
           emptyContext("你好世界".repeat(1_000)),
         ),
-        "max_completion_tokens",
+        "max_tokens",
         4_999,
       ],
       [
@@ -177,6 +181,111 @@ describe("OpenAI completions output budgets", () => {
     const inputTokens = Math.ceil(((2 + FAILED_ASSISTANT_REPLAY_TEXT.length) / 4) * 1.25);
     expect(params.max_completion_tokens).toBe(10_000 - inputTokens - 1);
   });
+});
+
+const modelStudioNativeCapabilities: AiProviderRequestCapabilities = {
+  endpointClass: "modelstudio-native",
+  knownProviderFamily: "modelstudio",
+  supportsNativeStreamingUsageCompat: true,
+  supportsOpenAICompletionsStreamingUsageCompat: false,
+  usesExplicitProxyLikeEndpoint: true,
+  allowsAnthropicServiceTier: false,
+};
+
+describe("Model Studio compatible-mode output token field", () => {
+  it.each([
+    ["qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["dashscope", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    ["modelstudio", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"],
+    ["dashscope", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
+    ["modelstudio", "https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
+  ] as const)("writes max_tokens for %s at %s", (provider, baseUrl) => {
+    const params = request({
+      id: "qwen3.5-plus",
+      provider,
+      baseUrl,
+      maxTokens: 1_234,
+    });
+    expect(params.max_tokens).toBe(1_234);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("keeps an explicit maxTokensField override", () => {
+    const params = request({
+      id: "qwen3.5-plus",
+      provider: "dashscope",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      maxTokens: 1_234,
+      compat: { maxTokensField: "max_completion_tokens" },
+    });
+    expect(params.max_completion_tokens).toBe(1_234);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it.each([
+    ["qwen", "https://coding.dashscope.aliyuncs.com/v1"],
+    ["qwen", "https://coding-intl.dashscope.aliyuncs.com/v1"],
+    ["qwen", "https://proxy.example/compatible-mode/v1"],
+    ["qwen", "https://dashscope.aliyuncs.com.evil.example/compatible-mode/v1"],
+    ["qwen", "https://notaliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://dashscope.aliyuncs.com/compatible-mode-preview/v1"],
+    ["openai", "https://api.openai.com/v1"],
+  ] as const)("keeps max_completion_tokens for %s at %s", (provider, baseUrl) => {
+    const params = request({
+      id: provider === "openai" ? "gpt-5.4" : "qwen3.5-plus",
+      provider,
+      baseUrl,
+      maxTokens: 1_234,
+    });
+    expect(params.max_completion_tokens).toBe(1_234);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("keeps Moonshot on max_tokens", () => {
+    const params = request({
+      id: "kimi-k2",
+      provider: "moonshot",
+      baseUrl: "https://api.moonshot.ai/v1",
+      maxTokens: 1_111,
+    });
+    expect(params.max_tokens).toBe(1_111);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("does not switch Coding Plan when the shared endpoint class is modelstudio-native", () => {
+    const detected = detectOpenAICompletionsCompat(
+      makeCompletionsModel({
+        id: "qwen3.5-plus",
+        provider: "qwen",
+        baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+      }),
+      () => modelStudioNativeCapabilities,
+    );
+    expect(detected.defaults.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it.each([
+    ["qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["qwencloud", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    ["modelstudio", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"],
+    ["dashscope", "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["qwen-token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"],
+    [
+      "bailian-token-plan",
+      "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    ],
+  ] as const)(
+    "selects max_tokens when %s is classified as modelstudio-native at %s",
+    (provider, baseUrl) => {
+      const detected = detectOpenAICompletionsCompat(
+        makeCompletionsModel({ id: "qwen3.5-plus", provider, baseUrl }),
+        () => modelStudioNativeCapabilities,
+      );
+      expect(detected.defaults.maxTokensField).toBe("max_tokens");
+    },
+  );
 });
 
 describe("OpenAI completions reasoning", () => {
