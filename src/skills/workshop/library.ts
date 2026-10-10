@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
@@ -7,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import {
@@ -26,7 +26,6 @@ import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { withSkillLocks } from "./skill-locks.js";
 import {
   listVersions,
   pruneVersions,
@@ -71,12 +70,24 @@ const ARCHIVE_DIR = ".archive";
 // lossy description rewrites whenever a review patched an older skill, and blocked restores.
 const MAX_DESCRIPTION_BYTES = 1024;
 const MAX_CHANGES_LIMIT = 500;
-const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+// New names follow the Agent Skills limit. Earlier releases named learned skills with
+// normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
+// the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
+const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+const skillLocks = new KeyedAsyncQueue();
+
+function emptyForMissingDirectory(error: unknown): never[] {
+  if (hasErrnoCode(error, "ENOENT")) {
+    return [];
+  }
+  throw error;
+}
 
 function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string): SkillPaths {
-  if (!SKILL_NAME_PATTERN.test(name)) {
+  if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
     throw new WorkshopWriteError(
-      `Invalid skill name "${name}": use 1-63 lowercase letters, digits, or hyphens, starting with a letter or digit (e.g. "deploy-staging").`,
+      `Invalid skill name "${name}": use lowercase letters, digits, or hyphens, starting with a letter or digit (e.g. "deploy-staging").`,
     );
   }
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
@@ -299,6 +310,14 @@ async function requireLiveSkill(paths: SkillPaths, name: string): Promise<void> 
   );
 }
 
+/** Sorted acquisition keeps overlapping multi-skill mutations from deadlocking. */
+async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
+  const [first, ...rest] = [...new Set(keys)].toSorted((a, b) => a.localeCompare(b));
+  return first === undefined
+    ? await run()
+    : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
+}
+
 /** Serializes one skill's mutation, then publishes the snapshot bump and change row. */
 async function mutateSkill(
   ctx: WorkshopMutationContext,
@@ -364,18 +383,12 @@ export async function listWorkshopSkills(
   agentId: string,
 ): Promise<WorkshopSkillSummary[]> {
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(skillsRoot, { withFileTypes: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
-  }
+  const entries = await fs
+    .readdir(skillsRoot, { withFileTypes: true })
+    .catch(emptyForMissingDirectory);
   const skills: WorkshopSkillSummary[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || !SKILL_NAME_PATTERN.test(entry.name)) {
+    if (!entry.isDirectory() || !EXISTING_SKILL_NAME_PATTERN.test(entry.name)) {
       continue;
     }
     const skillDir = path.join(skillsRoot, entry.name);
@@ -399,18 +412,12 @@ export async function listWorkshopArchive(
   agentId: string,
 ): Promise<WorkshopArchivedSkill[]> {
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
-  let names: string[];
-  try {
-    names = await fs.readdir(path.join(skillsRoot, ARCHIVE_DIR));
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
-  }
+  const names: string[] = await fs
+    .readdir(path.join(skillsRoot, ARCHIVE_DIR))
+    .catch(emptyForMissingDirectory);
   const archived: WorkshopArchivedSkill[] = [];
   for (const name of names.toSorted()) {
-    if (!SKILL_NAME_PATTERN.test(name)) {
+    if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
       continue;
     }
     const versions = await listVersions(path.join(skillsRoot, ARCHIVE_DIR, name));
@@ -457,6 +464,11 @@ export async function createWorkshopSkill(
   ctx: WorkshopMutationContext,
   params: { name: string; content: string; summary?: string },
 ): Promise<WorkshopChange> {
+  if (!NEW_SKILL_NAME_PATTERN.test(params.name)) {
+    throw new WorkshopWriteError(
+      `Invalid skill name "${params.name}": use 1-63 lowercase letters, digits, or hyphens, starting with a letter or digit (e.g. "deploy-staging").`,
+    );
+  }
   return await mutateSkill(ctx, params.name, "create", async (paths) => {
     if (await pathExists(paths.skillDir)) {
       throw new WorkshopWriteError(

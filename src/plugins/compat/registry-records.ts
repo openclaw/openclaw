@@ -1,5 +1,6 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
@@ -18,15 +19,6 @@ import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
-const BUNDLED_PLUGIN_METADATA = {
-  status: "active",
-  owner: "config",
-  introduced: "2026-04-24",
-  docsPath: "/plugins/architecture",
-  diagnostics: ["plugin status report"],
-  tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
-} as const;
-
 const ACTIVATION_HINT_METADATA = {
   status: "active",
   owner: "plugin-execution",
@@ -39,6 +31,7 @@ const ACTIVATION_HINT_METADATA = {
 export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
+  ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
@@ -209,7 +202,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-11",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+      "Use api.runtime.state.openKeyedStoreV2 or createPluginStateKeyedStoreV2, await data-only operations, and replace update/deleteIf closures with observe/compareAndApply. Synchronous methods retain commit-before-return until they are removed in the next Plugin SDK major and explicit breaking-release approval.",
     docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
     surfaces: [
       "api.runtime.state.openSyncKeyedStore",
@@ -220,7 +213,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
     diagnostics: [
       "TypeScript @deprecated annotations and state-store migration documentation",
-      "plugin compatibility inventory; no new runtime warnings",
+      "plugin compatibility inventory; legacy writer migrations use the shared once-per-plugin-and-capability-family warning policy",
     ],
     tests: [
       "src/plugins/compat/registry.test.ts",
@@ -230,7 +223,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:
-      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+      "Bundled plugins use worker-owned keyed-state operations and conditional prepared writes. Released synchronous stores and opaque callbacks retain their timing with a bounded migration warning; schemas, retention, and update behavior are unchanged.",
   },
   {
     code: "memory-read-result-statusless-success",
@@ -551,15 +544,25 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "bundled-plugin-allowlist",
-    ...BUNDLED_PLUGIN_METADATA,
+    status: "active",
+    owner: "config",
+    introduced: "2026-04-24",
     replacement: "manifest-owned plugin enablement and scoped load plans",
+    docsPath: "/plugins/architecture",
     surfaces: ["plugins.allow", "bundled provider startup", "plugins status"],
+    diagnostics: ["plugin status report"],
+    tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
   {
     code: "bundled-plugin-enablement",
-    ...BUNDLED_PLUGIN_METADATA,
+    status: "active",
+    owner: "config",
+    introduced: "2026-04-24",
     replacement: "manifest-owned plugin defaults and scoped load plans",
+    docsPath: "/plugins/architecture",
     surfaces: ["plugins.entries", "bundled provider startup", "plugins status"],
+    diagnostics: ["plugin status report"],
+    tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
   {
     code: "activation-agent-harness-hint",

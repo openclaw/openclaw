@@ -1,7 +1,5 @@
 /** Extension that safeguards compaction with structured summaries and quality repair. */
 
-import fs from "node:fs";
-import path from "node:path";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -17,8 +15,6 @@ import {
   MAX_FILE_OPS_SECTION_CHARS,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -26,14 +22,8 @@ import {
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
-import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-worker.js";
-import { buildHistoryPrunePlan } from "../compaction-planning.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
-import {
-  SUMMARIZATION_OVERHEAD_TOKENS,
-  resolveContextWindowTokens,
-  summarizeInStages,
-} from "../compaction.js";
+import { summarizeCompactionHistory } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
@@ -47,10 +37,6 @@ import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
-import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-  readWorkspaceBootstrapFile,
-} from "../workspace-bootstrap-read.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import {
   appendSummarySection,
@@ -66,6 +52,7 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
+import { readWorkspaceContextForSummary } from "./compaction-workspace-context.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
@@ -84,11 +71,8 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
-  "Previous compaction summary to re-distill with the current conversation. " +
-  "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
 const compactionSafeguardDeps = {
-  summarizeInStages,
+  summarizeCompactionHistory,
 };
 type CompactionLoss =
   | "summary-tail"
@@ -96,29 +80,6 @@ type CompactionLoss =
   | "split-turn-head"
   | "split-turn-tail"
   | "preserved-turn-head";
-
-function prependPreviousSummaryForRedistill(params: {
-  messages: AgentMessage[];
-  previousSummary?: string;
-}): AgentMessage[] {
-  const previousSummary = params.previousSummary?.trim();
-  if (!previousSummary) {
-    return params.messages;
-  }
-  return [
-    {
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `<previous-compaction-summary>\n${PREVIOUS_SUMMARY_REDISTILL_PREFIX}\n\n${previousSummary}\n</previous-compaction-summary>`,
-        },
-      ],
-      timestamp: 0,
-    } as AgentMessage,
-    ...params.messages,
-  ];
-}
 
 function nestMarkdownHeadings(text: string): string {
   return text.replace(/^##(?=[ \t]+\S)/gmu, "###");
@@ -182,20 +143,6 @@ function containsRealConversation(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
     isRealConversationMessage(message, allMessages, index),
   );
-}
-
-/**
- * Summarize via the built-in LLM pipeline (summarizeInStages).
- * Only called when no compaction provider is available or the provider failed.
- */
-async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]): Promise<string> {
-  // Summarization failure throws CompactionError (b942db4d569b) — there is no
-  // degraded-fallback return shape to preserve a previous summary against.
-  return await compactionSafeguardDeps.summarizeInStages({
-    ...params,
-    messages: prependPreviousSummaryForRedistill(params),
-    previousSummary: undefined,
-  });
 }
 
 /**
@@ -473,8 +420,13 @@ function budgetCompactionSummary(
       bodyBudget: maxChars,
       bodyTrimmed: false,
       suffixTrimmed: false,
-      qualityRetentionInfeasible: false,
     };
+  }
+
+  // The fitter must search above the retention minimum, not price an unrelated
+  // head cut whose CJK density can exceed a larger candidate that keeps the facts.
+  if (retentionPlan && retentionPlan.minimumChars > maxChars) {
+    return undefined;
   }
 
   const bodyCapacity = retentionPlan ? maxChars : summaryBody.length;
@@ -495,13 +447,12 @@ function budgetCompactionSummary(
     bodyBudget: bodySlot,
     bodyTrimmed: rendered ? rendered.trimmed : cappedBody.length < summaryBody.length,
     suffixTrimmed: cappedSuffix.length < suffix.text.length,
-    qualityRetentionInfeasible: retentionPlan !== null && retentionPlan.minimumChars > maxChars,
   };
 }
 
 function resolveSummaryReserveTokens(
   requestedReserveTokens: number,
-  model: NonNullable<Parameters<typeof summarizeInStages>[0]["model"]>,
+  model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
 ): number {
   const requested = Math.max(1, Math.floor(requestedReserveTokens));
   const modelMaxTokens = model.maxTokens;
@@ -764,73 +715,6 @@ function extractLatestUserAsk(messages: AgentMessage[]): string | null {
   return null;
 }
 
-/**
- * Read and format critical workspace context for compaction summary.
- * Uses explicitly configured AGENTS.md section names only.
- * The default "Session Startup" / "Red Lines" pair preserves the legacy
- * "Every Session" / "Safety" fallback.
- * Limited to 2000 chars to avoid bloating the summary.
- */
-async function readWorkspaceContextForSummary(
-  sectionNames?: string[],
-  workspaceDir = process.cwd(),
-): Promise<string> {
-  const MAX_SUMMARY_CONTEXT_CHARS = 2000;
-  if (!Array.isArray(sectionNames) || sectionNames.length === 0) {
-    return "";
-  }
-  const agentsPath = path.join(workspaceDir, "AGENTS.md");
-
-  try {
-    const opened = await openRootFile({
-      absolutePath: agentsPath,
-      rootPath: workspaceDir,
-      boundaryLabel: "workspace root",
-    });
-    if (!opened.ok) {
-      return "";
-    }
-
-    let content: string;
-    try {
-      content = await readWorkspaceBootstrapFile(opened.fd);
-    } catch (err) {
-      if (err instanceof RangeError) {
-        log.warn(
-          `Ignoring oversized AGENTS.md ${agentsPath}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
-        );
-        return "";
-      }
-      throw err;
-    } finally {
-      fs.closeSync(opened.fd);
-    }
-    let sections = extractSections(content, sectionNames);
-    if (
-      sections.length === 0 &&
-      sectionNames.length === 2 &&
-      sectionNames.some((name) => name.trim().toLowerCase() === "session startup") &&
-      sectionNames.some((name) => name.trim().toLowerCase() === "red lines")
-    ) {
-      sections = extractSections(content, ["Every Session", "Safety"]);
-    }
-
-    if (sections.length === 0) {
-      return "";
-    }
-
-    const combined = sections.join("\n\n");
-    const safeContent =
-      combined.length > MAX_SUMMARY_CONTEXT_CHARS
-        ? `${truncateUtf16Safe(combined, MAX_SUMMARY_CONTEXT_CHARS)}\n...[truncated]...`
-        : combined;
-
-    return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
-  } catch {
-    return "";
-  }
-}
-
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
@@ -1049,12 +933,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return cancelCompaction(authResult.reason);
     }
     try {
-      const modelContextWindow = resolveContextWindowTokens(model);
-      const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      let messagesToSummarize = baseMessagesToSummarize;
       const headers = buildCompactionSummaryHeaders({
         model,
-        messages: messagesToSummarize,
+        messages: baseMessagesToSummarize,
         headers: authResult.headers,
       });
       const usageSink: SessionModelUsageSink = (usage) =>
@@ -1065,7 +946,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         headers,
         signal,
         reserveTokens: resolveSummaryReserveTokens(preparation.settings.reserveTokens, model),
-        contextWindow: contextWindowTokens,
         summarizationInstructions,
         thinkingLevel,
         streamFn,
@@ -1073,75 +953,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       };
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
-      const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
-
-      const tokensBefore =
-        typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
-          ? preparation.tokensBefore
-          : undefined;
-
-      let droppedSummary: string | undefined;
-
-      if (tokensBefore !== undefined) {
-        const prunePlan = buildHistoryPrunePlan({
-          messagesToSummarize,
-          turnPrefixMessages,
-          tokensBefore,
-          contextWindowTokens,
-          maxHistoryShare,
-          parts: 2,
-        });
-        const { newContentTokens, maxHistoryTokens, pruned } = prunePlan;
-
-        if (newContentTokens > maxHistoryTokens && pruned) {
-          if (pruned.droppedChunks > 0) {
-            const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            log.warn(
-              `Compaction safeguard: new content uses ${newContentRatio.toFixed(
-                1,
-              )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
-                `(${pruned.droppedMessages} messages) to fit history budget.`,
-            );
-            messagesToSummarize = pruned.messages;
-
-            // Summarize dropped messages so context isn't lost
-            if (pruned.droppedMessagesList.length > 0) {
-              try {
-                const droppedChunkRatio = await computeAdaptiveChunkRatioWithWorker({
-                  messages: pruned.droppedMessagesList,
-                  contextWindow: contextWindowTokens,
-                  signal,
-                });
-                const droppedMaxChunkTokens = Math.max(
-                  1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio) -
-                    SUMMARIZATION_OVERHEAD_TOKENS,
-                );
-                droppedSummary = await summarizeViaLLM({
-                  ...llmSummaryParams,
-                  messages: pruned.droppedMessagesList,
-                  maxChunkTokens: droppedMaxChunkTokens,
-                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
-                  previousSummary,
-                });
-              } catch (droppedError) {
-                if (signal?.aborted) {
-                  signal.throwIfAborted();
-                }
-                throw new Error("Failed to summarize dropped messages.", {
-                  cause: droppedError,
-                });
-              }
-            }
-          }
-        }
-      }
-
-      const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const oracleMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
       const splitUserAsk = preparation.isSplitTurn
         ? extractLatestUserAsk(turnPrefixMessages)
         : null;
-      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(messagesToSummarize);
+      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(baseMessagesToSummarize);
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -1149,37 +965,27 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         summarizableMessages: summaryTargetMessages,
         preservedMessages: preservedRecentMessages,
       } = splitPreservedRecentTurns({
-        messages: messagesToSummarize,
+        messages: baseMessagesToSummarize,
         recentTurnsPreserve,
       });
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
-      const latestPreparedAsk = extractLatestUserAsk(messagesToSummarize);
+      const latestPreparedAsk = extractLatestUserAsk(baseMessagesToSummarize);
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
       const includePreservedContext =
         !latestUnresolvedUserRequest &&
         qualityGuardEnabled &&
         latestPreparedAsk === latestUserAsk &&
-        Boolean(latestPreparedAsk) &&
-        (summaryTargetMessages.length > 0 ||
-          !preservedTurnsSectionLocal.text.includes(requiredAskContext));
-      messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-
-      // Use adaptive chunk ratio based on message sizes, reserving headroom for
-      // the summarization prompt, system prompt, previous summary, and reasoning budget
-      // that generateSummary adds on top of the serialized conversation chunk.
-      const adaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
-        messages: allMessages,
-        contextWindow: contextWindowTokens,
-        signal,
-      });
-      const maxChunkTokens = Math.max(
-        1,
-        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
-      );
-      // Feed dropped-messages summary as previousSummary so the main summarization
-      // incorporates context from pruned messages instead of losing it entirely.
-      const effectivePreviousSummary = droppedSummary ?? previousSummary;
+        !preservedTurnsSectionLocal.text.includes(requiredAskContext);
+      // Retained excerpts supplement the handoff; they cannot update an older decision
+      // by themselves. Reconcile the complete prepared window whenever there is a
+      // summary to update or non-preserved/split-turn work to summarize.
+      const reconciliationMessages =
+        previousSummary ||
+        includePreservedContext ||
+        summaryTargetMessages.length > 0 ||
+        turnPrefixMessages.length > 0
+          ? oracleMessages
+          : [];
 
       let correctiveInstructions = "";
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
@@ -1191,16 +997,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const producerLosses = new Set<CompactionLoss>();
         try {
           historySummary =
-            messagesToSummarize.length > 0
-              ? await summarizeViaLLM({
+            reconciliationMessages.length > 0
+              ? await compactionSafeguardDeps.summarizeCompactionHistory({
                   ...llmSummaryParams,
-                  messages: messagesToSummarize,
-                  maxChunkTokens,
+                  messages: reconciliationMessages,
                   summaryPrompt: { kind: "custom", instructions: structuredInstructions },
                   customInstructions: correctiveInstructions,
-                  previousSummary: effectivePreviousSummary,
+                  previousSummary,
                 })
-              : buildStructuredFallbackSummary(effectivePreviousSummary);
+              : buildStructuredFallbackSummary(previousSummary);
 
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const splitTurnFocusLabel = "Additional context from /compact";
@@ -1208,10 +1013,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               splitTurnFocusLabel,
               customInstructions,
             );
-            const prefixSummary = await summarizeViaLLM({
+            const prefixSummary = await compactionSafeguardDeps.summarizeCompactionHistory({
               ...llmSummaryParams,
               messages: turnPrefixMessages,
-              maxChunkTokens,
               summaryPrompt: { kind: "turn-prefix" },
               customInstructions: [splitTurnFocus, correctiveInstructions]
                 .filter(Boolean)
@@ -1266,20 +1070,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             : undefined,
         );
 
-        const canRegenerate =
-          messagesToSummarize.length > 0 ||
-          (preparation.isSplitTurn && turnPrefixMessages.length > 0);
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
-        }
-        if (finalized.qualityRetentionInfeasible) {
-          log.warn(
-            "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
-              `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
-          );
-          return cancelCompaction(
-            "Compaction safeguard required facts exceed the finalized summary budget.",
-          );
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,
@@ -1294,7 +1086,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (quality.ok) {
           return compactionResult(finalized.summary);
         }
-        if (!canRegenerate || attempt >= totalAttempts - 1) {
+        if (reconciliationMessages.length === 0 || attempt >= totalAttempts - 1) {
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];
@@ -1339,15 +1131,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 }
 
 const testing = {
-  setSummarizeInStagesForTest(next?: typeof summarizeInStages) {
-    compactionSafeguardDeps.summarizeInStages = next ?? summarizeInStages;
+  setSummarizeCompactionHistoryForTest(next?: typeof summarizeCompactionHistory) {
+    compactionSafeguardDeps.summarizeCompactionHistory = next ?? summarizeCompactionHistory;
   },
   collectToolFailures,
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
-  prependPreviousSummaryForRedistill,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
@@ -1356,7 +1147,6 @@ const testing = {
   budgetCompactionSummary,
   formatFileOperations,
   MAX_FILE_OPS_SECTION_CHARS,
-  readWorkspaceContextForSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,

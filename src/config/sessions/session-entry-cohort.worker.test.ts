@@ -4,7 +4,7 @@ import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/ru
 import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";
@@ -16,12 +16,12 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 
-it("prepares bounded facts on one admitted source and refreshes after foreign and local writes", async () => {
+it("prepares bounded facts on one admitted source and refreshes after sibling and local writes without probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cohort";
@@ -138,7 +138,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       incarnation: first.databaseIdentity.incarnation,
       sessions: [{ sessionKey, sessionId: "cohort", lifecycleRevision: "original" }],
     };
-    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
+    const peer = openNodeSqliteDatabase(database.path);
     const nativeRead = entryCache.readExactSessionEntryCandidatesInDatabase;
     const commit = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
@@ -195,16 +195,16 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(standalone.databaseIdentity).toEqual(first.databaseIdentity);
       expect(standalone.lifecycleTimestamps).toEqual({});
       expect(transactionCommands).toEqual([]);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       sql.counts.fresh = 0;
       const pinned = read();
       expect(pinned.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
       expect(pinned.runtimeTarget?.sessionKey).toBe(sessionKey);
       expect(pinned.coldArchives).toEqual([]);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       expect(sql.counts.authSchema).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
-      // A known write cannot hide the foreign change from this connection's next use.
+      // A known write cannot hide a sibling's earlier commit on the next use.
       writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 2 });
       sql.counts.fresh = 0;
       transactionCommands.length = 0;
@@ -227,7 +227,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(
         current.entries.find(({ sessionKey: key }) => key === parentKey)?.entry.updatedAt,
       ).toBe(2);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
       expect(reopen).not.toHaveBeenCalled();
       expect(

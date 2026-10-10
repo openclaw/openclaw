@@ -37,12 +37,6 @@ function openPollRegistryStore(env?: NodeJS.ProcessEnv) {
   );
 }
 
-function openPollRegistrySyncStore(env?: NodeJS.ProcessEnv) {
-  return getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>(
-    pollRegistryStoreOptions(env),
-  );
-}
-
 // Public poll ids are globally unique, but keying by account keeps registries isolated
 // per bot account and mirrors the other Telegram keyed stores.
 export function telegramPollRegistryKey(accountId: string | undefined, pollId: string): string {
@@ -172,9 +166,10 @@ export function findTelegramPollRegistryEntrySync(params: {
   pollId: string;
   env?: NodeJS.ProcessEnv;
 }): TelegramPollRegistryEntry | null {
-  const stored = openPollRegistrySyncStore(params.env).lookup(
-    telegramPollRegistryKey(params.accountId, params.pollId),
+  const store = getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>(
+    pollRegistryStoreOptions(params.env),
   );
+  const stored = store.lookup(telegramPollRegistryKey(params.accountId, params.pollId));
   return normalizePollRegistryEntry(stored);
 }
 

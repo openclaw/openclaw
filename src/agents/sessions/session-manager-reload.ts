@@ -41,7 +41,7 @@ export async function openSessionManagerBoundedView<T extends object>(
 ): Promise<T> {
   const { cwd, onTruncated, signal, ...limits } = options;
   const fallbackCwd = cwd ?? process.cwd();
-  const hydration = prepareSessionManagerHydration(target, limits, signal);
+  const hydration = prepareSessionManagerHydration(target, { limits, signal });
   const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
   const assertCurrent = () => {
     signal?.throwIfAborted();

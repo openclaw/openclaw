@@ -261,12 +261,20 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     });
   }
 
-  private renderQuickActions(group: "panels" | "layout", actions: HeaderMenuQuickAction[]) {
-    if (actions.length === 0) {
+  private renderSubmenu(group: "panels" | "layout" | "view") {
+    const actions = group === "panels" ? this.panelActions : this.layoutActions;
+    if (group !== "view" && actions.length === 0) {
       return nothing;
     }
-    const label = t(group === "panels" ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout");
-    const icon = group === "panels" ? icons.panelRightOpen : icons.columns2;
+    const label = t(
+      group === "view"
+        ? "chat.view.menu"
+        : group === "panels"
+          ? "chat.sessionHeader.panels"
+          : "chat.sessionHeader.layout",
+    );
+    const icon =
+      group === "view" ? icons.eye : group === "panels" ? icons.panelRightOpen : icons.columns2;
     if (this.compact) {
       return renderCompactSessionMenuNavigationItem({
         value: `compact:open-${group}`,
@@ -278,7 +286,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       <wa-dropdown-item class="session-menu__item">
         <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
         <span class="session-menu__text">${label}</span>
-        ${this.renderQuickActionItems(group, actions)}
+        ${group === "view" ? this.renderViewSubmenu() : this.renderQuickActionItems(group, actions)}
       </wa-dropdown-item>
     `;
   }
@@ -322,7 +330,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.compactView === "copy" ||
       this.compactView === "assign-owner" ||
       this.compactView === "icon" ||
-      this.compactView === "group"
+      this.compactView === "group" ||
+      this.compactView === "snooze" ||
+      this.compactView === "advanced" ||
+      this.compactView === "archive"
     ) {
       return this.managementActions.renderCompactView(this.compactView);
     }
@@ -374,8 +385,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
             `
           : nothing
       }
-      ${this.renderQuickActions("panels", this.panelActions)}
-      ${this.renderQuickActions("layout", this.layoutActions)}
+      ${this.renderSubmenu("panels")} ${this.renderSubmenu("layout")}
       ${
         this.compact && this.sharing?.session && canManageChatSessionSharing(this.sharing.session)
           ? renderCompactSessionMenuNavigationItem({
@@ -386,28 +396,14 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
             })
           : nothing
       }
-      ${
-        this.compact
-          ? renderCompactSessionMenuNavigationItem({
-              value: "compact:open-view",
-              label: t("chat.view.menu"),
-              icon: icons.eye,
-            })
-          : html`<wa-dropdown-item class="session-menu__item">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.eye}</span>
-              <span class="session-menu__text">${t("chat.view.menu")}</span>
-              ${this.renderViewSubmenu()}
-            </wa-dropdown-item>`
-      }
+      ${this.renderSubmenu("view")}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderPrimaryActions()}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderOrganizationActions()}
       ${this.renderQuickActionItems("session", this.sessionActions, true)}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderTransferActions()}
-      <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderDeleteAction()}
+      ${this.managementActions.renderAdvancedAction()}
     `;
   }
 
@@ -443,6 +439,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           }
         }}
         @wa-show=${this.handleShow}
+        @wa-after-hide=${this.managementActions.advanced.close}
         @wa-select=${this.handleSelect}
       >
         <button

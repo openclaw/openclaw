@@ -64,6 +64,7 @@ describe("node-hosting preconditions", () => {
   });
 
   const healthyBase = {
+    tools: { exec: { host: "node" } },
     gateway: {
       bind: "lan",
       auth: { mode: "token", token: "configured-token" },
@@ -79,28 +80,100 @@ describe("node-hosting preconditions", () => {
   } satisfies OpenClawConfig;
 
   it.each([
+    { name: "fresh defaults", cfg: {} },
     {
-      name: "identity-header auth alone",
+      name: "a local-only loopback Gateway",
+      cfg: { gateway: { mode: "local", bind: "loopback", tailscale: { mode: "off" } } },
+    },
+    { name: "an automatic local bind", cfg: { gateway: { bind: "auto" } } },
+    {
+      name: "disabled pairing and restrictive node policies",
       cfg: {
-        ...healthyBase,
+        plugins: { entries: { "device-pair": { enabled: false } } },
         gateway: {
-          bind: "lan",
-          auth: { mode: "trusted-proxy" },
+          nodes: {
+            browser: { mode: "off", node: "unused-node" },
+            pairing: { autoApproveLocal: false, autoApproveCidrs: [], sshVerify: false },
+            commands: { allow: [], deny: ["system.run"] },
+          },
         },
       },
-      requirements: ["machine-client-auth"],
     },
     {
-      name: "loopback onboarding alone",
+      name: "default node capabilities without a target",
       cfg: {
-        ...healthyBase,
         gateway: {
-          bind: "loopback",
-          auth: { mode: "token", token: "configured-token" },
+          nodes: {
+            browser: { mode: "auto" },
+            pairing: { autoApproveLocal: true },
+            pluginTools: { enabled: true },
+            allowSkills: true,
+          },
         },
       },
-      requirements: ["node-onboarding-url"],
     },
+    {
+      name: "a node pin with execution forced to the Gateway",
+      cfg: { tools: { exec: { host: "gateway", node: "unused-node" } } },
+    },
+    {
+      name: "a remote-client profile",
+      cfg: { gateway: { mode: "remote" }, tools: { exec: { host: "node" } } },
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)(
+    "does not warn for $name",
+    async ({ cfg }) => {
+      expect(await findingsFor(cfg)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { name: "node execution", cfg: { tools: { exec: { host: "node" } } } },
+    { name: "an explicit node binding", cfg: { tools: { exec: { node: "worker" } } } },
+    {
+      name: "per-agent node execution",
+      cfg: { agents: { entries: { worker: { tools: { exec: { host: "node" } } } } } },
+    },
+    {
+      name: "a browser node target",
+      cfg: { gateway: { nodes: { browser: { mode: "manual", node: "browser-host" } } } },
+    },
+    {
+      name: "remote pairing CIDRs",
+      cfg: { gateway: { nodes: { pairing: { autoApproveCidrs: ["192.0.2.0/24"] } } } },
+    },
+    {
+      name: "explicit SSH pairing",
+      cfg: { gateway: { nodes: { pairing: { sshVerify: true } } } },
+    },
+    {
+      name: "custom SSH pairing",
+      cfg: { gateway: { nodes: { pairing: { sshVerify: { user: "node-user" } } } } },
+    },
+    {
+      name: "allowed node commands",
+      cfg: { gateway: { nodes: { commands: { allow: ["system.run"] } } } },
+    },
+    {
+      name: "explicit device-pair enablement",
+      cfg: { plugins: { entries: { "device-pair": { enabled: true } } } },
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)(
+    "keeps the loopback warning for $name",
+    async ({ cfg }) => {
+      const findings = await findingsFor({
+        ...healthyBase,
+        tools: undefined,
+        ...cfg,
+        gateway: { ...healthyBase.gateway, bind: "loopback", ...cfg.gateway },
+      });
+      expect(findings).toEqual([
+        expect.objectContaining({ requirement: "node-onboarding-url", severity: "warning" }),
+      ]);
+    },
+  );
+
+  it.each([
     {
       name: "both unavailable",
       cfg: {
@@ -130,10 +203,6 @@ describe("node-hosting preconditions", () => {
     requirements: string[];
   }>)("warns when $name", async ({ cfg, requirements }) => {
     expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toEqual(requirements);
-  });
-
-  it("does not warn for token auth with a reachable bind", async () => {
-    expect(await findingsFor(healthyBase)).toEqual([]);
   });
 
   it.each([
@@ -172,78 +241,21 @@ describe("node-hosting preconditions", () => {
     },
   );
 
-  it("keeps a mixed explicit roster healthy when one agent uses the embedded runtime", async () => {
-    expect(
-      await findingsFor({
-        ...healthyBase,
-        agents: {
-          ownership: "explicit",
-          entries: {
-            cloud: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-            },
-            device: {
-              model: "anthropic/claude-sonnet-4-6",
-              models: {
-                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
+  it.each(["codex"])("does not activate plugins or reject a cold %s runtime", async (runtime) => {
+    resetPluginRuntimeStateForTest();
 
-  it("accepts a registered external runtime that declares paired-device support", async () => {
     expect(
       await findingsFor({
         ...healthyBase,
         agents: {
           defaults: {
             model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
           },
         },
       }),
     ).toEqual([]);
-  });
-
-  it.each(["codex", "auto"])(
-    "does not activate plugins or reject a cold %s runtime",
-    async (runtime) => {
-      resetPluginRuntimeStateForTest();
-
-      expect(
-        await findingsFor({
-          ...healthyBase,
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
-            },
-          },
-        }),
-      ).toEqual([]);
-      expect(getActivePluginRegistry()).toBeNull();
-    },
-  );
-
-  it("accepts a configured public URL for loopback onboarding", async () => {
-    expect(
-      await findingsFor({
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          auth: { mode: "token", token: "configured-token" },
-        },
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: "wss://gateway.example" } },
-          },
-        },
-      }),
-    ).toEqual([]);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("accepts gateway.publicOrigin for loopback onboarding", async () => {

@@ -17,6 +17,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -162,22 +163,18 @@ describe("sessions.patch", () => {
       const requestContext = context({});
       let revoked = false;
       let reachedCommitAdmission = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.publication) &&
-              request.facts.publication.kind === "session-entry-replacements"
-            ) {
-              reachedCommitAdmission = true;
-              revoked = true;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-entry-replacements"
+        ) {
+          reachedCommitAdmission = true;
+          revoked = true;
+        }
+        admit(request, grant);
+      });
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
       await expect(
         withGatewayToolCallerIdentity(

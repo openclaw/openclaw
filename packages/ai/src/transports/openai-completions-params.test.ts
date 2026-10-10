@@ -4,7 +4,11 @@ import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Context, Model, Tool } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
-import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
+import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  buildOpenAICompletionsParams,
+  buildOpenAICompletionsRequest,
+} from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
 import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
@@ -36,6 +40,40 @@ function request(
 }
 
 describe("OpenAI completions output budgets", () => {
+  it.each([
+    { label: "non-reasoning", reasoning: false, effort: "off" },
+    { label: "thinking off", reasoning: true, effort: "off" },
+    { label: "thinking enabled", reasoning: true, effort: "medium" },
+  ] as const)("rejects unusable context clamps for $label", ({ reasoning, effort }) => {
+    const context = emptyContext("x".repeat(3200));
+    for (const maxTokensField of ["max_tokens", "max_completion_tokens"] as const) {
+      const model = {
+        ...proxy,
+        reasoning,
+        compat: { thinkingFormat: "qwen" as const, maxTokensField },
+      };
+      const options = { reasoning: effort };
+      for (const remaining of [-1, 0, 1, 15]) {
+        expect(() =>
+          request({ ...model, contextTokens: 1001 + remaining }, options, context),
+        ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+      }
+      expect(request({ ...model, contextTokens: 1017 }, options, context)[maxTokensField]).toBe(16);
+      for (const maxTokens of [1, 15]) {
+        expect(
+          request(
+            { ...model, contextTokens: 1001 + maxTokens },
+            { ...options, maxTokens },
+            context,
+          )[maxTokensField],
+        ).toBe(maxTokens);
+        expect(() =>
+          request({ ...model, contextTokens: 1001 }, { ...options, maxTokens }, context),
+        ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+      }
+    }
+  });
+
   it("resolves runtime, model, and context caps without changing the output field", () => {
     const uncapped = makeCompletionsModel({
       id: "mimo-v2.5-pro",
@@ -142,6 +180,44 @@ describe("OpenAI completions output budgets", () => {
 });
 
 describe("OpenAI completions reasoning", () => {
+  it.each(["direct", "managed"] as const)(
+    "sends custom reasoning controls with conservative off defaults (%s)",
+    (mode) => {
+      const cases: [
+        Partial<CompletionsModel>,
+        OpenAICompletionsOptions["reasoningEffort"],
+        string | undefined,
+      ][] = [
+        [{}, "low", "low"],
+        [{}, "high", "high"],
+        [{}, "off", undefined],
+        [{ compat: { supportsReasoningEffort: true } }, "off", undefined],
+        [{ id: "gpt-5.4" }, "off", undefined],
+        [{ reasoning: false }, "high", undefined],
+        [{ compat: { supportsReasoningEffort: false } }, "high", undefined],
+        [{ compat: { reasoningEffortMap: { off: "none" } } }, "off", "none"],
+        [{ compat: { supportedReasoningEfforts: ["none", "low", "high"] } }, "off", "none"],
+        [{ thinkingLevelMap: { off: "low" } }, "off", "low"],
+        [{ compat: { supportedReasoningEfforts: ["low", "high"] } }, "max", "high"],
+        [{ compat: { supportedReasoningEfforts: ["low", "high", "max"] } }, "max", "max"],
+      ];
+      for (const baseUrl of ["http://localhost:8000/v1", "https://proxy.example.com/v1"]) {
+        for (const [overrides, reasoningEffort, expected] of cases) {
+          const model = makeCompletionsModel({ provider: "custom", baseUrl, ...overrides });
+          const params = buildOpenAICompletionsRequest(
+            model,
+            emptyContext(),
+            { reasoningEffort },
+            mode === "direct"
+              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+              : { mode },
+          );
+          expect(params.reasoning_effort, `${baseUrl} ${reasoningEffort}`).toBe(expected);
+        }
+      }
+    },
+  );
+
   it("maps shared reasoning to supported provider-native efforts", () => {
     const groq = { provider: "groq", baseUrl: "https://api.groq.com/openai/v1" };
     const mapped = makeCompletionsModel({
@@ -215,7 +291,7 @@ describe("OpenAI completions reasoning", () => {
     }
   });
 
-  it("maps Qwen binary thinking and rejects exhausted thinking-enabled requests", () => {
+  it("maps Qwen binary thinking", () => {
     const model = makeCompletionsModel({
       ...proxy,
       id: "qwen3.5-32b",
@@ -231,19 +307,6 @@ describe("OpenAI completions reasoning", () => {
       expect(params.enable_thinking).toBe(enabled);
       expect(params).not.toHaveProperty("reasoning_effort");
     }
-    // Regression #157673: only enabled thinking enters overflow recovery.
-    const nearCap = { ...model, contextWindow: 1016 };
-    const context = emptyContext("x".repeat(3200));
-    expect(request(nearCap, { reasoning: "off" }, context)).toMatchObject({
-      enable_thinking: false,
-      max_completion_tokens: 15,
-    });
-    expect(() => request(nearCap, { reasoning: "medium" }, context)).toThrowError(
-      expect.objectContaining({ code: "context_length_exceeded" }),
-    );
-    expect(
-      request({ ...nearCap, contextWindow: 1000 }, { reasoning: "off" }, context),
-    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 1 });
   });
 
   it("maps Qwen chat-template thinking without a scalar effort", () => {

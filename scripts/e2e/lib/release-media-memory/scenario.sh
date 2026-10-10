@@ -56,17 +56,6 @@ dump_debug_logs() {
 }
 openclaw_e2e_enable_failure_diagnostics
 
-start_gateway() {
-  local log_path="$1"
-  gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$log_path")"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_path" 300 "$PORT"
-}
-
-stop_gateway() {
-  openclaw_e2e_terminate_gateways "${gateway_pid:-}"
-  gateway_pid=""
-}
-
 openclaw_e2e_install_package "$INSTALL_LOG"
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
@@ -89,19 +78,7 @@ openclaw_e2e_enable_openclaw_cli_timeout
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$MOCK_OPENAI_LOG")"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
-openclaw onboard \
-  --non-interactive \
-  --accept-risk \
-  --flow quickstart \
-  --mode local \
-  --auth-choice skip \
-  --gateway-port "$PORT" \
-  --gateway-bind loopback \
-  --skip-daemon \
-  --skip-ui \
-  --skip-channels \
-  --skip-skills \
-  --skip-health >"$ONBOARD_LOG" 2>&1
+openclaw_release_onboard "$PORT" openclaw >"$ONBOARD_LOG" 2>&1
 cp "$OPENCLAW_CONFIG_PATH" "$CONFIG_JSON"
 openclaw plugins list --json >"$PLUGINS_JSON" 2>"$PLUGINS_STDERR_LOG"
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGINS_JSON" memory-core

@@ -39,6 +39,7 @@ import {
   lifecycleState,
   readLifecycleState,
   registerSubscriptionChatRun,
+  registerSubscriptionRegistrationTests,
   registerAuditSubscriptionTests,
   registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
@@ -75,16 +76,23 @@ const transcriptBroadcastMocks = vi.hoisted(() => ({
     vi.fn<typeof import("./session-transcript-readers.js").readSessionMessageByIdAsync>(),
 }));
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
-type ActivitySummaryOptions = Parameters<
-  typeof import("./session-activity-summaries.js").createSessionActivitySummaries
->[0];
-const observeActivitySummary = vi.hoisted(() => vi.fn<(options: ActivitySummaryOptions) => void>());
+const observeActivitySummary = vi.hoisted(() =>
+  vi.fn<
+    (
+      options: Parameters<
+        typeof import("./session-activity-summaries.js").createSessionActivitySummaries
+      >[0],
+    ) => void
+  >(),
+);
 
 vi.mock("./session-activity-summaries.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-activity-summaries.js")>();
   return {
     ...actual,
-    createSessionActivitySummaries: (options: ActivitySummaryOptions) => {
+    createSessionActivitySummaries: (
+      options: Parameters<typeof actual.createSessionActivitySummaries>[0],
+    ) => {
       observeActivitySummary(options);
       return actual.createSessionActivitySummaries(options);
     },
@@ -443,6 +451,11 @@ describe("startGatewayEventSubscriptions", () => {
     expect(handler.dispose).toHaveBeenCalledOnce();
   });
 
+  registerSubscriptionRegistrationTests((params) => {
+    unsubs = startGatewayEventSubscriptions(params);
+    return unsubs;
+  });
+
   it("drives a registered chat run through the terminal persistence transition table", async () => {
     const runId = "run-lifecycle-table";
     const sessionKey = "agent:main:main";
@@ -589,6 +602,12 @@ describe("startGatewayEventSubscriptions", () => {
             return { ok: false as const, error };
           },
         );
+        await awaitGateBeforeSettlement(
+          firstDispatchEntered.promise,
+          firstDrain,
+          "Terminal ownership settled before its held dispatch was released",
+        );
+        expect(firstSettled).toBe(false);
         const recovery = {
           runId,
           sessionKey,
@@ -616,12 +635,6 @@ describe("startGatewayEventSubscriptions", () => {
           );
         }
         const currentState = readLifecycleState(current);
-        await awaitGateBeforeSettlement(
-          firstDispatchEntered.promise,
-          firstDrain,
-          "Terminal ownership settled before its held dispatch was released",
-        );
-        expect(firstSettled).toBe(false);
         if (change !== "removed") {
           await successorDispatchEntered.promise;
         }

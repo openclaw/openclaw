@@ -47,12 +47,13 @@ function appendArtifactSummary(
   }
 }
 
-export function renderAttendance(
-  result: GoogleMeetAttendanceResult,
+function createReport(
+  title: string,
+  result: Pick<GoogleMeetArtifactsResult, "input" | "space" | "conferenceRecords">,
   format: "summary" | "markdown",
-): string {
+) {
   const markdown = format === "markdown";
-  const lines: string[] = markdown ? ["# Google Meet Attendance"] : [];
+  const lines: string[] = markdown ? [`# Google Meet ${title}`] : [];
   const field = (label: string, value: string | number) => {
     lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
   };
@@ -66,6 +67,14 @@ export function renderAttendance(
     lines.push("");
   }
   field("Conference records", result.conferenceRecords.length);
+  return { markdown, lines, field };
+}
+
+export function renderAttendance(
+  result: GoogleMeetAttendanceResult,
+  format: "summary" | "markdown",
+): string {
+  const { markdown, lines, field } = createReport("Attendance", result, format);
   field("Attendance rows", result.attendance.length);
   for (const row of result.attendance) {
     const identity = row.displayName || row.user || row.participant;
@@ -159,21 +168,7 @@ export function renderArtifacts(
   result: GoogleMeetArtifactsResult,
   format: "summary" | "markdown",
 ): string {
-  const markdown = format === "markdown";
-  const lines: string[] = markdown ? ["# Google Meet Artifacts"] : [];
-  const field = (label: string, value: string | number) => {
-    lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
-  };
-  if (result.input) {
-    field("Input", result.input);
-  }
-  if (result.space) {
-    field("Space", result.space.name);
-  }
-  if (markdown) {
-    lines.push("");
-  }
-  field("Conference records", result.conferenceRecords.length);
+  const { markdown, lines, field } = createReport("Artifacts", result, format);
   for (const entry of result.artifacts) {
     lines.push("", `${markdown ? "##" : "record:"} ${entry.conferenceRecord.name}`);
     field("Started", formatOptional(entry.conferenceRecord.startTime));

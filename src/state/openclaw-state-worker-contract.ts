@@ -33,13 +33,14 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerRuntimePreparation } from "../infra/sqlite-worker-runtime-preparation.types.js";
 import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
@@ -47,7 +48,11 @@ import type {
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
-import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
+import type {
+  PluginMetadataStateKey,
+  PluginMetadataStateRow,
+  PluginMetadataStateSelector,
+} from "../plugins/installed-plugin-index-row.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -74,6 +79,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  RestartLifecycleWorkerOperations &
   SandboxRegistryOperations &
   WorktreeTemplateWorkerOperations &
   WorkspaceStateWorkerOperations &
@@ -162,6 +168,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "agentProvenance.record": { input: AgentProvenance; output: void };
     "secrets.write": {
       input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
         capturePrevious: boolean;
@@ -180,6 +187,13 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: Omit<Parameters<typeof secretWrites.deleteSecretStoreEntryInDatabase>[0], "database">;
       output: void;
     };
+    "secrets.allowedHosts": {
+      input: Omit<
+        Parameters<typeof secretWrites.updateSecretStoreAllowedHostsInDatabase>[0],
+        "database"
+      >;
+      output: void;
+    };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
@@ -196,8 +210,11 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: SessionGroupCatalogMutationResult;
     };
     "plugins.metadata.read": {
-      input: { selector: PluginMetadataStateSelector; artifactPreservingReadOnly?: boolean };
-      output: { value_json: string } | undefined;
+      input: (
+        | { selector: PluginMetadataStateSelector }
+        | { stateKeys: readonly PluginMetadataStateKey[] }
+      ) & { artifactPreservingReadOnly?: boolean };
+      output: { value_json: string } | PluginMetadataStateRow[] | undefined;
     };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };
@@ -216,7 +233,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
 
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
-  "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
   "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };
 
@@ -249,6 +265,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
       | "worktrees.reserveCapacity"
+      | keyof RestartLifecycleWorkerOperations
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
@@ -260,7 +277,9 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
+  runtimePreparation?: SqliteWorkerRuntimePreparation;
   existingOnly?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };

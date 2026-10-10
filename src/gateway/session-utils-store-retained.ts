@@ -6,8 +6,8 @@ import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session
 import type { SessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
-import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { assertSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import type { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";

@@ -102,7 +102,7 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
-On macOS, run `brew install sqlite` for native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
+On macOS, run `brew install sqlite` first: OpenClaw on Bun refuses Apple's system SQLite, which also lacks native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

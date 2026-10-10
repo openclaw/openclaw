@@ -92,6 +92,24 @@ it("bisects overflowing chunks instead of rendering every shorter prefix", () =>
   expect(renders).toBeLessThan(200);
 });
 
+it.each([
+  [160, 2],
+  [240, 3],
+])("carries rendered code overhead across %i lines", (lines, count) => {
+  const text = Array.from(
+    { length: lines },
+    (_, index) => `line_${String(index).padStart(4, "0")} = compute(${index}) # padding padding`,
+  ).join("\n");
+  const ir = markdownToIR(`\`\`\`python\n${text}\n\`\`\``);
+  const chunks = renderStringChunks(ir, 4_000);
+
+  expect(chunks).toHaveLength(count);
+  expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+  expect(chunks.map((chunk) => chunk.source.text.trim()).join("")).toBe(text);
+  expect(chunks.every((chunk) => chunk.rendered.length <= 4_000)).toBe(true);
+  expect(chunks.every((chunk) => chunk.rendered.startsWith("<pre><code>"))).toBe(true);
+});
+
 it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
   "keeps internal code whitespace away from message edges: %s",
   (first) => {

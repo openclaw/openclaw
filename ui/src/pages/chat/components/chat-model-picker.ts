@@ -89,6 +89,18 @@ function closeModelPickerAfterSelection(event: MouseEvent) {
   }
 }
 
+function renderModelList(label: string, content: unknown, more = false) {
+  return html`<div
+    class="chat-controls__provider-model-list"
+    data-chat-model-list="true"
+    data-chat-model-more=${more ? "" : nothing}
+    role="listbox"
+    aria-label=${label}
+  >
+    ${content}
+  </div>`;
+}
+
 export function renderChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
   const activeModelOption = params.modelOptions.find((option) =>
@@ -472,14 +484,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           : nothing
                                       }
                                     </div>
-                                    <div
-                                      class="chat-controls__provider-model-list"
-                                      data-chat-model-list="true"
-                                      role="listbox"
-                                      aria-label=${groupLabel}
-                                    >
-                                      ${repeat(lead, modelPickerOptionKey, renderModelOption)}
-                                    </div>
+                                    ${renderModelList(groupLabel, repeat(lead, modelPickerOptionKey, renderModelOption))}
                                     ${
                                       more.length > 0
                                         ? html`
@@ -507,15 +512,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                                 >${icons.chevronDown}</span
                                               >
                                             </button>
-                                            <div
-                                              class="chat-controls__provider-model-list"
-                                              data-chat-model-list="true"
-                                              data-chat-model-more
-                                              role="listbox"
-                                              aria-label=${groupLabel}
-                                            >
-                                              ${repeat(more, modelPickerOptionKey, renderModelOption)}
-                                            </div>
+                                            ${renderModelList(groupLabel, repeat(more, modelPickerOptionKey, renderModelOption), true)}
                                           `
                                         : nothing
                                     }
@@ -558,13 +555,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                             : undefined,
                                         )
                                   }
-                                  <div
-                                    class="chat-controls__provider-model-list"
-                                    data-chat-model-list="true"
-                                    role="listbox"
-                                    aria-label=${group.label}
-                                  >
-                                    ${repeat(
+                                  ${renderModelList(
+                                    group.label,
+                                    repeat(
                                       group.options,
                                       (entry) => entry.value,
                                       (entry, targetIndex) =>
@@ -576,8 +569,8 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           index: orderedOptions.length + targetIndex,
                                           onSelect: selectTarget,
                                         }),
-                                    )}
-                                  </div>
+                                    ),
+                                  )}
                                 </section>
                               `,
                             )}

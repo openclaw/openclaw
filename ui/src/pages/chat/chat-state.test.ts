@@ -56,6 +56,8 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
+const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
+
 function emitGatewayEvent(
   state: ChatPageHost,
   event: Parameters<typeof handlePageGatewayEvent>[1]["event"],
@@ -1001,7 +1003,7 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([false, true])(
-    "keeps whole server messages above a steer (later commentary=%s)",
+    "keeps accepted steers between saved output and whole later messages (later commentary=%s)",
     (laterCommentary) => {
       const activeRunId = "active-run";
       const steerRunId = "steer-request";
@@ -1119,13 +1121,12 @@ describe("canonical session message recovery", () => {
 
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
-        ...(laterCommentary
-          ? [
-              { role: "assistant", text: "Before steer." },
-              { role: "assistant", text: "After steer." },
-            ]
-          : [{ role: "assistant", text: "Before steer. After steer." }]),
+        ...(laterCommentary ? [{ role: "assistant", text: "Before steer." }] : []),
         { role: "user", text: "Steer prompt" },
+        {
+          role: "assistant",
+          text: laterCommentary ? "After steer." : "Before steer. After steer.",
+        },
       ]);
 
       handlePageGatewayEvent(state, steerEvent);
@@ -1181,14 +1182,10 @@ describe("canonical session message recovery", () => {
       });
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
-        ...(laterCommentary
-          ? [
-              { role: "assistant", text: "Before steer." },
-              { role: "assistant", text: "After steer." },
-            ]
-          : []),
-        { role: "assistant", text: terminalText },
+        ...(laterCommentary ? [{ role: "assistant", text: "Before steer." }] : []),
         { role: "user", text: "Steer prompt" },
+        ...(laterCommentary ? [{ role: "assistant", text: "After steer." }] : []),
+        { role: "assistant", text: terminalText },
       ]);
       expect(terminalMessage.content).toEqual([{ type: "text", text: terminalText }]);
     },
@@ -1574,8 +1571,7 @@ describe("canonical session message recovery", () => {
           "chat.history",
           {
             sessionKey: state.sessionKey,
-            limit: 80,
-            maxBytes: 256 * 1024,
+            ...historyBudget,
           },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
@@ -2500,7 +2496,7 @@ describe("canonical session message recovery", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "chat.history",
-          { sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024 },
+          { sessionKey: state.sessionKey, ...historyBudget },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
       );
@@ -3455,7 +3451,10 @@ describe("loadPageAssistantIdentity", () => {
           embedSandboxMode: "scripts",
         },
       },
-      gateway: { snapshot: { client, connected: true, hello: null } },
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.example.test" },
+        snapshot: { client, connected: true, hello: null },
+      },
       chatSubmissions: createChatSubmissions(),
       sessions: { refresh: vi.fn().mockResolvedValue(undefined) },
     } as unknown as ApplicationContext;
@@ -3487,6 +3486,10 @@ describe("loadPageAssistantIdentity", () => {
 
     now.mockReturnValue(61_001);
     state.sessionKey = "agent:main:third";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    identities.invalidate(["main"]);
     await state.loadAssistantIdentity();
     expect(request).toHaveBeenCalledTimes(3);
 

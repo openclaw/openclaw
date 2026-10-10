@@ -1,4 +1,5 @@
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
@@ -48,12 +49,28 @@ export async function withSessionHistoryReadAdmission<T>(
   let additionalLane: SessionHistoryWorkerLane | undefined;
   let outcome: { value: T } | { error: unknown };
   try {
-    const admittedNative = getOpenClawAgentDatabaseIfOpen(options);
-    if (!request.knownSource && !admittedNative) {
-      execution = captureExistingOpenClawAgentDatabaseExecution(options);
+    let resident = request.knownSource;
+    if (!resident) {
+      const cleanup = getAgentDeletionDatabaseCleanup(options);
+      if (cleanup?.worker) {
+        // Worker cleanup retains its executor and checks durable authority in its grants.
+        cleanup.assertCurrentHost();
+      } else {
+        try {
+          // An admitted open writer needs no discovery admission. Probe it without
+          // taking custody: the consumer owns native custody for its own reads.
+          resident = getOpenClawAgentDatabaseIfOpen(options) !== undefined;
+        } catch {
+          // A refused writer (such as pending startup inspection) must not block
+          // recovery reads; execution capture and cold admission re-check it.
+        }
+      }
+      if (!resident) {
+        execution = captureExistingOpenClawAgentDatabaseExecution(options);
+      }
     }
     const prepared = execution?.capturePreparedGenerationClaim();
-    const cold = !request.knownSource && !admittedNative && !prepared;
+    const cold = !resident && !prepared;
     const lane = cold ? targetDiscoveryLane : requestedLane;
     if (lane !== requestedLane) {
       historyClearTimeout(lane.idleTimer);

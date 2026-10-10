@@ -119,7 +119,7 @@ function appendLog(line) {
   }
 }
 
-const { OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, readRestartSentinelRowSync, writeRestartSentinelRowIfRevisionSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice } =
+const { OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, readRestartSentinelRowSync, writeRestartSentinelRowIfRevisionSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -438,7 +438,9 @@ async function parkGatewayService() {
     if ((await pendingServiceStop).code !== 0) throw new Error("scheduled task stop failed");
     return;
   }
-  if (recovery.kind === "systemd") {
+  const systemd = recovery.kind === "systemd";
+  let target;
+  if (systemd) {
     const current = await inspectSystemdService(recovery.unit, params.parentExitDeadlineAt);
     if (
       !current ||
@@ -454,47 +456,39 @@ async function parkGatewayService() {
     parkedServiceGeneration = current.ExecMainStartTimestampMonotonic;
     parkedServiceInvocation = current.InvocationID;
     parkedServiceFragment = current.FragmentPath;
-    await prepareTransferredGateway();
+  } else {
+    if (recovery.kind !== "launchd") throw new Error("unsupported managed update supervisor");
+    target = "gui/" + recovery.uid + "/" + recovery.label;
+    const inspection = await runServiceCommand("launchctl", ["print", target], undefined, params.parentExitDeadlineAt);
+    if (inspection.code !== 0 || parseLaunchdPid(inspection.stdout) !== params.parentPid) {
+      throw new Error("launchd service does not match the exact active gateway parent");
+    }
     assertGatewayParkOwner();
-    // Keep the exact stop job open across parent exit; its completion is the
-    // authoritative systemd fact, even after inactive-unit metadata is collected.
-    await new Promise((resolve, reject) => {
-      pendingServiceStop = runServiceCommand(
-        "systemctl",
-        ["--user", "stop", recovery.unit],
-        () => {
-          restorationArmed = true;
-          recordServiceStop();
-          resolve();
-        },
-        params.parentExitDeadlineAt,
-        params.parentExitTimeoutMs,
-      );
-      pendingServiceStop.then((result) => {
-        if (!restorationArmed) reject(new Error("systemd stop failed: " + result.stderr));
-      });
-    });
-    return;
   }
-  if (recovery.kind !== "launchd") throw new Error("unsupported managed update supervisor");
-  const target = "gui/" + recovery.uid + "/" + recovery.label;
-  const inspection = await runServiceCommand("launchctl", ["print", target], undefined, params.parentExitDeadlineAt);
-  if (inspection.code !== 0 || parseLaunchdPid(inspection.stdout) !== params.parentPid) {
-    throw new Error("launchd service does not match the exact active gateway parent");
-  }
-  assertGatewayParkOwner();
   await prepareTransferredGateway();
   assertGatewayParkOwner();
-  restorationArmed = true;
-  const disabled = await runServiceCommand("launchctl", ["disable", target], undefined, params.parentExitDeadlineAt);
-  if (disabled.code !== 0) throw new Error("launchctl disable failed: " + disabled.stderr);
-  assertGatewayParkOwner();
-  // bootout shares the activation deadline; its accepted spawn acknowledges parking.
+  if (!systemd) {
+    restorationArmed = true;
+    const disabled = await runServiceCommand("launchctl", ["disable", target], undefined, params.parentExitDeadlineAt);
+    if (disabled.code !== 0) throw new Error("launchctl disable failed: " + disabled.stderr);
+    assertGatewayParkOwner();
+  }
+  // Accepted spawn acknowledges parking; the exact stop stays open through parent exit.
   await new Promise((resolve, reject) => {
-    pendingServiceStop = runServiceCommand("launchctl", ["bootout", target], () => { recordServiceStop(); resolve(); }, params.parentExitDeadlineAt);
+    pendingServiceStop = runServiceCommand(
+      systemd ? "systemctl" : "launchctl",
+      systemd ? ["--user", "stop", recovery.unit] : ["bootout", target],
+      () => {
+        if (systemd) restorationArmed = true;
+        recordServiceStop();
+        resolve();
+      },
+      params.parentExitDeadlineAt,
+      systemd ? params.parentExitTimeoutMs : undefined,
+    );
     pendingServiceStop.then((result) => {
-      if (result.code !== 0 && !isLaunchdNotLoaded(result)) {
-        reject(new Error("launchctl bootout failed: " + result.stderr));
+      if (systemd ? !restorationArmed : result.code !== 0 && !isLaunchdNotLoaded(result)) {
+        reject(new Error((systemd ? "systemd stop" : "launchctl bootout") + " failed: " + result.stderr));
       }
     });
   });
@@ -506,10 +500,13 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   const record = (restored) => recordUpdateHandoffOutcome(
     restored ? reason : "managed-service-handoff-restore-failed", restored, childStatus, expectedRevision,
   );
-  if (decision?.serviceRestartSafe !== true || !decision.version) {
-    appendLog("recovery refused: original runtime identity could not be verified");
+  const refuse = (message) => {
+    if (message) appendLog(message);
     record(false);
     return false;
+  };
+  if (decision?.serviceRestartSafe !== true || !decision.version) {
+    return refuse("recovery refused: original runtime identity could not be verified");
   }
   const expectedVersion = decision.version;
   const expectedBuildId = decision.buildId;
@@ -532,9 +529,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   if (childStatus) expectedRevision = recordUpdateHandoffOutcome(reason, undefined, childStatus);
   if (recovery?.kind === "systemd") {
     if (!pendingServiceStop || (await pendingServiceStop).code !== 0) {
-      appendLog("recovery refused: exact systemd stop did not complete");
-      record(false);
-      return false;
+      return refuse("recovery refused: exact systemd stop did not complete");
     }
     const parked = await inspectSystemdService(recovery.unit);
     // A Gateway that exits non-zero during the stop (KillMode=mixed) settles the unit
@@ -546,9 +541,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       (parked.ActiveState !== "inactive" && parked.ActiveState !== "failed") ||
       parked.MainPID !== "0" || !(previousGeneration || isParkedSystemdGeneration(parked, true)) ||
       !ownsRecovery()) {
-      appendLog("recovery refused: parked systemd service identity changed or stop is incomplete");
-      record(false);
-      return false;
+      return refuse("recovery refused: parked systemd service identity changed or stop is incomplete");
     }
     const started = childStatus
       ? await restart()
@@ -572,13 +565,10 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     if (before.code === 0) {
       const pid = parseLaunchdPid(before.stdout);
       if (pid && pid !== params.parentPid) {
-        appendLog("recovery refused: launchd service has another process generation");
-        record(false);
-        return false;
+        return refuse("recovery refused: launchd service has another process generation");
       }
     } else if (!isLaunchdNotLoaded(before)) {
-      record(false);
-      return false;
+      return refuse();
     }
     if (childStatus) {
       const restarted = await restart();
@@ -681,21 +671,14 @@ async function finishGatewayServicePark() {
         Date.now() >= params.parentExitDeadlineAt) {
         throw new Error("systemd service remained active or changed execution generation");
       }
-      if ((current.ActiveState === "inactive" || current.ActiveState === "failed") &&
-        current.MainPID === "0") {
-        // KillMode=mixed units settle into ActiveState=failed instead of inactive
-        // when the Gateway main process exits non-zero during the stop. The parked
-        // generation/invocation stays retained in that state, so it is still the
-        // exact parked unit and activation may proceed.
-        if (!isParkedSystemdGeneration(current, true)) {
-          throw new Error("systemd service remained active or changed execution generation");
-        }
-        break;
-      }
-      if (current.ActiveState !== "deactivating" || current.MainPID !== "0" ||
-        !isParkedSystemdGeneration(current)) {
+      // KillMode=mixed may settle a non-zero Gateway exit as failed. Both settled
+      // states accept the parked generation or its collected inactive metadata.
+      const settled = current.ActiveState === "inactive" || current.ActiveState === "failed";
+      if ((!settled && current.ActiveState !== "deactivating") || current.MainPID !== "0" ||
+        !isParkedSystemdGeneration(current, settled)) {
         throw new Error("systemd service remained active or changed execution generation");
       }
+      if (settled) break;
       // The exact stop job has completed; systemd may publish inactive a moment later.
       await sleep(Math.min(25, Math.max(0, params.parentExitDeadlineAt - Date.now())));
     }

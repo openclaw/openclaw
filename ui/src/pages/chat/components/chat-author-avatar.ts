@@ -29,20 +29,6 @@ function renderInitialsAvatar(
   `;
 }
 
-function renderResolvedAvatar(view: IdentityAvatarView): TemplateResult {
-  if (!view.imageUrl) {
-    return renderInitialsAvatar(view.fallback);
-  }
-  return html`
-    ${renderIdentityAvatarImage({
-      view,
-      fallbackSelector: ".chat-author-avatar",
-      className: "chat-author-avatar__image",
-      ariaHidden: true,
-    })}${renderInitialsAvatar(view.fallback, true)}
-  `;
-}
-
 /** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
@@ -64,7 +50,16 @@ export function renderChatAuthorAvatar(
     </span>`;
   }
   const view = resolveIdentityAvatarView(sender);
-  const resolved = renderResolvedAvatar(view);
+  const resolved = view.imageUrl
+    ? html`
+        ${renderIdentityAvatarImage({
+          view,
+          fallbackSelector: ".chat-author-avatar",
+          className: "chat-author-avatar__image",
+          ariaHidden: true,
+        })}${renderInitialsAvatar(view.fallback, true)}
+      `
+    : renderInitialsAvatar(view.fallback);
   return html`<span
     class=${identityAvatarClass("chat-author-avatar", view)}
     role="img"

@@ -58,13 +58,12 @@ export async function accountAgentTurnCompaction(params: {
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
     const persistedCount = await incrementCompactionCount({
-      agentId: fact.target.agentId,
+      ...fact.target,
       sessionStore: params.sessionStore,
-      sessionKey: fact.target.sessionKey,
-      storePath: fact.target.storePath,
       expectedSession: fact.target,
       amount: fact.count,
       tokensAfter: fact.currentContextSnapshot?.tokens,
+      transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
       authorize,
     });
     if (persistedCount !== undefined) {
@@ -286,7 +285,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionStore: activeSessionStore,
     replyOperation: operation,
   });
-  await persistSessionUsageUpdate({
+  const usageCommit = await persistSessionUsageUpdate({
     agentId: latestCompaction?.target.agentId ?? followupRun.run.agentId,
     sessionStore: activeSessionStore,
     storePath: latestCompaction?.target.storePath ?? storePath,
@@ -324,6 +323,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       agentId: followupRun.run.agentId,
       providerUsed: sessionModel.provider,
       modelUsed: sessionModel.model,
+      usageCommit:
+        usageCommit?.entry.sessionId === expectedSession.sessionId &&
+        usageCommit.entry.lifecycleRevision === expectedSession.lifecycleRevision
+          ? usageCommit
+          : undefined,
     });
   }
 

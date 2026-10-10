@@ -171,6 +171,32 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.admin" });
   });
 
+  it("limits communication overrides and resets to write-scoped creators or admins", () => {
+    for (const communication of [null, { send: "always" }, { receive: null }]) {
+      for (const sharingRole of ["owner", "admin", "member", "viewer", undefined] as const) {
+        for (const scope of [
+          "operator.read",
+          "operator.sessions.write",
+          "operator.write",
+          "operator.admin",
+        ]) {
+          const access = readSessionMethodAccess(
+            snapshot({ methods: ["sessions.patch"], scopes: [scope] }),
+            {
+              method: "sessions.patch",
+              params: { communication },
+              session: { sharingRole },
+            },
+          );
+          expect(access.allowed).toBe(
+            scope === "operator.admin" ||
+              (scope === "operator.write" && (sharingRole === "owner" || sharingRole === "admin")),
+          );
+        }
+      }
+    }
+  });
+
   it("allows admin to satisfy write-scoped actions", () => {
     expect(
       readSessionMethodAccess(

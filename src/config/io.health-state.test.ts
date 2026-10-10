@@ -71,6 +71,7 @@ it("preserves typed maintenance errors for a reloaded caller after broker reuse"
       failure = error;
     }
     expect(incoming).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
+    expect(failure).toBe(incoming);
     expect(errors.findStartupMaintenanceRequiredError(failure)).toMatchObject({
       kind: "newer-schema",
     });
@@ -252,7 +253,10 @@ describe("config health-state warnings", () => {
   it("propagates audit migration required from health writes and config snapshots", async () => {
     const deps = createHealthDeps();
     const { path: databasePath } = openOpenClawStateDatabase(deps);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const db = new DatabaseSync(databasePath);
     db.exec(`
       DROP TABLE audit_events;

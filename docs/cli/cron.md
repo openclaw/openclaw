@@ -191,6 +191,8 @@ Command jobs do not start an isolated agent turn. A zero exit code records `ok`.
 
 Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the shared job/global `failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. An alert never retries the primary route that just failed.
 
+An unresolved announcement target (for example, no configured channels) is a delivery-only failure when the agent turn succeeds. Its report remains in run history; configure the destination before running the job again.
+
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error. Examples are `setup timed out before runner start`, or a stall message naming the last-known startup phase such as `context-engine`. For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts. Session lookup, hook, auth, prompt, and CLI setup stalls are therefore reported as pre-model automation failures.
 
 ## Scheduling
@@ -212,6 +214,8 @@ One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delive
 Configured intervals and stagger windows retain millisecond precision in human-readable output: `--every 90s` appears as `every 1m 30s`, and `--stagger 1001ms` as `stagger 1s 1ms`. Use `automations show <job-id>` for the full duration when the list column is truncated. Relative next-run and last-run labels remain rounded.
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
+
+For provider network failures, request timeouts, overloads, rate limits, and server errors (not the job's own execution timeout), the scheduler first re-runs the job after 30s, 1m, and 5m (or at its next scheduled run when sooner), and holds failure alerts and owner repair requests until those re-runs also fail.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 

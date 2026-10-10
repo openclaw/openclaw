@@ -182,23 +182,11 @@ export function capText(value: string | undefined, max: number): string | undefi
 }
 
 export function normalizeStatus(value: unknown, fallback: WorkboardStatus): WorkboardStatus {
-  if (typeof value !== "string" || !value.trim()) {
-    return fallback;
-  }
-  if ((WORKBOARD_STATUSES as readonly string[]).includes(value)) {
-    return value as WorkboardStatus;
-  }
-  throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+  return normalizeEnumValue(value, WORKBOARD_STATUSES, fallback, "status");
 }
 
 export function normalizePriority(value: unknown, fallback: WorkboardPriority): WorkboardPriority {
-  if (typeof value !== "string" || !value.trim()) {
-    return fallback;
-  }
-  if ((WORKBOARD_PRIORITIES as readonly string[]).includes(value)) {
-    return value as WorkboardPriority;
-  }
-  throw new Error(`priority must be one of: ${WORKBOARD_PRIORITIES.join(", ")}.`);
+  return normalizeEnumValue(value, WORKBOARD_PRIORITIES, fallback, "priority");
 }
 
 export function normalizeStringList(value: unknown, fieldName: string, maxLength = 80): string[] {
@@ -422,8 +410,15 @@ function normalizeEnumValue<T extends string, TFallback extends T | undefined>(
   value: unknown,
   allowed: readonly T[],
   fallback: TFallback,
+  fieldName?: string,
 ): T | TFallback {
-  return typeof value === "string" && allowed.includes(value as T) ? (value as T) : fallback;
+  if (typeof value === "string" && allowed.includes(value as T)) {
+    return value as T;
+  }
+  if (fieldName && typeof value === "string" && value.trim()) {
+    throw new Error(`${fieldName} must be one of: ${allowed.join(", ")}.`);
+  }
+  return fallback;
 }
 
 export function normalizeLinkType(value: unknown, fallback: WorkboardLinkType): WorkboardLinkType {

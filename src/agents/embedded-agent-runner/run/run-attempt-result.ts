@@ -6,8 +6,8 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function normalizeEmbeddedRunAttemptResult(
-  attempt: EmbeddedRunAttemptResult,
-): EmbeddedRunAttemptResult {
+  attempt: EmbeddedRunAttemptWithReceiptEvidence,
+): EmbeddedRunAttemptWithReceiptEvidence {
   const runtimeContinuationReplayMetadata =
     attempt.runtimeContinuationStarted === true
       ? { hadPotentialSideEffects: true, replaySafe: false }

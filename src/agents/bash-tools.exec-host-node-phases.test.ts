@@ -169,37 +169,6 @@ describe("node execution target resolution", () => {
     );
   });
 
-  it.each([
-    {
-      name: "beside a connected non-executor",
-      siblings: [
-        {
-          nodeId: "canvas-only",
-          caps: ["canvas"],
-          commands: ["canvas.present"],
-          connected: true,
-        },
-      ],
-    },
-  ])("selects the sole headless executor $name", async ({ siblings }) => {
-    callGatewayToolMock.mockResolvedValueOnce({
-      nodes: [
-        ...siblings,
-        {
-          nodeId: "exec-node",
-          platform: "linux",
-          caps: ["system"],
-          commands: ["system.run"],
-          connected: true,
-        },
-      ],
-    });
-
-    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).resolves.toMatchObject({
-      nodeId: "exec-node",
-    });
-  });
-
   it("honors an explicit executable node among multiple candidates", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
       nodes: [
@@ -340,17 +309,6 @@ describe("direct node run", () => {
       status: "failed",
       exitCode: 1,
       aggregated: output,
-      nodeId: "node-1",
-    });
-  });
-
-  it("identifies the node in the successful result the model reads", async () => {
-    const result = await dispatchNodeSystemRun(createDirectNodeRun());
-
-    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\nok" }]);
-    expect(result.details).toMatchObject({
-      status: "completed",
-      aggregated: "ok",
       nodeId: "node-1",
     });
   });

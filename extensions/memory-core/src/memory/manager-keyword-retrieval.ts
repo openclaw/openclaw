@@ -3,7 +3,6 @@ import {
   createSubsystemLogger,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   MEMORY_INDEX_FTS_TABLE as FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE as PATH_FTS_TABLE,
@@ -11,8 +10,6 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
-import { applyImportanceMultiplier } from "./importance.js";
-import { buildFtsQuery } from "./keyword-query.js";
 import {
   runMemoryCuratedCandidates,
   runMemoryKeywordSearch,
@@ -26,14 +23,13 @@ import type {
   MemoryKeywordWorkerResult,
 } from "./manager-search.worker.js";
 import {
-  applyProjectRanking,
+  applyRetrievalRanking,
   prepareActiveProjectKeys,
   projectScoreMultiplier,
 } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
-const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
 
@@ -50,8 +46,6 @@ export type KeywordSearchHit = MemoryRetrievalResult & {
 type KeywordSearchOptions = {
   boostFallbackRanking?: boolean;
   signal?: AbortSignal;
-  exactPathQuery?: string;
-  rankingQuery?: string;
   fuseRecallMetadata?: boolean;
 };
 
@@ -110,38 +104,33 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     limit?: number;
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
-    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return await this.readCuratedMemoryCandidates({
-      limit,
-      projectsOnly: false,
-      activeProjectKeys: opts?.activeProjectKeys,
-    });
+    return await this.readCuratedMemoryCandidates(opts, false);
   }
 
   async listCuratedProjectCandidates(opts: {
     activeProjectKeys: string[];
     limit?: number;
   }): Promise<MemorySearchResult[]> {
-    const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
-    return await this.readCuratedMemoryCandidates({
-      limit,
-      projectsOnly: true,
-      activeProjectKeys: opts.activeProjectKeys,
-    });
+    return await this.readCuratedMemoryCandidates(opts, true);
   }
 
-  private async readCuratedMemoryCandidates(query: {
-    limit: number;
-    projectsOnly: boolean;
-    activeProjectKeys?: string[];
-  }): Promise<MemorySearchResult[]> {
+  private async readCuratedMemoryCandidates(
+    opts: { limit?: number; activeProjectKeys?: string[] } | undefined,
+    projectsOnly: boolean,
+  ): Promise<MemorySearchResult[]> {
+    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? (projectsOnly ? 48 : 512))));
     return await this.withManagerOperation(async () => {
       const result = await runMemoryCuratedCandidates(
         {
           agentId: this.agentId,
           databasePath: resolveUserPath(this.settings.store.databasePath),
         },
-        { ...query, checkProvenanceRepair: this.memorySourceProvenanceRepairPending },
+        {
+          limit,
+          projectsOnly,
+          activeProjectKeys: opts?.activeProjectKeys,
+          checkProvenanceRepair: this.memorySourceProvenanceRepairPending,
+        },
       );
       this.memorySourceProvenanceRepairPending = result.provenanceRepairPending;
       if (this.memorySourceProvenanceRepairPending) {
@@ -203,7 +192,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
     const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
-    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
+    const ranked = applyRetrievalRanking(decayed, activeProjects)
       .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
       .map((entry) =>
         entry.exactPathSpecificity > 0
@@ -287,12 +276,10 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         snippetMaxChars: SNIPPET_MAX_CHARS,
         sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
         boostFallbackRanking: options?.boostFallbackRanking,
-        rankingQuery: options?.rankingQuery,
       },
       path: {
         pathFtsTable: PATH_FTS_TABLE,
         query,
-        exactPathQuery: options?.exactPathQuery ?? query,
         exactPathLimit: EXACT_PATH_CANDIDATE_LIMIT,
         ftsTokenizer: this.settings.store.fts.tokenizer,
         limit,
@@ -320,23 +307,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     return { indexState: result.indexState, keyword: result };
   }
 
-  private async searchKeyword(
-    query: string,
-    limit: number,
-    options?: KeywordSearchOptions,
-    sourceFilterList?: MemorySource[],
-  ): Promise<KeywordSearchHit[]> {
-    if (!this.fts.enabled || !this.fts.available) {
-      return [];
-    }
-    const result = await runMemoryKeywordSearch(
-      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
-      this.buildKeywordSearchQuery(query, limit, options, sourceFilterList),
-      options?.signal,
-    );
-    return this.resolveKeywordSearchResult(result, options?.exactPathQuery ?? query, limit);
-  }
-
   private resolveKeywordSearchResult(
     result: MemoryKeywordWorkerResult,
     exactPathQuery: string,
@@ -358,83 +328,35 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     return result.recallData ? this.applyRecallMetadata(results, result.recallData) : results;
   }
 
-  protected async searchKeywordWithFallback(
+  protected async searchKeyword(
     query: string,
     limit: number,
-    options:
-      | { boostFallbackRanking?: boolean; signal?: AbortSignal; fuseRecallMetadata?: boolean }
-      | undefined,
+    options: KeywordSearchOptions | undefined,
     sourceFilterList: MemorySource[],
     initialResult?: MemoryKeywordWorkerResult,
   ): Promise<KeywordSearchHit[]> {
-    // Fused probes exclude index mutations through selection; other searches
-    // refresh metadata after their final candidate merge to observe forget.
-    const enrich = (results: KeywordSearchHit[]) =>
-      options?.fuseRecallMetadata ? results : this.attachRecallMetadata(results, options?.signal);
-    const fullQueryResults = initialResult
-      ? this.resolveKeywordSearchResult(initialResult, query, limit)
-      : await this.searchKeyword(query, limit, options, sourceFilterList);
+    if (!this.fts.enabled || !this.fts.available) {
+      return [];
+    }
+    const result =
+      initialResult ??
+      (await runMemoryKeywordSearch(
+        { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+        this.buildKeywordSearchQuery(query, limit, options, sourceFilterList),
+        options?.signal,
+      ));
     options?.signal?.throwIfAborted();
-    const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
-    if (nonExactResults.length >= limit) {
-      return enrich(fullQueryResults);
-    }
-
-    // Supplement thin candidate pools for conversational queries, but cap the
-    // extra FTS probes so long prompts cannot fan out into unbounded sqlite work.
-    const fallbackTerms = this.resolveKeywordFallbackTerms(query);
-    if (fallbackTerms.length === 0) {
-      return enrich(fullQueryResults);
-    }
-    const strictFtsQuery = buildFtsQuery(query)?.toLowerCase();
-    const keywordFtsQuery = buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
-    if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
-      // Expansion did not normalize this already-matching keyword query; OR
-      // probes can only weaken its strict relevance before importance ranking.
-      return enrich(fullQueryResults);
-    }
-
-    const settled = await Promise.allSettled(
-      fallbackTerms.map((term) =>
-        this.searchKeyword(
-          term,
-          limit,
-          { ...options, exactPathQuery: query, rankingQuery: query },
-          sourceFilterList,
-        ),
-      ),
-    );
-    options?.signal?.throwIfAborted();
-    // Keep the generation leased until every admitted probe has closed its reader,
-    // including siblings of a failed or cancelled worker request.
-    const resultSets = settled.map((result) => {
-      if (result.status === "rejected") {
-        throw result.reason;
-      }
-      return result.value;
-    });
-    return enrich(
-      this.limitKeywordSearchHits(
-        this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
-        limit,
-      ),
-    );
-  }
-
-  private resolveKeywordFallbackTerms(query: string): string[] {
-    const normalizedQuery = query.trim().toLowerCase();
-    const keywords = extractKeywords(query, {
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-    }).filter((term) => term !== normalizedQuery);
-    return keywords.slice(0, KEYWORD_FALLBACK_SEARCH_TERM_LIMIT);
+    const results = this.resolveKeywordSearchResult(result, query, limit);
+    // Fused reads already observed metadata in the admitted generation.
+    return options?.fuseRecallMetadata
+      ? results
+      : this.attachRecallMetadata(results, options?.signal);
   }
 
   private mergeKeywordSearchHits(
     resultSets: Omit<KeywordSearchHit, "exactPathSpecificity">[][],
     exactPathQuery: string,
   ): KeywordSearchHit[] {
-    // Fallback terms broaden lexical recall, but only the original user query
-    // can claim exact path, basename, or stem precedence.
     const matchExactPath = prepareExactPathMatcher(exactPathQuery);
     const seenIds = new Map<string, KeywordSearchHit>();
     for (const results of resultSets) {

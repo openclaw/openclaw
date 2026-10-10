@@ -207,8 +207,7 @@ export function createSessionDeletions(host: DeletionHost) {
           return { deleted: false };
         }
         rollback(deletion);
-        const message = formatUiError(error);
-        reportError(message);
+        reportError(formatUiError(error));
         throw error;
       }
     })();

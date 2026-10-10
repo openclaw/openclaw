@@ -29,7 +29,9 @@ openclaw models auth login --provider anthropic --method cli --set-default
 openclaw agent --agent main --message "hi"
 ```
 
-The login keeps canonical `anthropic/*` model refs and sets `agentRuntime: { id: "claude-cli" }` on Claude model entries that do not already name a runtime, so `--model anthropic/claude-sonnet-5` also runs through Claude Code. Choosing **Claude CLI** in `openclaw onboard` writes the same config. Legacy `claude-cli/*` refs still work as compatibility input, and `openclaw doctor --fix` rewrites persisted ones to this canonical form.
+The login keeps canonical `anthropic/*` model refs and sets `agentRuntime: { id: "claude-cli" }` on Claude model entries that do not already name a runtime, so `--model anthropic/claude-sonnet-5` also runs through Claude Code. It also adds an `"anthropic/*"` entry with the same runtime, so Claude models that are published after sign-in or typed by ID run through Claude Code too. An entry for a specific model that names another runtime still wins. Choosing **Claude CLI** in `openclaw onboard` writes the same config. Legacy `claude-cli/*` refs still work as compatibility input, and `openclaw doctor --fix` rewrites persisted ones to this canonical form.
+
+Deprecated catalog models are not added at sign-in; an existing entry for one is kept and runs through Claude CLI. Configs from an earlier Claude CLI sign-in lack the `"anthropic/*"` entry, so Claude models that sign-in did not add fail with a missing Anthropic API key. `openclaw doctor --fix` and `openclaw update` add it when the default model is an Anthropic model pinned to `claude-cli`, no `"anthropic/*"` entry exists, and no Anthropic credential is configured (an Anthropic auth profile, provider API key, or `ANTHROPIC_API_KEY`/`ANTHROPIC_OAUTH_TOKEN`). With a credential or an API default model, other Claude models keep their current route.
 
 `main` is the default agent id when no explicit agent list is configured. Swap in your own agent id otherwise.
 
@@ -41,19 +43,13 @@ mechanics in `openclaw.json`.
 OpenClaw auto-loads an owning bundled plugin when model selection or a
 model-scoped `agentRuntime.id` references its backend.
 
-Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too. Claude CLI runs a fresh, tool-free completion with its own authentication. This includes canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
+Utility completions for Activity recaps, session titles, conversation labels, progress narration, and tool-call titles use the selected model's runtime. Claude CLI runs a fresh, tool-free completion with its own authentication.
 
-When `agents.defaults.utilityModel` is unset, these completions use the primary provider's declared small model. If that model has no usable provider credential or explicit runtime, it borrows the runtime pinned on the primary model's entry:
+When `agents.defaults.utilityModel` is unset, OpenClaw uses the primary provider's declared small model. A Claude CLI primary uses the recommended Haiku model through Claude CLI, even if an Anthropic API credential is also available. It does not automatically switch utility work to the Anthropic API.
 
-| Primary's runtime                      | Provider credential | Derived utility model runs on             |
-| -------------------------------------- | ------------------- | ----------------------------------------- |
-| `claude-cli` pinned on its model entry | none                | `claude-cli`, the primary's runtime       |
-| `claude-cli` pinned on its model entry | configured          | the HTTP route, billed to that credential |
-| default                                | either              | the HTTP route                            |
+An explicitly configured utility model keeps its own runtime. A compatible runtime explicitly selected for the session, or a runtime pinned on the derived model's own entry, also wins over inherited routing. For other runtimes, automatic utility routing can prefer an available provider credential before borrowing the primary model's pinned runtime.
 
-The session observer checks a borrowed route again at the next digest. Adding a provider credential during a run restores HTTP routing on that next digest. Routes that already have credentials keep their existing preparation cache. An explicitly configured utility model keeps its own runtime.
-
-To choose the route yourself rather than letting the credential decide, name a runtime on the derived model's own entry. The entry has to name one: a bare entry, or `id: "default"`, still falls back.
+To explicitly use the Anthropic API for utility work, configure its runtime on the utility model:
 
 ```json5
 {
@@ -123,6 +119,13 @@ plugin code registered with `api.registerCliBackend(...)`.
 3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend communicates directly with the installed Claude Code executable and keeps its authenticated subprocess warm across compatible agent turns.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
+
+Claude stream-json backends also emit live line-count progress while `write`,
+`edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
+name, and added/removed line counts, with at most four updates per second per
+call. The execution-start event still waits for complete arguments; input
+progress does not mean the tool has begun executing. If input generation is
+interrupted, a later text block does not mark the abandoned tool as started.
 
 Direct agent calls and child-completion updates share the same session reply policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
@@ -226,6 +229,12 @@ rebuilds that snapshot when a process resumes, so workspace edits or commits
 would otherwise invalidate cached conversation history. Git tools and workspace
 instructions remain available. This does not prevent cache misses after prompt
 changes, compaction, model or thinking changes, or cache expiry.
+
+OpenClaw disables Claude Code's saved system-prompt snapshots so resumed turns
+receive the current appended instructions, including per-turn plugin context.
+Unchanged prompts keep the warm process and stable prefix; changed prompts restart
+the process and resume the same conversation without rewriting its history.
+Changing prompt bytes can invalidate the cached prefix where they change.
 
 OpenClaw always launches Claude Code with its default permission mode.
 OpenClaw's permission responses and `PreToolUse` hook keep native tools under

@@ -88,6 +88,10 @@ custom policy values with an advisory while refreshing recognized old defaults.
 For example, `TimeoutStartSec=45` stays unchanged while the old installer value
 `TimeoutStopSec=30` becomes `330`. Existing identity and command checks still apply.
 Maintenance stops also read the resident Gateway's recorded shutdown budget.
+If rollback finds the service already stopped, the Gateway cannot be reached,
+and its local port is free, it proceeds directly through the guarded native stop
+to restoration instead of waiting for the drain deadline. Running Gateways and
+unverified service or port states keep the normal drain checks.
 Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
 their first stop therefore uses the short/unknown-budget path. The Gateway's
 lifecycle owner fences admission and reports drain progress until idle or the
@@ -363,6 +367,27 @@ These progress improvements require the repaired updater on the next update hop.
 An already-running 2026.9.5 updater retains its original silent verification window;
 independent `openclaw gateway status --deep --require-rpc` and `/readyz` checks can show
 whether the old Gateway is still serving, but do not establish the updater's wait reason.
+
+The update result, `openclaw update` output, and the run history record timed steps
+for the private state copy (`candidate-state-snapshot`), the rehearsal Doctor
+(`candidate-doctor`), the test Gateway startup (`candidate-gateway-startup`), and
+temporary-copy removal (`candidate-state-cleanup`), including Git updates. Activation
+also records `post-stop-checks` (the schema, artifact, and configuration checks after the
+Gateway stops) and `git-runtime-activation`. Each Doctor the updater launches adds one
+`Doctor sections: …` diagnostic with its database preflight, configuration, and
+contribution times, plus the slowest contributions. Run history keeps these rows when
+older diagnostics are trimmed. The updater that is already installed records these
+steps, so they first appear on the update after the one that installs this version.
+
+The report also preserves `updater-runtime-retention`, which measures retaining
+the running updater's package, built runtime, and dependency tree before mutation.
+This is separate from the private-state snapshot and can run while the previous
+Gateway is still serving. Native service work records `managed-service-executor-check`
+separately from the successful `managed-service-install` or `managed-service-restart`
+child. `update-driver-handoff` measures the interval from the previous driver's last
+completed receipt until the fresh driver resumes finalization. The handoff timer
+can appear on the installing update; retention and service timers require the
+updater executing those operations to include this instrumentation.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout

@@ -13,6 +13,7 @@ import type {
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedConfiguredRuntimeModel,
+  PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
   PreparedNativeModelSelection,
   PreparedRuntimeCapabilityModel,
@@ -53,6 +54,25 @@ export type PreparedModelRuntimeCatalogSource = Readonly<{
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 }>;
 
+export type PreparedModelRuntimeCatalogAccessParams = {
+  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
+  agentFacts: PreparedModelRuntimeAgentFacts;
+  nativeConfigFingerprint: string;
+  catalogFacts: PreparedModelRuntimeCatalogFacts;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  isCurrent: () => boolean;
+  isPublished?: () => boolean;
+  retirementSignal: AbortSignal;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
+    Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
+};
+
+export type PreparedModelCatalogCandidate = {
+  inventory: PreparedModelCatalogInventory | undefined;
+  configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
+  nativeCatalogAcquired: boolean;
+};
+
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   initialAuth: PreparedModelCatalogAuth;
   accountCatalog?: PreparedAccountCatalogAccess;
@@ -66,19 +86,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
     options?: PreparedModelCatalogRefreshOptions,
   ) => Promise<ModelCatalogSnapshot>;
   loadNativeModelCatalog: (
-    selection: PreparedNativeModelSelection,
+    selection?: PreparedNativeModelSelection,
   ) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
-export type PreparedModelRuntimeCatalogAccessParams = {
-  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  nativeConfigFingerprint: string;
-  catalogFacts: PreparedModelRuntimeCatalogFacts;
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-  isCurrent: () => boolean;
-  isPublished?: () => boolean;
-  retirementSignal: AbortSignal;
-  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
-    Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
-};

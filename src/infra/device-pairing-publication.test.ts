@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -43,6 +42,8 @@ import {
   listDevicePairingReadOnly,
   removePairedDevice,
 } from "./device-pairing.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -148,23 +149,15 @@ test.each([0, 1])(
     }
     let current = true;
     const revoked = new Error("setup cleanup owner revoked after native result");
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const delivery = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce((context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                current = false;
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const delivery = probe.command(
+      stateWorker,
+      async (command, executeOptions, scope) => {
+        const result = await scope.execute(command, executeOptions);
+        current = false;
+        return result;
+      },
+      { once: true },
+    );
     try {
       const pruning = executeDevicePairingMutation(
         { type: "bootstrap.prune", input: { nowMs: 1_000 } },
@@ -519,7 +512,7 @@ test("retains pairing admission through final publication preparation and synchr
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
 });
 
-test.each(["worker commit", "external commit"] as const)(
+test.each(["worker commit", "sibling owner commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
@@ -570,7 +563,7 @@ test.each(["worker commit", "external commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            const other = new DatabaseSync(database.path);
+            const other = openNodeSqliteDatabase(database.path);
             try {
               other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
             } finally {
@@ -599,9 +592,9 @@ test.each(["worker commit", "external commit"] as const)(
   },
 );
 
-test("retires prepared nodes after a foreign commit and database close", async () => {
+test("retires prepared nodes after a sibling owner commit and database close", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const other = new DatabaseSync(database.path);
+  const other = openNodeSqliteDatabase(database.path);
   try {
     other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
   } finally {

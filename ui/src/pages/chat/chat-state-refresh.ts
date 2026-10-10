@@ -62,6 +62,8 @@ type ChatMetadataBinding = {
   scope: { agentId?: string; sessionKey: string };
   version: number;
   sessionFactsInvalidated: boolean;
+  // Only a reply received by this pane binding can suppress the informational hint.
+  requiredWorkerInferenceProfileId?: string;
   sessionRefreshPending?: boolean;
   sessionFactsRetryPending?: boolean;
   sessionFactsRequest?: { version: number; promise: Promise<void> };
@@ -71,6 +73,11 @@ type ChatMetadataBinding = {
   unsubscribe: () => void;
 };
 const metadataBindings = new WeakMap<ChatPageHost, ChatMetadataBinding>();
+
+export function readChatRequiredWorkerInferenceProfileId(host: ChatPageHost): string | undefined {
+  const binding = metadataBindings.get(host);
+  return binding?.isCurrent() ? binding.requiredWorkerInferenceProfileId : undefined;
+}
 
 export function retireChatMetadataRequests(host: ChatPageHost): void {
   metadataBindings.get(host)?.catalogRequest?.controller.abort();
@@ -175,6 +182,11 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
       (update) => {
         if (!binding.isCurrent()) {
           return;
+        }
+        binding.requiredWorkerInferenceProfileId =
+          update.type === "result" ? update.result.requiredWorkerInferenceProfileId : undefined;
+        if (update.type === "invalidated") {
+          host.requestUpdate?.();
         }
         if (update.type === "invalidated" || update.type === "loading") {
           binding.sessionRefreshPending =
@@ -543,9 +555,8 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
 
 async function refreshChat(
   host: ChatPageHost,
-  opts?: ChatRefreshOptions & {
-    onStartupMetadata?: ChatStartupMetadataHandler;
-  },
+  opts: ChatRefreshOptions,
+  onStartupMetadata: ChatStartupMetadataHandler,
 ) {
   const refreshedClient = host.client;
   const refreshedSessions = host.sessions;
@@ -658,10 +669,10 @@ async function refreshChat(
     }
   });
   const startupMetadataRefresh =
-    opts?.startup === true && opts.onStartupMetadata
+    opts.startup === true
       ? historyLoad.then(
-          (history) => opts.onStartupMetadata?.(history?.metadata),
-          () => opts.onStartupMetadata?.(undefined),
+          (history) => onStartupMetadata(history?.metadata),
+          () => onStartupMetadata(undefined),
         )
       : Promise.resolve();
   flushChatQueueAfterIdleSessionReconciliation(
@@ -688,25 +699,22 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   if (binding) {
     void refreshChatMetadata(host, { automatic: true, startup: true });
   }
-  const refresh = refreshChat(host, {
-    ...opts,
-    onStartupMetadata: async (metadata) => {
-      // The publication belongs to the shared scope, not the pane that started history.
-      // Final subscriber release or invalidation retires it; one pane closing must not.
-      if (!binding || !publication?.isCurrent()) {
-        return;
-      }
-      if (metadata) {
-        publication.publish(metadata);
-      } else {
-        // Startup can omit its bounded projection. Read the same session scope without history.
-        const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
-          kind: "metadata",
-          revalidateMetadata: () => publication.isCurrent(),
-        });
-        await fallback.completed;
-      }
-    },
+  const refresh = refreshChat(host, { ...opts }, async (metadata) => {
+    // The publication belongs to the shared scope, not the pane that started history.
+    // Final subscriber release or invalidation retires it; one pane closing must not.
+    if (!binding || !publication?.isCurrent()) {
+      return;
+    }
+    if (metadata) {
+      publication.publish(metadata);
+    } else {
+      // Startup can omit its bounded projection. Read the same session scope without history.
+      const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
+        kind: "metadata",
+        revalidateMetadata: () => publication.isCurrent(),
+      });
+      await fallback.completed;
+    }
   });
   const sessionKey = host.sessionKey;
   const client = host.client;

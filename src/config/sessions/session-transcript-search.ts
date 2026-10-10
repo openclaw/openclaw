@@ -57,7 +57,7 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
-// SQLite data_version values are comparable only on the same live connection.
+// Local mutation revisions are comparable only on the same live connection.
 const searchConnections = new WeakMap<DatabaseSync, string>();
 
 function readSearchRevision(database: DatabaseSync): string | undefined {
@@ -75,7 +75,7 @@ function readSearchRevision(database: DatabaseSync): string | undefined {
         unregister();
       });
     }
-    return `${connection}:${revision.schema.revision}:${revision.dataVersion}:${revision.mutationRevision}`;
+    return `${connection}:${revision.schema.revision}:${revision.writeRevision}:${revision.mutationRevision}`;
   });
 }
 

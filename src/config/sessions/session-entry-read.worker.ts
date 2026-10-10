@@ -19,7 +19,6 @@ import { SessionMetadataUnavailableError } from "../../state/session-metadata-un
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
-import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
@@ -58,8 +57,6 @@ import {
 } from "./session-entry-current-admission.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
-  SessionEntryListWorkerInput,
-  SessionEntryListWorkerResult,
   SessionEntryReadWorkerInput,
   SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerInput,
@@ -197,60 +194,6 @@ export async function readSessionEntryWorkerRequest(
   return { kind: "session-entry-read", entry: read.value, source };
 }
 
-/** Cleanup selects identity columns before materializing metadata in the same worker snapshot. */
-export function readSessionEntryList(request: SessionEntryListWorkerInput) {
-  const scope = {
-    ...request.scope,
-    env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-  };
-  let source: SessionEntryListWorkerResult["source"];
-
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
-        source = captureSessionEntryReadSource(database, request.expectedIdentity);
-        if (scope.cleanupSession === undefined) {
-          return listSqliteSessionEntriesFromDatabase(
-            database,
-            resolveSqliteScope({ ...scope, sessionKey: "" }),
-            scope,
-          );
-        }
-        return withSqlitePostCommitPublications(database.db, () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
-            const identities = executeSqliteQuerySync(
-              database.db,
-              getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-                .selectFrom("session_nodes")
-                .select(["session_key as sessionKey", "current_session_id as sessionId"])
-                .orderBy("session_key"),
-            ).rows;
-            const keys = identities
-              .filter((row) =>
-                matchesPluginHostCleanupSession(row.sessionKey, row, scope.cleanupSession),
-              )
-              .map((row) => row.sessionKey);
-            const entries = new Map(
-              readSelectedSessionEntriesInDatabase(database, keys).map((entry) => [
-                entry.sessionKey,
-                entry,
-              ]),
-            );
-            return keys.flatMap((key) => {
-              const entry = entries.get(key);
-              return entry ? [entry] : [];
-            });
-          }),
-        );
-      }),
-    { ...request.database, env: scope.env },
-  );
-  if (!result.found && request.expectedIdentity?.key.startsWith("file:")) {
-    throw new Error("Session listing lost its captured physical owner");
-  }
-  return { entries: result.found ? result.value : [], source };
-}
-
 /** Canonical entry currency reuses parsed facts only at the same native connection revision. */
 export function readSessionEntryCurrentFacts(
   request: SessionEntryCurrentWorkerInput,
@@ -344,6 +287,11 @@ export function readExactSessionEntriesWithLifecycle(
     const read = readDatabase(
       (database) => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (request.projection === "worktree" && !request.manualCompact) {
+          return {
+            entries: readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys),
+          };
+        }
         using sourceGuard = prepareSessionColdSourceGuard(
           { ...request.database, env: request.env },
           request.manualCompact?.sources,
@@ -378,7 +326,7 @@ export function readExactSessionEntriesWithLifecycle(
                           entries.find((row) => row.sessionKey === key)?.entry,
                         ]),
                       ),
-                    ),
+                    ).refusedSource,
                   },
                 }
               : {}),
@@ -464,7 +412,8 @@ export function readExactSessionEntriesWithLifecycle(
               const selectedById = request.selection
                 ? readSessionEntryByIdInDatabase(database, {
                     sessionId: request.selection.sessionId,
-                    projection: "list",
+                    orderBy: request.selection.orderBy,
+                    projection: request.projection === "sharing" ? "list" : "full",
                   })
                 : undefined;
               const selected = request.selection
@@ -598,7 +547,10 @@ export function readExactSessionEntriesWithLifecycle(
                 ...(request.includeParticipantRecords
                   ? {
                       participantRecords: Object.fromEntries(
-                        participantRecordsBySessionKey(database.db, request.sessionKeys),
+                        participantRecordsBySessionKey(
+                          database.db,
+                          request.sessionKeys ?? selected.value.map(({ sessionKey }) => sessionKey),
+                        ),
                       ),
                     }
                   : {}),

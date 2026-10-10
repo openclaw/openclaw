@@ -401,25 +401,6 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("keeps the visible receipt for a WebChat user turn with message-tool-only replies", async () => {
-    const tool = createCurrentSourceMessageTool({
-      sourceReplyDeliveryMode: "message_tool_only",
-      inputProvenance: { kind: "external_user", sourceChannel: "webchat" },
-    });
-
-    const toolResult = await tool.execute("message-call", {
-      action: "send",
-      message: "Reply the user reads in the Control UI.",
-    });
-
-    expect(toolResult.content).toEqual([
-      {
-        type: "text",
-        text: "Sent visible reply to the current source conversation via internal-ui.",
-      },
-    ]);
-  });
-
   it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
     const tool = createCurrentSourceMessageTool({
       agentSessionKey: "agent:main:main",

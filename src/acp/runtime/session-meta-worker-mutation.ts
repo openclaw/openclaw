@@ -259,16 +259,21 @@ export async function readIncognitoAcpSessionEntry(
   return (await prepareIncognitoAcpSessionEntry(params)).entry;
 }
 
-function prepareIncognitoAcpSessionEntry(params: Target) {
+function prepareIncognitoAcpSessionEntry(params: Target, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
   return actor.sessions.withSharedState(async () => {
-    const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey });
-    const [acp] = await readAcpSessionMetaForEntries({
-      entries: [{ sessionKey, agentId: actor.agentId, entry }],
-      cfg: params.cfg,
-      env: context.environment,
-      databasePath: context.admission.databasePath,
-    });
+    const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey }, signal);
+    const [acp] = await readAcpSessionMetaForEntries(
+      {
+        entries: [{ sessionKey, agentId: actor.agentId, entry }],
+        cfg: params.cfg,
+        env: context.environment,
+        databasePath: context.admission.databasePath,
+      },
+      { signal },
+    );
+    signal?.throwIfAborted();
     const assertPreparedCurrent = () => {
       assertCurrent();
       snapshot.assertCurrent();
@@ -287,9 +292,10 @@ function prepareIncognitoAcpSessionEntry(params: Target) {
 
 /** Inactive cleanup composition; both source fences remain owned until release. */
 export function prepareIncognitoAcpSessionEntryRead(
-  params: Target & { storePath: string },
+  params: Target & { storePath: string; signal?: AbortSignal },
 ): Promise<PreparedAcpSessionEntryRead> {
   const { actor, sessionKey } = captureTarget(params);
+  const signal = params.signal;
   const cfg = params.cfg;
   const storePath = params.storePath;
   const logicalSessionKey = params.sessionKey.trim();
@@ -312,7 +318,8 @@ export function prepareIncognitoAcpSessionEntryRead(
       released.resolve();
     };
     try {
-      const prepared = await prepareIncognitoAcpSessionEntry(params);
+      const prepared = await prepareIncognitoAcpSessionEntry(params, signal);
+      signal?.throwIfAborted();
       const assertCurrent = () => {
         // Shared ACP publication can follow its actor-entry commit; retain both fences.
         prepared.assertCurrent();

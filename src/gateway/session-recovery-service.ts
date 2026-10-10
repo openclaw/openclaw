@@ -514,6 +514,9 @@ export async function recoverGatewaySession(params: {
               : {}),
             ...(currentSource.pluginOwnerId ? { pluginOwnerId: currentSource.pluginOwnerId } : {}),
             ...(currentSource.visibility ? { visibility: currentSource.visibility } : {}),
+            ...(currentSource.communication
+              ? { communication: { ...currentSource.communication } }
+              : {}),
             ...(currentSource.spawnedCwd ? { spawnedCwd: currentSource.spawnedCwd } : {}),
             ...(currentSource.execHost ? { execHost: currentSource.execHost } : {}),
             ...(currentSource.execNode ? { execNode: currentSource.execNode } : {}),

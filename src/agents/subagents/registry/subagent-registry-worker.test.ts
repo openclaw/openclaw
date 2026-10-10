@@ -9,6 +9,7 @@ import { createContext as createGatewayContext } from "../../../gateway/server-p
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -270,28 +271,16 @@ function change(runId: string, update: (row: SubagentRunRecord) => void) {
 }
 
 function interceptWrites(callback: (phase: "before" | "after") => void | Promise<void>) {
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  return vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, run, options) =>
-      execute(
-        context,
-        (scope) =>
-          run({
-            execute: async (command, executeOptions) => {
-              if (command.type === "subagents.persistChanges") {
-                await callback("before");
-              }
-              const receipt = await scope.execute(command, executeOptions);
-              if (command.type === "subagents.persistChanges") {
-                await callback("after");
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
-    );
+  return probe.command(stateWorker, async (command, executeOptions, scope) => {
+    if (command.type === "subagents.persistChanges") {
+      await callback("before");
+    }
+    const receipt = await scope.execute(command, executeOptions);
+    if (command.type === "subagents.persistChanges") {
+      await callback("after");
+    }
+    return receipt;
+  });
 }
 
 it("publishes overlapping same-row mutations in FIFO order after each real commit ACK", async () => {
@@ -694,16 +683,12 @@ it.each(["transaction", "commit"] as const)(
   async (stage) => {
     await register(entry("guarded"));
     let current = true;
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     const mutation = mutateSubagentRuns(
       ["guarded"],
       (rows) => ({
@@ -863,7 +848,7 @@ it("retains prepared announcement authority across bookkeeping and revokes it fo
   const prepared = await readSubagentRunAnnounceResultUsing(subagentRuns.get(child.runId)!, {
     readSubagentRun: (runId) => subagentRuns.get(runId),
     getRuntimeConfig: () => ({}),
-    readSubagentSessionEntry: () => undefined,
+    readSubagentSessionEntry: async () => undefined,
     resolveAgentIdFromSessionKey: () => "main",
     resolveSessionStorePathCore: () => "/synthetic/sessions",
     findTranscriptEvent: async () => ({

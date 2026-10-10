@@ -9,6 +9,7 @@ import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persi
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
@@ -20,7 +21,7 @@ import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
-  mergeStaticCatalogInlineModel,
+  mergeCatalogInlineModel,
   resolveConfiguredProviderConfig,
   shouldSuppressConfiguredModel,
 } from "./model.configured-overrides.js";
@@ -91,10 +92,14 @@ export function resolveExplicitModelWithRegistry(params: {
   const inlineModel = inlineMatch?.api ? inlineMatch : undefined;
   const registryModel = params.preparedCatalogModel ?? modelRegistry.find(provider, modelId);
   const staticCatalogModel = inlineModel ? params.getStaticCatalogModel?.() : undefined;
-  // Inline config owns transport and sizing; the captured catalog owns its lower price schedule.
+  // Live facts belong to their route; authored fields still override the catalog donor.
+  const catalogModel =
+    inlineModel && registryModel && modelTransportRoutesMatch(registryModel, inlineModel)
+      ? registryModel
+      : staticCatalogModel;
   const discoveredModel = inlineModel
     ? {
-        ...mergeStaticCatalogInlineModel(staticCatalogModel, inlineModel as Model),
+        ...mergeCatalogInlineModel(catalogModel, inlineModel as Model),
         cost: registryModel?.cost ?? staticCatalogModel?.cost ?? inlineModel.cost,
       }
     : registryModel;
@@ -112,7 +117,7 @@ export function resolveExplicitModelWithRegistry(params: {
     providerConfig,
     providerMetadataOwners,
     preferDiscoveredTransport: Boolean(inlineModel),
-    staticCatalogModel,
+    staticCatalogModel: catalogModel,
   });
   if (!model) {
     return undefined;

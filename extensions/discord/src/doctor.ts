@@ -223,25 +223,23 @@ function collectDiscordTranscriptsAutoStartWarnings(cfg: OpenClawConfig): string
 
 function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
-  const addHits = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const entry of list) {
-      const text = normalizeOptionalString(String(entry)) ?? "";
-      if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
-        continue;
-      }
-      hits.push({ path: pathLabel, entry: text });
-    }
-  };
-
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "discord")) {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
     }
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account, true)) {
-      addHits(ref.pathLabel, ref.holder[ref.key]);
+      const pathLabel = ref.pathLabel;
+      const list = ref.holder[ref.key];
+      if (!Array.isArray(list)) {
+        continue;
+      }
+      for (const entry of list) {
+        const text = normalizeOptionalString(String(entry)) ?? "";
+        if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
+          continue;
+        }
+        hits.push({ path: pathLabel, entry: text });
+      }
     }
   }
 

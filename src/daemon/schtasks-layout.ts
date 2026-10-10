@@ -582,18 +582,27 @@ async function readWindowsTaskCommand(
   );
 }
 
+function createLauncherScriptLines(
+  description: string | undefined,
+  kind: "Task" | "Startup launcher" | "Hidden launcher",
+): string[] {
+  const hidden = kind === "Hidden launcher";
+  const lines = hidden ? [] : ["@echo off"];
+  const trimmedDescription = description?.trim();
+  if (trimmedDescription) {
+    assertNoCmdLineBreak(trimmedDescription, `${kind} description`);
+    lines.push(`${hidden ? "'" : "rem"} ${trimmedDescription}`);
+  }
+  return lines;
+}
+
 export function buildTaskScript({
   description,
   programArguments,
   workingDirectory,
   environment,
 }: GatewayServiceRenderArgs): string {
-  const lines: string[] = ["@echo off"];
-  const trimmedDescription = description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Task description");
-    lines.push(`rem ${trimmedDescription}`);
-  }
+  const lines = createLauncherScriptLines(description, "Task");
   if (workingDirectory) {
     lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
@@ -613,11 +622,9 @@ export function buildTaskScript({
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  const commandArguments =
-    environment?.OPENCLAW_SERVICE_KIND === "gateway"
-      ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
-      : programArguments;
+  let commandArguments = programArguments;
   if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {
+    commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
     // Legacy VBS launchers supply their own outer owner; direct tasks own CMD.
     lines.push(DIRECT_TASK_LAUNCHER_MARKER);
   }
@@ -631,12 +638,7 @@ export function buildStartupLauncherScript(params: {
   description?: string;
   scriptPath: string;
 }): string {
-  const lines = ["@echo off"];
-  const trimmedDescription = params.description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
-    lines.push(`rem ${trimmedDescription}`);
-  }
+  const lines = createLauncherScriptLines(params.description, "Startup launcher");
   lines.push(
     `start "" /min ${quoteCmdScriptArg(getWindowsCmdExePath())} /d /c ${quoteCmdScriptArg(params.scriptPath)}`,
   );
@@ -652,12 +654,7 @@ export function buildHiddenLauncherScript(params: {
   scriptPath: string;
   taskSupervisor?: boolean;
 }): string {
-  const lines = [];
-  const trimmedDescription = params.description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
-    lines.push(`' ${trimmedDescription}`);
-  }
+  const lines = createLauncherScriptLines(params.description, "Hidden launcher");
   lines.push('Set shell = CreateObject("WScript.Shell")');
   if (params.taskSupervisor) {
     lines.push(

@@ -31,22 +31,12 @@ type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
 type AllowlistTarget = "both" | "config" | "store";
 type AllowlistCommand =
-  | {
-      action: "list";
+  | ({
       scope: AllowlistScope;
       channel?: string;
       account?: string;
       resolve?: boolean;
-    }
-  | {
-      action: "add" | "remove";
-      scope: AllowlistScope;
-      channel?: string;
-      account?: string;
-      entry: string;
-      resolve?: boolean;
-      target: AllowlistTarget;
-    }
+    } & ({ action: "list" } | { action: "add" | "remove"; entry: string; target: AllowlistTarget }))
   | { action: "error"; message: string };
 
 const ACTIONS = new Set(["list", "add", "remove"]);

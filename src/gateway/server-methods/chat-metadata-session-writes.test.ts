@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
-  appendTranscriptEventSync,
   assignSessionOwner,
   listSessionEntriesCore,
   listSessionParticipantsReadOnly,
@@ -15,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   projectionLane,
   rotateDatabaseWorkers,
@@ -612,6 +612,8 @@ it.each([
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
               skipMaintenance: true,
+              // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+              assertCommitAllowed: () => {},
             });
           } else if (changeEntry) {
             const writer = scenario.external ? new DatabaseSync(database.path) : database.db;

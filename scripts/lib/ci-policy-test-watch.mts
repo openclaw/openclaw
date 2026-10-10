@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
+import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isTestFileTarget } from "./changed-path-facts.mjs";
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
@@ -29,7 +30,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   // Browser-served route owners are not imports of the Playwright entry point.
   ...UI_E2E_OWNER_WATCHES.map(({ testFile, watchGlobs }): PolicyTestWatch => ({
-    testFile,
+    testFile: resolveUiTypeScriptPath(testFile),
     watchGlobs,
     sourceOnly: true,
   })),
@@ -450,14 +451,12 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/auto-reply/reply/get-reply.dashboard.test.ts",
     watchGlobs: ["skills/control-ui/SKILL.md"],
   },
-  ...[
-    "src/boards/board-generated-identity.test.ts",
-    "src/boards/board-store.parity.test.ts",
-    "src/boards/board-store.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
-  })),
+  ...["src/boards/board-generated-identity.test.ts", "src/boards/board-store.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
+    }),
+  ),
   ...[
     "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
@@ -1592,7 +1591,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/gateway/control-ui-session-prs-branch.test.ts",
     watchGlobs: [
       "src/gateway/control-ui-session-prs-git.runtime.ts",
-      "src/infra/git-read-operations.runtime.ts",
+      "src/infra/git-operation.worker.ts",
     ],
   },
   {

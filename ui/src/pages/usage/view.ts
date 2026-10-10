@@ -17,13 +17,12 @@ import { downloadTextFile } from "../../lib/download.ts";
 import "../../styles/usage.css";
 import { resolveUsageOverviewState } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery, formatIsoDate } from "./helpers.ts";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageInsightStats,
   formatUsageCost,
-  formatIsoDate,
   formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
@@ -70,11 +69,10 @@ function renderProviderUsage(
   unavailable: boolean,
   stalled: boolean,
 ) {
-  const notice = stalled
-    ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
-    : unavailable
+  const notice =
+    stalled || unavailable
       ? html`<div class="callout warning usage-callout">
-          ${t("usage.providerUsage.unavailable")}
+          ${t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
         </div>`
       : nothing;
   if (providers.length === 0) {
@@ -289,12 +287,12 @@ export function renderUsage(props: UsageProps) {
   };
   const applyPreset = (days: number) => {
     const range = presetRange(days);
-    filterActions.onStartDateChange(range.start);
-    filterActions.onEndDateChange(range.end);
+    filterActions.onDatesChange({ startDate: range.start });
+    filterActions.onDatesChange({ endDate: range.end });
   };
   const applyAllRange = () => {
-    filterActions.onStartDateChange("1970-01-01");
-    filterActions.onEndDateChange(formatIsoDate(new Date(), filters.timeZone));
+    filterActions.onDatesChange({ startDate: "1970-01-01" });
+    filterActions.onDatesChange({ endDate: formatIsoDate(new Date(), filters.timeZone) });
   };
   const exportStamp = formatIsoDate(new Date());
 
@@ -340,9 +338,9 @@ export function renderUsage(props: UsageProps) {
                   </button>
                 </div>
                 <div class="usage-date-range">
-                  ${renderDateInput(filters.startDate, t("usage.filters.startDate"), (e: Event) => filterActions.onStartDateChange((e.target as HTMLInputElement).value))}
+                  ${renderDateInput(filters.startDate, t("usage.filters.startDate"), (e: Event) => filterActions.onDatesChange({ startDate: (e.target as HTMLInputElement).value }))}
                   <span class="usage-separator">${t("usage.filters.to")}</span>
-                  ${renderDateInput(filters.endDate, t("usage.filters.endDate"), (e: Event) => filterActions.onEndDateChange((e.target as HTMLInputElement).value))}
+                  ${renderDateInput(filters.endDate, t("usage.filters.endDate"), (e: Event) => filterActions.onDatesChange({ endDate: (e.target as HTMLInputElement).value }))}
                 </div>
                 <select
                   class="usage-select"
@@ -350,9 +348,9 @@ export function renderUsage(props: UsageProps) {
                   aria-label=${t("usage.filters.timeZone")}
                   .value=${filters.timeZone}
                   @change=${(e: Event) =>
-                    filterActions.onTimeZoneChange(
-                      (e.target as HTMLSelectElement).value as "local" | "utc",
-                    )}
+                    filterActions.onScopeChange({
+                      timeZone: (e.target as HTMLSelectElement).value as "local" | "utc",
+                    })}
                 >
                   <option value="local">${t("usage.filters.timeZoneLocal")}</option>
                   <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
@@ -362,14 +360,14 @@ export function renderUsage(props: UsageProps) {
                 ${renderUsageCreatorFilter({
                   options: data.creatorOptions,
                   selectedKey: filters.creatorKey,
-                  onSelect: filterActions.onCreatorChange,
+                  onSelect: (creatorKey) => filterActions.onScopeChange({ creatorKey }),
                 })}
                 ${renderSettingsSegmented({
                   mode: "buttons",
                   variant: "accent",
                   value: filters.scope,
-                  onChange: filterActions.onScopeChange,
-                  onReselect: filterActions.onScopeChange,
+                  onChange: (scope) => filterActions.onScopeChange({ scope }),
+                  onReselect: (scope) => filterActions.onScopeChange({ scope }),
                   options: [
                     {
                       value: "instance",
@@ -387,8 +385,8 @@ export function renderUsage(props: UsageProps) {
                   mode: "buttons",
                   variant: "accent",
                   value: isTokenMode ? "tokens" : "cost",
-                  onChange: displayActions.onChartModeChange,
-                  onReselect: displayActions.onChartModeChange,
+                  onChange: (chartMode) => displayActions.onChange({ chartMode }),
+                  onReselect: (chartMode) => displayActions.onChange({ chartMode }),
                   options: [
                     { value: "tokens", label: t("usage.metrics.tokens") },
                     { value: "cost", label: t("usage.metrics.cost") },
@@ -408,24 +406,22 @@ export function renderUsage(props: UsageProps) {
               <div class="usage-header-metrics">
                 ${
                   displayTotals
-                    ? html`
-                        <span class="usage-metric-badge">
-                          <strong>${formatUsageTokens(displayTotals.totalTokens)}</strong>
-                          ${t("usage.metrics.tokens")}
-                        </span>
-                        <span class="usage-metric-badge">
-                          <strong>${formatUsageCost(displayTotals.totalCost)}</strong>
-                          ${t("usage.metrics.cost")}
-                        </span>
-                        <span class="usage-metric-badge">
-                          <strong>${displaySessionCount}</strong>
-                          ${
+                    ? [
+                        [formatUsageTokens(displayTotals.totalTokens), t("usage.metrics.tokens")],
+                        [formatUsageCost(displayTotals.totalCost), t("usage.metrics.cost")],
+                        [
+                          displaySessionCount,
+                          t(
                             displaySessionCount === 1
-                              ? t("usage.metrics.session")
-                              : t("usage.metrics.sessions")
-                          }
-                        </span>
-                      `
+                              ? "usage.metrics.session"
+                              : "usage.metrics.sessions",
+                          ),
+                        ],
+                      ].map(
+                        ([value, label]) => html`
+                          <span class="usage-metric-badge"><strong>${value}</strong> ${label}</span>
+                        `,
+                      )
                     : nothing
                 }
                 <button
@@ -662,7 +658,7 @@ export function renderUsage(props: UsageProps) {
                       filters.selectedDays,
                       display.chartMode,
                       display.dailyChartMode,
-                      displayActions.onDailyChartModeChange,
+                      (dailyChartMode) => displayActions.onChange({ dailyChartMode }),
                       filterActions.onSelectDay,
                       {
                         startDate: filters.startDate,
@@ -680,7 +676,7 @@ export function renderUsage(props: UsageProps) {
                     groups: activeAggregates.byCreator ?? [],
                     selectedKey: filters.creatorKey,
                     mode: display.chartMode,
-                    onSelect: filterActions.onCreatorChange,
+                    onSelect: (creatorKey) => filterActions.onScopeChange({ creatorKey }),
                   })}
                   ${renderUsageInsights(
                     insightTotals,

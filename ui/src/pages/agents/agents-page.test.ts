@@ -196,7 +196,7 @@ describe("AgentsPage gateway lifecycle", () => {
       runtimeConfig: { save },
     } as unknown as ApplicationContext;
 
-    page.saveAgentConfig();
+    void page.refreshAgents("save");
     await waitForFast(() => expect(save).toHaveBeenCalledOnce());
     expect(refreshList).not.toHaveBeenCalled();
   });
@@ -232,7 +232,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await Promise.resolve();
     expect(page.toolsEffectiveResult?.profile).toBe("messaging");
 
-    page.saveAgentConfig();
+    void page.refreshAgents("save");
     saved.resolve(true);
     await saved.promise;
     roster.resolve(agentsList);

@@ -45,7 +45,7 @@ const history = prepareChatHistoryFixture([
   },
   {
     ...result,
-    content: [{ type: "text", text: fullOutput.slice(0, 8_000) }],
+    content: [{ type: "text", text: fullOutput.slice(0, 2_000) }],
     __openclaw: { ...result["__openclaw"], truncated: true, reason: "display-cap" },
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
@@ -180,12 +180,19 @@ suite.define(() => {
         };
         await page.goto(suite.server.baseUrl + "chat");
         await expandOutput();
-        // This capture precedes the new control assertion, so the same test also
-        // retains an honest pre-fix screenshot when run against the baseline.
         await page.screenshot({
           path: path.join(artifacts, "01-output-preview.png"),
           animations: "disabled",
         });
+        const historyRequests = (await gateway.getRequests()).filter(
+          (request) => request.method === "chat.history" || request.method === "chat.startup",
+        );
+        expect(historyRequests.length).toBeGreaterThan(0);
+        expect(
+          historyRequests.every(
+            (request) => asOptionalRecord(request.params)?.toolResultMaxChars === 2_000,
+          ),
+        ).toBe(true);
         expect(await page.locator(".chat-tool-msg-body").textContent()).not.toContain("TAIL:");
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         const request = await gateway.waitForRequest("chat.message.get");

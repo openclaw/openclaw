@@ -4,7 +4,6 @@
  * Tracks runtime and browser containers in the shared state DB.
  */
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { withFileLock } from "../../infra/file-lock.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import {
@@ -20,8 +19,9 @@ import {
   finishSandboxRegistryRemoval,
   withSandboxRegistrySettlement,
 } from "./registry-lifecycle.js";
+import { withSandboxRegistryPublication } from "./registry-publication.js";
 import {
-  assertSandboxRegistryReservationCurrent,
+  assertSandboxRegistryGenerationCurrent,
   shouldPruneSandboxRegistryEntry,
   type SandboxRegistryOperations,
   type SandboxRegistryPrune,
@@ -64,9 +64,11 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
     (scope) => scope.execute({ type: command.type, input }),
     {
       assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
+      createAdmission: withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        () => context.admission.identity.key,
+        () => context.admission.assertCurrent(),
+      ),
     },
   );
 }
@@ -162,22 +164,14 @@ export async function reserveSandboxRegistryEntry(
 
 /** Validate the exact generation; retained handles cannot outlive removal intent. */
 // Released synchronous sandbox callbacks span provider waits and deferred process launch.
-// They need live generation authority observing foreign removals; revisit with async
-// companions at the next SDK major (docs/reference/database-schemas/worker-access.md).
+// Raw synchronous writers still lack complete receipts, so retain the native generation
+// guard until their next SDK-major removal (docs/reference/database-schemas/worker-access.md).
 export function assertSandboxRegistryEntryCurrent(entry: SandboxRegistryEntry): void {
   const current =
     withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
       readSandboxRegistryEntryInDatabase(db, entry.containerName),
     ) ?? null;
-  assertSandboxRegistryReservationCurrent(current, entry);
-  if (
-    current.createdAtMs !== entry.createdAtMs ||
-    current.workspaceDir !== entry.workspaceDir ||
-    current.configHash !== entry.configHash ||
-    !isDeepStrictEqual(current.backendTarget, entry.backendTarget)
-  ) {
-    throw new Error("Sandbox runtime generation changed");
-  }
+  assertSandboxRegistryGenerationCurrent(current, entry);
 }
 
 /** Publish only a still-current reservation, or forget a provider-confirmed terminal generation. */

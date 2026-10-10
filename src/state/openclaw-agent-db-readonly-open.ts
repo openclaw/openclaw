@@ -8,12 +8,11 @@ import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
-  getSqliteReadScopeRevision,
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
@@ -28,7 +27,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import { hasOpenClawAgentCanonicalValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -92,7 +91,7 @@ export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentRea
   }
   return () => {
     if (
-      getSqliteReadScopeRevision(database.db)?.schema !== schema ||
+      getAdmittedSqliteSchemaFacts(database.db) !== schema ||
       !hasAdmittedAgentReadOnlySchema(database)
     ) {
       throw changed();
@@ -105,17 +104,13 @@ export function hasOpenClawAgentReadOnlySchema(
   database: OpenClawAgentReadOnlyDatabase,
   onAdmitted?: () => void,
 ): boolean {
-  return runSqliteReadOperationSync(
-    database.db,
-    () => {
-      if (!hasAdmittedAgentReadOnlySchema(database)) {
-        return false;
-      }
-      onAdmitted?.();
-      return true;
-    },
-    "fresh",
-  );
+  return runSqliteReadOperationSync(database.db, () => {
+    if (!hasAdmittedAgentReadOnlySchema(database)) {
+      return false;
+    }
+    onAdmitted?.();
+    return true;
+  });
 }
 
 /** Admit ownership and consume its rows in the same freshly pinned snapshot. */
@@ -124,7 +119,7 @@ export function readOpenClawAgentDatabaseSnapshot<T>(
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   let result: OpenClawAgentDatabaseReadOnlyResult<T> = { found: false, reason: "schema-missing" };
-  runSqliteDeferredTransactionSync(database.db, () => {
+  runSqliteReadSnapshotSync(database.db, () => {
     if (hasAdmittedAgentReadOnlySchema(database)) {
       result = readOpenClawAgentDatabase(database, operation);
       // Return the callback value so the transaction owner rejects asynchronous kernels.
@@ -170,7 +165,7 @@ export function openOpenClawAgentDatabaseReadOnly(
   // Verified-corrupt generations stay quarantined for reads as well as writes:
   // the process terminal latch and the persisted generation-aware quarantine
   // row must both clear before any fresh read-only physical open proceeds.
-  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  revalidateAgentDatabaseTerminalOpen(pathname);
   const persistedQuarantine = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
     env: options.env,
   });
