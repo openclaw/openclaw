@@ -1,12 +1,15 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "../config/sessions/session-accessor.sqlite-events.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
@@ -45,6 +48,7 @@ import {
   resolveClientVoiceRunBinding,
 } from "./client-voice-session.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
+import { voiceTranscriptEventId } from "./voice-transcript.js";
 
 // Install digest mocks before the persistence graph loads.
 const { useClientVoiceDigestHarness } = await vi.hoisted(
@@ -54,6 +58,59 @@ const { useClientVoiceDigestHarness } = await vi.hoisted(
 describe("client voice digest physical sources", () => {
   const harness = useClientVoiceDigestHarness();
   const { sendDurableMessageBatch, settleDigestAttempts } = harness;
+
+  it("reserves and confirms durable voice custody around an actor transcript append", async () => {
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor(
+      { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+      authority,
+    );
+    const sessionKey = "agent:main:dashboard:incognito-voice";
+    const entry = {
+      sessionId: "private-voice",
+      lifecycleRevision: "voice-generation",
+      updatedAt: 1,
+    };
+    try {
+      await actor.sessions.create(authority, { sessionKey, entry });
+      await withIncognitoSessionActor(actor, async () => {
+        const voiceSessionId = await createOrResumeClientVoiceSession({
+          agentId: "main",
+          sessionKey,
+          origin: "client",
+          voiceSessionId: "private-call",
+        });
+        const observation = observeHostDataSql();
+        try {
+          await appendClientVoiceTranscript({
+            agentId: "main",
+            sessionKey,
+            sessionTarget: { sessionKey, storePath: actor.path },
+            voiceSessionId,
+            entryId: "spoken-1",
+            role: "user",
+            text: "Private spoken words",
+          });
+          expect(observation.queries).toEqual([]);
+        } finally {
+          observation.restore();
+        }
+        expect(readVoiceSessionRecord("main", voiceSessionId)).toMatchObject({
+          hasUserTranscript: true,
+          transcriptFailureKeys: [],
+        });
+        expect(
+          await findTranscriptEvent(
+            { agentId: "main", storePath: actor.path, sessionKey, sessionId: entry.sessionId },
+            { kind: "latest" },
+          ),
+        ).toMatchObject({ event: { id: voiceTranscriptEventId(voiceSessionId, "spoken-1") } });
+      });
+      expect(existsSync(actor.path)).toBe(false);
+    } finally {
+      await actor.close();
+    }
+  });
 
   it("delivers a detached digest from the captured private actor and confirms only once", async () => {
     const authority = { assertCurrent() {} };
