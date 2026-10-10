@@ -93,7 +93,7 @@ describe("Control UI Lit ratchet", () => {
     });
   });
 
-  it("passes shrinkage, rejects each growing metric and new Lit files, and reads staged bytes", () => {
+  it("passes shrinkage, rejects each growing metric and unoffset new Lit files, and reads staged bytes", () => {
     const root = tempDirs.make("openclaw-lit-ratchet-");
     const sourcePath = path.join(root, "ui/src/view.ts");
     const commonjsPath = path.join(root, "ui/src/legacy.cts");
@@ -170,5 +170,43 @@ describe("Control UI Lit ratchet", () => {
     }
     fs.writeFileSync(newPath, "export const view = <div />;\n");
     expect(main(root, ["--base", "HEAD"])).toBe(0);
+  });
+
+  it("allows splits and renames while rejecting net template and TODO growth", () => {
+    const root = tempDirs.make("openclaw-lit-moves-");
+    const original = path.join(root, "ui/src/view.ts");
+    const split = path.join(root, "ui/src/part.ts");
+    const renamed = path.join(root, "ui/src/renamed.ts");
+    const part = 'import { html as second } from "lit"; export const other = second`<wa-icon />`;';
+    fs.mkdirSync(path.dirname(original), { recursive: true });
+    fs.writeFileSync(original, `${legacy}\n${part}`);
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
+      git(root, args);
+    }
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    fs.writeFileSync(original, legacy);
+    fs.writeFileSync(split, part);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    git(root, ["add", "."]);
+    expect(main(root, ["--staged"])).toBe(0);
+
+    fs.renameSync(original, renamed);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    git(root, ["add", "-A"]);
+    expect(main(root, ["--staged"])).toBe(0);
+
+    fs.appendFileSync(renamed, "\nconst extra = markup`<div />`;");
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.join("\n")).toContain("htmlTemplates: 3 > 2");
+    expect(errors.join("\n")).toContain("ui/src/renamed.ts [htmlTemplates]: 2 > 0");
+
+    fs.writeFileSync(renamed, legacy);
+    fs.appendFileSync(split, "\n// TODO(solid2): finish migration");
+    errors.length = 0;
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.join("\n")).toContain("todoSolid2: 2 > 1");
   });
 });

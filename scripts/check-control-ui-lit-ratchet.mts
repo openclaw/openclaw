@@ -29,6 +29,15 @@ function flatten(counts: ReadonlyMap<string, MigrationMetrics>) {
   );
 }
 
+function totals(counts: ReadonlyMap<string, MigrationMetrics>) {
+  return new Map(
+    METRICS.map((metric) => [
+      metric,
+      [...counts.values()].reduce((sum, row) => sum + row[metric], 0),
+    ]),
+  );
+}
+
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
@@ -41,36 +50,45 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     }
     const previous = readInventorySources(root, { ref: base, roots: ["ui/src"] });
     const currentSources = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
-    // Unchanged bytes cannot grow. Parse only changed files, keeping both sides
-    // under the same counter even when the scanner itself changes.
-    const changed = [...currentSources].filter(([file, source]) => previous.get(file) !== source);
-    const currentCounts = countMigrationSources(root, new Map(changed));
-    const baseCounts = countMigrationSources(
-      root,
-      new Map(
-        changed.flatMap(([file]) => {
-          const source = previous.get(file);
-          return source === undefined ? [] : [[file, source] as const];
-        }),
+    // Include deleted paths so moves and splits retain their base contribution.
+    // Unchanged files cancel out and do not need parsing on either side.
+    const changed = new Set(
+      [...new Set([...previous.keys(), ...currentSources.keys()])].filter(
+        (file) => previous.get(file) !== currentSources.get(file),
       ),
     );
-    const increased = compareRatchetCounts(flatten(currentCounts), flatten(baseCounts)).increased;
+    const changedSources = (sources: ReadonlyMap<string, string>) =>
+      new Map([...sources].filter(([file]) => changed.has(file)));
+    const currentCounts = countMigrationSources(root, changedSources(currentSources));
+    const baseCounts = countMigrationSources(root, changedSources(previous));
+    const increasedTotals = compareRatchetCounts(
+      totals(currentCounts),
+      totals(baseCounts),
+    ).increased;
     if (
+      increasedTotals.length > 0 &&
       reportRatchetFailures(
         [
           {
-            title: "Control UI Lit migration debt may not grow:",
-            entries: increased.map(
+            title: "Control UI Lit migration metric totals may not grow:",
+            entries: increasedTotals.map(
               ({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`,
             ),
           },
+          {
+            title: "Per-file increases (diagnostic):",
+            entries: compareRatchetCounts(
+              flatten(currentCounts),
+              flatten(baseCounts),
+            ).increased.map(({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`),
+          },
         ],
-        "Use Solid for new UI code and remove Lit sites before adding replacements. New ui/src files cannot import Lit.",
+        "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change.",
       )
     ) {
       return 1;
     }
-    console.log(`Control UI Lit ratchet OK (${changed.length} changed files, base ${base}).`);
+    console.log(`Control UI Lit ratchet OK (${changed.size} changed files, base ${base}).`);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
