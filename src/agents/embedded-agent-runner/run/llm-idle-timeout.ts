@@ -258,6 +258,9 @@ export function streamWithIdleTimeout(
       reason = "no response from model",
     ) => {
       const timer = setTimeout(() => {
+        if (requestDeadline?.reject === reject) {
+          requestTimedOut = true;
+        }
         clearRequestDeadline();
         const error = new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`);
         streamAbortController.abort(error);
@@ -271,7 +274,8 @@ export function streamWithIdleTimeout(
       | { timer: NodeJS.Timeout; reject: (error: Error) => void; accepted: boolean }
       | undefined;
     let iterationWatchdogActive = false;
-    const requestTimeout = new Promise<never>((_, reject) => {
+    let requestTimedOut = false;
+    let requestTimeout: Promise<never> | undefined = new Promise<never>((_, reject) => {
       requestDeadline = {
         timer: startTimer(firstEventTimeoutMs, reject, firstEventTimeoutMs),
         reject,
@@ -283,6 +287,9 @@ export function streamWithIdleTimeout(
     const clearRequestDeadline = () => {
       clearTimeout(requestDeadline?.timer);
       requestDeadline = undefined;
+      if (!requestTimedOut) {
+        requestTimeout = undefined;
+      }
       unsubscribeCreationActivity();
     };
     const finishCreation = () => {
@@ -321,7 +328,8 @@ export function streamWithIdleTimeout(
     };
     const withSourceAbort = <T>(promise: Promise<T>) =>
       sourceSignal ? abortable(sourceSignal, promise) : promise;
-    const withRequestTimeout = <T>(promise: Promise<T>) => Promise.race([promise, requestTimeout]);
+    const withRequestTimeout = <T>(promise: Promise<T>) =>
+      requestTimeout ? Promise.race([promise, requestTimeout]) : promise;
 
     let maybeStream: ReturnType<StreamFn>;
     try {

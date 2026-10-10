@@ -172,9 +172,8 @@ describe("streamWithIdleTimeout", () => {
         }
         await vi.advanceTimersByTimeAsync(1);
         expect(onIdleTimeout).toHaveBeenCalledOnce();
-        if (next) {
-          expect(await next).toBe(onIdleTimeout.mock.calls[0]?.[0]);
-        }
+        const outcome = next ?? iterator.next().catch((error: unknown) => error);
+        expect(await outcome).toBe(onIdleTimeout.mock.calls[0]?.[0]);
       } finally {
         source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
         await iterator.return?.();
