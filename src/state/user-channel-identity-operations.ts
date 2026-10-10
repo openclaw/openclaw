@@ -267,19 +267,14 @@ export async function prepareUserProfileRolePolicyAuthority(
   profileId: string,
   options: IdentityOptions = {},
 ) {
-  return prepareUserProfileAuthorityRead(profileId, options, "authority", async (database) => {
-    const reply = await executeExistingOpenClawStateRead(database, {
-      type: "userProfiles.roleAuthority.resolve",
-      profileId,
-    });
-    if (!reply) {
-      return undefined;
-    }
-    if (!reply.ok || reply.type !== "userProfiles.roleAuthority.resolve") {
-      throw new Error("Profile role authority reader returned an unexpected result");
-    }
-    return reply.profile;
-  });
+  return prepareUserProfileAuthorityRead(profileId, options, "authority", (context) =>
+    runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({ type: "userProfiles.roleAuthority.resolve", input: { profileId } }),
+      { existingOnly: true },
+    ),
+  );
 }
 
 export async function prepareUserProfileSelectionAuthority(
@@ -300,12 +295,15 @@ async function prepareUserProfileAuthority(
     profileId,
     options,
     dependency,
-    async (database) => {
-      const reply = await executeExistingOpenClawStateRead(database, {
-        type: "userProfiles.authority.resolve",
-        profileId,
-        ...(includeProfile ? { includeProfile } : {}),
-      });
+    async (context) => {
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        {
+          type: "userProfiles.authority.resolve",
+          profileId,
+          ...(includeProfile ? { includeProfile } : {}),
+        },
+      );
       if (!reply) {
         return undefined;
       }
@@ -322,17 +320,16 @@ async function prepareUserProfileAuthorityRead<Profile extends { profileId: stri
   profileId: string,
   options: IdentityOptions,
   dependency: "authority" | "identity",
-  readProfile: (database: IdentityOptions) => Promise<Profile | undefined>,
+  readProfile: (
+    context: ReturnType<typeof captureAuthorityContext>,
+  ) => Promise<Profile | undefined>,
   includeProfile?: boolean,
 ) {
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const read = await captureUserProfileAuthorityRead(context.admission, undefined, dependency);
     const profileRevision = readUserProfileVersion();
-    const profile = await readProfile({
-      path: context.admission.databasePath,
-      env: context.environment,
-    });
+    const profile = await readProfile(context);
     context.admission.assertCurrent();
     if (!profile) {
       return undefined;
