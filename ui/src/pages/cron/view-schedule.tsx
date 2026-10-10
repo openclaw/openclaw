@@ -50,62 +50,57 @@ function describeFormSchedule(form: CronFormState): string | null {
   }
   return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
-export function DurationRow(componentProps: { props: CronProps; kind: "every" | "stagger" }) {
-  const recurring = createMemo(() => componentProps.kind === "every");
-  const amountField = createMemo(() => (recurring() ? "everyAmount" : "staggerAmount"));
-  const unitField = createMemo(() => (recurring() ? "everyUnit" : "staggerUnit"));
-  const label = createMemo(() => t(recurring() ? "cron.form.every" : "cron.form.staggerWindow"));
-  const required = createMemo(() => (recurring() ? true : undefined));
-  const disabled = createMemo(() =>
-    recurring() ? undefined : componentProps.props.form.scheduleExact,
-  );
-  const units = createMemo(() =>
-    recurring() ? ["seconds", "minutes", "hours", "days"] : ["seconds", "minutes"],
-  );
+export function DurationRow(
+  props: CronProps & {
+    kind: "every" | "stagger";
+  },
+) {
+  const recurring = () => props.kind === "every";
+  const amountField = () => (recurring() ? "everyAmount" : "staggerAmount");
+  const unitField = () => (recurring() ? "everyUnit" : "staggerUnit");
+  const label = () => t(recurring() ? "cron.form.every" : "cron.form.staggerWindow");
+  const required = () => (recurring() ? true : undefined);
+  const disabled = () => (recurring() ? undefined : props.form.scheduleExact);
+  const units = () =>
+    recurring() ? ["seconds", "minutes", "hours", "days"] : ["seconds", "minutes"];
   return (
     <FieldRow
-      params={{
-        label: label(),
-        controlId: inputIdForField(amountField()),
-        required: required(),
-        error: componentProps.props.fieldErrors[amountField()],
-        errorId: errorIdForField(amountField()),
-        control: (
-          <div class="cron-inline-controls">
-            <CronInput
-              props={componentProps.props}
-              field={amountField()}
-              options={{
-                inline: true,
-                label: label(),
-                required: required(),
-                disabled: disabled(),
-                errorKey: amountField(),
-                placeholder: t(
-                  recurring() ? "cron.form.everyAmountPlaceholder" : "cron.form.staggerPlaceholder",
-                ),
-              }}
-            />
-            <CronSelect
-              props={componentProps.props}
-              field={unitField()}
-              options={{
-                label: t(recurring() ? "cron.form.unit" : "cron.form.staggerUnit"),
-                inline: true,
-                disabled: disabled(),
-                options: units().map((value) => ({ value, label: t(`cron.form.${value}`) })),
-              }}
-            />
-          </div>
-        ),
-      }}
+      label={label()}
+      controlId={inputIdForField(amountField())}
+      required={required()}
+      error={props.fieldErrors[amountField()]}
+      errorId={errorIdForField(amountField())}
+      control={
+        <div class="cron-inline-controls">
+          <CronInput
+            {...props}
+            field={amountField()}
+            inline
+            label={label()}
+            required={required()}
+            disabled={disabled()}
+            errorKey={amountField()}
+            placeholder={t(
+              recurring() ? "cron.form.everyAmountPlaceholder" : "cron.form.staggerPlaceholder",
+            )}
+          />
+          <CronSelect
+            {...props}
+            field={unitField()}
+            label={t(recurring() ? "cron.form.unit" : "cron.form.staggerUnit")}
+            inline
+            disabled={disabled()}
+            options={units().map((value) => ({ value, label: t(`cron.form.${value}`) }))}
+          />
+        </div>
+      }
     />
   );
 }
 export function ScheduleSection(props: CronProps) {
-  const form = createMemo(() => props.form);
-  const isOnExit = createMemo(() => form().scheduleKind === "on-exit");
-  const isStream = createMemo(() => form().scheduleKind === "stream");
+  const form = () => props.form;
+  const isOnExit = () => form().scheduleKind === "on-exit";
+  const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
   // convert to an editable schedule, but never synthesize a command in the UI.
   const processSchedule = createMemo(() =>
@@ -132,79 +127,68 @@ export function ScheduleSection(props: CronProps) {
   });
   const summary = createMemo(() => describeFormSchedule(form()));
   return (
-    <SettingsSection
-      title={t("cron.detail.scheduleSection")}
-      children={
-        <>
-          <SettingsRow
-            title={t("cron.form.repeat")}
-            description={isOnExit() ? t("cron.form.onExitHelp") : undefined}
-            stacked={true}
-            control={
-              <SettingsSegmented<CronFormState["scheduleKind"]>
-                value={form().scheduleKind}
-                options={kinds()}
-                ariaLabel={t("cron.form.repeat")}
-                onChange={(value) =>
-                  props.onFormChange({
-                    scheduleKind: value,
-                    ...(value === "at" &&
-                    (form().scheduleKind === "every" || form().scheduleKind === "cron")
-                      ? { deleteAfterRun: true }
-                      : value === "every" || value === "cron"
-                        ? { deleteAfterRun: false }
-                        : {}),
-                  })
-                }
-              />
+    <SettingsSection title={t("cron.detail.scheduleSection")}>
+      <SettingsRow
+        title={t("cron.form.repeat")}
+        description={isOnExit() ? t("cron.form.onExitHelp") : undefined}
+        stacked
+        control={
+          <SettingsSegmented<CronFormState["scheduleKind"]>
+            value={form().scheduleKind}
+            options={kinds()}
+            ariaLabel={t("cron.form.repeat")}
+            onChange={(value) =>
+              props.onFormChange({
+                scheduleKind: value,
+                ...(value === "at" &&
+                (form().scheduleKind === "every" || form().scheduleKind === "cron")
+                  ? { deleteAfterRun: true }
+                  : value === "every" || value === "cron"
+                    ? { deleteAfterRun: false }
+                    : {}),
+              })
             }
           />
-          {form().scheduleKind === "at" ? (
-            <CronInput
-              props={props}
-              field="scheduleAt"
-              options={{
-                label: t("cron.form.runAt"),
-                required: true,
-                errorKey: "scheduleAt",
-                type: "datetime-local",
-              }}
-            />
-          ) : undefined}
-          {form().scheduleKind === "every" ? <DurationRow props={props} kind="every" /> : undefined}
-          {form().scheduleKind === "cron" ? (
-            <>
-              <CronInput
-                props={props}
-                field="cronExpr"
-                options={{
-                  label: t("cron.form.expression"),
-                  required: true,
-                  errorKey: "cronExpr",
-                  mono: true,
-                  placeholder: t("cron.form.expressionPlaceholder"),
-                }}
-              />
-              <CronInput
-                props={props}
-                field="cronTz"
-                options={{
-                  label: t("cron.form.timezoneOptional"),
-                  help: t("cron.form.timezoneHelp"),
-                  list: "cron-tz-suggestions",
-                  placeholder: t("cron.form.timezonePlaceholder"),
-                }}
-              />
-            </>
-          ) : undefined}
-          {summary() ? (
-            <div class="cron-schedule-summary">
-              <Icon name="clock" />
-              <span>{summary()}</span>
-            </div>
-          ) : undefined}
+        }
+      />
+      {form().scheduleKind === "at" ? (
+        <CronInput
+          {...props}
+          field="scheduleAt"
+          label={t("cron.form.runAt")}
+          required
+          errorKey="scheduleAt"
+          type="datetime-local"
+        />
+      ) : undefined}
+      {form().scheduleKind === "every" ? <DurationRow {...props} kind="every" /> : undefined}
+      {form().scheduleKind === "cron" ? (
+        <>
+          <CronInput
+            {...props}
+            field="cronExpr"
+            label={t("cron.form.expression")}
+            required
+            errorKey="cronExpr"
+            mono
+            placeholder={t("cron.form.expressionPlaceholder")}
+          />
+          <CronInput
+            {...props}
+            field="cronTz"
+            label={t("cron.form.timezoneOptional")}
+            help={t("cron.form.timezoneHelp")}
+            list="cron-tz-suggestions"
+            placeholder={t("cron.form.timezonePlaceholder")}
+          />
         </>
-      }
-    />
+      ) : undefined}
+      {summary() ? (
+        <div class="cron-schedule-summary">
+          <Icon name="clock" />
+          <span>{summary()}</span>
+        </div>
+      ) : undefined}
+    </SettingsSection>
   );
 }

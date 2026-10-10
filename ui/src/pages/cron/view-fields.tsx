@@ -1,11 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
-import type { PickerOption } from "../../components/select-picker.ts";
+import { renderChannelPicker } from "../../components/channel-picker.ts";
+import { renderPicker, type PickerOption } from "../../components/select-picker.ts";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import type { CronFieldKey, CronFormState, CronFieldErrors } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { CronPicker } from "./view-controls.tsx";
+import { LitContent } from "../../lit/lit-content.tsx";
 import type { CronProps } from "./view-types.ts";
 type BlockingField = {
   label: string;
@@ -28,24 +28,11 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
 };
-export function errorIdForField(key: CronFieldKey) {
-  return `cron-error-${key}`;
+export function errorIdForField(props: CronFieldKey) {
+  return `cron-error-${props}`;
 }
 export function inputIdForField(key: string) {
   return `cron-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
-}
-function fieldLabelForKey(
-  key: CronFieldKey,
-  form: CronFormState,
-  deliveryMode: CronFormState["deliveryMode"],
-) {
-  if (key === "payloadText" && form.payloadKind === "systemEvent") {
-    return t("cron.form.mainTimelineMessage");
-  }
-  if (key === "deliveryTo" && deliveryMode === "webhook") {
-    return t("cron.form.webhookUrl");
-  }
-  return t(CRON_FIELD_LABEL_KEYS[key]);
 }
 export function collectBlockingFields(
   errors: CronFieldErrors,
@@ -58,7 +45,13 @@ export function collectBlockingFields(
     return message
       ? [
           {
-            label: fieldLabelForKey(key, form, deliveryMode),
+            label: t(
+              key === "payloadText" && form.payloadKind === "systemEvent"
+                ? "cron.form.mainTimelineMessage"
+                : key === "deliveryTo" && deliveryMode === "webhook"
+                  ? "cron.form.webhookUrl"
+                  : CRON_FIELD_LABEL_KEYS[key],
+            ),
             message,
             inputId: inputIdForField(key),
           },
@@ -66,83 +59,61 @@ export function collectBlockingFields(
       : [];
   });
 }
-export function focusFormField(id: string) {
-  const el = document.getElementById(id);
+export function focusFormField(props: string) {
+  const el = document.getElementById(props);
   if (!(el instanceof HTMLElement)) {
     return;
   }
-  if (typeof el.scrollIntoView === "function") {
-    el.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
-  }
+  el.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
   el.focus();
 }
-function FieldError(props: { message?: string; id?: string }) {
-  return (
-    <>
-      {props.message ? (
-        <div id={props.id} class="cron-help cron-error">
-          {t(props.message)}
-        </div>
-      ) : undefined}
-    </>
-  );
-}
-function RequiredTitle(componentProps: { label: string }) {
-  return (
-    <>
-      {componentProps.label}
-      <span class="cron-required-marker" aria-hidden="true">
-        *
-      </span>
-      <span class="cron-required-sr">{t("cron.form.requiredSr")}</span>
-    </>
-  );
-}
-// Settings row whose control keeps its own validation message underneath. Mirrors
-// SettingsRow markup; local only so the title can be a real <label for> that gives the
-// wrapped control its accessible name (including the visually-hidden required marker).
-export function FieldRow(componentProps: {
-  params: {
-    label: string;
-    // Blank when the control is not labelable (e.g. a code block); the label then
-    // has no `for` target and the control carries its own aria-label.
-    controlId: string;
-    control: JSX.Element;
-    required?: boolean;
-    help?: string;
-    error?: string;
-    errorId?: string;
-    stacked?: boolean;
-    wide?: boolean;
-  };
+// A real label keeps the required marker in the control's accessible name.
+export function FieldRow(props: {
+  label: string;
+  controlId: string;
+  control: JSX.Element;
+  required?: boolean;
+  help?: string;
+  error?: string;
+  errorId?: string;
+  stacked?: boolean;
+  wide?: boolean;
+  inline?: boolean;
 }) {
-  const controlClass = createMemo(() =>
-    componentProps.params.wide ? "cron-control cron-control--wide" : "cron-control",
-  );
-  const control = (
-    <div class={controlClass()}>
-      {componentProps.params.control}
-      <FieldError message={componentProps.params.error} id={componentProps.params.errorId} />
-    </div>
-  );
   return (
-    <div
-      class={componentProps.params.stacked ? "settings-row settings-row--stacked" : "settings-row"}
-    >
-      <label class="settings-row__text" for={componentProps.params.controlId || undefined}>
-        <span class="settings-row__title">
-          {componentProps.params.required ? (
-            <RequiredTitle label={componentProps.params.label} />
-          ) : (
-            componentProps.params.label
-          )}
-        </span>
-        {componentProps.params.help ? (
-          <span class="settings-row__desc">{componentProps.params.help}</span>
-        ) : undefined}
-      </label>
-      <div class="settings-row__control">{control}</div>
-    </div>
+    <>
+      {" "}
+      {props.inline ? (
+        props.control
+      ) : (
+        <div class={["settings-row", { "settings-row--stacked": props.stacked }]}>
+          <label class="settings-row__text" for={props.controlId || undefined}>
+            <span class="settings-row__title">
+              {props.label}
+              {props.required ? (
+                <>
+                  <span class="cron-required-marker" aria-hidden="true">
+                    *
+                  </span>
+                  <span class="cron-required-sr">{t("cron.form.requiredSr")}</span>
+                </>
+              ) : undefined}
+            </span>
+            {props.help ? <span class="settings-row__desc">{props.help}</span> : undefined}
+          </label>
+          <div class="settings-row__control">
+            <div class={["cron-control", { "cron-control--wide": props.wide }]}>
+              {props.control}
+              {props.error ? (
+                <div id={props.errorId} class="cron-help cron-error">
+                  {t(props.error)}
+                </div>
+              ) : undefined}
+            </div>
+          </div>
+        </div>
+      )}{" "}
+    </>
   );
 }
 type CronStringFormField = {
@@ -151,7 +122,9 @@ type CronStringFormField = {
 type CronBooleanFormField = {
   [Field in keyof CronFormState]: CronFormState[Field] extends boolean ? Field : never;
 }[keyof CronFormState];
+type FormProps = Pick<CronProps, "form" | "fieldErrors" | "onFormChange">;
 type CronInputOptions = {
+  field: CronStringFormField;
   label: string;
   help?: string;
   placeholder?: string;
@@ -164,61 +137,46 @@ type CronInputOptions = {
   describeError?: boolean;
   inline?: boolean;
 };
-export function CronInput(componentProps: {
-  props: CronProps;
-  field: CronStringFormField;
-  options: CronInputOptions;
-}) {
-  const error = createMemo(() =>
-    componentProps.options.errorKey
-      ? componentProps.props.fieldErrors[componentProps.options.errorKey]
-      : undefined,
-  );
-  const describedBy = createMemo(() =>
-    error() && componentProps.options.errorKey && componentProps.options.describeError !== false
-      ? errorIdForField(componentProps.options.errorKey)
-      : undefined,
-  );
+export function CronInput(props: FormProps & CronInputOptions) {
+  const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
+  const describedBy = () =>
+    error() && props.errorKey && props.describeError !== false
+      ? errorIdForField(props.errorKey)
+      : undefined;
   const control = (
     <input
-      id={inputIdForField(componentProps.field)}
-      class={componentProps.options.mono ? "settings-input mono" : "settings-input"}
-      type={componentProps.options.type}
-      aria-required={componentProps.options.required ? "true" : undefined}
-      prop:value={componentProps.props.form[componentProps.field]}
-      list={componentProps.options.list}
-      disabled={componentProps.options.disabled ?? false}
-      aria-invalid={componentProps.options.errorKey ? (error() ? "true" : "false") : undefined}
+      id={inputIdForField(props.field)}
+      class={props.mono ? "settings-input mono" : "settings-input"}
+      type={props.type}
+      aria-required={props.required ? "true" : undefined}
+      prop:value={props.form[props.field]}
+      list={props.list}
+      disabled={props.disabled ?? false}
+      aria-invalid={props.errorKey ? (error() ? "true" : "false") : undefined}
       aria-describedby={describedBy()}
-      placeholder={componentProps.options.placeholder}
+      placeholder={props.placeholder}
       onInput={(event) =>
-        componentProps.props.onFormChange({
-          [componentProps.field]: event.currentTarget.value,
+        props.onFormChange({
+          [props.field]: event.currentTarget.value,
         })
       }
     />
   );
-  return createMemo(() =>
-    componentProps.options.inline ? (
-      control
-    ) : (
-      <FieldRow
-        params={{
-          label: componentProps.options.label,
-          controlId: inputIdForField(componentProps.field),
-          required: componentProps.options.required,
-          help: componentProps.options.help,
-          error: error(),
-          errorId: componentProps.options.errorKey
-            ? errorIdForField(componentProps.options.errorKey)
-            : undefined,
-          control,
-        }}
-      />
-    ),
+  return (
+    <FieldRow
+      inline={props.inline}
+      label={props.label}
+      controlId={inputIdForField(props.field)}
+      required={props.required}
+      help={props.help}
+      error={error()}
+      errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}
+      control={control}
+    />
   );
 }
 type CronSelectOptions = {
+  field: CronStringFormField;
   label: string;
   options: readonly PickerOption[];
   help?: string;
@@ -228,70 +186,48 @@ type CronSelectOptions = {
   channel?: boolean;
   errorKey?: CronFieldKey;
 };
-export function CronSelect(componentProps: {
-  props: CronProps;
-  field: CronStringFormField;
-  options: CronSelectOptions;
-}) {
-  const selected = createMemo(
-    () => componentProps.options.value ?? componentProps.props.form[componentProps.field],
-  );
-  const error = createMemo(() =>
-    componentProps.options.errorKey
-      ? componentProps.props.fieldErrors[componentProps.options.errorKey]
-      : undefined,
-  );
+export function CronSelect(props: FormProps & CronSelectOptions) {
+  const selected = () => props.value ?? props.form[props.field];
+  const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
   const control = (
-    <CronPicker
-      params={{
-        id: componentProps.options.inline ? undefined : inputIdForField(componentProps.field),
-        label: componentProps.options.label,
-        value: componentProps.options.channel ? selected() || "last" : selected(),
-        options: componentProps.options.options,
-        disabled: componentProps.options.disabled,
-        invalid: componentProps.options.errorKey ? Boolean(error()) : undefined,
-        describedBy:
-          error() && componentProps.options.errorKey
-            ? errorIdForField(componentProps.options.errorKey)
-            : undefined,
-        onChange: (value) => componentProps.props.onFormChange({ [componentProps.field]: value }),
-      }}
-      channel={componentProps.options.channel}
+    <LitContent
+      value={(props.channel ? renderChannelPicker : renderPicker)({
+        id: props.inline ? undefined : inputIdForField(props.field),
+        label: props.label,
+        value: props.channel ? selected() || "last" : selected(),
+        options: props.options,
+        disabled: props.disabled,
+        invalid: props.errorKey ? Boolean(error()) : undefined,
+        describedBy: error() && props.errorKey ? errorIdForField(props.errorKey) : undefined,
+        onChange: (value) => props.onFormChange({ [props.field]: value }),
+      })}
     />
   );
-  return createMemo(() =>
-    componentProps.options.inline ? (
-      control
-    ) : (
-      <FieldRow
-        params={{
-          label: componentProps.options.label,
-          controlId: inputIdForField(componentProps.field),
-          help: componentProps.options.help,
-          error: error(),
-          errorId: componentProps.options.errorKey
-            ? errorIdForField(componentProps.options.errorKey)
-            : undefined,
-          control,
-        }}
-      />
-    ),
+  return (
+    <FieldRow
+      inline={props.inline}
+      label={props.label}
+      controlId={inputIdForField(props.field)}
+      help={props.help}
+      error={error()}
+      errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}
+      control={control}
+    />
   );
 }
-export function ToggleRow(componentProps: {
-  props: CronProps;
-  field: CronBooleanFormField;
-  params: {
+export function ToggleRow(
+  props: FormProps & {
+    field: CronBooleanFormField;
     label: string;
     help?: string;
-  };
-}) {
+  },
+) {
   return (
     <SettingsToggleRow
-      title={componentProps.params.label}
-      description={componentProps.params.help}
-      checked={componentProps.props.form[componentProps.field]}
-      onChange={(checked) => componentProps.props.onFormChange({ [componentProps.field]: checked })}
+      title={props.label}
+      description={props.help}
+      checked={props.form[props.field]}
+      onChange={(checked) => props.onFormChange({ [props.field]: checked })}
     />
   );
 }

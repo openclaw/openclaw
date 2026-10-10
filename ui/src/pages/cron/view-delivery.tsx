@@ -20,92 +20,77 @@ function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
     })),
   ];
 }
-export function DeliverySection(componentProps: {
-  props: CronProps;
-  ctx: {
+export function DeliverySection(
+  props: CronProps & {
     supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
-  };
-}) {
-  const channelOptions = createMemo(() => buildChannelOptions(componentProps.props));
+  },
+) {
+  const channelOptions = createMemo(() => buildChannelOptions(props));
   return (
-    <SettingsSection
-      title={t("cron.detail.deliverySection")}
-      children={
+    <SettingsSection title={t("cron.detail.deliverySection")}>
+      <CronSelect
+        {...props}
+        field="deliveryMode"
+        label={t("cron.form.deliveryModeLabel")}
+        help={t("cron.form.deliveryHelp")}
+        value={props.selectedDeliveryMode}
+        errorKey="deliveryMode"
+        options={[
+          ...(props.selectedDeliveryMode === ""
+            ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
+            : []),
+          ...(props.supportsAnnounce
+            ? [{ value: "announce", label: t("cron.form.announceDefault") }]
+            : []),
+          { value: "webhook", label: t("cron.form.webhookPost") },
+          { value: "none", label: t("cron.form.noneInternal") },
+        ]}
+      />
+      {props.selectedDeliveryMode === "announce" ? (
         <>
           <CronSelect
-            props={componentProps.props}
-            field="deliveryMode"
-            options={{
-              label: t("cron.form.deliveryModeLabel"),
-              help: t("cron.form.deliveryHelp"),
-              value: componentProps.ctx.selectedDeliveryMode,
-              errorKey: "deliveryMode",
-              options: [
-                ...(componentProps.ctx.selectedDeliveryMode === ""
-                  ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
-                  : []),
-                ...(componentProps.ctx.supportsAnnounce
-                  ? [{ value: "announce", label: t("cron.form.announceDefault") }]
-                  : []),
-                { value: "webhook", label: t("cron.form.webhookPost") },
-                { value: "none", label: t("cron.form.noneInternal") },
-              ],
-            }}
+            {...props}
+            field="deliveryChannel"
+            label={t("cron.form.channel")}
+            help={t("cron.form.channelHelp")}
+            options={channelOptions()}
+            channel
           />
-          {componentProps.ctx.selectedDeliveryMode === "announce" ? (
-            <>
-              <CronSelect
-                props={componentProps.props}
-                field="deliveryChannel"
-                options={{
-                  label: t("cron.form.channel"),
-                  help: t("cron.form.channelHelp"),
-                  options: channelOptions(),
-                  channel: true,
-                }}
-              />
-              <CronInput
-                props={componentProps.props}
-                field="deliveryTo"
-                options={{
-                  label: t("cron.form.to"),
-                  help: t("cron.form.toHelp"),
-                  list: "cron-delivery-to-suggestions",
-                  placeholder: t("cron.form.toPlaceholder"),
-                }}
-              />
-            </>
-          ) : undefined}
-          {componentProps.ctx.selectedDeliveryMode === "webhook" ? (
-            <CronInput
-              props={componentProps.props}
-              field="deliveryTo"
-              options={{
-                label: t("cron.form.webhookUrl"),
-                required: true,
-                help: t("cron.form.webhookHelp"),
-                errorKey: "deliveryTo",
-                list: "cron-delivery-to-suggestions",
-                placeholder: t("cron.form.webhookPlaceholder"),
-              }}
-            />
-          ) : undefined}
+          <CronInput
+            {...props}
+            field="deliveryTo"
+            label={t("cron.form.to")}
+            help={t("cron.form.toHelp")}
+            list="cron-delivery-to-suggestions"
+            placeholder={t("cron.form.toPlaceholder")}
+          />
         </>
-      }
-    />
+      ) : undefined}
+      {props.selectedDeliveryMode === "webhook" ? (
+        <CronInput
+          {...props}
+          field="deliveryTo"
+          label={t("cron.form.webhookUrl")}
+          required
+          help={t("cron.form.webhookHelp")}
+          errorKey="deliveryTo"
+          list="cron-delivery-to-suggestions"
+          placeholder={t("cron.form.webhookPlaceholder")}
+        />
+      ) : undefined}
+    </SettingsSection>
   );
 }
-export function Advanced(componentProps: {
-  props: CronProps;
-  ctx: {
+export function Advanced(
+  props: CronProps & {
     mode: CronPanelMode;
     isAgentTurn: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
-  };
-}) {
-  const isCronSchedule = createMemo(() => componentProps.props.form.scheduleKind === "cron");
-  const channelOptions = createMemo(() => buildChannelOptions(componentProps.props));
+  },
+) {
+  const isCronSchedule = () => props.form.scheduleKind === "cron";
+  const channelOptions = createMemo(() => buildChannelOptions(props));
   // Collapsible section: the summary stands in for the section heading, the
   // body keeps the one-group-of-rows settings shape.
   return (
@@ -113,7 +98,7 @@ export function Advanced(componentProps: {
       <details class="cron-advanced">
         <summary class="settings-section__heading cron-advanced__summary">
           {t("cron.form.advanced")}
-          {componentProps.props.form.triggerEnabled ? (
+          {props.form.triggerEnabled ? (
             <span class="cron-trigger-summary">
               <Icon name="gitBranch" /> {t("cron.form.triggerConfigured")}
             </span>
@@ -121,121 +106,94 @@ export function Advanced(componentProps: {
         </summary>
         <p class="settings-section__desc">{t("cron.form.advancedHelp")}</p>
         <div class="settings-group">
-          <TriggerRows {...componentProps.props} />
+          <TriggerRows {...props} />
           <CronInput
-            props={componentProps.props}
+            {...props}
             field="description"
-            options={{
-              label: t("cron.form.description"),
-              placeholder: t("cron.form.descriptionPlaceholder"),
-            }}
+            label={t("cron.form.description")}
+            placeholder={t("cron.form.descriptionPlaceholder")}
           />
-          {componentProps.ctx.mode === "create" ? (
-            <ToggleRow
-              props={componentProps.props}
-              field="enabled"
-              params={{
-                label: t("cron.form.startEnabled"),
-              }}
-            />
+          {props.mode === "create" ? (
+            <ToggleRow {...props} field="enabled" label={t("cron.form.startEnabled")} />
           ) : undefined}
           <CronSelect
-            props={componentProps.props}
+            {...props}
             field="wakeMode"
-            options={{
-              label: t("cron.form.wakeMode"),
-              help: t("cron.form.wakeModeHelp"),
-              options: [
-                { value: "now", label: t("cron.form.now") },
-                { value: "next-heartbeat", label: t("cron.form.nextHeartbeat") },
-              ],
-            }}
+            label={t("cron.form.wakeMode")}
+            help={t("cron.form.wakeModeHelp")}
+            options={[
+              { value: "now", label: t("cron.form.now") },
+              { value: "next-heartbeat", label: t("cron.form.nextHeartbeat") },
+            ]}
           />
-          {componentProps.ctx.isAgentTurn ? (
+          {props.isAgentTurn ? (
             <CronInput
-              props={componentProps.props}
+              {...props}
               field="timeoutSeconds"
-              options={{
-                label: t("cron.form.timeoutSeconds"),
-                help: t("cron.form.timeoutHelp"),
-                errorKey: "timeoutSeconds",
-                placeholder: t("cron.form.timeoutPlaceholder"),
-              }}
+              label={t("cron.form.timeoutSeconds")}
+              help={t("cron.form.timeoutHelp")}
+              errorKey="timeoutSeconds"
+              placeholder={t("cron.form.timeoutPlaceholder")}
             />
           ) : undefined}
-          {componentProps.props.form.scheduleKind === "at" ||
-          componentProps.props.form.scheduleKind === "on-exit" ? (
+          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
             <ToggleRow
-              props={componentProps.props}
+              {...props}
               field="deleteAfterRun"
-              params={{
-                label: t("cron.form.deleteAfterRun"),
-                help: t("cron.form.deleteAfterRunHelp"),
-              }}
+              label={t("cron.form.deleteAfterRun")}
+              help={t("cron.form.deleteAfterRunHelp")}
             />
           ) : undefined}
           <ToggleRow
-            props={componentProps.props}
+            {...props}
             field="clearAgent"
-            params={{
-              label: t("cron.form.clearAgentOverride"),
-              help: t("cron.form.clearAgentHelp"),
-            }}
+            label={t("cron.form.clearAgentOverride")}
+            help={t("cron.form.clearAgentHelp")}
           />
           <CronInput
-            props={componentProps.props}
+            {...props}
             field="sessionKey"
-            options={{
-              label: t("cron.form.sessionKey"),
-              help: t("cron.form.sessionKeyHelp"),
-              placeholder: "agent:main:main",
-            }}
+            label={t("cron.form.sessionKey")}
+            help={t("cron.form.sessionKeyHelp")}
+            placeholder="agent:main:main"
           />
           {isCronSchedule() ? (
             <>
               <ToggleRow
-                props={componentProps.props}
+                {...props}
                 field="scheduleExact"
-                params={{
-                  label: t("cron.form.exactTiming"),
-                  help: t("cron.form.exactTimingHelp"),
-                }}
+                label={t("cron.form.exactTiming")}
+                help={t("cron.form.exactTimingHelp")}
               />
-              <DurationRow props={componentProps.props} kind="stagger" />
+              <DurationRow {...props} kind="stagger" />
             </>
           ) : undefined}
-          {componentProps.ctx.isAgentTurn ? (
+          {props.isAgentTurn ? (
             <>
               <CronInput
-                props={componentProps.props}
+                {...props}
                 field="deliveryAccountId"
-                options={{
-                  label: t("cron.form.accountId"),
-                  help: t("cron.form.accountIdHelp"),
-                  list: "cron-delivery-account-suggestions",
-                  disabled: componentProps.ctx.selectedDeliveryMode !== "announce",
-                  placeholder: "default",
-                }}
+                label={t("cron.form.accountId")}
+                help={t("cron.form.accountIdHelp")}
+                list="cron-delivery-account-suggestions"
+                disabled={props.selectedDeliveryMode !== "announce"}
+                placeholder="default"
               />
               <ToggleRow
-                props={componentProps.props}
+                {...props}
                 field="payloadLightContext"
-                params={{
-                  label: t("cron.form.lightContext"),
-                  help: t("cron.form.lightContextHelp"),
-                }}
+                label={t("cron.form.lightContext")}
+                help={t("cron.form.lightContextHelp")}
               />
-              <FailureAlertRows props={componentProps.props} channelOptions={channelOptions()} />
+              <FailureAlertRows {...props} channelOptions={channelOptions()} />
             </>
           ) : undefined}
-          {componentProps.ctx.selectedDeliveryMode !== "none" ? (
+          {props.selectedDeliveryMode !== "none" ? (
             <ToggleRow
-              props={componentProps.props}
+              {...props}
               field="deliveryBestEffort"
-              params={{
-                label: t("cron.form.bestEffortDelivery"),
-                help: t("cron.form.bestEffortHelp"),
-              }}
+              label={t("cron.form.bestEffortDelivery")}
+              help={t("cron.form.bestEffortHelp")}
             />
           ) : undefined}
         </div>
@@ -244,7 +202,7 @@ export function Advanced(componentProps: {
   );
 }
 function TriggerRows(props: CronProps) {
-  const scriptPayload = createMemo(() => props.form.payloadKind === "script");
+  const scriptPayload = () => props.form.payloadKind === "script";
   return (
     <>
       {!scriptPayload() && props.status === null ? undefined : props.status?.triggersEnabled !==
@@ -273,55 +231,47 @@ function TriggerRows(props: CronProps) {
       ) : (
         <>
           <ToggleRow
-            props={props}
+            {...props}
             field="triggerEnabled"
-            params={{
-              label: t("cron.form.conditionTrigger"),
-              help: t("cron.form.conditionTriggerHelp"),
-            }}
+            label={t("cron.form.conditionTrigger")}
+            help={t("cron.form.conditionTriggerHelp")}
           />
           {props.form.triggerEnabled ? (
             <>
               <FieldRow
-                params={{
-                  label: t("cron.form.triggerScript"),
-                  controlId: "cron-trigger-script",
-                  required: true,
-                  help: t("cron.form.triggerScriptHelp"),
-                  error: props.fieldErrors.triggerScript,
-                  errorId: errorIdForField("triggerScript"),
-                  stacked: true,
-                  wide: true,
-                  control: (
-                    <textarea
-                      id="cron-trigger-script"
-                      class="settings-input cron-trigger-script mono"
-                      rows="8"
-                      spellCheck="false"
-                      aria-invalid={props.fieldErrors.triggerScript ? "true" : "false"}
-                      aria-describedby={
-                        props.fieldErrors.triggerScript
-                          ? errorIdForField("triggerScript")
-                          : undefined
+                label={t("cron.form.triggerScript")}
+                controlId="cron-trigger-script"
+                required
+                help={t("cron.form.triggerScriptHelp")}
+                error={props.fieldErrors.triggerScript}
+                errorId={errorIdForField("triggerScript")}
+                stacked
+                wide
+                control={
+                  <textarea
+                    id="cron-trigger-script"
+                    class="settings-input cron-trigger-script mono"
+                    rows="8"
+                    spellCheck="false"
+                    aria-invalid={props.fieldErrors.triggerScript ? "true" : "false"}
+                    aria-describedby={
+                      props.fieldErrors.triggerScript ? errorIdForField("triggerScript") : undefined
+                    }
+                    prop:value={props.form.triggerScript}
+                    onInput={(event) => {
+                      const target = event.currentTarget;
+                      if (target instanceof HTMLTextAreaElement) {
+                        props.onFormChange({ triggerScript: target.value });
                       }
-                      prop:value={props.form.triggerScript}
-                      onInput={(event) => {
-                        const target = event.currentTarget;
-                        if (target instanceof HTMLTextAreaElement) {
-                          props.onFormChange({ triggerScript: target.value });
-                        }
-                      }}
-                    />
-                  ),
-                }}
+                    }}
+                  />
+                }
               />
               <ToggleRow
-                props={props}
+                {...props}
                 field="triggerOnce"
-                params={{
-                  label: t("cron.form.triggerOnce"),
-                  help: t("cron.form.triggerOnceHelp"),
-                }}
+                label={t("cron.form.triggerOnce")}
+                help={t("cron.form.triggerOnceHelp")}
               />
             </>
           ) : undefined}
@@ -330,85 +280,72 @@ function TriggerRows(props: CronProps) {
     </>
   );
 }
-function FailureAlertRows(componentProps: {
-  props: CronProps;
-  channelOptions: readonly ChannelPickerOption[];
-}) {
+function FailureAlertRows(
+  props: CronProps & {
+    channelOptions: readonly ChannelPickerOption[];
+  },
+) {
   return (
     <>
       <CronSelect
-        props={componentProps.props}
+        {...props}
         field="failureAlertMode"
-        options={{
-          label: t("cron.form.failureAlerts"),
-          help: t("cron.form.failureAlertsHelp"),
-          options: [
-            { value: "inherit", label: t("cron.form.failureAlertInherit") },
-            { value: "disabled", label: t("cron.form.failureAlertDisabled") },
-            { value: "custom", label: t("cron.form.failureAlertCustom") },
-          ],
-        }}
+        label={t("cron.form.failureAlerts")}
+        help={t("cron.form.failureAlertsHelp")}
+        options={[
+          { value: "inherit", label: t("cron.form.failureAlertInherit") },
+          { value: "disabled", label: t("cron.form.failureAlertDisabled") },
+          { value: "custom", label: t("cron.form.failureAlertCustom") },
+        ]}
       />
-      {componentProps.props.form.failureAlertMode === "custom" ? (
+      {props.form.failureAlertMode === "custom" ? (
         <>
           <CronInput
-            props={componentProps.props}
+            {...props}
             field="failureAlertAfter"
-            options={{
-              label: t("cron.form.failureAlertAfter"),
-              help: t("cron.form.failureAlertAfterHelp"),
-              errorKey: "failureAlertAfter",
-              placeholder: t("cron.form.failureAlertInherit"),
-            }}
+            label={t("cron.form.failureAlertAfter")}
+            help={t("cron.form.failureAlertAfterHelp")}
+            errorKey="failureAlertAfter"
+            placeholder={t("cron.form.failureAlertInherit")}
           />
           <CronInput
-            props={componentProps.props}
+            {...props}
             field="failureAlertCooldownSeconds"
-            options={{
-              label: t("cron.form.failureAlertCooldown"),
-              help: t("cron.form.failureAlertCooldownHelp"),
-              errorKey: "failureAlertCooldownSeconds",
-              placeholder: t("cron.form.failureAlertInherit"),
-            }}
+            label={t("cron.form.failureAlertCooldown")}
+            help={t("cron.form.failureAlertCooldownHelp")}
+            errorKey="failureAlertCooldownSeconds"
+            placeholder={t("cron.form.failureAlertInherit")}
           />
           <CronSelect
-            props={componentProps.props}
+            {...props}
             field="failureAlertChannel"
-            options={{
-              label: t("cron.form.failureAlertChannel"),
-              options: componentProps.channelOptions,
-              channel: true,
-            }}
+            label={t("cron.form.failureAlertChannel")}
+            options={props.channelOptions}
+            channel
           />
           <CronInput
-            props={componentProps.props}
+            {...props}
             field="failureAlertTo"
-            options={{
-              label: t("cron.form.failureAlertTo"),
-              help: t("cron.form.failureAlertToHelp"),
-              list: "cron-failure-alert-to-suggestions",
-              placeholder: t("cron.form.failureAlertToPlaceholder"),
-            }}
+            label={t("cron.form.failureAlertTo")}
+            help={t("cron.form.failureAlertToHelp")}
+            list="cron-failure-alert-to-suggestions"
+            placeholder={t("cron.form.failureAlertToPlaceholder")}
           />
           <CronSelect
-            props={componentProps.props}
+            {...props}
             field="failureAlertDeliveryMode"
-            options={{
-              label: t("cron.form.failureAlertMode"),
-              options: [
-                { value: "", label: t("cron.form.failureAlertInherit") },
-                { value: "announce", label: t("cron.form.failureAlertAnnounce") },
-                { value: "webhook", label: t("cron.form.failureAlertWebhook") },
-              ],
-            }}
+            label={t("cron.form.failureAlertMode")}
+            options={[
+              { value: "", label: t("cron.form.failureAlertInherit") },
+              { value: "announce", label: t("cron.form.failureAlertAnnounce") },
+              { value: "webhook", label: t("cron.form.failureAlertWebhook") },
+            ]}
           />
           <CronInput
-            props={componentProps.props}
+            {...props}
             field="failureAlertAccountId"
-            options={{
-              label: t("cron.form.failureAlertAccountId"),
-              placeholder: t("cron.form.failureAlertAccountPlaceholder"),
-            }}
+            label={t("cron.form.failureAlertAccountId")}
+            placeholder={t("cron.form.failureAlertAccountPlaceholder")}
           />
         </>
       ) : undefined}

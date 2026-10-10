@@ -13,7 +13,7 @@ import {
 } from "./view.test-support.ts";
 import { ChannelsView } from "./view.tsx";
 import type { ChannelsProps } from "./view.types.ts";
-import { renderWhatsAppCard } from "./view.whatsapp.tsx";
+import { WhatsAppCard } from "./view.whatsapp.tsx";
 
 function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
   return createChannelsViewProps(snapshot, {
@@ -442,7 +442,7 @@ function renderWhatsAppButtons(params: {
   }
 
   const container = document.createElement("div");
-  renderChannelView(renderWhatsAppCard, { props, whatsapp }, container);
+  renderChannelView(WhatsAppCard, props, container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
     container,
@@ -540,7 +540,7 @@ function renderWhatsAppConfigForm(
   props.onShowAdvancedSettings = onShowAdvancedSettings;
 
   const container = document.createElement("div");
-  renderChannelView(renderWhatsAppCard, { props, whatsapp }, container);
+  renderChannelView(WhatsAppCard, props, container);
   return { container, onShowAdvancedSettings };
 }
 
@@ -850,7 +850,7 @@ describe("WhatsApp status", () => {
       channelDefaultAccountId: {},
     });
     const container = document.createElement("div");
-    renderChannelView(renderWhatsAppCard, { props, whatsapp }, container);
+    renderChannelView(WhatsAppCard, props, container);
     const label = Array.from(container.querySelectorAll("dt")).find(
       (node) => node.textContent?.trim() === "Phone number",
     );

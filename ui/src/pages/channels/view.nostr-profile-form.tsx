@@ -122,25 +122,19 @@ export function renderNostrProfileForm(params: {
 
   return (
     <>
-      {
-        <SettingsRow
-          {...{
-            title: t("channels.nostr.editProfile"),
-            description: (
-              <>
-                {t("channels.nostr.account")}: {params.accountId}
-              </>
-            ),
-          }}
-        />
-      }
+      <SettingsRow
+        title={t("channels.nostr.editProfile")}
+        description={
+          <>
+            {t("channels.nostr.account")}: {params.accountId}
+          </>
+        }
+      />
       {params.state.error ? (
         <SettingsRow
-          {...{
-            role: "alert",
-            title: <SettingsStatus {...{ kind: "danger", label: t("channels.lastError") }} />,
-            description: params.state.error,
-          }}
+          role={"alert"}
+          title={<SettingsStatus kind={"danger"} label={t("channels.lastError")} />}
+          description={params.state.error}
         />
       ) : undefined}
       {params.state.success ? (
@@ -152,33 +146,31 @@ export function renderNostrProfileForm(params: {
       ) : undefined}
       {params.state.values.picture ? (
         <SettingsRow
-          {...{
-            title: t("channels.nostr.profilePicturePreview"),
-            control: (
-              <img
-                src={params.state.values.picture}
-                alt={t("channels.nostr.profilePicturePreview")}
-                style={{
-                  "max-width": "80px",
-                  "max-height": "80px",
-                  "border-radius": "50%",
-                  "object-fit": "cover",
-                }}
-                onError={(event) => {
-                  event.currentTarget.style.display = "none";
-                }}
-                onLoad={(event) => {
-                  event.currentTarget.style.display = "block";
-                }}
-              />
-            ),
-          }}
+          title={t("channels.nostr.profilePicturePreview")}
+          control={
+            <img
+              src={params.state.values.picture}
+              alt={t("channels.nostr.profilePicturePreview")}
+              style={{
+                "max-width": "80px",
+                "max-height": "80px",
+                "border-radius": "50%",
+                "object-fit": "cover",
+              }}
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+              }}
+              onLoad={(event) => {
+                event.currentTarget.style.display = "block";
+              }}
+            />
+          }
         />
       ) : undefined}
       {BASIC_FIELDS.map(renderField)}
       {params.state.showAdvanced ? (
         <>
-          {<SettingsRow {...{ title: t("channels.nostr.advanced") }} />}
+          <SettingsRow title={t("channels.nostr.advanced")} />
           {ADVANCED_FIELDS.map(renderField)}
         </>
       ) : undefined}

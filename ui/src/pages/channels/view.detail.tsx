@@ -1,7 +1,7 @@
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import type { ChannelStatus, NostrProfile, NostrStatus, WhatsAppStatus } from "../../api/types.ts";
+import type { ChannelStatus } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { icons } from "../../components/icons.ts";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -12,22 +12,22 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
 import { channelDocsUrl } from "./hub-meta.ts";
-import { renderChannelConfigSection } from "./view.config.tsx";
-import { renderNostrCard as NostrCard } from "./view.nostr.tsx";
+import { ChannelConfig } from "./view.config.tsx";
+import { NostrCard } from "./view.nostr.tsx";
 import { renderChannelPairingDetail } from "./view.pairing.tsx";
 import {
   boolStatusKind,
-  formatNullableBoolean,
-  renderChannelAccountRow,
-  renderChannelActionRow,
-  renderChannelErrorRow,
-  renderChannelFacts,
-  renderChannelProbeRow,
+  booleanChannelFact,
+  ChannelAccount,
+  ChannelActions,
+  ChannelError,
+  ChannelFacts,
+  ChannelProbe,
   resolveChannelAccountCount,
   resolveChannelDisplayState,
 } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
-import { renderWhatsAppCard as WhatsAppCard } from "./view.whatsapp.tsx";
+import { WhatsAppCard } from "./view.whatsapp.tsx";
 
 const STANDARD_CHANNEL_LOCALE_KEYS = {
   discord: "discord",
@@ -92,20 +92,15 @@ function ChannelStatusBody(params: {
           : [],
   );
   const statusRows = createMemo(() => [
-    {
-      label: t("common.configured"),
-      value: formatNullableBoolean(configured()),
-      kind: boolStatusKind(configured()),
-    },
-    {
-      label: t("common.running"),
-      value: !standardKey()
-        ? formatNullableBoolean(displayState().running)
+    booleanChannelFact("configured", configured()),
+    booleanChannelFact(
+      "running",
+      !standardKey()
+        ? displayState().running
         : standardKey() === "googlechat" && !status()
-          ? t("common.na")
-          : formatNullableBoolean(status()?.running ?? false),
-      kind: boolStatusKind(standardKey() ? status()?.running : displayState().running),
-    },
+          ? null
+          : (status()?.running ?? false),
+    ),
     ...(standardKey()
       ? [
           ...extraRows(),
@@ -116,13 +111,7 @@ function ChannelStatusBody(params: {
               : t("common.na"),
           })),
         ]
-      : [
-          {
-            label: t("common.connected"),
-            value: formatNullableBoolean(displayState().connected),
-            kind: boolStatusKind(displayState().connected),
-          },
-        ]),
+      : [booleanChannelFact("connected", displayState().connected)]),
   ]);
   const lastError = createMemo(() =>
     readStringField(
@@ -133,138 +122,74 @@ function ChannelStatusBody(params: {
 
   return (
     <SettingsSection
-      {...{
-        title: localeKey()
+      title={
+        localeKey()
           ? t(`channels.${localeKey()}.title`)
           : (readStringField(
               params.props.channels.channelsSnapshot?.channelLabels,
               params.channelId,
-            ) ?? params.channelId),
-        description: localeKey()
-          ? t(`channels.${localeKey()}.subtitle`)
-          : t("channels.generic.subtitle"),
-        ...(params.accountCount !== undefined ? { count: params.accountCount } : {}),
-      }}
-    >
-      {
-        <>
-          {showAccounts()
-            ? accounts().map((account) => {
-                const username =
-                  standardKey() === "telegram"
-                    ? readStringField(
-                        asNullableRecord(asNullableRecord(account.probe)?.bot),
-                        "username",
-                      )
-                    : undefined;
-                return renderChannelAccountRow({
-                  title: username ? `@${username}` : account.name || account.accountId,
-                  accountId: account.accountId,
-                  ...(standardKey() === "telegram"
-                    ? {
-                        facts: [
-                          `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
-                        ],
-                      }
-                    : {}),
-                  status: {
-                    kind: boolStatusKind(
-                      standardKey() === "telegram"
-                        ? account.running
-                        : (account.running ?? account.configured),
-                    ),
-                    label: account.running
-                      ? t("common.running")
-                      : !standardKey() && account.configured
-                        ? t("common.configured")
-                        : t("common.no"),
-                  },
-                  lastInboundAt: account.lastInboundAt,
-                  lastError: account.lastError,
-                });
-              })
-            : renderChannelFacts(statusRows())}
-          {lastError() ? renderChannelErrorRow(lastError()) : undefined}
-          {standardKey() ? (
-            <Show when={status()?.probe}>{(probe) => <>{renderChannelProbeRow(probe())}</>}</Show>
-          ) : undefined}
-          {renderChannelConfigSection({ channelId: params.channelId, props: params.props })}
-          {standardKey()
-            ? renderChannelActionRow(
-                <button
-                  class="btn"
-                  disabled={params.props.channels.channelsLoading}
-                  aria-busy={String(params.props.channels.channelsLoading)}
-                  onClick={() => params.props.onRefresh(true)}
-                >
-                  {t(params.props.channels.channelsLoading ? "common.refreshing" : "common.probe")}
-                </button>,
-              )
-            : undefined}
-        </>
+            ) ?? params.channelId)
       }
-    </SettingsSection>
-  );
-}
-
-function ChannelBody(params: { channelId: string; props: ChannelsProps }) {
-  const snapshot = createMemo(() => params.props.channels.channelsSnapshot);
-  const accountCount = createMemo(() =>
-    resolveChannelAccountCount(params.channelId, snapshot()?.channelAccounts),
-  );
-  const nostrAccounts = createMemo(() =>
-    resolveChannelAccounts(snapshot()?.channelAccounts, "nostr"),
-  );
-  const accountId = createMemo(() => nostrAccounts()[0]?.accountId ?? "default");
-  const profile = createMemo(() => {
-    return (
-      // SAFETY: Nostr resolveAccountSnapshot copies its schema-validated account.profile into this metadata field.
-      (asNullableRecord(nostrAccounts()[0])?.profile as NostrProfile | null | undefined) ?? null
-    );
-  });
-  const profileForm = createMemo(() =>
-    params.props.nostrProfileAccountId === accountId() ? params.props.nostrProfileFormState : null,
-  );
-  const profileFormCallbacks = {
-    onFieldChange: (field: keyof NostrProfile, value: string) =>
-      params.props.onNostrProfileFieldChange(field, value),
-    onSave: () => params.props.onNostrProfileSave(),
-    onImport: () => params.props.onNostrProfileImport(),
-    onCancel: () => params.props.onNostrProfileCancel(),
-    onToggleAdvanced: () => params.props.onNostrProfileToggleAdvanced(),
-  };
-  return (
-    <>
-      {params.channelId === "whatsapp" ? (
-        <WhatsAppCard
-          props={params.props}
-          whatsapp={
-            // SAFETY: The bundled WhatsApp plugin owns the channels.whatsapp status payload.
-            (snapshot()?.channels.whatsapp ?? undefined) as WhatsAppStatus | undefined
-          }
-          accountCount={accountCount()}
-        />
-      ) : params.channelId === "nostr" ? (
-        <NostrCard
-          props={params.props}
-          nostr={
-            // SAFETY: The bundled Nostr plugin owns the channels.nostr status payload.
-            (snapshot()?.channels.nostr ?? null) as NostrStatus | null
-          }
-          nostrAccounts={nostrAccounts()}
-          accountCount={accountCount()}
-          profileFormState={profileForm()}
-          profileFormCallbacks={profileFormCallbacks}
-          onEditProfile={() => params.props.onNostrProfileEdit(accountId(), profile())}
-        />
+      description={
+        localeKey() ? t(`channels.${localeKey()}.subtitle`) : t("channels.generic.subtitle")
+      }
+      count={params.accountCount !== undefined ? params.accountCount : undefined}
+    >
+      {showAccounts() ? (
+        accounts().map((account) => {
+          const username =
+            standardKey() === "telegram"
+              ? readStringField(asNullableRecord(asNullableRecord(account.probe)?.bot), "username")
+              : undefined;
+          return (
+            <ChannelAccount
+              title={username ? `@${username}` : account.name || account.accountId}
+              accountId={account.accountId}
+              facts={
+                standardKey() === "telegram"
+                  ? [
+                      `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
+                    ]
+                  : undefined
+              }
+              status={{
+                kind: boolStatusKind(
+                  standardKey() === "telegram"
+                    ? account.running
+                    : (account.running ?? account.configured),
+                ),
+                label: account.running
+                  ? t("common.running")
+                  : !standardKey() && account.configured
+                    ? t("common.configured")
+                    : t("common.no"),
+              }}
+              lastInboundAt={account.lastInboundAt}
+              lastError={account.lastError}
+            />
+          );
+        })
       ) : (
-        <ChannelStatusBody
-          channelId={params.channelId}
-          props={params.props}
-          accountCount={accountCount()}
-        />
+        <ChannelFacts rows={statusRows()} />
       )}
-    </>
+      {lastError() ? <ChannelError message={lastError()} /> : undefined}
+      {standardKey() ? (
+        <Show when={status()?.probe}>{(probe) => <ChannelProbe probe={probe()} />}</Show>
+      ) : undefined}
+      <ChannelConfig channelId={params.channelId} props={params.props} />
+      {standardKey() ? (
+        <ChannelActions>
+          <button
+            class="btn"
+            disabled={params.props.channels.channelsLoading}
+            aria-busy={String(params.props.channels.channelsLoading)}
+            onClick={() => params.props.onRefresh(true)}
+          >
+            {t(params.props.channels.channelsLoading ? "common.refreshing" : "common.probe")}
+          </button>
+        </ChannelActions>
+      ) : undefined}
+    </SettingsSection>
   );
 }
 
@@ -285,13 +210,11 @@ export function renderChannelDetail(params: {
     <openclaw-modal-dialog label={params.label} onModal-cancel={() => params.onClose()}>
       <div class="channels-detail">
         <div class="channels-detail__header">
-          {
-            <LitContent
-              value={renderChannelIcon(params.channelId, params.label, "cover", {
-                pluginIconUrl: params.pluginIconUrl,
-              })}
-            />
-          }
+          <LitContent
+            value={renderChannelIcon(params.channelId, params.label, "cover", {
+              pluginIconUrl: params.pluginIconUrl,
+            })}
+          />
           <div class="channels-detail__header-actions">
             <a
               class="btn btn--sm"
@@ -316,7 +239,7 @@ export function renderChannelDetail(params: {
               aria-label={t("common.close")}
               onClick={() => params.onClose()}
             >
-              {<LitContent value={icons.x} />}
+              <LitContent value={icons.x} />
             </button>
           </div>
         </div>
@@ -324,21 +247,32 @@ export function renderChannelDetail(params: {
           {params.props.wizardHost.blockedByDirtyConfig && params.props.config.configFormDirty ? (
             <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
           ) : undefined}
-          {
-            <For each={statusIssues()}>
-              {(issue) => (
-                <div class="callout warn" role="note">
-                  <strong>
-                    {t("channels.hub.stateAttention")} · {formatUiExternalText(issue.accountId)}
-                  </strong>
-                  <div>{formatUiExternalText(issue.message)}</div>
-                  {issue.fix ? <div>{formatUiExternalText(issue.fix)}</div> : undefined}
-                </div>
-              )}
-            </For>
-          }
+          <For each={statusIssues()}>
+            {(issue) => (
+              <div class="callout warn" role="note">
+                <strong>
+                  {t("channels.hub.stateAttention")} · {formatUiExternalText(issue.accountId)}
+                </strong>
+                <div>{formatUiExternalText(issue.message)}</div>
+                {issue.fix ? <div>{formatUiExternalText(issue.fix)}</div> : undefined}
+              </div>
+            )}
+          </For>
           {renderChannelPairingDetail(params.channelId, params.props)}{" "}
-          <ChannelBody channelId={params.channelId} props={params.props} />
+          {params.channelId === "whatsapp" ? (
+            <WhatsAppCard {...params.props} />
+          ) : params.channelId === "nostr" ? (
+            <NostrCard {...params.props} />
+          ) : (
+            <ChannelStatusBody
+              channelId={params.channelId}
+              props={params.props}
+              accountCount={resolveChannelAccountCount(
+                params.channelId,
+                params.props.channels.channelsSnapshot?.channelAccounts,
+              )}
+            />
+          )}
         </div>
       </div>
     </openclaw-modal-dialog>

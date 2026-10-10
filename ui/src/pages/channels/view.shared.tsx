@@ -55,8 +55,15 @@ export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
   };
 }
 
-export function formatNullableBoolean(value: boolean | null): string {
-  return t(value == null ? "common.na" : value ? "common.yes" : "common.no");
+export function booleanChannelFact(
+  field: "configured" | "linked" | "running" | "connected",
+  value: boolean | null | undefined,
+): ChannelStatusRow {
+  return {
+    label: t(`common.${field}`),
+    value: t(value == null ? "common.na" : value ? "common.yes" : "common.no"),
+    kind: boolStatusKind(value),
+  };
 }
 
 /** Status kind for boolean facts: dot signals on, quiet dot signals off. */
@@ -64,68 +71,62 @@ export function boolStatusKind(value: boolean | null | undefined): ChannelStatus
   return value === true ? "ok" : "muted";
 }
 
-export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
+export function ChannelFacts(params: { rows: readonly ChannelStatusRow[] }) {
   return (
     <dl class="settings-kv">
-      {
-        <For each={rows}>
-          {(row) => (
-            <>
-              <dt>{row.label}</dt>
-              <dd>
-                <Show when={row.kind} fallback={row.value}>
-                  {(kind) => <SettingsStatus kind={kind()} label={row.value} />}
-                </Show>
-              </dd>
-            </>
-          )}
-        </For>
-      }
+      <For each={params.rows}>
+        {(row) => (
+          <>
+            <dt>{row.label}</dt>
+            <dd>
+              <Show when={row.kind} fallback={row.value}>
+                {(kind) => <SettingsStatus kind={kind()} label={row.value} />}
+              </Show>
+            </dd>
+          </>
+        )}
+      </For>
     </dl>
   );
 }
 
-export function renderChannelErrorRow(message: unknown) {
+export function ChannelError(params: { message: unknown }) {
   return (
     <SettingsRow
-      {...{
-        title: <SettingsStatus {...{ kind: "danger", label: t("channels.lastError") }} />,
-        description: <>{formatUiError(message)}</>,
-      }}
+      title={<SettingsStatus kind={"danger"} label={t("channels.lastError")} />}
+      description={<>{formatUiError(params.message)}</>}
     />
   );
 }
 
-export function renderChannelProbeRow(probe: NonNullable<ChannelStatus["probe"]>) {
+export function ChannelProbe(params: { probe: NonNullable<ChannelStatus["probe"]> }) {
   const detail = createMemo(() =>
-    formatUiExternalText([probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" ")),
+    formatUiExternalText(
+      [params.probe.status ?? "", params.probe.error ?? ""].filter(Boolean).join(" "),
+    ),
   );
   return (
     <SettingsRow
-      {...{
-        title: (
-          <SettingsStatus
-            {...{
-              kind: probe.ok ? "ok" : "danger",
-              label: probe.ok ? t("common.probeOk") : t("common.probeFailed"),
-            }}
-          />
-        ),
-        description: detail(),
-      }}
+      title={
+        <SettingsStatus
+          kind={params.probe.ok ? "ok" : "danger"}
+          label={params.probe.ok ? t("common.probeOk") : t("common.probeFailed")}
+        />
+      }
+      description={detail()}
     />
   );
 }
 
-export function renderChannelActionRow(actions: JSX.Element) {
+export function ChannelActions(params: { children: JSX.Element }) {
   return (
     <div class="settings-row settings-row--actions">
-      <div class="settings-row__control">{actions}</div>
+      <div class="settings-row__control">{params.children}</div>
     </div>
   );
 }
 
-export function renderChannelRefreshAction(params: {
+export function ChannelRefresh(params: {
   updatedAt?: number | null;
   disabled: boolean;
   onRefresh: () => void;
@@ -142,15 +143,15 @@ export function renderChannelRefreshAction(params: {
         class="btn btn--xs btn--icon"
         aria-label={t("common.refresh")}
         disabled={params.disabled}
-        onClick={params.onRefresh}
+        onClick={() => params.onRefresh()}
       >
-        {<LitContent value={icons.refresh} />}
+        <LitContent value={icons.refresh} />
       </button>
     </openclaw-tooltip>
   );
 }
 
-export function renderChannelAccountRow(params: {
+export function ChannelAccount(params: {
   title: JSX.Element;
   accountId: string;
   facts?: readonly string[];
@@ -169,7 +170,7 @@ export function renderChannelAccountRow(params: {
         ) : undefined}
       </div>
       <div class="settings-row__control">
-        {<SettingsStatus {...params.status} />}
+        <SettingsStatus {...params.status} />
         <span class="settings-row__value">
           {params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")}
         </span>

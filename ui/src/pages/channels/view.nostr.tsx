@@ -2,20 +2,19 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../../api/types.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { renderChannelConfigSection } from "./view.config.tsx";
-import {
-  renderNostrProfileForm as NostrProfileForm,
-  type NostrProfileFormState,
-  type NostrProfileFormCallbacks,
-} from "./view.nostr-profile-form.tsx";
+import { ChannelConfig } from "./view.config.tsx";
+import { renderNostrProfileForm as NostrProfileForm } from "./view.nostr-profile-form.tsx";
 import {
   boolStatusKind,
-  renderChannelAccountRow,
-  renderChannelActionRow,
-  renderChannelErrorRow,
-  renderChannelFacts,
+  booleanChannelFact,
+  resolveChannelAccountCount,
+  ChannelAccount,
+  ChannelActions,
+  ChannelError,
+  ChannelFacts,
 } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -26,85 +25,82 @@ function truncatePubkey(pubkey: string | null | undefined): string {
   return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
 
-export function renderNostrCard(params: {
-  props: ChannelsProps;
-  nostr?: NostrStatus | null;
-  nostrAccounts: ChannelAccountSnapshot[];
-  accountCount?: number;
-  profileFormState?: NostrProfileFormState | null;
-  profileFormCallbacks?: NostrProfileFormCallbacks | null;
-  onEditProfile?: () => void;
-}) {
-  const primaryAccount = createMemo(() => params.nostrAccounts[0]);
-  const summaryConfigured = createMemo(
-    () => params.nostr?.configured ?? primaryAccount()?.configured ?? false,
+export function NostrCard(props: ChannelsProps) {
+  const snapshot = () => props.channels.channelsSnapshot;
+  const accounts = createMemo(() => resolveChannelAccounts(snapshot()?.channelAccounts, "nostr"));
+  const nostr = createMemo(() => {
+    // SAFETY: The bundled Nostr plugin owns the channels.nostr status payload.
+    return snapshot()?.channels.nostr as NostrStatus | undefined;
+  });
+  const accountId = () => accounts()[0]?.accountId ?? "default";
+  const form = createMemo(() =>
+    props.nostrProfileAccountId === accountId() ? props.nostrProfileFormState : null,
   );
-  const summaryRunning = createMemo(
-    () => params.nostr?.running ?? primaryAccount()?.running ?? false,
-  );
-  const summaryPublicKey = createMemo(
-    () =>
-      params.nostr?.publicKey ?? readStringField(asNullableRecord(primaryAccount()), "publicKey"),
-  );
-  const summaryLastStartAt = createMemo(
-    () => params.nostr?.lastStartAt ?? primaryAccount()?.lastStartAt ?? null,
-  );
-  const summaryLastError = createMemo(
-    () => params.nostr?.lastError ?? primaryAccount()?.lastError ?? null,
-  );
-  const hasMultipleAccounts = createMemo(() => params.nostrAccounts.length > 1);
+  const primaryAccount = () => accounts()[0];
+  const configured = () => nostr()?.configured ?? primaryAccount()?.configured ?? false;
+  const publicKey = () =>
+    nostr()?.publicKey ?? readStringField(asNullableRecord(primaryAccount()), "publicKey");
+  const lastStart = () => nostr()?.lastStartAt ?? primaryAccount()?.lastStartAt;
+  const lastError = () => nostr()?.lastError ?? primaryAccount()?.lastError;
 
   const renderAccountRow = (account: ChannelAccountSnapshot) => {
-    const publicKey = readStringField(asNullableRecord(account), "publicKey");
+    const accountPublicKey = readStringField(asNullableRecord(account), "publicKey");
     // SAFETY: Nostr resolveAccountSnapshot copies its schema-validated account.profile into this metadata field.
     const profile = asNullableRecord(account)?.profile as NostrProfile | null | undefined;
     const displayName = profile?.displayName ?? profile?.name ?? account.name ?? account.accountId;
 
-    return renderChannelAccountRow({
-      title: displayName,
-      accountId: account.accountId,
-      facts: [
-        `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
-        `${t("common.publicKey")}: ${truncatePubkey(publicKey)}`,
-      ],
-      status: {
-        kind: boolStatusKind(account.running),
-        label: account.running ? t("common.running") : t("common.no"),
-      },
-      lastInboundAt: account.lastInboundAt,
-      lastError: account.lastError,
-    });
+    return (
+      <ChannelAccount
+        title={displayName}
+        accountId={account.accountId}
+        facts={[
+          `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
+          `${t("common.publicKey")}: ${truncatePubkey(accountPublicKey)}`,
+        ]}
+        status={{
+          kind: boolStatusKind(account.running),
+          label: account.running ? t("common.running") : t("common.no"),
+        }}
+        lastInboundAt={account.lastInboundAt}
+        lastError={account.lastError}
+      />
+    );
   };
 
-  const renderProfileSection = () => {
-    // SAFETY: These are Nostr account snapshots; their profile metadata comes from the plugin's validated config.
+  const profile = createMemo(() => {
+    // SAFETY: Nostr account profile metadata comes from the plugin's schema-validated config.
     const accountProfile = asNullableRecord(primaryAccount())?.profile as
       | NostrProfile
       | null
       | undefined;
-    const profile = accountProfile ?? params.nostr?.profile;
-    const { name, displayName, about, picture, nip05 } = profile ?? {};
+    return accountProfile ?? nostr()?.profile;
+  });
+  const renderProfileSection = () => {
+    const { name, displayName, about, picture, nip05 } = profile() ?? {};
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 
     return (
       <>
-        {
-          <SettingsRow
-            {...{
-              title: t("channels.nostr.profile"),
-              description: hasAnyProfileData ? undefined : (
-                <>
-                  {t("channels.nostr.noProfile")} {t("channels.nostr.noProfileHint")}
-                </>
-              ),
-              control: summaryConfigured() ? (
-                <button class="btn btn--sm" onClick={() => params.onEditProfile?.()}>
-                  {t("channels.nostr.editProfile")}
-                </button>
-              ) : undefined,
-            }}
-          />
-        }
+        <SettingsRow
+          title={t("channels.nostr.profile")}
+          description={
+            hasAnyProfileData ? undefined : (
+              <>
+                {t("channels.nostr.noProfile")} {t("channels.nostr.noProfileHint")}
+              </>
+            )
+          }
+          control={
+            configured() ? (
+              <button
+                class="btn btn--sm"
+                onClick={() => props.onNostrProfileEdit(accountId(), profile())}
+              >
+                {t("channels.nostr.editProfile")}
+              </button>
+            ) : undefined
+          }
+        />
         {hasAnyProfileData ? (
           <dl class="settings-kv">
             {picture ? (
@@ -127,25 +123,23 @@ export function renderNostrCard(params: {
                 </dd>
               </>
             ) : undefined}
-            {
-              <For
-                each={[
-                  [t("channels.nostr.name"), name],
-                  [t("channels.nostr.displayName"), displayName],
-                  [t("channels.nostr.about"), about],
-                  ["NIP-05", nip05],
-                ]}
-              >
-                {([label, value]) =>
-                  value ? (
-                    <>
-                      <dt>{label}</dt>
-                      <dd>{value}</dd>
-                    </>
-                  ) : undefined
-                }
-              </For>
-            }
+            <For
+              each={[
+                [t("channels.nostr.name"), name],
+                [t("channels.nostr.displayName"), displayName],
+                [t("channels.nostr.about"), about],
+                ["NIP-05", nip05],
+              ]}
+            >
+              {([label, value]) =>
+                value ? (
+                  <>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </>
+                ) : undefined
+              }
+            </For>
           </dl>
         ) : undefined}
       </>
@@ -154,61 +148,50 @@ export function renderNostrCard(params: {
 
   return (
     <SettingsSection
-      {...{
-        title: t("channels.nostr.title"),
-        description: t("channels.nostr.subtitle"),
-        ...(params.accountCount !== undefined ? { count: params.accountCount } : {}),
-      }}
+      title={t("channels.nostr.title")}
+      description={t("channels.nostr.subtitle")}
+      count={resolveChannelAccountCount("nostr", snapshot()?.channelAccounts)}
     >
-      {
-        <>
-          {hasMultipleAccounts()
-            ? params.nostrAccounts.map((account) => renderAccountRow(account))
-            : renderChannelFacts([
-                {
-                  label: t("common.configured"),
-                  value: summaryConfigured() ? t("common.yes") : t("common.no"),
-                  kind: boolStatusKind(summaryConfigured()),
-                },
-                {
-                  label: t("common.running"),
-                  value: summaryRunning() ? t("common.yes") : t("common.no"),
-                  kind: boolStatusKind(summaryRunning()),
-                },
-                {
-                  label: t("common.publicKey"),
-                  value: (
-                    <code title={summaryPublicKey() ?? ""}>
-                      {truncatePubkey(summaryPublicKey())}
-                    </code>
-                  ),
-                },
-                {
-                  label: t("common.lastStart"),
-                  value: summaryLastStartAt()
-                    ? formatRelativeTimestamp(summaryLastStartAt())
-                    : t("common.na"),
-                },
-              ])}
-          {summaryLastError() ? renderChannelErrorRow(summaryLastError()) : undefined}
-          <Show
-            when={Boolean(params.profileFormState && params.profileFormCallbacks)}
-            fallback={renderProfileSection()}
-          >
-            <NostrProfileForm
-              state={params.profileFormState!}
-              callbacks={params.profileFormCallbacks!}
-              accountId={params.nostrAccounts[0]?.accountId ?? "default"}
-            />
-          </Show>{" "}
-          {renderChannelConfigSection({ channelId: "nostr", props: params.props })}
-          {renderChannelActionRow(
-            <button class="btn" onClick={() => params.props.onRefresh(false)}>
-              {t("common.refresh")}
-            </button>,
-          )}
-        </>
-      }
+      {accounts().length > 1 ? (
+        accounts().map((account) => renderAccountRow(account))
+      ) : (
+        <ChannelFacts
+          rows={[
+            booleanChannelFact("configured", configured()),
+            booleanChannelFact("running", nostr()?.running ?? primaryAccount()?.running ?? false),
+            {
+              label: t("common.publicKey"),
+              value: <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>,
+            },
+            {
+              label: t("common.lastStart"),
+              value: lastStart() ? formatRelativeTimestamp(lastStart()) : t("common.na"),
+            },
+          ]}
+        />
+      )}
+      {lastError() ? <ChannelError message={lastError()} /> : undefined}
+      <Show when={form()} fallback={renderProfileSection()}>
+        {(state) => (
+          <NostrProfileForm
+            state={state()}
+            accountId={accountId()}
+            callbacks={{
+              onFieldChange: props.onNostrProfileFieldChange,
+              onSave: props.onNostrProfileSave,
+              onImport: props.onNostrProfileImport,
+              onCancel: props.onNostrProfileCancel,
+              onToggleAdvanced: props.onNostrProfileToggleAdvanced,
+            }}
+          />
+        )}
+      </Show>
+      <ChannelConfig channelId={"nostr"} props={props} />
+      <ChannelActions>
+        <button class="btn" onClick={() => props.onRefresh(false)}>
+          {t("common.refresh")}
+        </button>
+      </ChannelActions>
     </SettingsSection>
   );
 }

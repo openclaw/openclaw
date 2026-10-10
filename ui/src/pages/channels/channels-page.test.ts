@@ -135,6 +135,12 @@ function createGateway(): TestGateway {
   } as unknown as TestGateway;
 }
 
+function setGatewayScopes(gateway: TestGateway, scopes: string[]) {
+  gateway.emit({
+    hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+  });
+}
+
 function createContext(gateway: ApplicationContext["gateway"]) {
   const channels = createChannelCapability(gateway);
   channels.state.channelsSnapshot = {
@@ -713,13 +719,43 @@ describe("ChannelsPage lifecycle", () => {
     second.channels.dispose();
   });
 
+  it("polls pairing only while visible, authorized, and mounted", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const gateway = createGateway();
+    setGatewayScopes(gateway, ["operator.pairing"]);
+    const source = createContext(gateway);
+    const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
+    const page = mountPage(source.context);
+    await settle();
+    refreshPairing.mockClear();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshPairing).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshPairing).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(refreshPairing).toHaveBeenCalledTimes(2);
+
+    setGatewayScopes(gateway, ["operator.read"]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshPairing).toHaveBeenCalledTimes(2);
+    setGatewayScopes(gateway, ["operator.pairing"]);
+    await settle();
+    refreshPairing.mockClear();
+    disposePage(page);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshPairing).not.toHaveBeenCalled();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("refreshes pairing data when the authorized scope set changes", async () => {
     const gateway = createGateway();
-    gateway.emit({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.pairing"] },
-      } as unknown as ApplicationGatewaySnapshot["hello"],
-    });
+    setGatewayScopes(gateway, ["operator.pairing"]);
     const source = createContext(gateway);
     source.channels.state.pairingSnapshot = {
       accounts: [
@@ -765,11 +801,7 @@ describe("ChannelsPage lifecycle", () => {
     await settle();
     expect(page.querySelector(".channels-pairing-dialog")).not.toBeNull();
 
-    gateway.emit({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] },
-      } as unknown as ApplicationGatewaySnapshot["hello"],
-    });
+    setGatewayScopes(gateway, ["operator.pairing", "operator.read"]);
 
     await waitForSolid(() => expect(refreshPairing).toHaveBeenCalled());
     expect(page.querySelector(".channels-pairing-dialog")).toBeNull();

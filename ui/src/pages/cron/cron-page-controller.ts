@@ -1,4 +1,4 @@
-import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
+import type { CronJob, CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -28,20 +28,12 @@ import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
-import {
-  projectAgents,
-  projectChannels,
-  projectRuntimeConfig,
-} from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { buildCronPageProps } from "./cron-page-props.ts";
 import {
   DeliveryConversationsController,
   invalidateStaleDeliveryRoute,
   requiresDirectoryReload,
 } from "./delivery-conversations.ts";
-import { CronEditorClearance } from "./editor-clearance.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.tsx";
 import type { CronDetailTab, CronListTab, CronProps } from "./view-types.ts";
@@ -52,7 +44,6 @@ registerEnglishCatalog(registerCronEnglish);
 export class CronPageController {
   routeSearch = "";
   cron = createInitialCronState();
-  agentsList: AgentsListResult | null = null;
   cronModelSuggestions: string[] = [];
   modelSuggestionsError: string | null = null;
   listTab: CronListTab = "tasks";
@@ -60,18 +51,15 @@ export class CronPageController {
   heartbeatScratch = "";
   private active = true;
   private readonly cleanups: Array<() => void> = [];
-  private stopActivation: (() => void) | undefined;
   private readonly gateway = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   private boundContext: ApplicationContext | null = null;
   private gatewayAvailable = false;
-  private readonly clearance: CronEditorClearance;
 
   constructor(
     public context: ApplicationContext,
     readonly host: HTMLElement,
     private readonly notify: () => void,
   ) {
-    this.clearance = new CronEditorClearance(host);
     this.runTranscript = new CronRunTranscript(
       this.host,
       () => this.publish(),
@@ -129,6 +117,10 @@ export class CronPageController {
     this.ensureInitialData();
     this.publish();
   });
+  get agentsList() {
+    return this.context.agents.state.agentsList;
+  }
+
   get canManageCron(): boolean {
     return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
   }
@@ -143,9 +135,10 @@ export class CronPageController {
     if (sourceChanged) {
       this.gateway.invalidate();
     }
-    const projection = projectGateway(context.gateway);
-    let available = this.gatewayAvailable;
     const applySnapshot = () => {
+      if (!this.active || this.context !== context) {
+        return;
+      }
       const snapshot = context.gateway.snapshot;
       const previousConnected = this.gateway.capture() !== null;
       const changed = this.gateway.transition(snapshot);
@@ -158,32 +151,19 @@ export class CronPageController {
       }
       if (snapshot.phase === "connected" && (first || changed)) {
         this.ensureInitialData();
-      } else if (!first && !available && nextAvailable && previousConnected) {
+      } else if (!first && !this.gatewayAvailable && nextAvailable && previousConnected) {
         this.ensureInitialData(true);
       }
       first = false;
-      available = nextAvailable;
       this.gatewayAvailable = nextAvailable;
       this.publish();
     };
-    this.cleanups.push(projection.subscribe(applySnapshot), () => projection.dispose());
+    this.cleanups.push(context.gateway.subscribe(applySnapshot));
     applySnapshot();
-    const agents = projectAgents(context.agents);
-    this.agentsList = agents.read().agentsList;
-    const channels = projectChannels(context.channels);
-    const config = projectRuntimeConfig(context.runtimeConfig);
     this.cleanups.push(
-      agents.subscribe(() => {
-        this.agentsList = context.agents.state.agentsList;
-        this.publish();
-      }),
-      channels.subscribe(() => this.publish()),
-      config.subscribe(() => this.publish()),
-      () => {
-        agents.dispose();
-        channels.dispose();
-        config.dispose();
-      },
+      context.agents.subscribe(() => this.publish()),
+      context.channels.subscribe(() => this.publish()),
+      context.runtimeConfig.subscribe(() => this.publish()),
       this.observeAgentScope(context.agentSelection),
       watchSelectedAgent(context.agentSelection, (agentId) => {
         if (this.modelSuggestionsRequest?.agentId !== agentId) {
@@ -202,34 +182,27 @@ export class CronPageController {
     );
   }
 
+  private readonly onActivation = () => {
+    const hidden = document.visibilityState === "hidden";
+    const resumed = this.pageHidden && !hidden;
+    this.pageHidden = hidden;
+    if (resumed) {
+      this.ensureInitialData(true);
+    }
+  };
+
   activate() {
-    const onActivation = () => {
-      const hidden = document.visibilityState === "hidden";
-      const resumed = this.pageHidden && !hidden;
-      this.pageHidden = hidden;
-      if (resumed) {
-        this.ensureInitialData(true);
-      }
-    };
-    document.addEventListener("visibilitychange", onActivation);
-    globalThis.addEventListener("focus", onActivation);
-    this.stopActivation = () => {
-      document.removeEventListener("visibilitychange", onActivation);
-      globalThis.removeEventListener("focus", onActivation);
-    };
+    document.addEventListener("visibilitychange", this.onActivation);
+    globalThis.addEventListener("focus", this.onActivation);
     this.ensureInitialData();
   }
 
   dispose() {
     this.active = false;
-    this.stopActivation?.();
+    document.removeEventListener("visibilitychange", this.onActivation);
+    globalThis.removeEventListener("focus", this.onActivation);
     this.cleanups.splice(0).forEach((stop) => stop());
     this.gateway.dispose();
-    this.runTranscript.close();
-    this.clearHeartbeatScratch();
-    this.deliveryDirectory.retireEditor();
-    invalidateCronRefresh(this.cron);
-    this.clearance.dispose();
     this.resetGatewayState({ ...this.context.gateway.snapshot, client: null, phase: "stopped" });
   }
 
@@ -244,13 +217,13 @@ export class CronPageController {
     this.notify();
   }
 
-  private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
+  private resetGatewayState(snapshot: ApplicationContext["gateway"]["snapshot"]) {
     this.runTranscript.close();
     this.clearHeartbeatScratch();
     invalidateCronRefresh(this.cron);
-    const connected = snapshot?.phase === "connected";
+    const connected = snapshot.phase === "connected";
     const cron = createInitialCronState({
-      client: snapshot?.client ?? null,
+      client: snapshot.client,
       connected,
     });
     cron.canRefresh = () => this.canRefreshCron(cron);
@@ -260,7 +233,6 @@ export class CronPageController {
     this.routeJobRequested = false;
     this.pageHidden = document.visibilityState === "hidden";
     this.cron.cronAgentId = this.context.agentSelection.state.scopeId;
-    this.agentsList = connected ? this.context.agents.state.agentsList : null;
     this.cronModelSuggestions = [];
     this.deliveryDirectory.retireEditor();
     this.modelSuggestionsError = null;
@@ -340,7 +312,6 @@ export class CronPageController {
   }
 
   afterRender() {
-    this.clearance.update();
     const routeData = this.pendingRouteData;
     const client = this.cron.client;
     if (routeData?.session && this.cron.cronJobsSnapshotRevision && !this.cron.cronLoading) {
@@ -666,8 +637,8 @@ export class CronPageController {
     });
   }
 
-  get viewProps(): CronProps {
-    return buildCronPageProps(this, {
+  get actions(): Pick<CronProps, Extract<keyof CronProps, `on${string}`>> {
+    return {
       onListTabChange: (tab) => {
         this.listTab = tab;
         this.publish();
@@ -709,6 +680,6 @@ export class CronPageController {
           await loadCronRuns(cronState);
         }),
       onViewRunTranscript: (entry, trigger) => void this.runTranscript.open(entry, trigger),
-    });
+    };
   }
 }

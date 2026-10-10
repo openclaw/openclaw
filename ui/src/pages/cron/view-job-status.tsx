@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -31,11 +31,9 @@ export function JobStateIndicator(props: { job: CronJob }) {
       aria-label={presentation()[2]}
       title={presentation()[2]}
     >
-      {presentation()[1] ? (
-        <Icon name={presentation()[1]!} />
-      ) : (
-        <span class="cron-table__state-dot" />
-      )}
+      <Show when={presentation()[1]} fallback={<span class="cron-table__state-dot" />}>
+        {(name) => <Icon name={name()} />}
+      </Show>
     </span>
   );
 }
@@ -53,10 +51,10 @@ export function TriggerIndicator() {
 }
 /** Auto-disabled is an escalated failure, not an operator pause. */
 export function DisabledNote(props: { job: CronJob }) {
-  const label = createMemo(() => {
+  const label = () => {
     const autoDisabled = props.job.state?.autoDisabled;
     return autoDisabled ? disabledNoteLabel(autoDisabled) : t("cron.list.paused");
-  });
+  };
   return (
     <span
       class={
@@ -77,22 +75,20 @@ export function DisabledNote(props: { job: CronJob }) {
     </span>
   );
 }
-function disabledNoteLabel(
-  autoDisabled: NonNullable<NonNullable<CronJob["state"]>["autoDisabled"]>,
-) {
+function disabledNoteLabel(data: NonNullable<NonNullable<CronJob["state"]>["autoDisabled"]>) {
   return t(
-    autoDisabled.reason === "schedule-errors"
+    data.reason === "schedule-errors"
       ? "cron.list.autoDisabledScheduleErrors"
       : "cron.list.autoDisabledRunFailures",
-    { count: String(autoDisabled.consecutiveErrors) },
+    { count: String(data.consecutiveErrors) },
   );
 }
 export function LastRunCell(props: { job: CronJob }) {
-  const status = createMemo(() => resolveCronJobLastRunStatus(props.job));
-  const relative = createMemo(() => {
+  const status = () => resolveCronJobLastRunStatus(props.job);
+  const relative = () => {
     const time = props.job.state?.lastRunAtMs;
     return typeof time === "number" && Number.isFinite(time) ? formatRelativeTimestamp(time) : null;
-  });
+  };
   return (
     <>
       {status() === "unknown" || !relative() ? (

@@ -1,11 +1,11 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
+import { html, nothing } from "lit";
 import { createMemo, flush } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import { i18n } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
@@ -129,30 +129,21 @@ export function CronRunTranscriptView(props: {
   controller: CronRunTranscript;
   revision: () => number;
 }) {
-  const translations = projectI18n(i18n);
-  const state = createMemo(() => {
+  const state = () => {
     props.revision();
-    return {
-      entry: props.controller.entry,
-      messages: props.controller.messages,
-      error: props.controller.error,
-      loading: props.controller.loading,
-      nextCursor: props.controller.nextCursor,
-    };
-  });
-  const historyBoundary = createMemo(() => {
-    translations.revision();
-    return state().nextCursor
-      ? renderChatHistoryBoundary({
-          hasMore: true,
-          loading: state().loading,
-          onShowEarlier: () => void props.controller.load(props.controller.nextCursor),
-        })
-      : null;
-  });
+    return props.controller;
+  };
   const transcript = createMemo(() => {
-    translations.revision();
-    return renderChatTranscriptFeed(state().messages);
+    const current = state();
+    return html`${
+      current.nextCursor
+        ? renderChatHistoryBoundary({
+            hasMore: true,
+            loading: current.loading,
+            onShowEarlier: () => void props.controller.load(props.controller.nextCursor),
+          })
+        : nothing
+    }${renderChatTranscriptFeed(current.messages)}`;
   });
   return (
     <>
@@ -183,7 +174,6 @@ export function CronRunTranscriptView(props: {
             </>
           ) : null}
           {state().loading ? <p role="status">{t("common.loading")}</p> : null}
-          <LitContent value={historyBoundary()} />
           {!state().loading && !state().error && state().messages.length === 0 ? (
             <p>{t("cron.runEntry.transcriptEmpty")}</p>
           ) : null}

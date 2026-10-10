@@ -6,68 +6,139 @@ import { renderAgentScopeControl } from "../../components/agent-scope-control.ts
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { i18n } from "../../i18n/index.ts";
+import { hasCronFormErrors } from "../../lib/cron/index.ts";
+import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CronPageController } from "./cron-page-controller.ts";
+import { reserveCronEditorClearance } from "./editor-clearance.ts";
+import {
+  buildCronSuggestions,
+  resolveConversationTargetSuggestions,
+  THINKING_SUGGESTIONS,
+} from "./form-suggestions.ts";
 import { CronRunTranscriptView } from "./run-transcript.tsx";
+import type { CronProps } from "./view-types.ts";
 import { CronView } from "./view.tsx";
 
 export function CronPageContent(props: { controller: CronPageController; revision: () => number }) {
   const translations = projectI18n(i18n);
-  const viewProps = createMemo(() => {
-    props.revision();
+  const revision = () => {
     translations.revision();
-    return props.controller.viewProps;
-  });
-  const header = createMemo(() => {
-    props.revision();
-    translations.revision();
+    return props.revision();
+  };
+  const viewProps = createMemo<CronProps>(() => {
+    revision();
+    const page = props.controller;
+    const channels = page.context.channels.state;
+    const suggestions = buildCronSuggestions({
+      channels,
+      runtimeConfig: page.context.runtimeConfig.state,
+      cron: page.cron,
+      agentsList: page.agentsList,
+      modelSuggestions: page.cronModelSuggestions,
+      conversationTargets: resolveConversationTargetSuggestions(
+        page.deliveryDirectory.conversations,
+        page.cron.cronForm.deliveryAccountId,
+      ),
+    });
+    const canManage = page.canManageCron;
     return {
-      title: titleForRoute("cron"),
-      subtitle: props.controller.cron.cronSessionFilter
-        ? t("cron.list.sessionFilter")
-        : subtitleForRoute("cron"),
+      ...page.actions,
+      loading: page.cron.cronLoading,
+      hasLoaded: page.cron.cronJobsSnapshotRevision !== null,
+      listError: page.cron.cronJobsError,
+      canManage,
+      status: page.cron.cronStatus,
+      jobs: page.cron.cronJobs,
+      jobsLoadingMore: page.cron.cronJobsLoadingMore,
+      jobsTotal: page.cron.cronJobsTotal,
+      jobsHasMore: page.cron.cronJobsHasMore,
+      jobsQuery: page.cron.cronJobsQuery,
+      jobsEnabledFilter: page.cron.cronJobsEnabledFilter,
+      jobsScheduleKindFilter: page.cron.cronJobsScheduleKindFilter,
+      jobsLastStatusFilter: page.cron.cronJobsLastStatusFilter,
+      jobsTriggerFilter: page.cron.cronJobsTriggerFilter,
+      jobsSortBy: page.cron.cronJobsSortBy,
+      jobsSortDir: page.cron.cronJobsSortDir,
+      editingJob: page.cron.cronEditingJob,
+      createOpen: page.cron.cronCreateOpen,
+      listTab: page.listTab,
+      detailTab: page.detailTab,
+      error:
+        page.cron.cronError ??
+        page.cron.cronRunsError ??
+        page.deliveryDirectory.error ??
+        page.modelSuggestionsError,
+      busy: page.cron.cronBusy,
+      form: page.cron.cronForm,
+      heartbeatScratch: canManage ? page.heartbeatScratch : "",
+      channels: channels.channelsSnapshot?.channelMeta?.length
+        ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
+        : (channels.channelsSnapshot?.channelOrder ?? []),
+      channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
+      channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
+      runs: page.cron.cronRuns,
+      runsState: getCronRunsViewState(page.cron),
+      highlightedRunId: page.highlightedRunId,
+      runsHasMore: page.cron.cronRunsHasMore,
+      runsLoadingMore: page.cron.cronRunsLoadingMore,
+      runsStatuses: page.cron.cronRunsStatuses,
+      runsDeliveryStatuses: page.cron.cronRunsDeliveryStatuses,
+      runsQuery: page.cron.cronRunsQuery,
+      runsSortDir: page.cron.cronRunsSortDir,
+      fieldErrors: page.cron.cronFieldErrors,
+      canSubmit: !hasCronFormErrors(page.cron.cronFieldErrors),
+      agentSuggestions: suggestions.agentSuggestions,
+      modelSuggestions: suggestions.modelSuggestions,
+      thinkingSuggestions: THINKING_SUGGESTIONS,
+      timezoneSuggestions: suggestions.timezoneSuggestions,
+      deliveryToSuggestions: suggestions.deliveryToSuggestions,
+      failureAlertToSuggestions: suggestions.failureAlertToSuggestions,
+      accountSuggestions: suggestions.accountTargets,
     };
   });
-  const headerActions = createMemo(() => {
-    props.revision();
-    translations.revision();
+  const header = createMemo(() => {
+    revision();
     const controller = props.controller;
-    return controller.cron.cronSessionFilter
-      ? html`<a
-          class="btn"
-          href=${pathForRoute("cron", controller.context.basePath)}
-          @click=${(event: MouseEvent) => {
-            if (shouldHandleNavigationClick(event)) {
-              event.preventDefault();
-              controller.context.navigate("cron", { search: "" });
-            }
-          }}
-          >${t("cron.list.showAll")}</a
-        >`
-      : renderAgentScopeControl({
-          agents: controller.agentsList?.agents ?? [],
-          selection: controller.context.agentSelection,
-        });
+    return {
+      title: titleForRoute("cron"),
+      subtitle: controller.cron.cronSessionFilter
+        ? t("cron.list.sessionFilter")
+        : subtitleForRoute("cron"),
+      actions: controller.cron.cronSessionFilter
+        ? html`<a
+            class="btn"
+            href=${pathForRoute("cron", controller.context.basePath)}
+            @click=${(event: MouseEvent) => {
+              if (shouldHandleNavigationClick(event)) {
+                event.preventDefault();
+                controller.context.navigate("cron", { search: "" });
+              }
+            }}
+            >${t("cron.list.showAll")}</a
+          >`
+        : renderAgentScopeControl({
+            agents: controller.agentsList?.agents ?? [],
+            selection: controller.context.agentSelection,
+          }),
+    };
   });
-  createEffect(
-    () => props.revision(),
-    () => props.controller.afterRender(),
-  );
+  createEffect(revision, () => {
+    props.controller.afterRender();
+    return reserveCronEditorClearance(props.controller.host);
+  });
   return (
     <>
       <SettingsPageHeader
         title={header().title}
         subtitle={header().subtitle}
-        actions={headerActions() === nothing ? undefined : <LitContent value={headerActions()} />}
+        actions={header().actions === nothing ? undefined : <LitContent value={header().actions} />}
       />
-      <CronRunTranscriptView
-        controller={props.controller.runTranscript}
-        revision={props.revision}
-      />
+      <CronRunTranscriptView controller={props.controller.runTranscript} revision={revision} />
       <SettingsWorkspace>
         <CronView {...viewProps()} />
       </SettingsWorkspace>

@@ -15,54 +15,52 @@ const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = 
   "on-exit": "cron.form.repeatOnExit",
   stream: "cron.form.repeatStream",
 };
-function JobsFilter(componentProps: {
-  props: CronProps;
-  field: keyof Parameters<CronProps["onJobsFiltersChange"]>[0];
-  params: {
+function JobsFilter(
+  props: CronProps & {
+    field: keyof Parameters<CronProps["onJobsFiltersChange"]>[0];
     label: string;
     value: string;
     options: readonly PickerOption[];
     testId?: string;
-  };
-}) {
+  },
+) {
   return (
     <label class="field">
-      <span>{componentProps.params.label}</span>
+      <span>{props.label}</span>
       <select
         class="settings-select"
-        data-test-id={componentProps.params.testId}
-        prop:value={componentProps.params.value}
+        data-test-id={props.testId}
+        prop:value={props.value}
         onChange={(event: Event) => {
           if (event.currentTarget instanceof HTMLSelectElement) {
-            void componentProps.props.onJobsFiltersChange({
-              [componentProps.field]: event.currentTarget.value,
+            void props.onJobsFiltersChange({
+              [props.field]: event.currentTarget.value,
             });
           }
         }}
       >
-        {
-          <For each={componentProps.params.options} keyed={(option) => option.value}>
-            {(option) => (
-              <option
-                value={option().value}
-                selected={option().value === componentProps.params.value}
-              >
-                {option().label}
-              </option>
-            )}
-          </For>
-        }
+        <For each={props.options} keyed={(option) => option.value}>
+          {(option) => (
+            <option value={option().value} selected={option().value === props.value}>
+              {option().label}
+            </option>
+          )}
+        </For>
       </select>
     </label>
   );
 }
-export function JobsFilterPopover(componentProps: { props: CronProps; active: boolean }) {
+export function JobsFilterPopover(
+  props: CronProps & {
+    active: boolean;
+  },
+) {
   return (
     <>
       <button
         id="cron-jobs-filter-trigger"
         type="button"
-        class={["btn btn--sm cron-filter-popover__trigger", { active: componentProps.active }]}
+        class={["btn btn--sm cron-filter-popover__trigger", { active: props.active }]}
         title={t("cron.list.filters")}
         aria-label={t("cron.list.filters")}
         aria-haspopup="dialog"
@@ -82,78 +80,68 @@ export function JobsFilterPopover(componentProps: { props: CronProps; active: bo
       >
         <div class="cron-filter-popover__panel">
           <JobsFilter
-            props={componentProps.props}
+            {...props}
             field="cronJobsScheduleKindFilter"
-            params={{
-              label: t("cron.jobs.schedule"),
-              value: componentProps.props.jobsScheduleKindFilter,
-              testId: "cron-jobs-schedule-filter",
-              options: Object.entries(SCHEDULE_KIND_FILTER_LABELS).map(([value, labelKey]) => ({
-                value,
-                label: t(labelKey),
-              })),
-            }}
+            label={t("cron.jobs.schedule")}
+            value={props.jobsScheduleKindFilter}
+            testId="cron-jobs-schedule-filter"
+            options={Object.entries(SCHEDULE_KIND_FILTER_LABELS).map(([value, labelKey]) => ({
+              value,
+              label: t(labelKey),
+            }))}
           />
           <JobsFilter
-            props={componentProps.props}
+            {...props}
             field="cronJobsLastStatusFilter"
-            params={{
-              label: t("cron.jobs.lastRun"),
-              value: componentProps.props.jobsLastStatusFilter,
-              testId: "cron-jobs-last-status-filter",
-              options: [
-                { value: "all", label: t("cron.jobs.all") },
-                { value: "ok", label: t("cron.runs.runStatusOk") },
-                { value: "error", label: t("cron.runs.runStatusError") },
-                { value: "skipped", label: t("cron.runs.runStatusSkipped") },
-                { value: "unknown", label: t("cron.runs.runStatusUnknown") },
-              ],
-            }}
+            label={t("cron.jobs.lastRun")}
+            value={props.jobsLastStatusFilter}
+            testId="cron-jobs-last-status-filter"
+            options={[
+              { value: "all", label: t("cron.jobs.all") },
+              { value: "ok", label: t("cron.runs.runStatusOk") },
+              { value: "error", label: t("cron.runs.runStatusError") },
+              { value: "skipped", label: t("cron.runs.runStatusSkipped") },
+              { value: "unknown", label: t("cron.runs.runStatusUnknown") },
+            ]}
           />
           <JobsFilter
-            props={componentProps.props}
+            {...props}
             field="cronJobsTriggerFilter"
-            params={{
-              label: t("cron.jobs.condition"),
-              value: componentProps.props.jobsTriggerFilter,
-              testId: "cron-jobs-trigger-filter",
-              options: [
-                { value: "all", label: t("cron.jobs.all") },
-                { value: "conditional", label: t("cron.jobs.conditional") },
-                { value: "unconditional", label: t("cron.jobs.unconditional") },
-              ],
-            }}
+            label={t("cron.jobs.condition")}
+            value={props.jobsTriggerFilter}
+            testId="cron-jobs-trigger-filter"
+            options={[
+              { value: "all", label: t("cron.jobs.all") },
+              { value: "conditional", label: t("cron.jobs.conditional") },
+              { value: "unconditional", label: t("cron.jobs.unconditional") },
+            ]}
           />
           <JobsFilter
-            props={componentProps.props}
+            {...props}
             field="cronJobsSortBy"
-            params={{
-              label: t("cron.jobs.sort"),
-              value: componentProps.props.jobsSortBy,
-              options: [
-                { value: "nextRunAtMs", label: t("cron.jobs.nextRun") },
-                { value: "updatedAtMs", label: t("cron.jobs.recentlyUpdated") },
-                { value: "name", label: t("cron.jobs.name") },
-              ],
-            }}
+            label={t("cron.jobs.sort")}
+            value={props.jobsSortBy}
+            options={[
+              { value: "nextRunAtMs", label: t("cron.jobs.nextRun") },
+              { value: "updatedAtMs", label: t("cron.jobs.recentlyUpdated") },
+              { value: "name", label: t("cron.jobs.name") },
+            ]}
           />
           <JobsFilter
-            props={componentProps.props}
+            {...props}
             field="cronJobsSortDir"
-            params={{
-              label: t("cron.jobs.direction"),
-              value: componentProps.props.jobsSortDir,
-              options: [
-                { value: "asc", label: t("cron.jobs.ascending") },
-                { value: "desc", label: t("cron.jobs.descending") },
-              ],
-            }}
+            label={t("cron.jobs.direction")}
+            value={props.jobsSortDir}
+            options={[
+              { value: "asc", label: t("cron.jobs.ascending") },
+              { value: "desc", label: t("cron.jobs.descending") },
+            ]}
           />
           <button
             class="btn btn--sm"
             data-test-id="cron-jobs-filters-reset"
-            disabled={!componentProps.active}
-            onClick={() => void componentProps.props.onJobsFiltersReset()}
+            disabled={!props.active}
+            onClick={() => void props.onJobsFiltersReset()}
           >
             {t("cron.jobs.reset")}
           </button>

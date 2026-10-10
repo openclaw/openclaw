@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import type { WizardStep } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import {
   renderWizardBusyButton,
@@ -165,37 +164,19 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   if (channels.includes("whatsapp")) {
     return renderWhatsAppLinking(props);
   }
-  const changed = createMemo(() => channels.length > 0);
+  const changed = channels.length > 0;
   return (
     <>
       <div class="channels-wizard__message" role="status">
-        {t(changed() ? "channels.setup.doneTitle" : "channels.setup.doneNoChangesTitle")}
+        {t(changed ? "channels.setup.doneTitle" : "channels.setup.doneNoChangesTitle")}
       </div>
       <div class="channels-wizard__note">
-        {t(changed() ? "channels.setup.doneBody" : "channels.setup.doneNoChangesBody")}
+        {t(changed ? "channels.setup.doneBody" : "channels.setup.doneNoChangesBody")}
       </div>
       <div class="channels-wizard__footer">
-        {renderCloseButton(props, changed() ? "channels.setup.finish" : "common.close", true)}
+        {renderCloseButton(props, changed ? "channels.setup.finish" : "common.close", true)}
       </div>
     </>
-  );
-}
-
-function renderExternalStepLink(step: WizardStep | null) {
-  if (!step?.externalUrl) {
-    return undefined;
-  }
-  return (
-    <div class="channels-wizard__links">
-      <a
-        class="channels-wizard__link"
-        href={step.externalUrl}
-        target="_blank"
-        rel="noreferrer noopener"
-      >
-        {t("channels.setup.openLink")}
-      </a>
-    </div>
   );
 }
 
@@ -252,7 +233,20 @@ function WizardDialog(props: {
           </div>
         </div>
         <div class="channels-wizard__body">
-          {renderExternalStepLink(step()?.step ?? null)}
+          <Show when={step()?.step.externalUrl}>
+            {(url) => (
+              <div class="channels-wizard__links">
+                <a
+                  class="channels-wizard__link"
+                  href={url()}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  {t("channels.setup.openLink")}
+                </a>
+              </div>
+            )}
+          </Show>
           <Show when={props.wizard.phase === "starting"}>
             <div class="channels-wizard__footer">
               <LitContent value={renderWizardBusyButton(t("channels.setup.starting"))} />

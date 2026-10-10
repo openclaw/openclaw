@@ -23,7 +23,9 @@ export function CronSuggestionLists(
     }).map(([id, options]) => {
       const clean = normalizeUniqueStringEntries(options);
       return clean.length === 0 ? undefined : (
-        <datalist id={id}>{<For each={clean}>{(value) => <option value={value} />}</For>}</datalist>
+        <datalist id={id}>
+          <For each={clean}>{(value) => <option value={value} />}</For>
+        </datalist>
       );
     }),
   );

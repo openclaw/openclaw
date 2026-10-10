@@ -29,7 +29,7 @@ function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchem
 
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
 
-function ChannelConfigForm(params: { channelId: string; props: ChannelsProps; disabled: boolean }) {
+export function ChannelConfig(params: { channelId: string; props: ChannelsProps }) {
   const locale = projectI18n(i18n);
   const analysis = createMemo(() => analyzeConfigSchema(params.props.config.configSchema));
   const node = createMemo(() =>
@@ -40,79 +40,69 @@ function ChannelConfigForm(params: { channelId: string; props: ChannelsProps; di
   );
   const extraFields = createMemo(() => EXTRA_CHANNEL_FIELDS.filter((field) => field in value()));
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
-  return (
-    <Show
-      when={analysis().schema}
-      fallback={<div class="settings-row__desc">{t("channels.config.schemaUnavailable")}</div>}
-    >
-      <Show
-        when={node()}
-        fallback={
-          <div class="settings-row__desc">{t("channels.config.channelSchemaUnavailable")}</div>
-        }
-      >
-        {(schema) => (
-          <>
-            <div class="config-form">
-              <LitContent
-                value={(() => {
-                  locale.revision();
-                  return renderConfigTierGroups({
-                    schema: schema(),
-                    path: ["channels", params.channelId],
-                    hints: params.props.config.configUiHints,
-                    revealAdvanced: params.props.showAdvancedSettings,
-                    onShowAdvanced: () => params.props.onShowAdvancedSettings(true),
-                    onHideAdvanced: () => params.props.onShowAdvancedSettings(false),
-                    renderTier: (tier) =>
-                      renderNode({
-                        schema: tier,
-                        value: value(),
-                        path: ["channels", params.channelId],
-                        hints: params.props.config.configUiHints,
-                        unsupported: unsupported(),
-                        disabled: params.disabled,
-                        showLabel: false,
-                        maskSensitive: true,
-                        onPatch: params.props.onConfigPatch,
-                      }),
-                  });
-                })()}
-              />
-            </div>
-            <Show when={extraFields().length > 0}>
-              <div>
-                <For each={extraFields()}>
-                  {(field) => (
-                    <div class="settings-row__desc">
-                      {field}: {formatChannelExtraValue(value()[field])}
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </>
-        )}
-      </Show>
-    </Show>
-  );
-}
-
-export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const disabled = createMemo(
     () => params.props.config.configSaving || params.props.config.configSchemaLoading,
   );
+  const form = createMemo(() => {
+    locale.revision();
+    const schema = node();
+    if (!schema) {
+      return undefined;
+    }
+    return renderConfigTierGroups({
+      schema,
+      path: ["channels", params.channelId],
+      hints: params.props.config.configUiHints,
+      revealAdvanced: params.props.showAdvancedSettings,
+      onShowAdvanced: () => params.props.onShowAdvancedSettings(true),
+      onHideAdvanced: () => params.props.onShowAdvancedSettings(false),
+      renderTier: (tier) =>
+        renderNode({
+          schema: tier,
+          value: value(),
+          path: ["channels", params.channelId],
+          hints: params.props.config.configUiHints,
+          unsupported: unsupported(),
+          disabled: disabled(),
+          showLabel: false,
+          maskSensitive: true,
+          onPatch: params.props.onConfigPatch,
+        }),
+    });
+  });
   return (
     <Show
       when={!params.props.config.configSchemaLoading}
       fallback={<SettingsLoadingSkeleton label={t("channels.config.loadingSchema")} rows={2} />}
     >
       <div class="settings-row settings-row--stacked">
-        <ChannelConfigForm
-          channelId={params.channelId}
-          props={params.props}
-          disabled={disabled()}
-        />
+        <Show
+          when={node()}
+          fallback={
+            <div class="settings-row__desc">
+              {t(
+                analysis().schema
+                  ? "channels.config.channelSchemaUnavailable"
+                  : "channels.config.schemaUnavailable",
+              )}
+            </div>
+          }
+        >
+          <div class="config-form">
+            <LitContent value={form()} />
+          </div>
+          <Show when={extraFields().length > 0}>
+            <div>
+              <For each={extraFields()}>
+                {(field) => (
+                  <div class="settings-row__desc">
+                    {field}: {formatChannelExtraValue(value()[field])}
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        </Show>
         {params.props.config.lastError ? (
           <div class="callout danger" role="alert">
             {params.props.config.lastError}

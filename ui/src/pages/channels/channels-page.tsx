@@ -63,17 +63,16 @@ class ChannelsPageController {
   private readonly cleanups: Array<() => void> = [];
   private currentGateway?: ApplicationContext["gateway"];
   private currentClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
-  private currentConnected = false;
-  private hasBoundGateway = false;
   private pairingTimer: ReturnType<typeof setInterval> | null = null;
-  private pairingPolling = false;
   private pairingScrollPending = false;
 
   constructor(
     private readonly getContext: () => ApplicationContext,
     private readonly host: HTMLElement,
     private readonly notify: () => void,
-  ) {}
+  ) {
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+  }
 
   private get context() {
     return this.getContext();
@@ -109,31 +108,7 @@ class ChannelsPageController {
     const gateway = projectGateway(context.gateway);
     const channels = projectChannels(context.channels);
     const config = projectRuntimeConfig(context.runtimeConfig);
-    const applyGateway = () => {
-      if (this.context.gateway !== context.gateway) {
-        return;
-      }
-      const snapshot = gateway.read().snapshot;
-      const initial = !this.hasBoundGateway;
-      const sourceChanged = this.hasBoundGateway && this.currentGateway !== context.gateway;
-      const clientChanged = this.currentClient !== snapshot.client;
-      const connectionChanged = this.currentConnected !== (snapshot.phase === "connected");
-      const transitioned = this.gateway.transition(snapshot);
-      if (sourceChanged && !transitioned) {
-        this.gateway.invalidate();
-      }
-      this.currentGateway = context.gateway;
-      this.currentClient = snapshot.client;
-      this.currentConnected = snapshot.phase === "connected";
-      this.hasBoundGateway = true;
-      this.handleGatewaySnapshot({
-        snapshot,
-        initial,
-        identityChanged: !initial && (sourceChanged || clientChanged),
-        connectionChanged,
-      });
-      this.requestUpdate();
-    };
+    const applyGateway = () => this.handleGatewaySnapshot(context.gateway);
     this.cleanups.push(gateway.subscribe(applyGateway), () => gateway.dispose());
     applyGateway();
     if (this.channelsSource && this.channelsSource !== context.channels) {
@@ -169,42 +144,44 @@ class ChannelsPageController {
     }
   }
 
-  private handleGatewaySnapshot(change: {
-    snapshot: ApplicationContext["gateway"]["snapshot"];
-    initial: boolean;
-    identityChanged: boolean;
-    connectionChanged: boolean;
-  }) {
-    const snapshot = change.snapshot;
+  private handleGatewaySnapshot(source: ApplicationContext["gateway"]) {
+    if (this.context.gateway !== source) {
+      return;
+    }
+    const snapshot = source.snapshot;
+    const initial = this.currentGateway === undefined;
+    const identityChanged =
+      !initial && (this.currentGateway !== source || this.currentClient !== snapshot.client);
+    const transportChanged = this.gateway.transition(snapshot);
+    if (identityChanged && !transportChanged) {
+      this.gateway.invalidate();
+    }
+    this.currentGateway = source;
+    this.currentClient = snapshot.client;
     const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
     const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
     const pairingAuthChanged =
-      !change.initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
-    if (change.identityChanged || snapshot.phase !== "connected") {
+      !initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
+    if (identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
     }
-    if (change.identityChanged || change.connectionChanged || snapshot.phase !== "connected") {
+    if (identityChanged || transportChanged || snapshot.phase !== "connected") {
       this.pluginPresentation.reset();
     }
-    if (
-      change.identityChanged ||
-      pairingAuthChanged ||
-      snapshot.phase !== "connected" ||
-      !pairingAccess
-    ) {
+    if (identityChanged || pairingAuthChanged || snapshot.phase !== "connected" || !pairingAccess) {
       this.pairingPrompt = null;
       this.setPairingFilter(null, null);
       this.pairingNotice = null;
     }
     this.gatewayPairingAuthSignature = pairingAuthSignature;
-    this.syncPairingPolling(snapshot);
+    this.syncPairingPolling();
     if (snapshot.phase === "connected" && snapshot.client) {
-      if (!change.initial) {
+      if (!initial) {
         this.ensureInitialData();
       }
       if (
-        !change.initial &&
-        (change.identityChanged || change.connectionChanged || pairingAuthChanged) &&
+        !initial &&
+        (identityChanged || transportChanged || pairingAuthChanged) &&
         pairingAccess
       ) {
         void this.context.channels.refreshPairing();
@@ -212,18 +189,7 @@ class ChannelsPageController {
     } else {
       this.schemaLoadStarted = false;
     }
-  }
-
-  private syncPairingPolling(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    if (
-      snapshot.phase === "connected" &&
-      snapshot.client &&
-      hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
-    ) {
-      this.startPairingPolling();
-      return;
-    }
-    this.stopPairingPolling();
+    this.requestUpdate();
   }
 
   private ensureInitialData() {
@@ -258,61 +224,48 @@ class ChannelsPageController {
   }
 
   private readonly handleVisibilityChange = () => {
-    if (!this.pairingPolling) {
-      return;
-    }
-    if (document.visibilityState === "hidden") {
-      this.clearPairingTimer();
-    } else if (this.startPairingTimer()) {
+    if (this.syncPairingPolling()) {
       this.pollPairing();
     }
   };
 
   private pollPairing() {
     const snapshot = this.context.gateway.snapshot;
-    if (snapshot.phase === "connected" && hasOperatorPairingAccess(snapshot.hello?.auth ?? null)) {
+    if (
+      this.active &&
+      document.visibilityState !== "hidden" &&
+      snapshot.phase === "connected" &&
+      hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+    ) {
       void this.context.channels.refreshPairing();
     }
   }
 
-  private startPairingTimer() {
-    if (this.pairingTimer !== null || document.visibilityState === "hidden") {
-      return false;
-    }
-    this.pairingTimer = setInterval(() => {
-      if (document.visibilityState !== "hidden") {
-        this.pollPairing();
+  private syncPairingPolling() {
+    const snapshot = this.context.gateway.snapshot;
+    const enabled =
+      this.active &&
+      snapshot.phase === "connected" &&
+      snapshot.client &&
+      hasOperatorPairingAccess(snapshot.hello?.auth ?? null) &&
+      document.visibilityState !== "hidden";
+    if (!enabled) {
+      if (this.pairingTimer !== null) {
+        clearInterval(this.pairingTimer);
+        this.pairingTimer = null;
       }
-    }, CHANNEL_PAIRING_POLL_INTERVAL_MS);
-    return true;
-  }
-
-  private clearPairingTimer() {
-    if (this.pairingTimer !== null) {
-      clearInterval(this.pairingTimer);
+    } else if (this.pairingTimer === null) {
+      this.pairingTimer = setInterval(() => this.pollPairing(), CHANNEL_PAIRING_POLL_INTERVAL_MS);
+      return true;
     }
-    this.pairingTimer = null;
-  }
-
-  private startPairingPolling() {
-    if (this.pairingPolling) {
-      return;
-    }
-    this.pairingPolling = true;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    this.startPairingTimer();
-  }
-
-  private stopPairingPolling() {
-    this.pairingPolling = false;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    this.clearPairingTimer();
+    return false;
   }
 
   dispose() {
     this.active = false;
     this.wizardHost.cancelOnDisconnect();
-    this.stopPairingPolling();
+    this.syncPairingPolling();
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.pluginPresentation.reset();
     this.gateway.dispose();
     for (const cleanup of this.cleanups.splice(0)) {

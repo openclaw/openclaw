@@ -1,27 +1,30 @@
 import { createMemo } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu, CronTabs } from "./view-controls.tsx";
+import { LitContent } from "../../lit/lit-content.tsx";
+import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
 import { TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
-export function DetailView(componentProps: { props: CronProps; mode: CronPanelMode }) {
+export function DetailView(
+  props: CronProps & {
+    mode: CronPanelMode;
+  },
+) {
   // Status refresh updates the selected job's runtime facts in place.
   const selectedJob = createMemo(
-    () =>
-      componentProps.mode === "job" ? (componentProps.props.editingJob ?? undefined) : undefined,
+    () => (props.mode === "job" ? (props.editingJob ?? undefined) : undefined),
     { equals: false },
   );
-  const hasDetailTabs = createMemo(() => componentProps.mode === "job" && Boolean(selectedJob()));
-  const showHistory = createMemo(
-    () => componentProps.mode === "job" && componentProps.props.detailTab === "history",
-  );
+  const hasDetailTabs = () => props.mode === "job" && Boolean(selectedJob());
+  const showHistory = () => props.mode === "job" && props.detailTab === "history";
   const conditionActivity = createMemo(() => {
     const job = selectedJob();
     return job?.trigger
@@ -32,87 +35,68 @@ export function DetailView(componentProps: { props: CronProps; mode: CronPanelMo
         }
       : undefined;
   });
-  const children = createMemo(() => [
-    <div class="cron-back-row">
-      <button
-        type="button"
-        class="cron-back"
-        data-test-id="cron-back"
-        disabled={componentProps.props.busy}
-        onClick={() => componentProps.props.onClosePanel()}
-      >
-        <Icon name="arrowLeft" /> {t("cron.detail.back")}
-      </button>
-    </div>,
-    <DetailHeader
-      props={componentProps.props}
-      mode={componentProps.mode}
-      selectedJob={selectedJob()}
-    />,
-    <AdminRequired {...componentProps.props} />,
-    hasDetailTabs() ? <DetailTabs {...componentProps.props} /> : undefined,
-    <ErrorBanner error={componentProps.props.error} />,
-    <div
-      id="cron-detail-panel"
-      class="cron-tab-panel"
-      role={hasDetailTabs() ? "tabpanel" : undefined}
-      aria-labelledby={
-        hasDetailTabs() ? `cron-detail-tab-${componentProps.props.detailTab}` : undefined
-      }
-    >
-      {showHistory() ? (
-        <SettingsSection
-          title={t("cron.detail.historyTitle")}
-          children={
-            <div class="cron-history">
-              <RunsSection
-                {...{ ...componentProps.props, conditionActivity: conditionActivity() }}
-              />
-            </div>
-          }
-        />
-      ) : (
-        <Editor props={componentProps.props} mode={componentProps.mode} />
-      )}
-    </div>,
-  ]);
   return (
-    <section class="cron-page cron-page--detail" data-panel-mode={componentProps.mode}>
-      <SettingsPage children={children()} wide={true} />
+    <section class="cron-page cron-page--detail" data-panel-mode={props.mode}>
+      <SettingsPage wide>
+        <div class="cron-back-row">
+          <button
+            type="button"
+            class="cron-back"
+            data-test-id="cron-back"
+            disabled={props.busy}
+            onClick={() => props.onClosePanel()}
+          >
+            <Icon name="arrowLeft" /> {t("cron.detail.back")}
+          </button>
+        </div>
+        <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
+        <AdminRequired {...props} />
+        {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
+        <ErrorBanner error={props.error} />
+        <div
+          id="cron-detail-panel"
+          class="cron-tab-panel"
+          role={hasDetailTabs() ? "tabpanel" : undefined}
+          aria-labelledby={hasDetailTabs() ? `cron-detail-tab-${props.detailTab}` : undefined}
+        >
+          {showHistory() ? (
+            <SettingsSection title={t("cron.detail.historyTitle")}>
+              <div class="cron-history">
+                <RunsSection {...{ ...props, conditionActivity: conditionActivity() }} />
+              </div>
+            </SettingsSection>
+          ) : (
+            <Editor {...props} mode={props.mode} />
+          )}
+        </div>
+      </SettingsPage>
     </section>
   );
 }
-function DetailHeader(componentProps: {
-  props: CronProps;
-  mode: CronPanelMode;
-  selectedJob?: CronJob;
-}) {
-  const title = createMemo(() =>
-    componentProps.mode === "job"
-      ? (componentProps.selectedJob?.displayName ??
-        componentProps.selectedJob?.name ??
-        componentProps.props.form.name)
-      : t("cron.detail.newTitle"),
-  );
-  const description = createMemo(() =>
-    componentProps.mode === "job" ? componentProps.selectedJob?.description?.trim() : undefined,
-  );
-  const systemOwned = createMemo(() =>
-    isSystemMonitorDeclaration(componentProps.selectedJob?.declarationKey),
-  );
+function DetailHeader(
+  props: CronProps & {
+    mode: CronPanelMode;
+    selectedJob?: CronJob;
+  },
+) {
+  const title = () =>
+    props.mode === "job"
+      ? (props.selectedJob?.displayName ?? props.selectedJob?.name ?? props.form.name)
+      : t("cron.detail.newTitle");
+  const description = () =>
+    props.mode === "job" ? props.selectedJob?.description?.trim() : undefined;
+  const systemOwned = () => isSystemMonitorDeclaration(props.selectedJob?.declarationKey);
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
-  const nextRunAtMs = createMemo(() => componentProps.selectedJob?.state?.nextRunAtMs);
-  const nextRunSuffix = createMemo(() =>
+  const nextRunAtMs = () => props.selectedJob?.state?.nextRunAtMs;
+  const nextRunSuffix = () =>
     typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs())
       ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs())}`
-      : "",
-  );
-  const subtitle = createMemo(() =>
-    componentProps.mode === "job" && componentProps.selectedJob
-      ? `${formatCronSchedule(componentProps.selectedJob)}${nextRunSuffix()}`
-      : t("cron.detail.newSubtitle"),
-  );
+      : "";
+  const subtitle = () =>
+    props.mode === "job" && props.selectedJob
+      ? `${formatCronSchedule(props.selectedJob)}${nextRunSuffix()}`
+      : t("cron.detail.newSubtitle");
   return (
     <div class="cron-detail-header">
       <div class="cron-detail-header__copy">
@@ -124,36 +108,31 @@ function DetailHeader(componentProps: {
           </div>
         ) : undefined}
         <div class="cron-detail-meta">
-          {componentProps.mode === "job" &&
-          componentProps.selectedJob &&
-          componentProps.props.canManage &&
-          !systemOwned() ? (
-            <EnabledSwitch props={componentProps.props} job={componentProps.selectedJob} />
+          {props.mode === "job" && props.selectedJob && props.canManage && !systemOwned() ? (
+            <EnabledSwitch {...props} job={props.selectedJob} />
           ) : undefined}
           <span class="cron-detail-sub">{subtitle()}</span>
-          {componentProps.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
+          {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
         </div>
       </div>
       <div class="cron-detail-actions">
-        {componentProps.mode === "job" &&
-        componentProps.selectedJob &&
-        componentProps.props.canManage ? (
+        {props.mode === "job" && props.selectedJob && props.canManage ? (
           <>
             <button
               type="button"
               class="btn btn--sm"
               data-test-id="cron-run-now"
-              disabled={componentProps.props.busy}
+              disabled={props.busy}
               onClick={() => {
-                const job = componentProps.selectedJob;
+                const job = props.selectedJob;
                 if (job) {
-                  componentProps.props.onRun(job, "force");
+                  props.onRun(job, "force");
                 }
               }}
             >
               <Icon name="play" /> {t("cron.actions.runNow")}
             </button>
-            <JobMenu props={componentProps.props} job={componentProps.selectedJob} />
+            <JobMenu {...props} job={props.selectedJob} />
           </>
         ) : undefined}
       </div>
@@ -162,8 +141,8 @@ function DetailHeader(componentProps: {
 }
 function DetailTabs(props: CronProps) {
   return (
-    <CronTabs
-      props={{
+    <LitContent
+      value={renderHubTabs({
         id: "cron-detail",
         panelId: "cron-detail-panel",
         className: "cron-tabs",
@@ -183,7 +162,7 @@ function DetailTabs(props: CronProps) {
         ],
         ariaLabel: t("cron.detail.tabsLabel"),
         onSelect: props.onDetailTabChange,
-      }}
+      })}
     />
   );
 }

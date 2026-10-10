@@ -17,7 +17,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
-import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.shared.tsx";
+import { ChannelRefresh, resolveChannelDisplayState } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 import { ChannelWizard } from "./wizard-view.tsx";
 
@@ -60,89 +60,70 @@ export function ChannelsView(props: ChannelsProps) {
     () =>
       props.channels.channelsSnapshot?.warnings
         ?.filter((warning) => warning.trim())
-        .map((warning) => formatUiExternalText(warning)) ?? [],
+        .slice(0, 3)
+        .map((warning) => formatUiExternalText(warning))
+        .join("; ") ?? "",
   );
-  const selected = createMemo(() => props.selectedChannel);
 
   return (
     <>
-      {
-        <SettingsPage>
-          {
-            <>
-              {showingStaleSnapshot() ? (
-                <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
-              ) : undefined}
-              {props.channels.channelsSnapshot?.partial ? (
-                <div class="callout warn">
-                  {t("channels.hub.partialSnapshot")}
-                  {partialWarnings().length > 0 ? partialWarnings().slice(0, 3).join("; ") : ""}
-                </div>
-              ) : undefined}
-              {props.channels.channelsError ? (
-                <div class="callout danger">{props.channels.channelsError}</div>
-              ) : undefined}
-              {props.wizardHost.blockedByDirtyConfig && props.config.configFormDirty ? (
-                <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
-              ) : undefined}
-              {
-                <SettingsSection
-                  {...{
-                    title: t("channels.hub.connectedTitle"),
-                    ...(connected().length > 0 ? { count: connected().length } : {}),
-                    actions: renderChannelRefreshAction({
-                      updatedAt: props.channels.channelsLastSuccess,
-                      disabled: props.channels.channelsLoading,
-                      onRefresh: () => props.onRefresh(true),
-                    }),
-                  }}
-                >
-                  {connected().length === 0 ? (
-                    <div class="channels-empty">
-                      {/* No configured transports is a true empty state, so Clawd rests here. */}
-                      <openclaw-mascot mood="sleepy" prop:size={80} />
-                      {<SettingsEmpty message={t("channels.hub.noneConnected")} />}
-                    </div>
-                  ) : (
-                    <For each={connected()}>
-                      {(key) => <ConnectedRow channelId={key} props={props} />}
-                    </For>
-                  )}
-                </SettingsSection>
-              }
-              {
-                <SettingsSection
-                  {...{
-                    title: t("channels.hub.addTitle"),
-                    description: t("channels.hub.addSubtitle"),
-                  }}
-                >
-                  {
-                    <>
-                      {!props.canAdmin ? (
-                        <div class="callout info" role="note">
-                          {t("channels.hub.adminRequired")}
-                        </div>
-                      ) : (
-                        <>
-                          {
-                            <For each={available()}>
-                              {(key) => <AvailableRow channelId={key} props={props} />}
-                            </For>
-                          }
-                          {renderBrowseAllRow(props)}
-                        </>
-                      )}
-                    </>
-                  }
-                </SettingsSection>
-              }
-              {renderChannelPairingQueue(props)}
-            </>
+      <SettingsPage>
+        {showingStaleSnapshot() ? (
+          <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
+        ) : undefined}
+        {props.channels.channelsSnapshot?.partial ? (
+          <div class="callout warn">
+            {t("channels.hub.partialSnapshot")}
+            {partialWarnings()}
+          </div>
+        ) : undefined}
+        {props.channels.channelsError ? (
+          <div class="callout danger">{props.channels.channelsError}</div>
+        ) : undefined}
+        {props.wizardHost.blockedByDirtyConfig && props.config.configFormDirty ? (
+          <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
+        ) : undefined}
+        <SettingsSection
+          title={t("channels.hub.connectedTitle")}
+          count={connected().length > 0 ? connected().length : undefined}
+          actions={
+            <ChannelRefresh
+              updatedAt={props.channels.channelsLastSuccess}
+              disabled={props.channels.channelsLoading}
+              onRefresh={() => props.onRefresh(true)}
+            />
           }
-        </SettingsPage>
-      }
-      <Show when={selected()} keyed>
+        >
+          {connected().length === 0 ? (
+            <div class="channels-empty">
+              {/* No configured transports is a true empty state, so Clawd rests here. */}
+              <openclaw-mascot mood="sleepy" prop:size={80} />
+              <SettingsEmpty message={t("channels.hub.noneConnected")} />
+            </div>
+          ) : (
+            <For each={connected()}>{(key) => <ConnectedRow channelId={key} props={props} />}</For>
+          )}
+        </SettingsSection>
+        <SettingsSection
+          title={t("channels.hub.addTitle")}
+          description={t("channels.hub.addSubtitle")}
+        >
+          {!props.canAdmin ? (
+            <div class="callout info" role="note">
+              {t("channels.hub.adminRequired")}
+            </div>
+          ) : (
+            <>
+              <For each={available()}>
+                {(key) => <AvailableRow channelId={key} props={props} />}
+              </For>
+              {renderBrowseAllRow(props)}
+            </>
+          )}
+        </SettingsSection>
+        {renderChannelPairingQueue(props)}
+      </SettingsPage>
+      <Show when={props.selectedChannel} keyed>
         {(channel) => (
           <ChannelDetail
             channelId={channel}
@@ -230,7 +211,7 @@ function resolveRowState(key: string, props: ChannelsProps): ChannelCardState {
 
 function rowStatus(state: ChannelCardState) {
   const { kind, labelKey } = CHANNEL_CARD_STATES[state];
-  return <SettingsStatus {...{ kind, label: t(labelKey) }} />;
+  return <SettingsStatus kind={kind} label={t(labelKey)} />;
 }
 
 function lastActivityLine(key: string, props: ChannelsProps): string | null {
@@ -264,20 +245,20 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       class="settings-row settings-row--nav channels-item"
       onClick={() => params.props.onShowDetail(params.channelId)}
     >
-      {
-        <LitContent
-          value={renderChannelIcon(params.channelId, label(), "tile", {
-            pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-          })}
-        />
-      }
+      <LitContent
+        value={renderChannelIcon(params.channelId, label(), "tile", {
+          pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
+        })}
+      />
       <div class="settings-row__text">
         <span class="settings-row__title">{label()}</span>
         <span class="settings-row__desc">{description()}</span>
       </div>
       <div class="settings-row__control">
         {rowStatus(statusIssue() ? "attention" : resolveRowState(params.channelId, params.props))}
-        <span class="settings-row__chevron">{<LitContent value={icons.chevronRight} />}</span>
+        <span class="settings-row__chevron">
+          <LitContent value={icons.chevronRight} />
+        </span>
       </div>
     </button>
   );
@@ -300,13 +281,11 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         title={t("channels.hub.openDetails")}
         onClick={() => params.props.onShowDetail(params.channelId)}
       >
-        {
-          <LitContent
-            value={renderChannelIcon(params.channelId, label(), "tile", {
-              pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-            })}
-          />
-        }
+        <LitContent
+          value={renderChannelIcon(params.channelId, label(), "tile", {
+            pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
+          })}
+        />
         <span class="settings-row__text">
           <span class="settings-row__title">{label()}</span>
           <span class="settings-row__desc">{description()}</span>
@@ -344,7 +323,9 @@ function renderBrowseAllRow(props: ChannelsProps) {
         <span class="settings-row__desc">{t("channels.hub.browseAllSubtitle")}</span>
       </div>
       <div class="settings-row__control">
-        <span class="settings-row__chevron">{<LitContent value={icons.chevronRight} />}</span>
+        <span class="settings-row__chevron">
+          <LitContent value={icons.chevronRight} />
+        </span>
       </div>
     </button>
   );

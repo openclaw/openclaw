@@ -41,27 +41,25 @@ type CronRunsSectionProps = Pick<
     lastFiredAtMs?: number;
   };
 };
-function ConditionMetric(componentProps: { label: string; value: string }) {
+function ConditionMetric(props: { label: string; value: string }) {
   return (
     <div class="cron-condition-activity__metric">
-      <dt>{componentProps.label}</dt>
-      <dd>{componentProps.value}</dd>
+      <dt>{props.label}</dt>
+      <dd>{props.value}</dd>
     </div>
   );
 }
-function ConditionActivity(componentProps: {
+function ConditionActivity(props: {
   activity: NonNullable<CronRunsSectionProps["conditionActivity"]>;
 }) {
-  const lastChecked = createMemo(() =>
-    formatRelativeTimestamp(componentProps.activity.lastCheckedAtMs, {
+  const lastChecked = () =>
+    formatRelativeTimestamp(props.activity.lastCheckedAtMs, {
       fallback: t("cron.runs.notChecked"),
-    }),
-  );
-  const lastFired = createMemo(() =>
-    formatRelativeTimestamp(componentProps.activity.lastFiredAtMs, {
+    });
+  const lastFired = () =>
+    formatRelativeTimestamp(props.activity.lastFiredAtMs, {
       fallback: t("cron.runs.neverFired"),
-    }),
-  );
+    });
   return (
     <div class="cron-condition-activity" data-test-id="cron-condition-activity">
       <div class="cron-condition-activity__intro">
@@ -74,10 +72,7 @@ function ConditionActivity(componentProps: {
         <div class="settings-row__desc">{t("cron.runs.conditionActivityHint")}</div>
       </div>
       <dl class="cron-condition-activity__metrics">
-        <ConditionMetric
-          label={t("cron.runs.checks")}
-          value={String(componentProps.activity.checkCount)}
-        />
+        <ConditionMetric label={t("cron.runs.checks")} value={String(props.activity.checkCount)} />
         <ConditionMetric label={t("cron.runs.lastChecked")} value={lastChecked()} />
         <ConditionMetric label={t("cron.runs.lastFired")} value={lastFired()} />
       </dl>
@@ -114,28 +109,26 @@ function toggleSelection<T extends string>(selected: T[], value: T, checked: boo
 }
 const FILTER_OPTION_PREFIX = "option:";
 const FILTER_COMMAND_PREFIX = "command:";
-function FilterDropdown<T extends string>(componentProps: {
-  params: {
-    id: string;
-    title: string;
-    allLabel: string;
-    options: Array<{
-      value: T;
-      label: string;
-    }>;
-    selected: T[];
-    onToggle: (value: T, checked: boolean) => void;
-    onClear: () => void;
-  };
+function FilterDropdown<T extends string>(props: {
+  id: string;
+  title: string;
+  allLabel: string;
+  options: Array<{
+    value: T;
+    label: string;
+  }>;
+  selected: T[];
+  onToggle: (value: T, checked: boolean) => void;
+  onClear: () => void;
 }) {
   const selectedLabels = createMemo(() =>
-    componentProps.params.options
-      .filter((option) => componentProps.params.selected.includes(option.value))
+    props.options
+      .filter((option) => props.selected.includes(option.value))
       .map((option) => option.label),
   );
   const summary = createMemo(() =>
     selectedLabels().length === 0
-      ? componentProps.params.allLabel
+      ? props.allLabel
       : selectedLabels().length <= 2
         ? selectedLabels().join(", ")
         : `${selectedLabels()[0]} +${selectedLabels().length - 1}`,
@@ -149,7 +142,7 @@ function FilterDropdown<T extends string>(componentProps: {
       : summary(),
   );
   return (
-    <div class="cron-filter-dropdown" data-filter={componentProps.params.id}>
+    <div class="cron-filter-dropdown" data-filter={props.id}>
       <wa-dropdown
         class="cron-filter-dropdown__details"
         placement="bottom-start"
@@ -162,19 +155,16 @@ function FilterDropdown<T extends string>(componentProps: {
         ) => {
           const value = event.detail.item.value;
           if (value === `${FILTER_COMMAND_PREFIX}clear`) {
-            componentProps.params.onClear();
+            props.onClear();
             return;
           }
           if (value?.startsWith(FILTER_OPTION_PREFIX)) {
             event.preventDefault();
-            const option = componentProps.params.options.find(
+            const option = props.options.find(
               (candidate) => candidate.value === value.slice(FILTER_OPTION_PREFIX.length),
             );
             if (option) {
-              componentProps.params.onToggle(
-                option.value,
-                !componentProps.params.selected.includes(option.value),
-              );
+              props.onToggle(option.value, !props.selected.includes(option.value));
             }
           }
         }}
@@ -184,28 +174,26 @@ function FilterDropdown<T extends string>(componentProps: {
           type="button"
           class={[
             "btn btn--sm cron-filter-dropdown__trigger",
-            { active: componentProps.params.selected.length > 0 },
+            { active: props.selected.length > 0 },
           ]}
-          title={componentProps.params.title}
-          aria-label={`${componentProps.params.title} ${accessibleSummary()}`}
+          title={props.title}
+          aria-label={`${props.title} ${accessibleSummary()}`}
         >
           <span>{summary()}</span>
           <Icon name="chevronDown" />
         </button>
-        {
-          <For each={componentProps.params.options} keyed={(option) => option.value}>
-            {(option) => (
-              <wa-dropdown-item
-                class="cron-filter-dropdown__option"
-                type="checkbox"
-                value={`${FILTER_OPTION_PREFIX}${option().value}`}
-                prop:checked={componentProps.params.selected.includes(option().value)}
-              >
-                {option().label}
-              </wa-dropdown-item>
-            )}
-          </For>
-        }
+        <For each={props.options} keyed={(option) => option.value}>
+          {(option) => (
+            <wa-dropdown-item
+              class="cron-filter-dropdown__option"
+              type="checkbox"
+              value={`${FILTER_OPTION_PREFIX}${option().value}`}
+              prop:checked={props.selected.includes(option().value)}
+            >
+              {option().label}
+            </wa-dropdown-item>
+          )}
+        </For>
         <div class="session-menu__separator" role="separator" />
         <wa-dropdown-item value={`${FILTER_COMMAND_PREFIX}clear`}>
           {t("cron.runs.clear")}
@@ -220,15 +208,12 @@ export function RunsSection(props: CronRunsSectionProps) {
     const ascending = props.runsSortDir === "asc";
     return props.runs.toSorted((a, b) => (ascending ? a.ts - b.ts : b.ts - a.ts));
   });
-  const hasRunFilters = createMemo(
-    () =>
-      props.runsQuery.trim().length > 0 ||
-      props.runsStatuses.length > 0 ||
-      props.runsDeliveryStatuses.length > 0,
-  );
-  const sortLabel = createMemo(() =>
-    props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst"),
-  );
+  const hasRunFilters = () =>
+    props.runsQuery.trim().length > 0 ||
+    props.runsStatuses.length > 0 ||
+    props.runsDeliveryStatuses.length > 0;
+  const sortLabel = () =>
+    props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return (
     <div class="cron-runs" aria-busy={String(props.runsState === "pending")}>
       {props.conditionActivity ? (
@@ -253,41 +238,37 @@ export function RunsSection(props: CronRunsSectionProps) {
           />
         </div>
         <FilterDropdown
-          params={{
-            id: "status",
-            title: t("cron.runs.status"),
-            allLabel: t("cron.runs.allStatuses"),
-            options: Array.from(RUN_STATUS_LABELS, ([value, key]) => ({
-              value,
-              label: t(key),
-            })),
-            selected: props.runsStatuses,
-            onToggle: (value, checked) => {
-              const next = toggleSelection(props.runsStatuses, value, checked);
-              void props.onRunsFiltersChange({ cronRunsStatuses: next });
-            },
-            onClear: () => {
-              void props.onRunsFiltersChange({ cronRunsStatuses: [] });
-            },
+          id="status"
+          title={t("cron.runs.status")}
+          allLabel={t("cron.runs.allStatuses")}
+          options={Array.from(RUN_STATUS_LABELS, ([value, key]) => ({
+            value,
+            label: t(key),
+          }))}
+          selected={props.runsStatuses}
+          onToggle={(value, checked) => {
+            const next = toggleSelection(props.runsStatuses, value, checked);
+            void props.onRunsFiltersChange({ cronRunsStatuses: next });
+          }}
+          onClear={() => {
+            void props.onRunsFiltersChange({ cronRunsStatuses: [] });
           }}
         />
         <FilterDropdown
-          params={{
-            id: "delivery",
-            title: t("cron.runs.delivery"),
-            allLabel: t("cron.runs.allDelivery"),
-            options: Array.from(RUN_DELIVERY_LABELS, ([value, key]) => ({
-              value,
-              label: t(key),
-            })),
-            selected: props.runsDeliveryStatuses,
-            onToggle: (value, checked) => {
-              const next = toggleSelection(props.runsDeliveryStatuses, value, checked);
-              void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
-            },
-            onClear: () => {
-              void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
-            },
+          id="delivery"
+          title={t("cron.runs.delivery")}
+          allLabel={t("cron.runs.allDelivery")}
+          options={Array.from(RUN_DELIVERY_LABELS, ([value, key]) => ({
+            value,
+            label: t(key),
+          }))}
+          selected={props.runsDeliveryStatuses}
+          onToggle={(value, checked) => {
+            const next = toggleSelection(props.runsDeliveryStatuses, value, checked);
+            void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
+          }}
+          onClear={() => {
+            void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           }}
         />
         <div class="cron-filter-dropdown">
@@ -364,20 +345,18 @@ export function RunsSection(props: CronRunsSectionProps) {
         )
       ) : (
         <div class="cron-runs__list">
-          {
-            <For each={runs()} keyed={(entry) => `${entry.jobId}:${entry.ts}:${entry.runId ?? ""}`}>
-              {(entry) => (
-                <Run
-                  entry={entry()}
-                  formatTimestamp={formatTimestamp()}
-                  highlightedRunId={props.highlightedRunId}
-                  onViewRunTranscript={(targetEntry, trigger) =>
-                    props.onViewRunTranscript?.(targetEntry, trigger)
-                  }
-                />
-              )}
-            </For>
-          }
+          <For each={runs()} keyed={(entry) => `${entry.jobId}:${entry.ts}:${entry.runId ?? ""}`}>
+            {(entry) => (
+              <Run
+                entry={entry()}
+                formatTimestamp={formatTimestamp()}
+                highlightedRunId={props.highlightedRunId}
+                onViewRunTranscript={(targetEntry, trigger) =>
+                  props.onViewRunTranscript?.(targetEntry, trigger)
+                }
+              />
+            )}
+          </For>
         </div>
       )}
       {props.runsHasMore ? (
@@ -411,98 +390,80 @@ export function runStatusLabel(
       "cron.runs.runStatusUnknown",
   );
 }
-function RunError(componentProps: { error: CronRunLogEntry["error"] }) {
-  return <div class="muted">{formatUiExternalText(componentProps.error)}</div>;
+function RunError(props: { error: CronRunLogEntry["error"] }) {
+  return <div class="muted">{formatUiExternalText(props.error)}</div>;
 }
-function Run(componentProps: {
+function Run(props: {
   entry: CronRunLogEntry;
   formatTimestamp: ReturnType<typeof createMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
 }) {
-  const status = createMemo(() =>
-    runStatusLabel(componentProps.entry.status ?? "unknown", componentProps.entry.completionStatus),
-  );
-  const delivery = createMemo(() =>
+  const status = () =>
+    runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
+  const delivery = () =>
     t(
-      RUN_DELIVERY_LABELS.get(componentProps.entry.deliveryStatus ?? "not-requested") ??
+      RUN_DELIVERY_LABELS.get(props.entry.deliveryStatus ?? "not-requested") ??
         "cron.runs.deliveryUnknown",
-    ),
-  );
+    );
   const usageSummary = createMemo(() => {
-    const usage = componentProps.entry.usage;
+    const usage = props.entry.usage;
     return usage && typeof usage.total_tokens === "number"
       ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
         : null;
   });
-  const bodySource = createMemo(
-    () =>
-      componentProps.entry.summary ||
-      formatUiExternalText(componentProps.entry.error) ||
-      t("cron.runEntry.noSummary"),
-  );
-  const showErrorInMeta = createMemo(
-    () => Boolean(componentProps.entry.error) && Boolean(componentProps.entry.summary),
-  );
-  const suppressionReason = createMemo(() =>
-    formatUiExternalText(componentProps.entry.deliverySuppressionReason),
-  );
+  const bodySource = () =>
+    props.entry.summary || formatUiExternalText(props.entry.error) || t("cron.runEntry.noSummary");
+  const showErrorInMeta = () => Boolean(props.entry.error) && Boolean(props.entry.summary);
+  const suppressionReason = () => formatUiExternalText(props.entry.deliverySuppressionReason);
   const facts = createMemo(() =>
     [
       delivery(),
       suppressionReason()
         ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason() })
         : null,
-      componentProps.entry.model,
-      componentProps.entry.provider,
+      props.entry.model,
+      props.entry.provider,
       usageSummary(),
     ].filter(Boolean),
   );
-  const highlighted = createMemo(() =>
-    Boolean(
-      componentProps.highlightedRunId &&
-      cronRunEntryMatchesLink(componentProps.highlightedRunId, componentProps.entry),
-    ),
-  );
+  const highlighted = () =>
+    Boolean(props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry));
   return (
     <div class={["cron-run-entry", { "cron-run-entry--highlighted": highlighted() }]}>
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">
-            {componentProps.entry.jobName ?? componentProps.entry.jobId}
+            {props.entry.jobName ?? props.entry.jobId}
             <span class="muted"> · {status()}</span>
           </div>
           <div class="cron-run-entry__facts muted">{facts().join(" · ")}</div>
         </div>
         <div class="cron-run-entry__meta">
-          <div>{componentProps.formatTimestamp(componentProps.entry.ts)}</div>
-          {typeof componentProps.entry.runAtMs === "number" ? (
+          <div>{props.formatTimestamp(props.entry.ts)}</div>
+          {typeof props.entry.runAtMs === "number" ? (
             <div class="muted">
-              {t("cron.runEntry.runAt")}{" "}
-              {componentProps.formatTimestamp(componentProps.entry.runAtMs)}
+              {t("cron.runEntry.runAt")} {props.formatTimestamp(props.entry.runAtMs)}
             </div>
           ) : undefined}
           <div class="muted">
-            {typeof componentProps.entry.durationMs === "number" &&
-            Number.isFinite(componentProps.entry.durationMs)
-              ? (formatDurationCompact(componentProps.entry.durationMs) ??
-                formatDurationHuman(componentProps.entry.durationMs, t("common.na")))
+            {typeof props.entry.durationMs === "number" && Number.isFinite(props.entry.durationMs)
+              ? (formatDurationCompact(props.entry.durationMs) ??
+                formatDurationHuman(props.entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
-          {typeof componentProps.entry.nextRunAtMs === "number" ? (
-            <div class="muted">{formatRunNextLabel(componentProps.entry.nextRunAtMs)}</div>
+          {typeof props.entry.nextRunAtMs === "number" ? (
+            <div class="muted">{formatRunNextLabel(props.entry.nextRunAtMs)}</div>
           ) : undefined}
-          {componentProps.entry.runId ||
-          componentProps.entry.runAtMs !== undefined ||
-          componentProps.entry.sessionKey ? (
+          {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (
             <div>
               <button
                 class="btn btn--sm"
                 onClick={(event: MouseEvent) => {
                   if (event.currentTarget instanceof HTMLButtonElement) {
-                    componentProps.onViewRunTranscript?.(componentProps.entry, event.currentTarget);
+                    props.onViewRunTranscript?.(props.entry, event.currentTarget);
                   }
                 }}
               >
@@ -510,10 +471,8 @@ function Run(componentProps: {
               </button>
             </div>
           ) : undefined}
-          {showErrorInMeta() ? <RunError error={componentProps.entry.error} /> : undefined}
-          {componentProps.entry.deliveryError ? (
-            <RunError error={componentProps.entry.deliveryError} />
-          ) : undefined}
+          {showErrorInMeta() ? <RunError error={props.entry.error} /> : undefined}
+          {props.entry.deliveryError ? <RunError error={props.entry.deliveryError} /> : undefined}
         </div>
       </div>
       <LitContent
