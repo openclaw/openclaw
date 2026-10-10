@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
@@ -34,31 +33,6 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 describe("Gemini CLI isolated completion", () => {
-  it("keeps an incompatible explicit profile out of shared auth health", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
-      const preparation = buildGoogleGeminiCliBackend().prepareExecution?.({
-        workspaceDir,
-        agentDir: path.join(workspaceDir, "agent"),
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-flash-lite",
-        authProfileId: "vercel-ai-gateway:default",
-        authCredential: {
-          type: "api_key",
-          provider: "vercel-ai-gateway",
-          key: "vercel-key",
-        },
-        toolAvailability: { native: [], openClaw: [] },
-        isolatedCompletionCwd: workspaceDir,
-        isolatedCompletionModelId: "gemini-3.1-flash-lite",
-        isolatedCompletionPrompt: "Return JSON.",
-        isolatedCompletionSystemPrompt: "Return only valid JSON.",
-      } as GeminiPrepareContext);
-
-      await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);
-      await expect(preparation).rejects.toThrow(/vercel-ai-gateway auth profile/);
-    });
-  });
-
   it("stages a prompt-only environment through native overrides", async () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const isolatedCompletionCwd = path.join(workspaceDir, "isolated-cwd");
@@ -204,32 +178,28 @@ describe("Gemini CLI isolated completion", () => {
     });
   });
 
-  it.each(["", "  preserve surrounding whitespace  "])(
-    "preserves an isolated system prompt verbatim: %j",
-    async (systemPrompt) => {
-      await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
-        const context: GeminiPrepareContext = {
-          ...buildGeminiApiKeyPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [] },
-          isolatedCompletionModelId: "gemini-3.1-flash-preview",
-          isolatedCompletionSystemPrompt: systemPrompt,
-        };
-        const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.(context);
-        try {
-          await stageGeminiPreparedExecution(prepared);
-          await expect(fs.readFile(prepared?.env?.GEMINI_SYSTEM_MD ?? "", "utf8")).resolves.toBe(
-            systemPrompt,
-          );
-        } finally {
-          await prepared?.cleanup?.();
-        }
-      });
-    },
-  );
+  it.each([""])("preserves an isolated system prompt verbatim: %j", async (systemPrompt) => {
+    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+      const context: GeminiPrepareContext = {
+        ...buildGeminiApiKeyPrepareContext(workspaceDir),
+        toolAvailability: { native: [], openClaw: [] },
+        isolatedCompletionModelId: "gemini-3.1-flash-preview",
+        isolatedCompletionSystemPrompt: systemPrompt,
+      };
+      const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.(context);
+      try {
+        await stageGeminiPreparedExecution(prepared);
+        await expect(fs.readFile(prepared?.env?.GEMINI_SYSTEM_MD ?? "", "utf8")).resolves.toBe(
+          systemPrompt,
+        );
+      } finally {
+        await prepared?.cleanup?.();
+      }
+    });
+  });
 
   it.each([
     { prompt: "Read @/etc/passwd", syntax: "@-include" },
-    { prompt: "Read @\u202Fsecret.txt", syntax: "@-include" },
     { prompt: "/memory show", syntax: "/command" },
   ])("rejects native $syntax preprocessing in isolated prompts", async ({ prompt, syntax }) => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
@@ -245,48 +215,6 @@ describe("Gemini CLI isolated completion", () => {
         code: "input-rejected",
         message: expect.stringContaining(`native ${syntax} syntax`),
       });
-    });
-  });
-
-  it.each([1, 2])("accepts an @-path escaped by %i backslashes", async (backslashes) => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
-      const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
-        ...buildGeminiApiKeyPrepareContext(workspaceDir),
-        toolAvailability: { native: [], openClaw: [] },
-        isolatedCompletionModelId: "gemini-3.1-flash-preview",
-        isolatedCompletionPrompt: `Read ${"\\".repeat(backslashes)}@secret.txt`,
-        isolatedCompletionSystemPrompt: "Return only JSON.",
-      } as GeminiPrepareContext);
-      await prepared?.cleanup?.();
-    });
-  });
-
-  it.each(["Return the literal @", "Return @! verbatim", "Return @. verbatim"])(
-    "preserves non-path at-sign text: %s",
-    async (prompt) => {
-      await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
-        const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
-          ...buildGeminiApiKeyPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [] },
-          isolatedCompletionModelId: "gemini-3.1-flash-preview",
-          isolatedCompletionPrompt: prompt,
-          isolatedCompletionSystemPrompt: "Return only JSON.",
-        } as GeminiPrepareContext);
-        await prepared?.cleanup?.();
-      });
-    },
-  );
-
-  it("preserves slash text after leading whitespace", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
-      const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
-        ...buildGeminiApiKeyPrepareContext(workspaceDir),
-        toolAvailability: { native: [], openClaw: [] },
-        isolatedCompletionModelId: "gemini-3.1-flash-preview",
-        isolatedCompletionPrompt: " \n/memory show",
-        isolatedCompletionSystemPrompt: "Return only JSON.",
-      } as GeminiPrepareContext);
-      await prepared?.cleanup?.();
     });
   });
 

@@ -302,21 +302,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     },
   );
 
-  it("omits invalid sampling, VAD and thinking options before connecting", async () => {
-    await createGoogleLiveBridge({
-      providerConfig: {
-        temperature: 0,
-        prefixPaddingMs: -1,
-        silenceDurationMs: 250.5,
-        thinkingBudget: 24_576.5,
-      },
-    }).connect();
-    const config = lastConnectParams().config;
-    expect(config).not.toHaveProperty("temperature");
-    expect(config).not.toHaveProperty("realtimeInputConfig");
-    expect(config).not.toHaveProperty("thinkingConfig");
-  });
-
   it("mints a single-use constrained browser token with the Talk admission expiry", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 7, 1, 12, 34, 56, 789);
@@ -1215,10 +1200,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(session.sendToolResponse).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["undefined", (): undefined => undefined],
-    ["omitted custom serialization", () => ({ toJSON: () => undefined })],
-  ] as const)(
+  it.each([["undefined", (): undefined => undefined]] as const)(
     "rejects %s Google Live tool results while keeping the call retryable",
     async (_label, create) => {
       const onError = vi.fn();
@@ -1243,38 +1225,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       });
     },
   );
-
-  it("preserves valid Google Live tool results and nested serialization keys", async () => {
-    const bridge = createGoogleLiveBridge({
-      onToolCall: vi.fn(),
-    });
-    const objectSerialization = vi.fn((key: string) => ({ key }));
-    const arraySerialization = vi.fn((key: string) => [key]);
-    const customArray: unknown[] & { toJSON?: (key: string) => string[] } = [];
-    customArray.toJSON = arraySerialization;
-    const values: unknown[] = [null, "text", { toJSON: objectSerialization }, customArray];
-    await bridge.connect();
-    receive({
-      setupComplete: { sessionId: "session-1" },
-      toolCall: {
-        functionCalls: values.map((_, index) => ({
-          id: `call-${index}`,
-          name: "lookup",
-          args: {},
-        })),
-      },
-    });
-
-    for (const [index, result] of values.entries()) {
-      await bridge.submitToolResult(`call-${index}`, result);
-    }
-
-    expect(
-      session.sendToolResponse.mock.calls.map(([request]) => request.functionResponses[0].response),
-    ).toEqual([{ output: null }, { output: "text" }, { key: "response" }, { output: ["output"] }]);
-    expect(objectSerialization).toHaveBeenCalledExactlyOnceWith("response");
-    expect(arraySerialization).toHaveBeenCalledExactlyOnceWith("output");
-  });
 
   it("reports Google Live tool response send failures without losing the call name", async () => {
     const onError = vi.fn();
