@@ -15,6 +15,18 @@ const SIGNAL_IMAGE = Buffer.from(
   "base64",
 );
 
+function decodeInlineAttachment(attachment: string | undefined): Buffer | undefined {
+  if (!attachment?.startsWith("data:")) {
+    return undefined;
+  }
+  const marker = ";base64,";
+  const markerAt = attachment.indexOf(marker);
+  if (markerAt === -1) {
+    return undefined;
+  }
+  return Buffer.from(attachment.slice(markerAt + marker.length), "base64");
+}
+
 type SignalMediaContext = {
   cfg: OpenClawConfig;
   to: string;
@@ -89,10 +101,10 @@ describe("Signal host-owned outbound media access", () => {
       request.on("end", () => {
         void (async () => {
           const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as SignalRpcEnvelope;
-          const attachmentPath = envelope.params?.attachments?.[0];
+          const attachment = envelope.params?.attachments?.[0];
           requests.push({
             envelope,
-            attachment: attachmentPath ? await fs.readFile(attachmentPath) : undefined,
+            attachment: decodeInlineAttachment(attachment),
           });
           onRequest?.();
           response.writeHead(200, { "content-type": "application/json" });
@@ -207,6 +219,9 @@ describe("Signal host-owned outbound media access", () => {
       expect(approvedReader).toHaveBeenCalledExactlyOnceWith(sourcePath);
       expect(conflictingReader).not.toHaveBeenCalled();
       expect(requests).toHaveLength(1);
+      expect(requests[0]?.envelope.params?.attachments).toEqual([
+        expect.stringMatching(/^data:image\/png;filename=chart\.png;base64,/),
+      ]);
       expect(requests[0]?.attachment).toEqual(SIGNAL_IMAGE);
       expect(requests[0]?.envelope).toMatchObject({
         method: "send",
@@ -258,6 +273,9 @@ describe("Signal host-owned outbound media access", () => {
     } else {
       await expect(delivery).resolves.toMatchObject({ messageId: "1700000000999" });
       expect(requests).toHaveLength(1);
+      expect(requests[0]?.envelope.params?.attachments?.[0]).toMatch(
+        /^data:image\/png;filename=chart\.png;base64,/,
+      );
       expect(requests[0]?.attachment).toEqual(SIGNAL_IMAGE);
     }
   });
