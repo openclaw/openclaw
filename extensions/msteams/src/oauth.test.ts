@@ -7,6 +7,7 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
     async (params: {
       url: string;
       init?: RequestInit;
+      timeoutMs?: number;
       fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     }) => {
       const fetchImpl = params.fetchImpl ?? globalThis.fetch;
@@ -28,6 +29,7 @@ import { buildMSTeamsAuthUrl } from "./oauth.flow.js";
 import { loginMSTeamsDelegated } from "./oauth.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
+  MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
   MSTEAMS_OAUTH_REDIRECT_URI,
   buildMSTeamsAuthEndpoint,
   buildMSTeamsTokenEndpoint,
@@ -157,6 +159,27 @@ describe("exchangeMSTeamsCodeForTokens", () => {
     vi.unstubAllGlobals();
   });
 
+  it("passes guard-owned timeoutMs for token exchange", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      responseJson({
+        access_token: "at-123",
+        refresh_token: "rt-456",
+        expires_in: 3600,
+        scope: "ChatMessage.Send offline_access",
+      }),
+    );
+    await exchangeMSTeamsCodeForTokens({
+      tenantId: "tenant-1",
+      clientId: "client-1",
+      clientSecret: "secret-1", // pragma: allowlist secret
+      code: "auth-code",
+      verifier: "pkce-verifier",
+    });
+    const guardCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(guardCall?.timeoutMs).toBe(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS);
+    expect(guardCall?.init?.signal).toBeUndefined();
+  });
+
   it("throws on a 400 error response", async () => {
     fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
 
@@ -247,6 +270,9 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");
     expect(body.get("client_secret")).toBe("secret-1");
+    const guardCall = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+    expect(guardCall?.timeoutMs).toBe(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS);
+    expect(guardCall?.init?.signal).toBeUndefined();
   });
 
   it("uses new refresh token when Azure returns one", async () => {

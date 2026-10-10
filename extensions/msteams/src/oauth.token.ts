@@ -54,6 +54,8 @@ async function fetchMSTeamsTokens(params: {
   auditContext: string;
   failureLabel: string;
 }): Promise<MSTeamsTokenResponse> {
+  // Prefer guard-owned timeoutMs (same as graph.ts): it also configures the
+  // HTTP dispatcher deadlines, not only AbortSignal abort of the fetch call.
   const { response, release } = await fetchWithSsrFGuard({
     url: params.tokenUrl,
     init: {
@@ -63,9 +65,9 @@ async function fetchMSTeamsTokens(params: {
         Accept: "application/json",
       },
       body: params.body,
-      signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
     },
     auditContext: params.auditContext,
+    timeoutMs: MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
   });
 
   try {
