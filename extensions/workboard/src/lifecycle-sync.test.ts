@@ -587,6 +587,90 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
+  it("keeps exhausted-fallback failure terminal through ordered attempt hooks", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-ops-exhausted";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+      ],
+      complete: true,
+    });
+
+    // The primary candidate fails while the fallback keeps the run alive.
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: false },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "running" });
+
+    // The failing fallback can still emit a candidate-level success hook before
+    // the runner settles the overall error; it must not review the card.
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: true },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 3,
+      readSessions,
+    });
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "running" });
+
+    // The run-level terminal owner settles the exhausted run as blocked.
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: sessionKey,
+        runId: "run-agent",
+        endedAt: card.updatedAt + 4,
+        outcome: "error",
+      },
+      now: card.updatedAt + 4,
+    });
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
+      metadata: { failureCount: 1 },
+    });
+  });
+
+  it("reviews immediately when agent_end succeeds after the run settled", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-ops-settled-success";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-agent",
+      execution: execution(sessionKey, "run-agent"),
+    });
+    const readSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
+      ],
+      complete: true,
+    });
+
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-agent", success: true },
+      context: { runId: "run-agent", sessionKey },
+      now: card.updatedAt + 2,
+      readSessions,
+    });
+
+    expect(readSessions).toHaveBeenCalledOnce();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "review",
+      execution: { status: "review" },
+    });
+  });
+
   it("marks an inactive running session stale and clears it after recovery", async () => {
     const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:main:dashboard:stale";

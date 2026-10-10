@@ -102,9 +102,11 @@ export default definePluginEntry({
           store,
           event,
           context,
-          // agent_end fires per model candidate; a failed attempt must not block
-          // the card while the same run continues on a fallback. The session
-          // snapshot is the authoritative run-liveness source for that check.
+          // agent_end fires per model candidate and never reports the overall
+          // run: neither a failed attempt may block the card while a fallback
+          // continues, nor a candidate-level success may review it before the
+          // runner settles. The session snapshot is the authoritative
+          // run-liveness source for deferring both attempt-level terminals.
           readSessions: async (options) =>
             await readWorkboardLifecycleSessions(api.runtime.gateway, options),
           onMatched: automationNudge.nudge,

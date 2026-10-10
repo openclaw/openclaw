@@ -125,13 +125,15 @@ async function syncWorkboardLifecycleEvent(params: {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
-  // Attempt-level end events (agent_end) fire per model candidate: a failed
-  // attempt can precede a fallback that continues the same run, so its terminal
-  // outcome is not authoritative. Consult the session rows before writing a
-  // failure; a live run keeps the card running and leaves the terminal
-  // transition to its run-level owners (subagent_ended, lifecycle sweep).
-  // An absent session or failed read keeps the event's own outcome so genuine
-  // failures are never lost.
+  // Attempt-level end events (agent_end) fire per model candidate and never
+  // report the overall run: a failed attempt can precede a fallback that
+  // continues the same run, and a candidate-level success can precede the
+  // runner settling an overall error (an exhausted fallback chain has been
+  // observed emitting a success attempt hook before the terminal failure).
+  // Treat both attempt-level terminal directions as provisional while the
+  // linked run is still active; its run-level owners (subagent_ended,
+  // lifecycle sweep) write the settled outcome. An absent session or failed
+  // read keeps the event's own outcome so genuine results are never lost.
   //
   // Liveness matching preserves the sweep's session-ownership rules: the
   // event's exact session key is authoritative, and an agentless
@@ -145,7 +147,9 @@ async function syncWorkboardLifecycleEvent(params: {
         complete: boolean;
       }
     | undefined;
-  if (params.readSessions && params.observation.state === "failed") {
+  const isAttemptTerminalState =
+    params.observation.state === "failed" || params.observation.state === "succeeded";
+  if (params.readSessions && isAttemptTerminalState) {
     try {
       const snapshot = await params.readSessions({ includeUnknown: false });
       liveness = {
@@ -186,7 +190,7 @@ async function syncWorkboardLifecycleEvent(params: {
   const updates = Promise.all(
     cards.map(async (card) => {
       const state =
-        params.observation.state === "failed" && isLiveRunForCard(card)
+        isAttemptTerminalState && isLiveRunForCard(card)
           ? ("running" as const)
           : params.observation.state;
       return await params.store.syncLifecycle(card.id, {
