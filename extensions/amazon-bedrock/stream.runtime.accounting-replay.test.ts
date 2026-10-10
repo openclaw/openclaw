@@ -231,6 +231,30 @@ describe("Bedrock reasoning replay", () => {
 
 describe("Bedrock prompt cache ownership", () => {
   it.each([
+    ["anthropic.claude-haiku-5-5", "1h"],
+    ["global.anthropic.claude-haiku-5-5", "1h"],
+    ["anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
+    ["us.anthropic.claude-fable-5", "1h"],
+    ["us.anthropic.claude-mythos-5", "1h"],
+    ["global.anthropic.claude-opus-5", "1h"],
+    ["global.anthropic.claude-sonnet-5", "1h"],
+    ["opaque-deployment", undefined],
+  ])("uses the supported long-retention checkpoint for %s", async (id, ttl) => {
+    vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", "1");
+    const payload = await capturePayload(
+      bedrockModel({ id, name: "Test deployment" }),
+      {
+        systemPrompt: "Stable policy",
+        messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+      },
+      { cacheRetention: "long" },
+    );
+    const cachePoint = { type: "default", ...(ttl ? { ttl } : {}) };
+    expect(payload.system).toEqual([{ text: "Stable policy" }, { cachePoint }]);
+    expect(payload.messages?.[0]?.content).toEqual([{ text: "Hello" }, { cachePoint }]);
+  });
+
+  it.each([
     ["global.amazon.nova-2-lite-v1:0", true],
     ["amazon.nova-sonic-v1:0", false],
   ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
@@ -351,6 +375,10 @@ describe("Bedrock prompt cache ownership", () => {
             content: [
               { type: "text", text: "OpenClaw runtime context:\nSecond request" },
               { type: "text", text: "Retained context two" },
+              ...Array.from({ length: 21 }, (_, index) => ({
+                type: "text" as const,
+                text: `Attached document block ${index}`,
+              })),
             ],
             timestamp: 2,
             runtimeContext: {},
@@ -358,6 +386,7 @@ describe("Bedrock prompt cache ownership", () => {
         ],
       };
       const first = await captureMessages(model, context, { cacheRetention: "short" });
+      expect(first[0]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
       expect(first[2]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
       const previousAssistant = context.messages[1];
       if (previousAssistant?.role !== "assistant") {
@@ -385,12 +414,13 @@ describe("Bedrock prompt cache ownership", () => {
       expect(second[3]?.content).toEqual([
         { toolUse: { toolUseId: "read_1", name: "read", input: { path: "README.md" } } },
       ]);
-      expect(second[2]?.content).toEqual([
-        { text: "OpenClaw runtime context:\nSecond request" },
-        { text: "Retained context two" },
-      ]);
+      expect(second[2]?.content).toEqual(first[2]?.content);
       expect(second[4]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
-      expect(second.slice(0, 2)).toEqual(first.slice(0, 2));
+      expect(second[0]?.content).toEqual([
+        { text: "OpenClaw runtime context:\nFirst request" },
+        { text: "Retained context one" },
+      ]);
+      expect(second[1]).toEqual(first[1]);
     },
   );
 
