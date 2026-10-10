@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { beginReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -725,38 +727,68 @@ describe("plugin-owned CLI same-turn input", () => {
     expect(recorder.hasPersisted()).toBe(false);
   });
 
-  it("carries the run's delivery modes on the handle, so admission can match them", async () => {
+  it("admits compatible CLI input and rejects a mismatched delivery surface", async () => {
     const { context } = await createExecution();
     context.params.sourceReplyDeliveryMode = "message_tool_only";
-    (
-      context.params as unknown as { taskSuggestionDeliveryMode?: string }
-    ).taskSuggestionDeliveryMode = "gateway";
-    let handle: ReplyBackendHandle | undefined;
-    context.params.replyOperation = {
-      attachBackend: (backend: ReplyBackendHandle) => {
-        handle = backend;
-      },
-      detachBackend: vi.fn(),
-    } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
+    context.params.taskSuggestionDeliveryMode = "gateway";
+    const operation = createReplyOperation({
+      sessionKey: context.params.sessionKey!,
+      sessionId: context.params.sessionId,
+      resetTriggered: false,
+    });
+    context.params.replyOperation = operation;
+    operation.setPhase("running");
+    const ready = createDeferred();
     const finish = createDeferred();
+    const queued: string[] = [];
     const run = runPlugin(context, async function* (execution) {
       execution.registerMessageInjection?.({
         isAvailable: () => true,
-        queueMessage: async (_text, assertCurrent) => {
+        queueMessage: async (text, assertCurrent) => {
           assertCurrent();
+          queued.push(text);
         },
       });
+      ready.resolve();
       await finish.promise;
       yield SUCCESS_RESULT;
     });
-    await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
-
-    // A handle that omits these rejects exactly the turns that carry them.
-    expect(handle).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
-      taskSuggestionDeliveryMode: "gateway",
-    });
-    finish.resolve();
-    await run;
+    try {
+      await Promise.race([
+        ready.promise,
+        run.then(() => {
+          throw new Error("CLI run ended before injection became ready");
+        }),
+      ]);
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+      if (!target) {
+        throw new Error("running CLI backend did not expose a registry injection target");
+      }
+      const rejected = await beginReplyMessageInjectionTarget(target, "incompatible", {
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: undefined,
+      });
+      await expect(rejected.acceptance).resolves.toBe(false);
+      await expect(rejected.outcome).resolves.toEqual({
+        status: "rejected",
+        reason: "task_suggestion_delivery_mode_mismatch",
+      });
+      expect(queued).toEqual([]);
+      const accepted = await beginReplyMessageInjectionTarget(target, "compatible", {
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: "gateway",
+      });
+      await expect(accepted.acceptance).resolves.toBe(true);
+      await expect(accepted.outcome).resolves.toEqual({ status: "accepted" });
+      expect(queued).toEqual(["compatible"]);
+    } finally {
+      finish.resolve();
+      try {
+        await run;
+      } finally {
+        operation.complete();
+      }
+    }
+    expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toBeUndefined();
   });
 });

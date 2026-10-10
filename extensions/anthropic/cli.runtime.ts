@@ -20,13 +20,13 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 
 function readReplayedTaskId(
   message: Record<string, unknown>,
-  inputUuid: string,
+  submittedInputUuids: ReadonlySet<string>,
 ): string | undefined {
   if (
     message.type !== "user" ||
     message.isReplay !== true ||
     message.parent_tool_use_id !== null ||
-    message.uuid === inputUuid ||
+    (typeof message.uuid === "string" && submittedInputUuids.has(message.uuid)) ||
     !isRecord(message.message)
   ) {
     return undefined;
@@ -57,6 +57,8 @@ type ClaudeCliTurn = {
   userInput: ReturnType<typeof createClaudeCliUserInputAuthorizer>;
   events: PassThrough;
   inputUuid: string;
+  /** Replayed user text is never a task receipt, even after its input lifecycle ends. */
+  submittedInputUuids: Set<string>;
   inputStarted: boolean;
   promptSubmitted: boolean;
   sawTerminalResult: boolean;
@@ -276,6 +278,7 @@ async function injectInput(
   // Closing can reject the receipt while the write is still pending.
   void started.promise.catch(() => {});
   turn.injectedInputs.set(uuid, { text, started });
+  turn.submittedInputUuids.add(uuid);
   try {
     await session.transport.send(createUserInput(turn.context, text, uuid));
   } catch (error) {
@@ -429,7 +432,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   }
   // A replay receipt acknowledges consumption within the current query. Keep its
   // queue slot until that query's result so it cannot acknowledge the next task twice.
-  const replayedTaskId = readReplayedTaskId(message, turn.inputUuid);
+  const replayedTaskId = readReplayedTaskId(message, turn.submittedInputUuids);
   if (replayedTaskId) {
     turn.pendingBackgroundTaskIds.delete(replayedTaskId);
     turn.foregroundTaskIds.delete(replayedTaskId);
@@ -550,12 +553,14 @@ export async function* executeClaudeCli(
     throw new Error("Claude CLI live session is closed or already handling another turn.");
   }
   clearTimeout(session.idleTimer);
+  const inputUuid = randomUUID();
   const turn: ClaudeCliTurn = {
     context,
     controller: new AbortController(),
     userInput: createClaudeCliUserInputAuthorizer(context),
     events: new PassThrough({ objectMode: true }),
-    inputUuid: randomUUID(),
+    inputUuid,
+    submittedInputUuids: new Set([inputUuid]),
     inputStarted: false,
     promptSubmitted: false,
     sawTerminalResult: false,

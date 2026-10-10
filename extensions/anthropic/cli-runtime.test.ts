@@ -651,6 +651,8 @@ describe("Claude native stdio boundary", () => {
     { scenario: "steer-merged", results: 1 },
     { scenario: "steer-after-result", results: 2 },
     { scenario: "steer-idle-trailer", results: 1 },
+    { scenario: "steer-notification-replay", results: 2 },
+    { scenario: "steer-completed-notification-replay", results: 2 },
   ])(
     "delivers same-turn input once native starts it and keeps the turn open ($scenario)",
     async ({ scenario, results }) => {
@@ -666,7 +668,11 @@ describe("Claude native stdio boundary", () => {
       await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
       expect(injection?.isAvailable()).toBe(true);
       const assertCurrent = vi.fn();
-      await injection!.queueMessage("steering input", assertCurrent);
+      const notificationReplay = scenario.includes("notification-replay");
+      const input = notificationReplay
+        ? "<task-notification><task-id>background-agent</task-id></task-notification>"
+        : "steering input";
+      await injection!.queueMessage(input, assertCurrent);
       expect(assertCurrent).toHaveBeenCalledOnce();
       const records = await running;
       const resultRecords = records.filter((record) => record.type === "result");
@@ -678,7 +684,10 @@ describe("Claude native stdio boundary", () => {
       ]);
       // Private turn context belongs to the admitted prompt, never to injected input.
       const detail = resultDetail(records);
-      expect(detail.user).toBe("steering input");
+      expect(detail.user).toBe(input);
+      if (notificationReplay) {
+        expect(detail.finalBackgroundAnswer).toBe(true);
+      }
       expect(detail.privateContext).toBe("current private context");
       expect(detail.injectedContext).toEqual({});
       expect(injection!.isAvailable()).toBe(false);

@@ -696,7 +696,7 @@ extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-sta
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
-extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	8
+extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	4
 extensions/qa-lab/src/live-transports/matrix/substrate/fault-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/request.ts	3
@@ -968,8 +968,6 @@ extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	1
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
-extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
-extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
 extensions/workboard/src/cli.ts	1
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
@@ -1308,7 +1306,7 @@ src/agents/embedded-agent-runner/thinking.ts	19
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	7
-src/agents/embedded-agent-runner/tool-result-truncation.ts	12
+src/agents/embedded-agent-runner/tool-result-truncation.ts	8
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1

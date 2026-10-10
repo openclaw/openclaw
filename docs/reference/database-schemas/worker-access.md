@@ -357,6 +357,38 @@ public SDK, or update-format change.
 
 ### Session authority projections
 
+The entry reader retains requested entry, participant, and membership facts per
+physical database. Standalone reads and admitted session cohorts share this owner.
+A warm hit sends no worker request and executes no SQLite statement, but still
+joins the physical writer FIFO before consuming facts. Pending writes therefore
+settle before subsequent reads. A cold simple read uses one bounded statement in
+autocommit; transcript, lifecycle-header, parent-discovery, and other composite
+cohorts retain their consistent read snapshots.
+Selected listings retain their internal-row filtering and pending-row validation.
+Case-folded lookups validate their sibling candidates in the fused worker query;
+a receipt for one key does not certify those sibling guards.
+
+Reads inside an active session writer borrow that writer's execution instead of
+reentering FIFO admission or consuming a potentially unsettled cached postimage.
+Transcript callbacks retain their existing append and preparation queues, and
+the writer settles accepted reads before releasing its reservation. The plain
+reader keeps its projection and error contracts on the supplied database handle.
+
+Each database retains at most 128 keys and 8 MiB of serialized fact data, including
+saved prompt snapshots; the process retains at most 32 such databases. Least
+recently used entries are evicted when either bound is reached. Eviction, worker
+retirement, or missing receipt coverage changes performance only. Full prompt
+snapshots remain separate from the resident display-row projection.
+
+Committed publications install complete postimages before observers. They carry
+the writer's sealed in-process revision; a partial, superseded, or unknown
+publication cannot certify a full entry. A changed shared native-write revision
+invalidates retained reads, including raw writes through another managed handle.
+No foreign-commit query or per-read schema check is used. Callers receive detached
+values. Writer transactions still reread authoritative rows, and live permission,
+run, generation, and source assertions remain at effect boundaries. This changes
+no schema, stored bytes, durability, retention, permissions, or update behavior.
+
 Typed session writers publish through the existing entry and transcript owners.
 Entry replacement and patch receipts carry the committed lifecycle, permission,
 sharing, membership, owner, and category facts. Partial owner, member, category,
@@ -442,7 +474,18 @@ the destination and any same-plugin namespace conditions in one synchronous
 worker transaction. An explicit conflict requires fresh preparation. Neither an
 unknown outcome nor a failed worker request selects a native fallback.
 
-Native binding deletion normally joins the
+Native harness ownership prepares through the awaited harness hook. Descriptive
+session rows retain exact keyed-state read dependencies through acceptance and
+invalidate on matching committed receipts or unknown settlement. Pending writes
+do not change committed descriptive truth. Unrelated keys leave those rows valid;
+this projection never replaces a final authority check. Legacy hooks with opaque
+storage retain refresh-on-dirty behavior. Unbound incognito retains its existing
+native acquisition contract.
+
+The native catalogue's upsert/link functions are transaction kernels called by
+entry writes or `conversation.register` in the agent worker. Reply audit capture
+uses the existing fenced transcript event worker command. Its private native
+Promise wrapper has been removed. Native binding deletion normally joins the
 existing durable worker transaction; initialization, incognito, or a mixed
 released participant can explicitly select the existing native atomic settlement
 before dispatch. This compatibility selection is never a recovery fallback.
@@ -527,6 +570,18 @@ behavior are unchanged; published updaters need no migration for these
 process-local facts.
 
 ### Approval, placement, and workspace receipts
+
+Ordinary turn preparation retains workspace snapshots, conversation bindings,
+skill-library queries, workshop changes, GitHub attribution, node catalogs, and
+exec policy in bounded process-local caches. Their existing owning writers
+invalidate the retained facts on commit or uncertain settlement. Binding expiry
+still invokes its pruning owner; workspace recovery predicates and explicit
+snapshot reads retain their existing database paths. Unchanged workspace
+preparation does not dispatch another registration transaction. Workshop reads
+filter the existing per-agent retained history in memory. Caller-visible mutable
+results are copied. Final execution and credential-use checks retain their
+current authority owners; prepared policy is not permission to execute.
+These caches change no schema, persisted data, retention, or update behavior.
 
 Managed approval and exec writers capture exact row postimages and deletion
 facts in their mutation statements. Approval expiry and corrupt-row repair are

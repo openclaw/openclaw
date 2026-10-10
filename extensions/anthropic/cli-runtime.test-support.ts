@@ -296,7 +296,22 @@ for await (const line of createInterface({ input: process.stdin })) {
         send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
       }
       send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "steered" }] } });
-      if (scenario === "steer-merged") {
+      if (scenario.includes("notification-replay")) {
+        send({ type: "system", subtype: "background_tasks_changed",
+          tasks: [{ task_id: "background-agent", task_type: "local_agent" }] });
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+        send({ type: "system", subtype: "task_notification", task_id: "background-agent", status: "completed" });
+        const completedFirst = scenario === "steer-completed-notification-replay";
+        if (completedFirst) send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
+        // Native replays host input without origin; notification-looking text is still user input.
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: pendingInputUuid,
+          message: { role: "user", content: user } });
+        result({ injectedContext });
+        if (!completedFirst) send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "real-background-receipt",
+          origin: { kind: "task-notification" }, message: { role: "user", content: user } });
+        result({ injectedContext, finalBackgroundAnswer: true });
+      } else if (scenario === "steer-merged") {
         send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
         result({ injectedContext });
         send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
