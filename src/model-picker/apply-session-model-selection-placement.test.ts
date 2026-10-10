@@ -53,7 +53,14 @@ vi.mock("../config/config.js", factories.config);
 vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
+  ...factories.placementRuntime(),
+  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync: async (
+    params: Parameters<
+      typeof import("../gateway/worker-environments/placement-session-runtime.js").resolveWorkerPlacementSessionRuntimeCapabilitiesAsync
+    >[0],
+  ) => placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(params),
+}));
 
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 

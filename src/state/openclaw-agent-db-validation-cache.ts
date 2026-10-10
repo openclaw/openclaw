@@ -761,17 +761,13 @@ export function releaseOpenClawAgentDatabaseReadValidation(
   candidates: readonly Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">[],
   retainedPaths: readonly string[] = [],
 ): void {
-  const retainedKeys = new Set(retainedPaths.map(resolveDatabasePathKey));
-  const keyedCandidates = candidates.map((candidate) => ({
-    ...candidate,
-    path: resolveDatabasePathKey(candidate.path),
-  }));
+  // Cleanup consumes captured physical paths, even when discovery found an unreadable directory.
   for (const pathname of validatedPaths.keys()) {
     if (
-      !retainedKeys.has(pathname) &&
-      keyedCandidates.some((candidate) =>
-        matchesAgentDatabaseReadCandidatePath(candidate, pathname),
-      )
+      !retainedPaths.some((retained) =>
+        matchesAgentDatabaseReadCandidatePath({ path: retained }, pathname),
+      ) &&
+      candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
       validatedPaths.delete(pathname);
     }
