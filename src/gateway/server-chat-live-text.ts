@@ -1,5 +1,5 @@
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
@@ -106,12 +106,20 @@ export function assistantWireProjection(
 }
 
 export function prepareAgentWirePayload(
-  event: AgentEventPayload,
+  event: AgentEventRuntimePayload,
   clientRunId: string,
   state: ChatRunState,
   isCurrent: () => boolean,
 ): AgentEventPayload {
   let payload = event.runId === clientRunId ? event : { ...event, runId: clientRunId };
+  if (event.stream === "item" && event.data.kind === "preamble") {
+    payload = {
+      ...payload,
+      preamble: event.assistantProjection?.replace
+        ? { retainedText: event.assistantProjection.text }
+        : {},
+    };
+  }
   if (event.stream === "assistant") {
     const input = resolveAssistantTextInput(event.data);
     if (input) {

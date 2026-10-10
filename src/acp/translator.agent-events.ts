@@ -1,4 +1,5 @@
 import type { AgentSideConnection, SessionUpdate } from "@agentclientprotocol/sdk";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
@@ -56,33 +57,11 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
-    if (
-      stream !== "assistant" &&
-      stream !== "tool" &&
-      (stream !== "item" || data.kind !== "preamble")
-    ) {
+    if (stream !== "tool" && (stream !== "item" || data.kind !== "preamble")) {
       return;
     }
     const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
-      return;
-    }
-    if (stream === "assistant") {
-      const itemId = normalizeOptionalString(data.itemId);
-      if (!itemId || data.phase === "final_answer") {
-        pending.assistantItem = undefined;
-        return;
-      }
-      const item =
-        pending.assistantItem?.id === itemId
-          ? pending.assistantItem
-          : { id: itemId, text: "", prefix: pending.sentText ?? "" };
-      item.text =
-        typeof data.text === "string"
-          ? data.text
-          : (data.replace === true ? "" : item.text) +
-            (typeof data.delta === "string" ? data.delta : "");
-      pending.assistantItem = item;
       return;
     }
 
@@ -92,57 +71,48 @@ export class AcpTranslatorAgentEvents {
       if (!text) {
         return;
       }
+      const projection = payload.preamble;
+      if (
+        !isRecord(projection) ||
+        (projection.retainedText !== undefined && typeof projection.retainedText !== "string")
+      ) {
+        return;
+      }
       const itemId = normalizeOptionalString(data.itemId) ?? "";
       const preambles = (pending.sentPreambles ??= new Map());
       let sent = preambles.get(itemId) ?? "";
-      const preview = pending.assistantItem;
-      let previewText = preview?.text.trimEnd();
-      if (
-        preview?.prefix &&
-        previewText?.startsWith(preview.prefix) &&
-        !text.startsWith(previewText) &&
-        !previewText.startsWith(text)
-      ) {
-        // Raw snapshots can retain earlier answer blocks in the same model message.
-        previewText = previewText.slice(preview.prefix.length).replace(/^\n+/, "");
-      }
-      const replacement =
-        pending.textReplacement?.seq === payload.seq
-          ? pending.textReplacement
-          : !preambles.has(itemId) &&
-              preview &&
-              previewText &&
-              (text.startsWith(previewText) || previewText.startsWith(text))
-            ? { sentText: pending.sentText ?? "", text: preview.prefix }
-            : undefined;
-      // The Gateway projects a reclassification before its preamble with the same sequence.
-      // A held projection can arrive later; its active assistant item still owns the preview.
-      if (replacement) {
-        const retired = replacement.sentText.startsWith(replacement.text)
-          ? replacement.sentText.slice(replacement.text.length).replace(/^\n+/, "")
-          : "";
-        if (
-          (text.startsWith(retired) || retired.startsWith(text)) &&
-          retired.length > sent.length
-        ) {
-          sent = retired;
+      let preceding = "";
+      if (!preambles.has(itemId) && typeof projection.retainedText === "string") {
+        const retained = projection.retainedText.trimEnd();
+        const answer = pending.sentText ?? "";
+        if (answer.startsWith(retained)) {
+          const preview = answer.slice(retained.length).replace(/^\n+/, "");
+          if (text.startsWith(preview) || preview.startsWith(text)) {
+            sent = preview;
+          }
         }
-        pending.sentText = replacement.text;
+        preceding = retained.startsWith(answer) ? retained.slice(answer.length) : "";
+        pending.sentText = retained;
         pending.streamMessage = mergeChatStreamMessage(pending.streamMessage, {
-          deltaText: replacement.text,
+          deltaText: retained,
           replace: true,
         });
-        pending.textReplacement = undefined;
-        pending.assistantItem = undefined;
       }
-      if (sent.startsWith(text)) {
-        preambles.set(itemId, sent);
+      const delta = sent.startsWith(text)
+        ? ""
+        : text.startsWith(sent)
+          ? text.slice(sent.length)
+          : text;
+      preambles.set(itemId, sent.startsWith(text) ? sent : text);
+      if (!preceding && !delta) {
         return;
       }
-      preambles.set(itemId, text);
       update = {
         sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: text.startsWith(sent) ? text.slice(sent.length) : text },
+        content: {
+          type: "text",
+          text: preceding && delta ? `${preceding}\n\n${delta}` : preceding + delta,
+        },
       };
     } else {
       const phase = data.phase as string | undefined;
@@ -153,7 +123,6 @@ export class AcpTranslatorAgentEvents {
       }
 
       if (phase === "start") {
-        pending.assistantItem = undefined;
         pending.sentPreambles?.delete("");
         pending.toolCalls ??= new Map();
         if (pending.toolCalls.has(toolCallId)) {

@@ -34,6 +34,7 @@ async function createHarness() {
     send("agent", {
       stream: "item",
       data: { kind: "preamble", itemId, progressText, phase: "end" },
+      preamble: { retainedText: "" },
       ...options,
     });
   const tool = (toolCallId: string, phase: "start" | "result") =>
@@ -148,46 +149,91 @@ describe("ACP commentary reclassification", () => {
     ]);
   });
 
-  it.each([false, true])("keeps an earlier answer prefix (deferred=%s)", async (deferred) => {
+  it.each([
+    { deferred: false, chatFirst: false },
+    { deferred: true, chatFirst: false },
+    { deferred: true, chatFirst: true },
+  ])(
+    "keeps an earlier answer prefix (deferred=$deferred, chatFirst=$chatFirst)",
+    async ({ deferred, chatFirst }) => {
+      const h = await createHarness();
+      await h.send("agent", {
+        stream: "assistant",
+        data: { itemId: "earlier-answer", text: "First answer.", phase: "final_answer" },
+      });
+      await h.chat("First answer.");
+      if (chatFirst) {
+        await h.chat("First answer.\n\nChecking again.");
+      }
+      await h.send("agent", {
+        stream: "assistant",
+        data: { itemId: "preview", text: "First answer.\n\nChecking again." },
+      });
+      if (!chatFirst) {
+        await h.chat("First answer.\n\nChecking again.");
+      }
+      if (!deferred) {
+        await h.chat("First answer.", { replace: true, seq: 100 });
+      }
+      await h.preamble("commentary", "Checking again.", {
+        seq: 100,
+        preamble: { retainedText: "First answer." },
+      });
+      if (deferred) {
+        await h.chat("First answer.", { replace: true });
+      }
+      await h.tool("read", "start");
+      await h.tool("read", "result");
+      await h.chat("First answer.\n\nDone.", { state: "final" });
+      await h.prompt;
+      expect(h.updates()).toEqual([
+        "First answer.",
+        "\n\nChecking again.",
+        "read:in_progress",
+        "read:completed",
+        "\n\nDone.",
+      ]);
+    },
+  );
+
+  it("keeps a distinct preamble with identical text and ignores another run", async () => {
     const h = await createHarness();
-    await h.send("agent", {
-      stream: "assistant",
-      data: { itemId: "earlier-answer", text: "First answer.", phase: "final_answer" },
+    await h.chat("Answer.");
+    await h.chat("", { replace: true, seq: 100 });
+    await h.preamble("foreign", "Answer.", { seq: 100, runId: "other-run" });
+    await h.preamble("unrelated", "Answer.", {
+      seq: 101,
+      preamble: {},
     });
-    await h.chat("First answer.");
-    await h.send("agent", {
-      stream: "assistant",
-      data: { itemId: "preview", text: "First answer.\n\nChecking again." },
+    await h.chat("Answer.", { state: "final" });
+    await h.prompt;
+    expect(h.updates()).toEqual(["Answer.", "Answer."]);
+  });
+  it("delivers a retained answer that was held before a reclassified item", async () => {
+    const h = await createHarness();
+    await h.preamble("commentary", "Checking again.", {
+      preamble: { retainedText: "First answer." },
     });
-    await h.chat("First answer.\n\nChecking again.");
-    if (!deferred) {
-      await h.chat("First answer.", { replace: true, seq: 100 });
-    }
-    await h.preamble("commentary", "Checking again.", { seq: 100 });
-    if (deferred) {
-      await h.chat("First answer.", { replace: true });
-    }
     await h.tool("read", "start");
     await h.tool("read", "result");
     await h.chat("First answer.\n\nDone.", { state: "final" });
     await h.prompt;
     expect(h.updates()).toEqual([
-      "First answer.",
-      "\n\nChecking again.",
+      "First answer.\n\nChecking again.",
       "read:in_progress",
       "read:completed",
       "\n\nDone.",
     ]);
   });
 
-  it("does not reclassify an unrelated replacement or accept another run's preamble", async () => {
+  it("keeps legacy events without projection metadata compatible", async () => {
     const h = await createHarness();
-    await h.chat("Answer.");
-    await h.chat("", { replace: true, seq: 100 });
-    await h.preamble("foreign", "Answer.", { seq: 100, runId: "other-run" });
-    await h.preamble("unrelated", "Answer.", { seq: 101 });
-    await h.chat("Answer.", { state: "final" });
+    await h.preamble("legacy", "Checking.", { preamble: undefined });
+    await h.tool("read", "start");
+    await h.tool("read", "result");
+    await h.chat("Done.");
+    await h.chat("Done.", { state: "final" });
     await h.prompt;
-    expect(h.updates()).toEqual(["Answer.", "Answer."]);
+    expect(h.updates()).toEqual(["read:in_progress", "read:completed", "Done."]);
   });
 });
