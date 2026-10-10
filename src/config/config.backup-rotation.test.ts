@@ -309,4 +309,43 @@ describe("config backup rotation", () => {
       }
     });
   });
+
+  it("keeps an undecodable config's pre-update snapshot byte-for-byte", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const { existsSync } = await import("node:fs");
+      // Latin-1 "café": the byte a decode/re-encode round trip would replace.
+      const original = Buffer.concat([
+        Buffer.from('{"gateway":{"note":"caf'),
+        Buffer.from([0xe9]),
+        Buffer.from('"}}\n'),
+      ]);
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      // This file is the operator's rollback point, so it must hold the exact
+      // bytes that were on disk rather than a decoded rendering of them.
+      await expect(fs.readFile(`${configPath}.pre-update`)).resolves.toEqual(original);
+    });
+  });
+
+  it("keeps a valid non-ASCII config's pre-update snapshot byte-for-byte", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const { existsSync } = await import("node:fs");
+      const original = Buffer.from('{"gateway":{"note":"合法 😀 \uFFFD"}}\n', "utf8");
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      await expect(fs.readFile(`${configPath}.pre-update`)).resolves.toEqual(original);
+    });
+  });
 });

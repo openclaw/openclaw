@@ -183,10 +183,10 @@ export async function prepareConfigFileWrite(
 interface PreUpdateSnapshotFs {
   writeFile: (
     path: string,
-    content: string,
-    options: { encoding: "utf-8"; mode: number; flag: "w" },
+    content: Uint8Array,
+    options: { mode: number; flag: "w" },
   ) => Promise<void>;
-  readFile: (path: string, encoding: "utf-8") => Promise<string>;
+  readFile: (path: string) => Promise<Buffer>;
   existsSync: (path: string) => boolean;
 }
 
@@ -213,12 +213,10 @@ export async function createPreUpdateConfigSnapshot(params: {
   preUpdateConfigSnapshotsWritten.add(snapshotKey);
   const snapshotPath = `${params.configPath}.pre-update`;
   try {
-    const content = await params.fs.readFile(params.configPath, "utf-8");
-    await params.fs.writeFile(snapshotPath, content, {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "w",
-    });
+    // Copy the exact bytes: this file is the rollback point for the update, so a
+    // decode/re-encode round trip must not replace undecodable bytes with U+FFFD.
+    const content = await params.fs.readFile(params.configPath);
+    await params.fs.writeFile(snapshotPath, content, { mode: 0o600, flag: "w" });
   } catch {
     // Best-effort: let the update continue, but allow its later snapshot pass to retry.
     preUpdateConfigSnapshotsWritten.delete(snapshotKey);
