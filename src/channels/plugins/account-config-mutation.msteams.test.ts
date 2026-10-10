@@ -1,15 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveMSTeamsAccount,
-  resolveMSTeamsAccountConfig,
-  resolveMSTeamsRuntimeAccount,
-} from "../../../extensions/msteams/src/accounts.js";
-import { msteamsSetupPlugin } from "../../../extensions/msteams/src/channel.setup.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   applyPreparedChannelAccountConfiguration,
   prepareChannelAccountConfiguration,
 } from "./account-config-mutation.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+
+let msteamsSetupPlugin: ChannelPlugin<unknown>;
+beforeAll(async () => {
+  ({ msteamsSetupPlugin } = await loadBundledPluginFacade<{
+    msteamsSetupPlugin: ChannelPlugin<unknown>;
+  }>({ pluginId: "msteams", artifactBasename: "setup-plugin-api.js" }));
+});
 
 const runtime = {
   log: vi.fn(),
@@ -88,17 +91,21 @@ describe("Teams host account setup", () => {
           support: { appId: "support-app", appPassword: "support-secret" },
         },
       });
-      expect(resolveMSTeamsAccount({ cfg: next, accountId: "default" }).enabled).toBe(enabled);
-      expect(resolveMSTeamsAccount({ cfg: next, accountId: "support" }).enabled).toBe(true);
-      const account = resolveMSTeamsAccountConfig(next, "support");
-      expect(account).toMatchObject({
-        tenantId: "shared-tenant",
-        allowFrom: ["owner"],
-        groupPolicy: "allowlist",
-        webhook: { path: "/teams/messages/support" },
+      expect(msteamsSetupPlugin.config.resolveAccount(next, "default")).toMatchObject({
+        enabled,
+        config: { webhook: { path: "/teams/messages" } },
       });
-      expect(account.legacyWebhook).toBeUndefined();
-      expect(resolveMSTeamsAccountConfig(next, "default").webhook?.path).toBe("/teams/messages");
+      const account = msteamsSetupPlugin.config.resolveAccount(next, "support");
+      expect(account).toMatchObject({
+        enabled: true,
+        config: {
+          tenantId: "shared-tenant",
+          allowFrom: ["owner"],
+          groupPolicy: "allowlist",
+          webhook: { path: "/teams/messages/support" },
+        },
+      });
+      expect(account).not.toHaveProperty("config.legacyWebhook");
     },
   );
 
@@ -123,19 +130,21 @@ describe("Teams host account setup", () => {
       useEnv: true,
       webhookPath: "/teams/environment",
     });
-    expect(resolveMSTeamsRuntimeAccount({ cfg: next, accountId: "default" })).toMatchObject({
+    expect(msteamsSetupPlugin.config.resolveAccount(next, "default")).toMatchObject({
+      configured: true,
+      tokenStatus: "available",
       config: { webhook: { path: "/teams/environment" } },
-      credentials: {
-        type: "federated",
-        appId: "environment-app",
-        tenantId: "environment-tenant",
-        useManagedIdentity: true,
-      },
     });
-    expect(resolveMSTeamsRuntimeAccount({ cfg: next, accountId: "sibling" })).toMatchObject({
-      config: { webhook: { path: "/teams/messages/sibling" } },
-      credentials: {
-        type: "secret",
+    vi.stubEnv("MSTEAMS_APP_ID", "");
+    expect(msteamsSetupPlugin.config.resolveAccount(next, "default")).toMatchObject({
+      configured: false,
+      tokenStatus: "missing",
+    });
+    expect(msteamsSetupPlugin.config.resolveAccount(next, "sibling")).toMatchObject({
+      configured: true,
+      tokenStatus: "available",
+      config: {
+        webhook: { path: "/teams/messages/sibling" },
         appId: "sibling-app",
         appPassword: "sibling-password",
         tenantId: "shared-tenant",
@@ -173,9 +182,11 @@ describe("Teams host account setup", () => {
       appPassword: "new-secret",
       tenantId: "new-tenant",
     });
-    expect(resolveMSTeamsRuntimeAccount({ cfg: next })).toMatchObject({
-      credentials: {
-        type: "secret",
+    expect(msteamsSetupPlugin.config.resolveAccount(next)).toMatchObject({
+      configured: true,
+      tokenStatus: "available",
+      config: {
+        authType: "secret",
         appId: "new-app",
         appPassword: "new-secret",
         tenantId: "new-tenant",
