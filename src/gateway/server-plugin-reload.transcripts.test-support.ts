@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -6,7 +7,7 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { activeSessions } from "../transcripts/capture.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -42,18 +43,16 @@ export async function startTranscriptReloadFixtureSidecars(
   };
   const startup = await startGatewayPostAttachRuntime(
     {
+      scheduler: runtime.scheduler,
       minimalTestGateway: false,
       cfgAtStart: config,
       getConfig: fixture.getConfig,
-      bindHost: "127.0.0.1",
-      bindHosts: ["127.0.0.1"],
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
       port: 0,
-      tlsEnabled: false,
       log,
       isNixMode: false,
       broadcastToConnIds: vi.fn(),
       getClientConnIds: () => new Set(),
-      controlUiBasePath: "/",
       gatewayPluginConfigAtStart: config,
       activationSourceConfig: config,
       pluginManifestRecords: [],
@@ -61,7 +60,9 @@ export async function startTranscriptReloadFixtureSidecars(
       defaultWorkspaceDir: workspaceDir,
       deps: {},
       startChannels: async () => {},
+      isRestartRecoverySuppressed: () => false,
       recoveryRuntime: {
+        prepareRestartRecovery: unusedRecovery,
         dispatchSessionMethod: unusedRecovery,
         dispatchAgent: unusedRecovery,
         waitForAgent: unusedRecovery,
@@ -145,6 +146,19 @@ export function registerTranscriptFixture(api: OpenClawPluginApi, owner: "first"
     unwatch,
     stop,
     waitForCapture,
+    getActiveCaptureForChannel(source: { guildId: string; channelId: string }) {
+      // Concurrent startup can deliver captures in a different order than their config entries.
+      const request = captures.find(
+        ({ session }) =>
+          session.source.guildId === source.guildId &&
+          session.source.channelId === source.channelId,
+      );
+      assert(request);
+      const capture = activeSessions.get(request.session.sessionId);
+      assert(capture);
+      expect(capture.phase).toBe("active");
+      return capture;
+    },
     async waitForActiveCapture(count: number, signal: AbortSignal) {
       // Gateway readiness precedes deferred capture startup and its session write.
       await waitForCapture(count, signal);
@@ -153,6 +167,19 @@ export function registerTranscriptFixture(api: OpenClawPluginApi, owner: "first"
         expect(activeSessions.get(captures[count - 1]!.session.sessionId)?.phase).toBe("active");
       });
       return captures[count - 1]!;
+    },
+  };
+}
+
+export function createTranscriptFixtures() {
+  const providers = {
+    first: [] as ReturnType<typeof registerTranscriptFixture>[],
+    sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
+  };
+  return {
+    providers,
+    register: (api: OpenClawPluginApi, owner: "first" | "sibling") => {
+      providers[owner].push(registerTranscriptFixture(api, owner));
     },
   };
 }

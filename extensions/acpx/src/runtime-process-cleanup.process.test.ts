@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AcpxRuntime as BaseAcpxRuntime } from "acpx/runtime";
+import {
+  AcpxRuntime as BaseAcpxRuntime,
+  createAgentRegistry,
+  createFileSessionStore,
+} from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateKeyedStoreForTests,
@@ -16,9 +20,11 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+);
 
 afterEach(() => {
   vi.restoreAllMocks();

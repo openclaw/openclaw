@@ -51,6 +51,22 @@ export const PortalCloseParamsSchema = closedObject({
 });
 export const PortalCloseResultSchema = closedObject({ closed: Type.Boolean() });
 
+const SessionPortalFields = {
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  environmentId: NonEmptyString,
+};
+
+export const SessionPortalListParamsSchema = closedObject(SessionPortalFields);
+export const SessionPortalOpenParamsSchema = closedObject({
+  ...PortalOpenParamsSchema.properties,
+  ...SessionPortalFields,
+});
+export const SessionPortalCloseParamsSchema = closedObject({
+  ...PortalCloseParamsSchema.properties,
+  ...SessionPortalFields,
+});
+
 export const PortalChangedEventSchema = closedObject({
   portals: Type.Array(PortalSummarySchema),
 });

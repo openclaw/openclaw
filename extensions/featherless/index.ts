@@ -1,8 +1,4 @@
-// Featherless plugin entrypoint registers its OpenClaw integration.
-import type {
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -10,8 +6,6 @@ import {
   resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { applyFeatherlessConnectionConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   FEATHERLESS_BASE_URL,
   FEATHERLESS_DEFAULT_MODEL_ID,
@@ -19,7 +13,9 @@ import {
   FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
   FEATHERLESS_DYNAMIC_MAX_TOKENS,
   isFeatherlessCatalogModelId,
-} from "./provider-catalog.js";
+} from "./models.js";
+import { applyFeatherlessConnectionConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "featherless";
 
@@ -51,16 +47,6 @@ function resolveFeatherlessDynamicModel(ctx: ProviderResolveDynamicModelContext)
     },
     synthesize: true,
   });
-}
-
-function normalizeFeatherlessResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  return {
-    ...model,
-    compat: {
-      ...FEATHERLESS_DYNAMIC_COMPAT,
-      ...model.compat,
-    },
-  };
 }
 
 export default defineSingleProviderPluginEntry({
@@ -97,13 +83,16 @@ export default defineSingleProviderPluginEntry({
         config,
         providerId: PROVIDER_ID,
       }),
-    normalizeResolvedModel: ({ model }) => normalizeFeatherlessResolvedModel(model),
+    normalizeResolvedModel: ({ model }) => ({
+      ...model,
+      compat: { ...FEATHERLESS_DYNAMIC_COMPAT, ...model.compat },
+    }),
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       dropReasoningFromHistory: false,
     }),
     ...buildProviderToolCompatFamilyHooks("openai"),
-    resolveDynamicModel: (ctx) => resolveFeatherlessDynamicModel(ctx),
+    resolveDynamicModel: resolveFeatherlessDynamicModel,
     isModernModelRef: () => true,
   },
 });

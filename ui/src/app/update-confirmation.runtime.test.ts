@@ -8,7 +8,11 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
-import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
+import {
+  createUpdateProgressWatcher,
+  type ConfirmAndStartUpdateParams,
+  type UpdateProgress,
+} from "./update-confirmation.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
@@ -17,16 +21,18 @@ function createProgressStream(
 ) {
   let emit: ((progress: UpdateProgress) => void) | null = null;
   let stopped = false;
+  const stopWatching = vi.fn(() => {
+    stopped = true;
+  });
   return {
+    stopWatching,
     get stopped() {
       return stopped;
     },
     watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
       emit = listener;
       listener(initial);
-      return () => {
-        stopped = true;
-      };
+      return stopWatching;
     },
     async push(progress: UpdateProgress) {
       emit?.(progress);
@@ -64,23 +70,15 @@ function installNativeBridge(): ReturnType<typeof vi.fn> {
 }
 
 function startUpdate(
-  overrides: {
-    updateAvailable?: UpdateAvailable | null;
-    updateSchedule?: UpdateScheduleState | null;
-    viaNativeApp?: boolean;
-    watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  } = {},
+  overrides: Partial<Omit<ConfirmAndStartUpdateParams, "startGatewayUpdate">> = {},
 ) {
   const startGatewayUpdate = vi.fn();
   const settled = confirmAndStartUpdateRuntime({
-    ...(overrides.watchUpdateProgress
-      ? { watchUpdateProgress: overrides.watchUpdateProgress }
-      : {}),
     startGatewayUpdate,
-    updateAvailable:
-      overrides.updateAvailable === undefined ? UPDATE_AVAILABLE : overrides.updateAvailable,
-    updateSchedule: overrides.updateSchedule ?? null,
-    viaNativeApp: overrides.viaNativeApp ?? false,
+    updateAvailable: UPDATE_AVAILABLE,
+    updateSchedule: null,
+    viaNativeApp: false,
+    ...overrides,
   });
   return { settled, startGatewayUpdate };
 }
@@ -101,85 +99,195 @@ afterEach(() => {
   }
 });
 
-it("hands a confirmed update to the Mac app instead of the Gateway", async () => {
+it.each([false, true])("routes a confirmed Mac update with bridge removed: %s", async (removed) => {
   const postMessage = installNativeBridge();
   const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });
   const { dialog } = await getRenderedModalDialog(document.body);
-
   expect(dialog.getAttribute("aria-label")).toBe("Update Mac app + Gateway");
+  if (removed) {
+    Reflect.deleteProperty(window, "webkit");
+  }
   findButton("Update Mac app and restart").click();
   await settled;
-
-  expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "start-update" });
-  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  if (removed) {
+    expect(startGatewayUpdate).toHaveBeenCalledOnce();
+    expect(postMessage).not.toHaveBeenCalled();
+  } else {
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "start-update" });
+    expect(startGatewayUpdate).not.toHaveBeenCalled();
+  }
 });
 
-it("falls back to the Gateway when the Mac bridge disappears during confirmation", async () => {
-  installNativeBridge();
-  const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });
-  await getRenderedModalDialog(document.body);
-
-  Reflect.deleteProperty(window, "webkit");
-  findButton("Update Mac app and restart").click();
-  await settled;
-
-  expect(startGatewayUpdate).toHaveBeenCalledOnce();
-});
-
-it("shows the git target when no package version is available", async () => {
-  const { settled } = startUpdate({
-    updateAvailable: null,
-    updateSchedule: {
-      channel: "dev",
-      autoEnabled: false,
-      target: {
+it.each(["absent", "unavailable", "refreshed", "campaign", "moved campaign"] as const)(
+  "shows coherent git revisions with %s comparison metadata",
+  async (comparison) => {
+    const campaign = comparison === "campaign" || comparison === "moved campaign";
+    const refreshed = comparison === "refreshed" || campaign;
+    const { settled } = startUpdate({
+      updateAvailable: {
+        channel: "dev",
+        currentVersion: "2026.9.5",
+        latestVersion: "2026.9.5",
+        currentSha: "a".repeat(40),
+        upstreamSha: "b".repeat(40),
+        repositoryUrl: "https://github.com/example/openclaw",
         commitsBehind: 3,
-        kind: "git",
-        upstreamRef: "origin/main",
-        upstreamSha: "abc1234",
       },
+      updateSchedule: refreshed
+        ? {
+            channel: "dev",
+            autoEnabled: false,
+            install: {
+              kind: "git",
+              git: {
+                status: "behind",
+                currentSha: (comparison === "campaign" ? "a" : "c").repeat(40),
+                upstreamSha: "d".repeat(40),
+                repositoryUrl: "https://github.com/example/refreshed",
+                commitsBehind: 1,
+              },
+            },
+            target: {
+              kind: "git",
+              upstreamRef: "origin/main",
+              upstreamSha: "b".repeat(40),
+              commitsBehind: 6,
+            },
+            ...(campaign
+              ? {
+                  campaign: {
+                    id: "campaign-1",
+                    state: "waiting-for-idle" as const,
+                    announcedAtMs: 1_000,
+                    forceAtMs: 901_000,
+                    updatedAtMs: 1_000,
+                  },
+                }
+              : {}),
+          }
+        : comparison === "unavailable"
+          ? {
+              channel: "dev",
+              autoEnabled: false,
+              install: {
+                kind: "git",
+                git: { status: "unavailable", reason: "fetch-failed", currentSha: "c".repeat(40) },
+              },
+              target: {
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "d".repeat(40),
+                commitsBehind: 6,
+              },
+            }
+          : null,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    expect(modal.querySelector(".exec-approval-command > div")?.textContent).toBe(
+      comparison === "moved campaign"
+        ? "v2026.9.5"
+        : comparison === "refreshed"
+          ? "Installed v2026.9.5 · 1 commit behind"
+          : "Installed v2026.9.5 · 3 commits behind",
+    );
+    expect(
+      [...modal.querySelectorAll(".update-git-revisions code")].map((code) => code.textContent),
+    ).toEqual(
+      comparison === "moved campaign"
+        ? ["bbbbbbbb"]
+        : comparison === "refreshed"
+          ? ["cccccccc", "dddddddd"]
+          : ["aaaaaaaa", "bbbbbbbb"],
+    );
+    expect(modal.querySelector(".update-git-revisions a")?.getAttribute("href")).toBe(
+      comparison === "moved campaign"
+        ? undefined
+        : comparison === "refreshed"
+          ? `https://github.com/example/refreshed/compare/${"c".repeat(40)}...${"d".repeat(40)}`
+          : `https://github.com/example/openclaw/compare/${"a".repeat(40)}...${"b".repeat(40)}`,
+    );
+    expect(modal.textContent).not.toContain("a".repeat(40));
+    findButton("Cancel").click();
+    await settled;
+  },
+);
+
+it.each([
+  undefined,
+  "https://gitlab.com/example/openclaw",
+  "https://github.com.evil.invalid/example/openclaw",
+  "https://example-user:example-password@github.com/example/openclaw",
+  "javascript:alert(1)",
+])("keeps revisions readable without a supported GitHub link: %s", async (repositoryUrl) => {
+  const { settled } = startUpdate({
+    updateAvailable: {
+      channel: "dev",
+      currentVersion: "2026.9.5",
+      latestVersion: "2026.9.5",
+      currentSha: "a".repeat(40),
+      upstreamSha: "b".repeat(40),
+      commitsBehind: 3,
+      repositoryUrl,
     },
   });
   const { modal } = await getRenderedModalDialog(document.body);
-
-  expect(modal.textContent).toContain("3 commits behind");
-
+  expect(modal.querySelectorAll(".update-git-revisions code")).toHaveLength(2);
+  expect(modal.querySelector(".update-git-revisions a")).toBeNull();
   findButton("Cancel").click();
   await settled;
 });
 
-it.each([
-  { cachedBehind: 246, git: undefined, expectedDistance: "246 commits behind" },
+it.each<{
+  version: string | null;
+  cachedBehind?: number;
+  git?: NonNullable<UpdateScheduleState["install"]>["git"];
+  distance: string | null;
+}>([
+  { version: null, cachedBehind: 3, distance: "3 commits behind" },
+  { version: "2026.8.1", cachedBehind: 246, distance: "246 commits behind" },
   {
+    version: "2026.8.1",
     cachedBehind: 1,
     git: { status: "behind", commitsBehind: 50 },
-    expectedDistance: "50 commits behind",
+    distance: "50 commits behind",
   },
   {
+    version: "2026.8.1",
     cachedBehind: 246,
     git: { status: "behind", commitsBehind: 1 },
-    expectedDistance: "1 commit behind",
+    distance: "1 commit behind",
   },
   {
+    version: "2026.8.1",
     cachedBehind: 1,
     git: { status: "diverged", commitsAhead: 2, commitsBehind: 50 },
-    expectedDistance: "50 commits behind",
+    distance: "50 commits behind",
   },
   {
-    cachedBehind: undefined,
+    version: "2026.8.1",
     git: { status: "behind", commitsBehind: 50 },
-    expectedDistance: "50 commits behind",
+    distance: "50 commits behind",
   },
-] as const)(
-  "states $expectedDistance using the checkout comparison when present ($git)",
-  async ({ cachedBehind, git, expectedDistance }) => {
+  { version: "2026.9.3", cachedBehind: 246, git: { status: "current" }, distance: null },
+  {
+    version: "2026.9.3",
+    cachedBehind: 246,
+    git: { status: "ahead", commitsAhead: 1 },
+    distance: null,
+  },
+])(
+  "formats the git target from its current comparison: %j",
+  async ({ version, cachedBehind, git, distance }) => {
     const { settled } = startUpdate({
-      updateAvailable: {
-        channel: "dev",
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.1",
-        commitsBehind: cachedBehind,
-      },
+      updateAvailable:
+        version === null
+          ? null
+          : {
+              channel: "dev",
+              currentVersion: version,
+              latestVersion: version,
+              commitsBehind: cachedBehind,
+            },
       updateSchedule: {
         channel: "dev",
         autoEnabled: false,
@@ -196,45 +304,17 @@ it.each([
       },
     });
     const { modal } = await getRenderedModalDialog(document.body);
-
-    expect(modal.textContent).toContain(`Installed v2026.8.1 · ${expectedDistance}`);
-    expect(modal.textContent).not.toContain(`Available ${expectedDistance}`);
-
-    findButton("Cancel").click();
-    await settled;
-  },
-);
-
-it.each(["current", "ahead"] as const)(
-  "omits a cached git distance after a refreshed %s comparison",
-  async (status) => {
-    const { settled } = startUpdate({
-      updateAvailable: {
-        channel: "dev",
-        currentVersion: "2026.9.3",
-        latestVersion: "2026.9.3",
-        commitsBehind: 246,
-      },
-      updateSchedule: {
-        channel: "dev",
-        autoEnabled: false,
-        install: {
-          kind: "git",
-          git: status === "current" ? { status } : { status, commitsAhead: 1 },
-        },
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "abc1234",
-          commitsBehind: 246,
-        },
-      },
-    });
-    const { modal } = await getRenderedModalDialog(document.body);
-
-    expect(modal.textContent).toContain("v2026.9.3");
-    expect(modal.textContent).not.toContain("246 commits behind");
-
+    if (version === null) {
+      expect(modal.textContent).toContain(distance);
+      expect(modal.querySelector(".update-git-revisions code")?.textContent).toBe("abc1234");
+    } else if (distance) {
+      expect(modal.textContent).toContain(`Installed v${version} · ${distance}`);
+      expect(modal.textContent).not.toContain(`Available ${distance}`);
+    } else {
+      expect(modal.textContent).toContain(`v${version}`);
+      expect(modal.textContent).not.toContain("246 commits behind");
+      expect(modal.querySelector(".update-git-revisions")).toBeNull();
+    }
     findButton("Cancel").click();
     await settled;
   },
@@ -254,10 +334,18 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
-it("keeps the dialog open and narrates the install, the disconnect, and the failure", async () => {
+it.each([
+  {
+    action: "Close",
+    failure: "The update failed at install: ENOSPC: no space left on device, write.",
+  },
+  { action: "Review update", failure: "Read the recorded cause before retrying." },
+])("keeps install failures visible until $action", async ({ action, failure }) => {
   const stream = createProgressStream();
+  const onReviewUpdate = vi.fn();
   const { settled, startGatewayUpdate } = startUpdate({
     watchUpdateProgress: stream.watchUpdateProgress,
+    ...(action === "Review update" ? { onReviewUpdate } : {}),
   });
   const { modal } = await getRenderedModalDialog(document.body);
 
@@ -281,12 +369,25 @@ it("keeps the dialog open and narrates the install, the disconnect, and the fail
     run: null,
     busy: false,
     connected: true,
-    failure: "The update failed at install: ENOSPC: no space left on device, write.",
+    failure,
   });
-  expect(modal.textContent).toContain("ENOSPC: no space left on device");
-  findButton("Close").click();
+  expect(modal.textContent).toContain(failure);
+  if (action === "Review update") {
+    await stream.push({
+      run: null,
+      busy: false,
+      connected: true,
+      failure,
+      readError: "Could not check for updates: timeout",
+    });
+    expect(modal.textContent).toContain(failure);
+    expect(modal.textContent).toContain("Could not check for updates: timeout");
+  }
+  expect(onReviewUpdate).not.toHaveBeenCalled();
+  findButton(action).click();
   await settled;
   expect(stream.stopped).toBe(true);
+  expect(onReviewUpdate).toHaveBeenCalledTimes(action === "Review update" ? 1 : 0);
 });
 
 it("keeps the server success report visible across restart until the operator closes it", async () => {
@@ -322,34 +423,11 @@ it("keeps the server success report visible across restart until the operator cl
   expect(stream.stopped).toBe(true);
 });
 
-it("opens a saved run without starting another update and acknowledges its report on close", async () => {
-  const onAcknowledge = vi.fn();
-  const startGatewayUpdate = vi.fn();
-  const settled = confirmAndStartUpdateRuntime({
-    existingRun: createUpdateRunFixture({
-      phase: "finished",
-      status: "succeeded",
-      finishedAtMs: 10,
-    }),
-    startGatewayUpdate,
-    onAcknowledge,
-    updateAvailable: null,
-    updateSchedule: null,
-    viaNativeApp: false,
-  });
-  await getRenderedModalDialog(document.body);
-  expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
-  expect(startGatewayUpdate).not.toHaveBeenCalled();
-  findButton("Close").click();
-  await settled;
-  expect(onAcknowledge).toHaveBeenCalledOnce();
-});
-
-it.each(["existing", "started"] as const)(
+it.each(["existing", "started", "initial"] as const)(
   "clears a %s run report when its scoped row is retired",
   async (entry) => {
     const run = createUpdateRunFixture(
-      entry === "existing" ? { phase: "finished", status: "succeeded", finishedAtMs: 10 } : {},
+      entry !== "started" ? { phase: "finished", status: "succeeded", finishedAtMs: 10 } : {},
     );
     const progress: UpdateProgress = {
       run,
@@ -360,22 +438,24 @@ it.each(["existing", "started"] as const)(
     const stream = createProgressStream(entry === "existing" ? progress : undefined);
     const onAcknowledge = vi.fn();
     const settled = confirmAndStartUpdateRuntime({
-      ...(entry === "existing" ? { existingRun: run } : {}),
+      ...(entry !== "started" ? { existingRun: run } : {}),
       onAcknowledge,
       startGatewayUpdate: vi.fn(),
       watchUpdateProgress: stream.watchUpdateProgress,
-      updateAvailable: UPDATE_AVAILABLE,
+      updateAvailable: entry === "initial" ? null : UPDATE_AVAILABLE,
       updateSchedule: null,
       viaNativeApp: false,
     });
-    await getRenderedModalDialog(document.body);
-    if (entry === "started") {
-      findButton("Update and restart").click();
-      await stream.push(progress);
+    if (entry !== "initial") {
+      await getRenderedModalDialog(document.body);
+      if (entry === "started") {
+        findButton("Update and restart").click();
+        await stream.push(progress);
+      }
+      expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
+      await stream.push({ run: null, busy: false, connected: false, failure: null });
     }
-    expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
-
-    await stream.push({ run: null, busy: false, connected: false, failure: null });
+    expect(stream.stopWatching).toHaveBeenCalledOnce();
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(document.body.classList.contains("update-dialog-open")).toBe(false);
@@ -384,72 +464,6 @@ it.each(["existing", "started"] as const)(
     await settled;
   },
 );
-
-it("unsubscribes when the initial snapshot retires a saved run before subscription returns", async () => {
-  const stopWatching = vi.fn();
-  const settled = confirmAndStartUpdateRuntime({
-    existingRun: createUpdateRunFixture({
-      phase: "finished",
-      status: "succeeded",
-      finishedAtMs: 10,
-    }),
-    startGatewayUpdate: vi.fn(),
-    watchUpdateProgress: (listener) => {
-      listener({ run: null, busy: false, connected: true, failure: null });
-      return stopWatching;
-    },
-    updateAvailable: null,
-    updateSchedule: null,
-    viaNativeApp: false,
-  });
-
-  expect(stopWatching).toHaveBeenCalledOnce();
-  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(document.body.classList.contains("update-dialog-open")).toBe(false);
-  await settled;
-});
-
-it("keeps the failure visible until the operator explicitly opens its review action", async () => {
-  const stream = createProgressStream();
-  const onReviewUpdate = vi.fn();
-  const settled = confirmAndStartUpdateRuntime({
-    startGatewayUpdate: vi.fn(),
-    watchUpdateProgress: stream.watchUpdateProgress,
-    onReviewUpdate,
-    updateAvailable: UPDATE_AVAILABLE,
-    updateSchedule: null,
-    viaNativeApp: false,
-  });
-  await getRenderedModalDialog(document.body);
-  findButton("Update and restart").click();
-  await stream.push({
-    run: null,
-    busy: false,
-    connected: true,
-    failure: "Read the recorded cause before retrying.",
-  });
-  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-    "Read the recorded cause",
-  );
-  await stream.push({
-    run: null,
-    busy: false,
-    connected: true,
-    failure: "Read the recorded cause before retrying.",
-    readError: "Could not check for updates: timeout",
-  });
-  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-    "Read the recorded cause",
-  );
-  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-    "Could not check for updates: timeout",
-  );
-  expect(onReviewUpdate).not.toHaveBeenCalled();
-  findButton("Review update").click();
-  await settled;
-  expect(onReviewUpdate).toHaveBeenCalledOnce();
-  expect(stream.stopped).toBe(true);
-});
 
 it.each([
   { name: "an empty snapshot", failure: null },
@@ -481,28 +495,35 @@ it.each([
 });
 
 it.each([
-  { status: "succeeded", reason: null, recovery: false },
-  { status: "skipped", reason: "external-supervisor-update-required", recovery: false },
-  { status: "skipped", reason: "container-image-install", recovery: false },
-  { status: "skipped", reason: "already-current", recovery: false },
-  { status: "skipped", reason: "dirty", recovery: true },
-  { status: "failed", reason: "build-failed", recovery: true },
+  { status: "succeeded", reason: null, recovery: false, watch: false },
+  { status: "succeeded", reason: null, recovery: false, watch: true },
+  {
+    status: "skipped",
+    reason: "external-supervisor-update-required",
+    recovery: false,
+    watch: true,
+  },
+  { status: "skipped", reason: "container-image-install", recovery: false, watch: true },
+  { status: "skipped", reason: "already-current", recovery: false, watch: true },
+  { status: "skipped", reason: "dirty", recovery: true, watch: true },
+  { status: "failed", reason: "build-failed", recovery: true, watch: true },
 ] as const)(
   "offers update recovery only for failed $status/$reason outcomes",
-  async ({ status, reason, recovery }) => {
+  async ({ status, reason, recovery, watch }) => {
     const run = createUpdateRunFixture({ status, reason, phase: "finished", finishedAtMs: 4_000 });
     const stream = createProgressStream({ run, busy: false, connected: true, failure: null });
-    const settled = confirmAndStartUpdateRuntime({
+    const onAcknowledge = vi.fn();
+    const { settled, startGatewayUpdate } = startUpdate({
       existingRun: run,
-      startGatewayUpdate: vi.fn(),
+      onAcknowledge,
       onCheckStatus: vi.fn(async () => true),
       onReviewUpdate: vi.fn(),
-      watchUpdateProgress: stream.watchUpdateProgress,
-      updateAvailable: UPDATE_AVAILABLE,
-      updateSchedule: null,
-      viaNativeApp: false,
+      ...(watch ? { watchUpdateProgress: stream.watchUpdateProgress } : {}),
+      updateAvailable: watch ? UPDATE_AVAILABLE : null,
     });
     const { modal } = await getRenderedModalDialog(document.body);
+    expect(document.body.querySelector("openclaw-update-run-view")).not.toBeNull();
+    expect(startGatewayUpdate).not.toHaveBeenCalled();
     const labels = new Set(
       [...modal.querySelectorAll("button")].map((button) => button.textContent?.trim()),
     );
@@ -511,7 +532,8 @@ it.each([
     expect(labels.has("Check status")).toBe(recovery);
     findButton("Close").click();
     await settled;
-    expect(stream.stopped).toBe(true);
+    expect(onAcknowledge).toHaveBeenCalledOnce();
+    expect(stream.stopped).toBe(watch);
   },
 );
 
@@ -600,9 +622,13 @@ it.each([
       }
       const pendingStatus = createDeferred();
       statusResponse = pendingStatus.promise;
-      const statusReadsBeforeCheck = request.mock.calls.filter(
-        ([method]) => method === "update.status",
-      ).length;
+      const checkoutReads = () =>
+        request.mock.calls.filter(
+          ([method, params]) =>
+            method === "update.status" &&
+            expect.objectContaining({ refreshCheckout: true }).asymmetricMatch(params),
+        );
+      const checkoutReadsBeforeCheck = checkoutReads().length;
       check.click();
       await flushMicrotasks();
       expect(findButton("Checking status…").disabled).toBe(true);
@@ -615,9 +641,7 @@ it.each([
       expect(modal.textContent).not.toContain("Run status read failed");
       expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
       expect(view.run).toEqual(run);
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReadsBeforeCheck + 1,
-      );
+      expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
       findButton("Check status").click();
@@ -641,9 +665,7 @@ it.each([
         expect(findButton("Retry update").disabled).toBe(true);
       }
       findButton("Check status").click();
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReadsBeforeCheck + 3,
-      );
+      expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 3);
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
         entry === "started" ? 1 : 0,
       );

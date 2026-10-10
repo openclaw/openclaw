@@ -1,4 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
+import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -7,23 +9,14 @@ import {
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-  type ChatFollowUpMode,
   type ChatSendShortcut,
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
+import { normalizeTypefaceOverride } from "./typography.ts";
 
-export function isAppearancePref(
-  key: string,
-): key is "theme" | "themeMode" | "accent" | "fontUi" | "fontChat" {
-  return (
-    key === "theme" ||
-    key === "themeMode" ||
-    key === "accent" ||
-    key === "fontUi" ||
-    key === "fontChat"
-  );
+export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE_PREFERENCE_KEYS {
+  return Object.hasOwn(UI_APPEARANCE_PREFERENCE_KEYS, key);
 }
 
 type SyncedPrefSpec<T> = {
@@ -32,20 +25,28 @@ type SyncedPrefSpec<T> = {
   local: (settings: UiSettings) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
   canApply?: (value: T, settings: UiSettings) => boolean;
-  clearable?: boolean;
-  reset?: (settings: UiSettings) => Partial<UiSettings>;
 };
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
-const fontPrefSpec = (key: "fontUi" | "fontChat") =>
-  prefSpec<TypefaceId>({
-    configSync: false,
-    extract: normalizeTypefaceOverride,
-    local: (settings) => normalizeTypefaceOverride(settings[key]),
+const optionalPrefSpec = <
+  K extends "accent" | "fontUi" | "fontChat" | "tabIcon" | "chatFollowUpMode",
+>(
+  key: K,
+  normalize: (value: unknown) => UiSettings[K],
+  configSync = true,
+) =>
+  prefSpec<UiSettings[K]>({
+    configSync,
+    extract: normalize,
+    local: (settings) => normalize(settings[key]),
     write: (value) => ({ [key]: value }),
-    clearable: true,
-    reset: () => ({ [key]: undefined }),
+  });
+
+const booleanPrefSpec = (local: SyncedPrefSpec<boolean>["local"]) =>
+  prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local,
   });
 
 /**
@@ -57,8 +58,6 @@ export const SYNCED_PREFS = {
     extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
     local: (settings) => settings.theme,
     write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
-    clearable: true,
-    reset: () => ({ theme: UI_APPEARANCE_DEFAULTS.theme }),
     // A server "custom" theme is only honorable once this browser imported one;
     // the imported palette itself is too large to live in config.
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
@@ -67,56 +66,26 @@ export const SYNCED_PREFS = {
     extract: normalizeThemeMode,
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
-    clearable: true,
-    reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
   }),
-  accent: prefSpec<string>({
-    extract: normalizeAccentColor,
-    local: (settings) => normalizeAccentColor(settings.accent),
-    write: (value) => ({ accent: value }),
-    clearable: true,
-    reset: () => ({ accent: undefined }),
-  }),
-  fontUi: fontPrefSpec("fontUi"),
-  fontChat: fontPrefSpec("fontChat"),
+  accent: optionalPrefSpec("accent", normalizeAccentColor),
+  fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
+  fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
+  tabIcon: optionalPrefSpec("tabIcon", normalizeTabIconPreference, false),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
     write: (value) => ({ locale: value }),
-    clearable: true,
-    reset: () => ({ locale: undefined }),
   }),
-  chatShowThinking: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowThinking,
-  }),
-  chatShowToolCalls: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowToolCalls,
-  }),
-  chatPersistCommentary: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary !== false,
-  }),
+  chatShowThinking: booleanPrefSpec((settings) => settings.chatShowThinking),
+  chatShowToolCalls: booleanPrefSpec((settings) => settings.chatShowToolCalls),
+  chatPersistCommentary: booleanPrefSpec((settings) => settings.chatPersistCommentary !== false),
   chatSendShortcut: prefSpec<ChatSendShortcut>({
-    extract: (value) =>
-      value === "enter" || value === "modifier-enter"
-        ? normalizeChatSendShortcut(value)
-        : undefined,
+    extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
     local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
     write: (value) => ({ chatSendShortcut: value }),
-    clearable: true,
-    reset: () => ({ chatSendShortcut: undefined }),
   }),
-  chatFollowUpMode: prefSpec<ChatFollowUpMode>({
-    extract: (value) => normalizeChatFollowUpModeOverride(value),
-    local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
-    write: (value) => ({ chatFollowUpMode: value }),
-    // Unset means "use the server-configured queue mode"; clearing must propagate,
-    // so the push serializes an explicit null removal.
-    clearable: true,
-    reset: () => ({ chatFollowUpMode: undefined }),
-  }),
+  // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
+  chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,
@@ -130,6 +99,7 @@ export type ResettableServerUiPrefKey =
   | "accent"
   | "fontUi"
   | "fontChat"
+  | "tabIcon"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";
@@ -196,7 +166,7 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
 ): ServerUiPrefState<SyncedPrefValue<K>> {
   const specification = SYNCED_PREFS[key];
   const localValue = specification.local(settings) as SyncedPrefValue<K> | undefined;
-  const resetPatch = specification.reset?.(settings);
+  const resetPatch = specification.write?.(undefined);
   const productDefault = (
     resetPatch ? specification.local({ ...settings, ...resetPatch }) : undefined
   ) as SyncedPrefValue<K> | undefined;
@@ -236,20 +206,15 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
         settings,
       ));
   const applicableServerValue = canApplyServerValue ? serverValue : productDefault;
-  if (canSync === null && profilePrefs != null && isAppearancePref(key)) {
-    // Offline profile snapshots supply a local reset baseline. Cancel queued
-    // edits without creating a new remote write while identity is disconnected.
+  if (
+    (canSync === null && profilePrefs != null && isAppearancePref(key)) ||
+    (canSync === false && shadowPrefs && key in shadowPrefs)
+  ) {
+    // Disconnected profiles and read-only queued edits use the last server
+    // baseline without claiming a pending sync or creating another remote write.
     return { ...localState(applicableServerValue), provenance: "device-local" };
   }
   if (shadowPrefs && key in shadowPrefs) {
-    if (canSync === false) {
-      return {
-        ...localState(applicableServerValue),
-        // Keep queued intent for a later authorized reconnect without claiming
-        // that this connected read-only browser is pending a server sync.
-        provenance: "device-local",
-      };
-    }
     const shadowValue = shadowPrefs[key];
     if (shadowValue === null) {
       return { ...localState(resetValue), provenance: "pending" };
@@ -261,31 +226,17 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
       value: shadowValue as SyncedPrefValue<K>,
     };
   }
-  if ((!prefs || !Object.hasOwn(prefs, key)) && !isProfileValue) {
+  if (serverValue === undefined || (!canApplyServerValue && canSync === false)) {
     return localState(productDefault);
   }
-  if (serverValue === undefined) {
-    return localState(productDefault);
-  }
-  if (!canApplyServerValue) {
-    if (canSync === false) {
-      return localState(productDefault);
-    }
+  if (!canApplyServerValue || prefValuesEqual(localValue, serverValue)) {
     // Preserve authored server provenance even when this browser cannot render
     // the value, so Restore default still removes the server override.
     return {
       overridden: true,
       provenance: isProfileValue ? "profile" : "synced",
       resetValue,
-      value: localValue,
-    };
-  }
-  if (prefValuesEqual(localValue, serverValue)) {
-    return {
-      overridden: true,
-      provenance: isProfileValue ? "profile" : "synced",
-      resetValue,
-      value: serverValue,
+      value: canApplyServerValue ? serverValue : localValue,
     };
   }
   return localState(serverValue);
@@ -312,48 +263,31 @@ export function serverUiPrefsSnapshotDelta(
   // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
   // fields would revert unpushable local edits whenever any other server field moves.
   for (const prefKey of SYNCED_PREF_KEYS) {
-    if (
-      Object.hasOwn(prefs, prefKey) &&
-      (appearanceReady || !isAppearancePref(prefKey)) &&
-      !(shadowPrefs && prefKey in shadowPrefs) &&
-      !retainedLocalKeys.has(prefKey) &&
-      (scopeChanged || firstSnapshot || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
-    ) {
-      Object.assign(changed, { [prefKey]: prefs[prefKey] });
+    if ((shadowPrefs && prefKey in shadowPrefs) || retainedLocalKeys.has(prefKey)) {
+      continue;
     }
-  }
-  for (const prefKey of SYNCED_PREF_KEYS) {
-    if (
-      Object.hasOwn(lastSeen, prefKey) &&
-      (appearanceReady || !isAppearancePref(prefKey)) &&
-      !(prefKey in prefs) &&
-      !(shadowPrefs && prefKey in shadowPrefs) &&
-      !retainedLocalKeys.has(prefKey) &&
-      SYNCED_PREFS[prefKey]?.clearable
-    ) {
-      changed[prefKey] = null;
-    }
-  }
-  if (scopeChanged) {
-    // The previous identity may have rendered appearance values this scope has
-    // never seen (absent from both prefs and this scope's last-seen); clear
-    // them back to defaults so the new identity never wears the old one's look.
-    for (const prefKey of SYNCED_PREF_KEYS) {
+    const appearance = isAppearancePref(prefKey);
+    const ready = appearanceReady || !appearance;
+    if (Object.hasOwn(prefs, prefKey)) {
       if (
-        isAppearancePref(prefKey) &&
-        !(prefKey in prefs) &&
-        !(shadowPrefs && prefKey in shadowPrefs) &&
-        !retainedLocalKeys.has(prefKey) &&
-        SYNCED_PREFS[prefKey].clearable
+        ready &&
+        (scopeChanged || firstSnapshot || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
       ) {
-        changed[prefKey] = null;
+        Object.assign(changed, { [prefKey]: prefs[prefKey] });
       }
+    } else if (
+      !(prefKey in prefs) &&
+      SYNCED_PREFS[prefKey].write &&
+      ((ready && Object.hasOwn(lastSeen, prefKey)) || (scopeChanged && appearance))
+    ) {
+      // A new identity also clears appearance values absent from its last-seen
+      // snapshot, so it never inherits the previous identity's rendered look.
+      changed[prefKey] = null;
     }
   }
   return changed;
 }
 
-/** Local-settings patch that brings the browser mirror in line with the server. */
 export function serverPrefsLocalPatch(
   prefs: ServerUiPrefs,
   settings: UiSettings,
@@ -366,7 +300,7 @@ export function serverPrefsLocalPatch(
       continue;
     }
     if (serverValue === null) {
-      const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
+      const resetPatch = specification.write?.(undefined);
       if (resetPatch) {
         applyChangedSettingsPatch(patch, settings, resetPatch);
       }

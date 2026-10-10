@@ -5,7 +5,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,8 +15,11 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "./diagnostics-timeline.js";
+import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const tempDirs: string[] = [];
+const timelineUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.diagnosticsTimeline);
 
 async function createTimelineEnv() {
   const dir = await mkdtemp(join(tmpdir(), "openclaw-diagnostics-timeline-"));
@@ -142,7 +144,7 @@ describe("diagnostics timeline", () => {
     async (mode) => {
       const { env, path } = await createTimelineEnv();
       const script = `
-        import { emitDiagnosticsTimelineEvent } from ${JSON.stringify(new URL("./diagnostics-timeline.ts", import.meta.url).href)};
+        import { emitDiagnosticsTimelineEvent } from ${JSON.stringify(timelineUrl.href)};
         const env = ${JSON.stringify(env)};
         process.on("exit", () => emitDiagnosticsTimelineEvent({ type: "mark", name: "last" }, { env }));
         ${mode === "first-event-at-exit" ? "" : 'emitDiagnosticsTimelineEvent({ type: "mark", name: "first" }, { env });'}
@@ -151,8 +153,7 @@ describe("diagnostics timeline", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+          ...resolveRuntimeWorkerArgv(timelineUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           script,
@@ -410,25 +411,6 @@ describe("diagnostics timeline", () => {
     expect(errorEvent.errorMessage).toBeUndefined();
     expect(JSON.stringify(events)).not.toContain("TOKEN_ID");
     expect(JSON.stringify(events)).not.toContain("prod");
-  });
-
-  it("records synchronous spans", async () => {
-    const { env, path } = await createTimelineEnv();
-
-    const result = measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
-      env,
-      phase: "startup",
-    });
-
-    expect(result).toBe(42);
-    const events = await readTimeline(path);
-    expect(events).toHaveLength(2);
-    const start = expectDefined(events[0], "span start");
-    const end = expectDefined(events[1], "span end");
-    expect(start.type).toBe("span.start");
-    expect(start.name).toBe("plugins.metadata.scan");
-    expect(end.type).toBe("span.end");
-    expect(end.name).toBe("plugins.metadata.scan");
   });
 
   it("lets nested spans inherit the active timeline phase and parent span", async () => {

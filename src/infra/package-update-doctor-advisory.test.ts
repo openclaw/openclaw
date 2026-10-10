@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markPackagePostInstallDoctorAdvisory } from "./package-update-steps.js";
+import { markPackagePostInstallDoctorAdvisory } from "./package-update-verification-step.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -19,10 +19,18 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
               warnings: [warning],
             };
       const step = markPackagePostInstallDoctorAdvisory(
-        { exitCode, termination: "exit" as const },
+        { exitCode, termination: "exit" as const, stderrTail: "doctor diagnostics" },
         result,
       );
+      expect(step.advisory).toMatchObject({
+        kind: "package-post-install-doctor",
+        message: expect.stringContaining("recoverable update-time repair warning"),
+      });
       expect(step.advisory?.message).toContain(warning);
+      expect(step.stderrTail).toContain("doctor diagnostics");
+      if (exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE) {
+        expect(step.stderrTail).toContain("deferred plugin repair");
+      }
       expect(step).toMatchObject({
         warnings: [
           warning,
@@ -33,31 +41,6 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
       });
     },
   );
-  it("marks only explicit post-install doctor advisory exits", () => {
-    const step = markPackagePostInstallDoctorAdvisory(
-      {
-        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-        stderrTail: "doctor deferred repair",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      },
-      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
-    );
-
-    expect(step.advisory).toEqual({
-      kind: "package-post-install-doctor",
-      message: expect.stringContaining("recoverable update-time repair warning"),
-    });
-    expect(step).toMatchObject({
-      warnings: [
-        "deferred configured plugin repair\nRun openclaw doctor --fix to finish deferred repairs.",
-      ],
-    });
-    expect(step.stderrTail).toContain("doctor deferred repair");
-    expect(step.stderrTail).toContain("deferred configured plugin repair");
-  });
-
   it("keeps advisory diagnostics bounded after appending deferred repair details", () => {
     const step = markPackagePostInstallDoctorAdvisory(
       {
@@ -80,7 +63,7 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     ]);
   });
 
-  it("does not mark unknown nonzero doctor exits as advisory", () => {
+  it("preserves failed Doctor diagnostics when no receipt is available", () => {
     const step = markPackagePostInstallDoctorAdvisory(
       {
         exitCode: 1,
@@ -96,13 +79,13 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     expect(step.stderrTail).toBe("doctor refused migration");
   });
 
-  it("does not mark timed-out doctor exits as advisory when they report a code", () => {
+  it("does not mark timed-out doctor exits as advisory even with the advisory code", () => {
     const step = markPackagePostInstallDoctorAdvisory(
       {
-        exitCode: 124,
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
         stderrTail: "doctor timed out",
         signal: null,
-        killed: true,
+        killed: false,
         termination: "timeout" as const,
       },
       createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),

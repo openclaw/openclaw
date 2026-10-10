@@ -23,18 +23,18 @@ type ReplayRepairParams = {
 
 type ReplayRepairResult = { repaired: boolean; repairedCount: number; reason?: string };
 
-function rewriteRejectedReplayInSessionManager(
+async function rewriteRejectedReplayInSessionManager(
   params: ReplayRepairParams,
   repair: {
     replacements: Array<{ entryId: string; message: AgentMessage }>;
     emptyReason: string;
     logMessage: string;
   },
-): ReplayRepairResult {
+): Promise<ReplayRepairResult> {
   if (repair.replacements.length === 0) {
     return { repaired: false, repairedCount: 0, reason: repair.emptyReason };
   }
-  const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+  const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
     sessionManager: params.sessionManager,
     replacements: repair.replacements,
   });
@@ -66,18 +66,14 @@ function rewriteRejectedReplayInSessionManager(
 
 export function repairRejectedThinkingReplayInSessionManager(
   params: ReplayRepairParams,
-): ReplayRepairResult {
-  const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
-  for (const entry of params.sessionManager.getBranch()) {
+): Promise<ReplayRepairResult> {
+  const replacements = params.sessionManager.getBranch().flatMap((entry) => {
     if (entry.type !== "message") {
-      continue;
+      return [];
     }
     const replacement = stripThinkingBlocksFromMessage(entry.message);
-    if (replacement === entry.message) {
-      continue;
-    }
-    replacements.push({ entryId: entry.id, message: replacement });
-  }
+    return replacement === entry.message ? [] : [{ entryId: entry.id, message: replacement }];
+  });
 
   return rewriteRejectedReplayInSessionManager(params, {
     replacements,
@@ -88,7 +84,7 @@ export function repairRejectedThinkingReplayInSessionManager(
 
 export function repairRejectedCompactionReplayInSessionManager(
   params: ReplayRepairParams & { checkpoint: OpenAIResponsesCompactionRejection },
-): ReplayRepairResult {
+): Promise<ReplayRepairResult> {
   const owner = params.sessionManager
     .getBranch()
     .findLast(

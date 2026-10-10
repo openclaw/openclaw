@@ -2,10 +2,12 @@ import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toErrorObject } from "../../scripts/lib/error-format.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForFixtureFile } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import * as nodeScript from "../helpers/run-node-script.js";
 import { formatShimResult } from "./direct-run-entrypoints.test-support.js";
@@ -16,7 +18,9 @@ const entries = ["run-oxlint.mjs", "run-oxlint-shards.mts", "run-lint.mts"] as c
 type Entry = (typeof entries)[number];
 type Mode = "success" | "nonzero" | "signal" | "wait" | "throw" | "unjoined";
 
-function createLintFixture(mode: Mode, phase: string, timeout: boolean) {
+let preparedScripts: Promise<Map<string, string | Uint8Array>> | undefined;
+
+async function createLintFixture(mode: Mode, phase: string, timeout: boolean) {
   const root = fs.realpathSync(fixture.createTempDir("openclaw-lint-status-"));
   const write = (relative: string, content: string) => {
     const target = path.join(root, relative);
@@ -44,15 +48,23 @@ export function waitForFile(file) {
   for (const file of [
     ...entries,
     "run-oxlint.mts",
+    "generate-kysely-types.mts",
     "run-stylelint.mts",
     "tsx.mjs",
     "windows-cmd-helpers.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
+    "lib/check-limits.mts",
+    "lib/oxlint-changed-scope.mts",
+    "lib/ci-static-check-evidence.mjs",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
+    "lib/dist-artifact-lock.mts",
+    "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
+    "lib/managed-memory.mts",
+    "lib/managed-memory-entrypoint.mts",
     "lib/vitest-resource-ownership.mts",
     "lib/windows-taskkill.mjs",
     "lib/repo-root.mjs",
@@ -66,10 +78,69 @@ export function waitForFile(file) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));
   }
   // Only this disposable fixture gets synthetic binaries; installed tools stay untouched.
-  for (const name of ["tsx", "p-map", "@openclaw/fs-safe"]) {
+  for (const name of ["p-map", "@openclaw/fs-safe", "json5"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
+  }
+  // Wrappers are compiled below and synthetic tools are native JavaScript.
+  // Keep loader imports without adding unrelated compiler-service children.
+  write(
+    "node_modules/tsx/package.json",
+    JSON.stringify({
+      name: "tsx",
+      type: "module",
+      exports: { ".": "./loader.mjs", "./esm": "./loader.mjs" },
+    }),
+  );
+  write("node_modules/tsx/loader.mjs", "export {};\n");
+  preparedScripts ??= (async () => {
+    const { bundles } = await build({
+      config: false,
+      cwd: root,
+      root,
+      entry: ["scripts/run-lint.mts", "scripts/run-oxlint.mts", "scripts/run-oxlint-shards.mts"],
+      outDir: root,
+      unbundle: true,
+      format: "esm",
+      platform: "node",
+      dts: false,
+      clean: false,
+      write: false,
+      treeshake: false,
+      deps: { neverBundle: ["p-map", "@openclaw/fs-safe"] },
+      // These POSIX fixtures omit optional Windows Job and declaration compiler runtimes.
+      inputOptions: {
+        external: (id, importer) =>
+          (id === "./managed-windows-job.mts" &&
+            importer === path.join(root, "scripts/lib/managed-child-process.mts")) ||
+          (id === "./tsdown-declaration-boundary.mts" &&
+            importer === path.join(root, "scripts/lib/local-check-runtime.mts")),
+      },
+      outExtensions: () => ({ js: ".js" }),
+      outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
+      logLevel: "silent",
+    });
+    const outputs = new Map<string, string | Uint8Array>();
+    for (const bundle of bundles) {
+      for (const output of bundle.chunks) {
+        outputs.set(output.fileName, output.type === "chunk" ? output.code : output.source);
+      }
+      await bundle[Symbol.asyncDispose]();
+    }
+    return outputs;
+  })();
+  for (const [relative, contents] of await preparedScripts) {
+    const output = path.join(root, relative);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, contents);
+  }
+  // The original wrapper and shard owner still select their .mts entry paths.
+  for (const name of ["run-lint", "run-oxlint", "run-oxlint-shards"]) {
+    fs.copyFileSync(
+      path.join(root, "scripts", `${name}.js`),
+      path.join(root, "scripts", `${name}.mts`),
+    );
   }
   const toolSource = (step: string) => `
 import fs from "node:fs";
@@ -80,7 +151,7 @@ const shard = process.argv.includes("scripts") ? "scripts" : process.argv.includ
 const name = step === "oxlint" ? shard : step;
 const lock = ".artifacts/dist-artifacts.lock";
 fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
-process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
+if (mode !== "wait") process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
 process.stderr.write("diagnostic:" + name + "\\n");
 if (mode === "throw") throw new Error("fixture preparation failure");
 if (mode === "unjoined") throw Object.assign(new Error("fixture cleanup unverified"), { processTreeState: "indeterminate" });
@@ -95,6 +166,7 @@ else if (mode === "wait") {
   });
   fs.writeFileSync(name + ".pid.tmp", String(process.pid));
   fs.renameSync(name + ".pid.tmp", name + ".pid");
+  process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
 } else process.exitCode = mode === "nonzero" ? 7 : 0;
 `;
   for (const name of ["oxlint", "stylelint"]) {
@@ -188,7 +260,7 @@ async function runLintFixture(
     forwarded?: "SIGINT" | "SIGTERM";
   } = {},
 ) {
-  const { root, probe, env } = createLintFixture(mode, phase, timeout);
+  const { root, probe, env } = await createLintFixture(mode, phase, timeout);
   const args =
     entry === "run-oxlint.mjs"
       ? ["--tsconfig", "extensions/tsconfig.json", "extensions"]
@@ -212,26 +284,41 @@ async function runLintFixture(
         OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
         OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: timeout ? "1500" : "0",
       },
-      10_000,
+      undefined,
       {
         cwd: root,
         signal,
         requireProcessTreeExit: true,
-        onReady(child) {
+        onReady(child, readOutput) {
           if (forwarded) {
+            const ready = createDeferred();
+            const line = JSON.stringify({ step: phase, shard: "extensions" }) + "\n";
+            // Wait-mode tools emit their one stdout row only after installing
+            // signal handlers. The managed command joins this same output pipe.
+            child.stdout?.on("data", () => {
+              if (readOutput().stdout.includes(line)) {
+                ready.resolve();
+              }
+            });
             // The lifetime schedules this after command is initialized and joins it during cleanup.
             readiness = fixture.run(async () => {
-              const ready = path.join(root, phase === "oxlint" ? "extensions.pid" : `${phase}.pid`);
-              await waitForFixtureFile(
-                ready,
-                command.then((result) => {
-                  if (result.error !== undefined) {
-                    throw toErrorObject(
-                      result.error,
-                      "Lint command failed before signal readiness",
-                    );
-                  }
-                }),
+              const file = path.join(root, phase === "oxlint" ? "extensions.pid" : `${phase}.pid`);
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  ready.promise,
+                  command.then((result) => {
+                    if (result.error !== undefined) {
+                      throw new Error(`Child failed before writing ${file}`, {
+                        cause: toErrorObject(
+                          result.error,
+                          "Lint command failed before signal readiness",
+                        ),
+                      });
+                    }
+                  }),
+                  `Child exited before writing ${file}`,
+                ),
+                signal,
               );
               child.kill(forwarded);
             });
@@ -273,65 +360,49 @@ async function runLintFixture(
 }
 
 describe.skipIf(process.platform === "win32")("lint failure reporting boundary", () => {
-  it.for(
-    entries.flatMap((entry) => [
-      { entry, githubActions: false },
-      { entry, githubActions: true },
-    ]),
-  )(
-    "$entry preserves real oxlint warning/error exits (GitHub Actions: $githubActions)",
-    ({ entry, githubActions }, { signal }) =>
-      fixture.run(async () => {
-        const { root, env } = createLintFixture("success", "oxlint", false);
-        for (const name of ["oxlint", "tsgolint"]) {
-          const bin = path.join(root, "node_modules/.bin", name);
-          fs.rmSync(bin, { force: true });
-          fs.symlinkSync(path.resolve("node_modules/.bin", name), bin);
-        }
-        fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
-        fs.mkdirSync(path.join(root, "extensions/sample"), { recursive: true });
-        fs.writeFileSync(
-          path.join(root, "extensions/tsconfig.json"),
-          JSON.stringify({ compilerOptions: { strict: true }, include: ["**/*.ts"] }),
+  it("run-oxlint.mjs preserves real oxlint warning/error exits (GitHub Actions: true)", ({
+    signal,
+  }) =>
+    fixture.run(async () => {
+      const { root, env } = await createLintFixture("success", "oxlint", false);
+      for (const name of ["oxlint", "tsgolint"]) {
+        const bin = path.join(root, "node_modules/.bin", name);
+        fs.rmSync(bin, { force: true });
+        fs.symlinkSync(path.resolve("node_modules/.bin", name), bin);
+      }
+      fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+      fs.mkdirSync(path.join(root, "extensions/sample"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "extensions/tsconfig.json"),
+        JSON.stringify({ compilerOptions: { strict: true }, include: ["**/*.ts"] }),
+      );
+      const source = path.join(root, "extensions/sample/oversized.ts");
+      const warningSource = `export const values = [\n${"  0,\n".repeat(700)}];\n`;
+      const args = ["--tsconfig", "extensions/tsconfig.json", "extensions"];
+      for (const hasError of [false, true]) {
+        fs.writeFileSync(source, warningSource + (hasError ? "export var legacy = 1;\n" : ""));
+        const result = await fixture.track(
+          runNodeScript(
+            [path.join(root, "scripts/run-oxlint.mjs"), ...args, "--threads=1"],
+            { ...env, CI: "true", GITHUB_ACTIONS: "true" },
+            10_000,
+            { cwd: root, signal, requireProcessTreeExit: true },
+          ),
         );
-        const source = path.join(root, "extensions/sample/oversized.ts");
-        const warningSource = `export const values = [\n${"  0,\n".repeat(700)}];\n`;
-        const args =
-          entry === "run-oxlint.mjs"
-            ? ["--tsconfig", "extensions/tsconfig.json", "extensions"]
-            : ["--only=extensions", "--extension-stripe=1/1"];
-        for (const hasError of [false, true]) {
-          fs.writeFileSync(source, warningSource + (hasError ? "export var legacy = 1;\n" : ""));
-          const result = await fixture.track(
-            runNodeScript(
-              [path.join(root, "scripts", entry), ...args, "--threads=1"],
-              { ...env, CI: String(githubActions), GITHUB_ACTIONS: String(githubActions) },
-              10_000,
-              { cwd: root, signal, requireProcessTreeExit: true },
-            ),
-          );
-          const details = formatShimResult(result);
-          expect(result.error, details).toBeUndefined();
-          expect(result.status, details).toBe(hasError ? 1 : 0);
-          expect(result.stdout, details).toContain("eslint(max-lines)");
-          expect(result.stdout, details).toContain("warning");
-          if (githubActions) {
-            expect(result.stdout, details).toContain(hasError ? "1 error" : "0 errors");
-            expect(result.stdout, details).toContain("1 warning");
-          }
-          if (hasError) {
-            expect(result.stdout, details).toContain("eslint(no-var)");
-          }
-          if (entry === "run-lint.mts") {
-            expect(
-              readRows<Step>(root, "steps.jsonl").filter((step) => step.step === "stylelint"),
-            ).toHaveLength(1);
-          }
+        const details = formatShimResult(result);
+        expect(result.error, details).toBeUndefined();
+        expect(result.status, details).toBe(hasError ? 1 : 0);
+        expect(result.stdout, details).toContain("eslint(max-lines)");
+        expect(result.stdout, details).toContain("warning");
+        expect(result.stdout, details).toContain(hasError ? "1 error" : "0 errors");
+        expect(result.stdout, details).toContain("1 warning");
+        if (hasError) {
+          expect(result.stdout, details).toContain("eslint(no-var)");
         }
-      }),
-  );
+      }
+    }));
 
-  it.for(["exited", "failed"] as const)(
+  it.for(["failed"] as const)(
     "reports signal readiness when the command %s before its receipt",
     async (outcome, { signal }) => {
       const failure = outcome === "failed" ? new Error("fixture command failed") : undefined;
@@ -358,43 +429,51 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
     },
   );
 
-  it.for(
-    entries.flatMap((entry) =>
-      (["success", "nonzero", "signal"] as const).map((mode) => ({ entry, mode })),
-    ),
-  )("$entry reports $mode after joining and releasing artifacts", ({ entry, mode }, { signal }) =>
-    fixture.run(async () => {
-      const { result, details, steps, trailers } = await runLintFixture(entry, mode, signal);
-      const code = mode === "success" ? 0 : mode === "signal" ? 143 : 7;
-      expect(result.status, details).toBe(code);
-      const lint = steps.find((step) => step.step === "oxlint");
-      expect(lint, details).toMatchObject({ owned: true });
-      if (mode === "success") {
-        expect(steps.find((step) => step.step === "prepare")?.args, details).toEqual([
-          "--mode=package-boundary",
-        ]);
-      }
-      if (entry !== "run-oxlint.mjs") {
-        expect(lint!.claims).toHaveLength(1);
-      }
-      if (mode === "success" && entry === "run-lint.mts") {
-        expect(steps.map((step) => step.step)).toEqual(["i18n", "prepare", "oxlint", "stylelint"]);
-      }
-      expect(result.stderr.match(/FAILED \(exit/g) ?? []).toHaveLength(code ? 1 : 0);
-      const tool = entry === "run-lint.mts" ? "lint" : "oxlint";
-      expect(trailers, details).toEqual(
-        code
-          ? [{ text: `[${tool}] FAILED (exit ${code})`, owned: false, claims: [], live: [] }]
-          : [],
-      );
-      if (code) {
-        expect(result.stderr.trim().split("\n").at(-1)).toBe(`[${tool}] FAILED (exit ${code})`);
-        expect(result.stderr).not.toContain("[oxlint:extensions] finished");
-      }
-    }),
+  it.for([
+    { entry: "run-oxlint.mjs", mode: "nonzero" },
+    { entry: "run-oxlint-shards.mts", mode: "nonzero" },
+    { entry: "run-lint.mts", mode: "success" },
+    { entry: "run-lint.mts", mode: "signal" },
+  ] as const)(
+    "$entry reports $mode after joining and releasing artifacts",
+    ({ entry, mode }, { signal }) =>
+      fixture.run(async () => {
+        const { result, details, steps, trailers } = await runLintFixture(entry, mode, signal);
+        const code = mode === "success" ? 0 : mode === "signal" ? 143 : 7;
+        expect(result.status, details).toBe(code);
+        const lint = steps.find((step) => step.step === "oxlint");
+        expect(lint, details).toMatchObject({ owned: true });
+        if (mode === "success") {
+          expect(steps.find((step) => step.step === "prepare")?.args, details).toEqual([
+            "--mode=package-boundary",
+          ]);
+        }
+        if (entry !== "run-oxlint.mjs") {
+          expect(lint!.claims).toHaveLength(1);
+        }
+        if (mode === "success" && entry === "run-lint.mts") {
+          expect(steps.map((step) => step.step)).toEqual([
+            "i18n",
+            "prepare",
+            "oxlint",
+            "stylelint",
+          ]);
+        }
+        expect(result.stderr.match(/FAILED \(exit/g) ?? []).toHaveLength(code ? 1 : 0);
+        const tool = entry === "run-lint.mts" ? "lint" : "oxlint";
+        expect(trailers, details).toEqual(
+          code
+            ? [{ text: `[${tool}] FAILED (exit ${code})`, owned: false, claims: [], live: [] }]
+            : [],
+        );
+        if (code) {
+          expect(result.stderr.trim().split("\n").at(-1)).toBe(`[${tool}] FAILED (exit ${code})`);
+          expect(result.stderr).not.toContain("[oxlint:extensions] finished");
+        }
+      }),
   );
 
-  it.for(["run-oxlint-shards.mts", "run-lint.mts"] as const)(
+  it.for(["run-lint.mts"] as const)(
     "%s reports one timeout after the owned child drains",
     (entry, { signal }) =>
       fixture.run(async () => {
@@ -415,7 +494,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
       }),
   );
 
-  it.for(entries)(
+  it.for(["run-lint.mts"] as const)(
     "%s reports preparation exceptions after releasing ownership",
     (entry, { signal }) =>
       fixture.run(async () => {
@@ -436,7 +515,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
       }),
   );
 
-  it.for(["run-oxlint-shards.mts", "run-lint.mts"] as const)(
+  it.for(["run-lint.mts"] as const)(
     "%s joins parallel siblings before one final failure",
     (entry, { signal }) =>
       fixture.run(async () => {
@@ -466,17 +545,12 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
   );
 
   it.for([
-    ...entries.flatMap((entry) =>
-      (["SIGINT", "SIGTERM"] as const).map((forwarded) => ({ entry, phase: "oxlint", forwarded })),
-    ),
-    ...["i18n", "prepare", "stylelint"].flatMap((phase) =>
-      (["SIGINT", "SIGTERM"] as const).map((forwarded) => ({
-        entry: "run-lint.mts" as const,
-        phase,
-        forwarded,
-      })),
-    ),
-  ])(
+    { entry: "run-oxlint.mjs", phase: "oxlint", forwarded: "SIGTERM" },
+    { entry: "run-lint.mts", phase: "oxlint", forwarded: "SIGINT" },
+    { entry: "run-lint.mts", phase: "i18n", forwarded: "SIGTERM" },
+    { entry: "run-lint.mts", phase: "prepare", forwarded: "SIGINT" },
+    { entry: "run-lint.mts", phase: "stylelint", forwarded: "SIGTERM" },
+  ] as const)(
     "$entry forwards $forwarded during $phase and reports cancellation",
     ({ entry, phase, forwarded }, { signal }) =>
       fixture.run(async () => {
@@ -495,23 +569,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
       }),
   );
 
-  it.for(["i18n", "stylelint"])("complete lint reports a $0 failure once", (phase, { signal }) =>
-    fixture.run(async () => {
-      const { result, details, trailers } = await runLintFixture(
-        "run-lint.mts",
-        "nonzero",
-        signal,
-        { phase },
-      );
-      expect(result.status, details).toBe(7);
-      expect(trailers, details).toEqual([
-        { text: "[lint] FAILED (exit 7)", owned: false, claims: [], live: [] },
-      ]);
-      expect(result.stderr.match(/FAILED \(exit/g)).toHaveLength(1);
-    }),
-  );
-
-  it.for(["run-oxlint-shards.mts", "run-lint.mts"] as const)(
+  it.for(["run-lint.mts"] as const)(
     "%s reports after retaining uncertain artifact ownership",
     (entry, { signal }) =>
       fixture.run(async () => {

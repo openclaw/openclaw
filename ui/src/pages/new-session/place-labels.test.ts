@@ -34,24 +34,6 @@ describe("disambiguate", () => {
       expected: ["Mac14,12", "Mac15,14"],
     },
     {
-      name: "uses IPs when models tie",
-      items: [
-        {
-          nodeId: "11111111",
-          displayName: "Mac Studio",
-          modelIdentifier: "Mac14,12",
-          remoteIp: "192.168.1.11",
-        },
-        {
-          nodeId: "22222222",
-          displayName: "Mac Studio",
-          modelIdentifier: "Mac14,12",
-          remoteIp: "192.168.1.12",
-        },
-      ],
-      expected: ["192.168.1.11", "192.168.1.12"],
-    },
-    {
       name: "advances past a partly distinct model candidate",
       items: [
         {

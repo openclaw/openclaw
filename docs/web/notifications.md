@@ -36,6 +36,8 @@ The Control UI asks for notification permission automatically the first time you
 
 Behind the scenes, enabling creates a push subscription in this browser and registers its endpoint and keys with the Gateway. The Gateway binds the subscription to the browser's paired device and, when operator roles are enabled, its authenticated user profile. The Gateway keeps browser subscriptions and its VAPID signing key in `state/openclaw.sqlite` — there is no `openclaw.json` key to edit. When the Control UI reconnects, existing subscriptions are reconciled with the Gateway automatically.
 
+Browser registration and notification settings reads do not wait for background notifications to load conversation access data. The Gateway still rechecks current access before sending each notification.
+
 Approval notifications use generic lock-screen text. Command, working-directory, prompt, and plugin details stay out of the push payload. Selecting the notification opens the authenticated `/approve/<approvalId>` page. Before each send, the Gateway rechecks the paired device's current approval scopes, operator role, user profile, and approval visibility. A revoked or downgraded browser stops receiving approval pushes without needing to unsubscribe first.
 
 ### Choose what reaches each device

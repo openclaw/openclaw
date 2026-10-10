@@ -4,8 +4,7 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { loadGitHubDetail } from "./detail.js";
-import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
+import { ControlUiGitHubError, formatControlUiGitHubPreviewError, isRecord } from "./github-api.js";
 import { loadGitHubImage, parseGitHubImageParams } from "./image.js";
 import { isControlUiGitHubPreview } from "./preview-contract.js";
 import { githubTargetUrl, parseGitHubLinkParams } from "./targets.js";
@@ -27,18 +26,21 @@ async function handleGitHubRequest(
     return;
   }
   try {
-    if (method === "github.preview" && parsed.target.kind !== "commit") {
-      // The entitled dispatcher retains this request's exact client. The host
-      // adapter alone selects/revalidates managed identities and caller lifetime.
-      const result = await dispatchGatewayMethod("controlUi.githubPreview", {
+    const result = await dispatchGatewayMethod(
+      method === "github.preview" ? "controlUi.githubPreview" : "controlUi.githubDetail",
+      {
         ...parsed.target,
         ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
         ...(parsed.refresh ? { refresh: true } : {}),
-      });
-      if (!result.ok) {
-        respond(false, result.payload, result.error, result.meta);
-        return;
-      }
+      },
+    );
+    if (!result.ok) {
+      respond(false, result.payload, result.error, result.meta);
+      return;
+    }
+    if (method === "github.preview" && parsed.target.kind !== "commit") {
+      // The entitled dispatcher retains this request's exact client. The host
+      // adapter alone selects/revalidates managed identities and caller lifetime.
       if (
         !isControlUiGitHubPreview(result.payload) ||
         githubTargetUrl(result.payload).toLowerCase() !==
@@ -53,15 +55,21 @@ async function handleGitHubRequest(
         result.meta,
       );
     } else {
-      // Documents never use ambient or selected credentials, including refreshes.
-      const document = await loadGitHubDetail(parsed.target, undefined, parsed.refresh);
-      if (document.url.toLowerCase() !== githubTargetUrl(parsed.target).toLowerCase()) {
+      const document = result.payload;
+      if (
+        !isRecord(document) ||
+        typeof document.title !== "string" ||
+        typeof document.body !== "string" ||
+        typeof document.url !== "string" ||
+        document.url.toLowerCase() !== githubTargetUrl(parsed.target).toLowerCase()
+      ) {
         throw new ControlUiGitHubError(502, "GitHub document returned a different resource");
       }
       respond(
         true,
         { ...document, url: parsed.url, filesExpanded: parsed.filesExpanded },
         undefined,
+        result.meta,
       );
     }
   } catch (error) {

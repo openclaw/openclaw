@@ -1,8 +1,7 @@
 import { html, nothing, svg, type PropertyValues } from "lit";
-import { property, state as reactiveState } from "lit/decorators.js";
+import { state as reactiveState } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type {
-  ControlUiSessionPullRequest,
   ControlUiSessionPullRequestCheck,
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequestCheckStep,
@@ -16,7 +15,7 @@ import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
-import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { ChatCiDisclosure } from "./chat-ci-disclosure.ts";
 
 registerChatCiEnglish();
 
@@ -25,47 +24,35 @@ const SKIPPED_ICON = strokeIcon(svg`<circle cx="12" cy="12" r="10" /><path d="M8
 const CHECK_ORDER = { failed: 0, running: 1, passed: 2, skipped: 3 } as const;
 type CheckState = ControlUiSessionPullRequestCheck["state"] | "queued";
 
+const STEP_CONCLUSIONS = new Map<string, CheckState>([
+  ["success", "passed"],
+  ["failure", "failed"],
+  ["timed_out", "failed"],
+  ["action_required", "failed"],
+  ["startup_failure", "failed"],
+  ["skipped", "skipped"],
+  ["neutral", "skipped"],
+  ["cancelled", "skipped"],
+]);
+
 function stepState(step: ControlUiSessionPullRequestCheckStep): CheckState {
   if (step.status === "in_progress") {
     return "running";
   }
-  switch (step.conclusion) {
-    case "success":
-      return "passed";
-    case "failure":
-    case "timed_out":
-    case "action_required":
-    case "startup_failure":
-      return "failed";
-    case "skipped":
-    case "neutral":
-    case "cancelled":
-      return "skipped";
-    default:
-      return "queued";
-  }
+  return STEP_CONCLUSIONS.get(step.conclusion ?? "") ?? "queued";
 }
 
-const STATE_LABEL_KEYS = {
-  passed: "chat.pullRequests.checksPassed",
-  failed: "chat.pullRequests.checksFailed",
-  running: "chat.pullRequests.checksRunning",
-  skipped: "chat.pullRequests.checksSkipped",
-  queued: "chat.pullRequests.checksQueued",
+const CHECK_PRESENTATION = {
+  passed: ["chat.pullRequests.checksPassed", icons.check],
+  failed: ["chat.pullRequests.checksFailed", icons.circleX],
+  running: ["chat.pullRequests.checksRunning", icons.loader],
+  skipped: ["chat.pullRequests.checksSkipped", SKIPPED_ICON],
+  queued: ["chat.pullRequests.checksQueued", icons.clock],
 } as const;
 
 function renderStatus(state: CheckState) {
-  const label = t(STATE_LABEL_KEYS[state]);
-  const icon =
-    state === "passed"
-      ? icons.check
-      : state === "failed"
-        ? icons.circleX
-        : state === "running"
-          ? icons.loader
-          : state === "skipped"
-            ? SKIPPED_ICON
-            : icons.clock;
+  const [labelKey, icon] = CHECK_PRESENTATION[state];
+  const label = t(labelKey);
   return html`<span
     class="chat-ci__status"
     data-state=${state}
@@ -85,16 +72,11 @@ function duration(item: { startedAt?: string; completedAt?: string }, running: b
 }
 
 /** Presentation-only details: the Gateway owns GitHub discovery, joins, and caching. */
-export class ChatCiDetailsElement extends OpenClawLightDomElement {
-  @property({ attribute: false }) pullRequest?: ControlUiSessionPullRequest;
-  @property({ attribute: false }) gateway?: ApplicationGateway;
-  @property({ attribute: false }) sessionKey = "";
-  @property({ type: Boolean }) presented = true;
+export class ChatCiDetailsElement extends ChatCiDisclosure {
   @reactiveState() private loading = false;
   @reactiveState() private result?: ControlUiSessionPullRequestCheckDetails;
   @reactiveState() private error: string | null = null;
 
-  private disclosure: HTMLDetailsElement | null = null;
   private stopGateway?: () => void;
   private boundGateway?: ApplicationGateway;
   private readonly connection = createGatewayConnectionLifecycle({
@@ -109,37 +91,17 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
   private readonly expandedJobs = new Map<number, boolean>();
   private expansionInitialized = false;
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.disclosure = this.closest<HTMLDetailsElement>(".chat-pr__checks");
-    this.disclosure?.addEventListener("toggle", this.handleToggle);
-    this.ownerDocument.addEventListener("visibilitychange", this.handleVisibility);
-    this.requestUpdate();
-  }
-
-  override disconnectedCallback(): void {
-    this.disclosure?.removeEventListener("toggle", this.handleToggle);
-    this.ownerDocument.removeEventListener("visibilitychange", this.handleVisibility);
+  protected override disconnect(): void {
     this.stopGateway?.();
     this.stopGateway = undefined;
     this.boundGateway = undefined;
     this.connection.transition({ client: null, phase: "stopped" });
     this.reset();
-    super.disconnectedCallback();
   }
 
   private targetKey(): string {
     const pr = this.pullRequest;
     return JSON.stringify([this.sessionKey, pr?.owner, pr?.repo, pr?.number, pr?.headSha]);
-  }
-
-  private get visible(): boolean {
-    return (
-      this.isConnected &&
-      this.presented &&
-      this.disclosure?.open === true &&
-      this.ownerDocument.visibilityState !== "hidden"
-    );
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
@@ -204,18 +166,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     this.expansionInitialized = false;
   }
 
-  private readonly handleToggle = (event: Event): void => {
-    if (event.target !== this.disclosure) {
-      return;
-    }
-    if (this.visible) {
-      void this.load();
-    } else {
-      this.cancelRequest();
-    }
-  };
-
-  private readonly handleVisibility = (): void => {
+  protected override readonly handleVisibility = (): void => {
     if (this.visible) {
       void this.load();
     } else {
@@ -441,13 +392,15 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
       .filter((check) => check.state !== "skipped")
       .toSorted((a, b) => CHECK_ORDER[a.state] - CHECK_ORDER[b.state]);
     const skipped = checks.filter((check) => check.state === "skipped");
+    const renderJobs = (items: ControlUiSessionPullRequestCheck[]) =>
+      repeat(
+        items,
+        (check) => check.id,
+        (check) => this.renderJob(check),
+      );
     return html`${this.renderNotice()}
       <div class="chat-ci__jobs" aria-busy=${this.loading ? "true" : "false"}>
-        ${repeat(
-          jobs,
-          (check) => check.id,
-          (check) => this.renderJob(check),
-        )}
+        ${renderJobs(jobs)}
         ${
           skipped.length
             ? html`<details class="chat-ci__skipped">
@@ -457,11 +410,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
                   >
                   <span class="chat-ci__chevron" aria-hidden="true">${icons.chevronDown}</span>
                 </summary>
-                ${repeat(
-                  skipped,
-                  (check) => check.id,
-                  (check) => this.renderJob(check),
-                )}
+                ${renderJobs(skipped)}
               </details>`
             : nothing
         }

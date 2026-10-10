@@ -256,6 +256,22 @@ export function currentCodexCatalogListDiagnostics(): CodexCatalogListDiagnostic
   return observation?.closed ? undefined : observation;
 }
 
+export function startCodexCatalogListTiming(
+  field: Extract<keyof ListFields, `${string}Ms`>,
+  counter?: "adoptionCalls" | "exclusionMarkCalls" | "controlPageCalls",
+): () => void {
+  const observation = currentCodexCatalogListDiagnostics();
+  const started = observation ? performance.now() : 0;
+  if (observation && counter) {
+    observation.fields[counter]++;
+  }
+  return () => {
+    if (observation && !observation.closed) {
+      observation.fields[field] = (observation.fields[field] ?? 0) + performance.now() - started;
+    }
+  };
+}
+
 /** One logical list scope survives admission pauses; finishing drops its captured context. */
 export function createCodexCatalogListScope() {
   const observation = start<ListFields>("list phases", {
@@ -317,19 +333,15 @@ export function startCodexCatalogControlRequestDiagnostics(
       const kept = (page.fields.controlWaitersV1 ??= []);
       page.fields.controlWaitersOmitted ??= 0;
       const tuple = controlWaiterTuple(controlCallOrdinal, summary);
-      if (!tuple) {
+      if (!tuple || kept.length === 4) {
         page.fields.controlWaitersOmitted = Math.min(
           Number.MAX_SAFE_INTEGER,
           page.fields.controlWaitersOmitted + 1,
         );
-        return;
-      }
-      if (kept.length === 4) {
+        if (!tuple) {
+          return;
+        }
         kept.splice(2, 1);
-        page.fields.controlWaitersOmitted = Math.min(
-          Number.MAX_SAFE_INTEGER,
-          page.fields.controlWaitersOmitted + 1,
-        );
       }
       kept.push(tuple);
     },

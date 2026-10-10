@@ -1,12 +1,12 @@
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import {
-  buildDiscordUnresolvedResults,
   filterDiscordGuilds,
+  parseDiscordAllowlistInput,
   resolveDiscordAllowlistToken,
 } from "./resolve-allowlist-common.js";
 
@@ -33,56 +33,15 @@ export type DiscordUserResolution = {
   note?: string;
 };
 
-function parseDiscordUserInput(raw: string): {
-  userId?: string;
-  guildId?: string;
-  guildName?: string;
-  userName?: string;
-} {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const mention = trimmed.match(/^<@!?(\d+)>$/);
-  if (mention) {
-    return { userId: mention[1] };
-  }
-  const prefixed = trimmed.match(/^(?:user:|discord:)?(\d+)$/i);
-  if (prefixed) {
-    return { userId: prefixed[1] };
-  }
-  const split = trimmed.includes("/") ? trimmed.split("/") : trimmed.split("#");
-  if (split.length >= 2) {
-    const guild = split[0]?.trim();
-    const user = split.slice(1).join("#").trim();
-    if (guild && /^\d+$/.test(guild)) {
-      return { guildId: guild, userName: user };
-    }
-    return { guildName: guild, userName: user };
-  }
-  return { userName: trimmed.replace(/^@/, "") };
-}
-
 function scoreDiscordMember(member: DiscordMember, query: string): number {
-  const q = normalizeLowercaseStringOrEmpty(query);
+  const q = query.toLowerCase();
   const user = member.user;
-  const candidates = [user.username, user.global_name, member.nick ?? undefined]
-    .map((value) => {
-      const normalized = normalizeOptionalString(value);
-      return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
-    })
-    .filter(Boolean) as string[];
-  let score = 0;
-  if (candidates.some((value) => value === q)) {
-    score += 3;
-  }
-  if (candidates.some((value) => value?.includes(q))) {
-    score += 1;
-  }
-  if (!user.bot) {
-    score += 1;
-  }
-  return score;
+  const candidates = [user.username, user.global_name, member.nick]
+    .map(normalizeOptionalLowercaseString)
+    .filter((value) => value !== undefined);
+  const exactMatchScore = candidates.includes(q) ? 3 : 0;
+  const partialMatchScore = candidates.some((value) => value.includes(q)) ? 1 : 0;
+  return exactMatchScore + partialMatchScore + (user.bot ? 0 : 1);
 }
 
 export async function resolveDiscordUserAllowlist(params: {
@@ -92,7 +51,7 @@ export async function resolveDiscordUserAllowlist(params: {
 }): Promise<DiscordUserResolution[]> {
   const token = resolveDiscordAllowlistToken(params.token);
   if (!token) {
-    return buildDiscordUnresolvedResults(params.entries, (input) => ({
+    return params.entries.map((input) => ({
       input,
       resolved: false,
     }));
@@ -102,30 +61,26 @@ export async function resolveDiscordUserAllowlist(params: {
   // Lazy-load guilds: only fetch when an entry actually needs username search.
   // This prevents listGuilds() failures (permissions, network) from blocking
   // resolution of plain user-id entries that don't need guild data at all.
-  let guilds: DiscordGuildSummary[] | null = null;
-  const getGuilds = async (): Promise<DiscordGuildSummary[]> => {
-    if (!guilds) {
-      guilds = await listGuilds(token, fetcher, {
-        timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
-      });
-    }
-    return guilds;
-  };
+  let guilds: Promise<DiscordGuildSummary[]> | undefined;
+  const getGuilds = () =>
+    (guilds ??= listGuilds(token, fetcher, {
+      timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
+    }));
 
   const results: DiscordUserResolution[] = [];
 
   for (const input of params.entries) {
-    const parsed = parseDiscordUserInput(input);
-    if (parsed.userId) {
+    const parsed = parseDiscordAllowlistInput(input, "user");
+    if (parsed.id) {
       results.push({
         input,
         resolved: true,
-        id: parsed.userId,
+        id: parsed.id,
       });
       continue;
     }
 
-    const query = parsed.userName?.trim();
+    const query = parsed.name?.trim();
     if (!query) {
       results.push({ input, resolved: false });
       continue;
@@ -134,7 +89,7 @@ export async function resolveDiscordUserAllowlist(params: {
     const allGuilds = await getGuilds();
     const guildList = filterDiscordGuilds(allGuilds, {
       guildId: parsed.guildId,
-      guildName: parsed.guildName?.trim(),
+      guildName: parsed.guild,
     });
 
     let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;

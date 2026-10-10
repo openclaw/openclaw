@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
@@ -9,22 +10,13 @@ import {
   resolveCodexSessionBinding,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
-  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
-type CodexConversationControlTarget = {
-  identity: CodexAppServerBindingIdentity;
-  agentId: string;
-  agentDir: string;
-  requestedAuthProfileId?: string;
-};
-
-export async function resolveControlTarget(
-  ctx: PluginCommandContext,
-): Promise<CodexConversationControlTarget | undefined> {
+export async function resolveControlTarget(ctx: PluginCommandContext) {
   const binding = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(binding);
   const scope = resolveCodexConversationControlScope(ctx);
@@ -55,21 +47,10 @@ type CommandAppServerScope = Pick<
   "assertCurrent" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions" | "storePath"
 > & { agentId: string; agentDir: string };
 
-export type PreparedCodexCommandAuthority = {
-  target: CodexConversationControlTarget | undefined;
-  binding: CodexAppServerThreadBinding | undefined;
-  currentSessionBinding: CodexAppServerThreadBinding | undefined;
-  sessionId: string | undefined;
-  sessionKey: string | undefined;
-  storePath: string | undefined;
-  assertHostCurrent: () => void;
-  assertCurrent: () => void;
-};
-
 export async function resolvePreparedCodexCommandAuthority(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-): Promise<PreparedCodexCommandAuthority> {
+) {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const sessionId = ctx.sessionId;
@@ -97,7 +78,9 @@ export async function resolvePreparedCodexCommandAuthority(
         storePath,
       })
     : undefined;
-  const assertHostCurrent = currentSession?.assertCurrent ?? (() => {});
+  // Direct checks stay synchronous; entry writes retain the authority's prepared predicates.
+  const assertHostCurrent =
+    currentSession?.authority.assertLegacyCurrent ?? composeSessionEntryCommitGuards([]);
   const resolvedTarget =
     target && (!sessionIdentity || !isDeepStrictEqual(target.identity, sessionIdentity))
       ? await resolveCodexSessionBinding({
@@ -109,13 +92,13 @@ export async function resolvePreparedCodexCommandAuthority(
         })
       : currentSession;
   const binding = resolvedTarget?.binding;
-  const assertCurrent = () => {
-    assertHostCurrent();
+  const assertCurrent = composeSessionEntryCommitGuards([assertHostCurrent], (assertSource) => {
+    assertSource();
     if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
       throw new Error("Codex command binding changed before dispatch");
     }
-    assertHostCurrent();
-  };
+    assertSource();
+  });
   assertCurrent();
   return {
     target,
@@ -126,6 +109,17 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
+    assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertSource();
+    }),
+    assertHostMutationCurrent: composeSessionEntryCommitGuards(
+      [assertHostCurrent],
+      (assertSource) => {
+        assertCodexHostOwnerCurrent(ctx);
+        assertSource();
+      },
+    ),
   };
 }
 

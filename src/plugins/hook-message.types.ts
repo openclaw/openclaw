@@ -121,36 +121,39 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   pluginBinding?: PluginConversationBinding;
 };
 
-export type PluginHookInboundClaimEvent = {
-  content: string;
+export type PluginHookInboundClaimEvent = PluginHookInboundMessageFacts & {
   body?: string;
   bodyForAgent?: string;
   transcript?: string;
-  timestamp?: number;
   channel: string;
   accountId?: string;
   conversationId?: string;
   parentConversationId?: string;
-  senderId?: string;
   senderName?: string;
   senderUsername?: string;
+  isGroup: boolean;
+  commandAuthorized?: boolean;
+  senderIsOwner?: boolean;
+  wasMentioned?: boolean;
+};
+
+type PluginHookInboundMessageFacts = {
+  content: string;
+  timestamp?: number;
+  threadId?: string | number;
+  messageId?: string;
+  senderId?: string;
   replyToId?: string;
   replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
   replyToIsQuote?: boolean;
-  threadId?: string | number;
-  messageId?: string;
   sessionKey?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;
   traceId?: string;
   spanId?: string;
   parentSpanId?: string;
-  isGroup: boolean;
-  commandAuthorized?: boolean;
-  senderIsOwner?: boolean;
-  wasMentioned?: boolean;
   location?: PluginHookLocation;
   providerUpdate?: PluginHookProviderUpdate;
   /** Staged, locally usable attachments in stable source order. */
@@ -162,33 +165,8 @@ export type PluginHookInboundClaimEvent = {
   metadata?: PluginHookInboundMessageMetadata;
 };
 
-export type PluginHookMessageReceivedEvent = {
+export type PluginHookMessageReceivedEvent = PluginHookInboundMessageFacts & {
   from: string;
-  content: string;
-  timestamp?: number;
-  threadId?: string | number;
-  messageId?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-  sessionKey?: string;
-  runId?: string;
-  trace?: DiagnosticTraceContext;
-  traceId?: string;
-  spanId?: string;
-  parentSpanId?: string;
-  location?: PluginHookLocation;
-  providerUpdate?: PluginHookProviderUpdate;
-  /** Staged, locally usable attachments in stable source order. */
-  media?: PluginHookMediaFact[];
-  /** Original attachment facts when local staging has not completed yet. */
-  originalMedia?: PluginHookMediaFact[];
-  /** True when `originalMedia` is present but `media` is intentionally withheld pending staging. */
-  mediaStagingPending?: boolean;
-  metadata?: PluginHookInboundMessageMetadata;
 };
 
 export type PluginHookMessageSendingEvent = {

@@ -1,6 +1,6 @@
-// Slack plugin module owns durable Agent View mode state.
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
+import { writeLruMapEntry } from "./lru-map-cache.js";
 
 const SLACK_AGENT_VIEW_STATE_NAMESPACE = "agent-view-workspaces";
 const SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE = "agent-view-threads";
@@ -68,16 +68,22 @@ export function createSlackAgentViewState(params: {
     SLACK_AGENT_VIEW_THREAD_STATE_MAX_ENTRIES,
   );
 
-  const workspaceStateKey = () => {
+  const resolveStateKey = (thread?: [channelId: string, threadTs: string]) => {
     const apiAppId = params.getApiAppId();
     return apiAppId
-      ? JSON.stringify(["workspace", params.accountId, params.getTeamId(), apiAppId])
+      ? JSON.stringify([
+          thread ? "thread" : "workspace",
+          params.accountId,
+          params.getTeamId(),
+          apiAppId,
+          ...(thread ?? []),
+        ])
       : undefined;
   };
   const record = async () => {
     enabled = true;
     loaded = true;
-    const stateKey = workspaceStateKey();
+    const stateKey = resolveStateKey();
     if (persisted || !stateKey) {
       return;
     }
@@ -103,7 +109,7 @@ export function createSlackAgentViewState(params: {
     if (loaded) {
       return false;
     }
-    const stateKey = workspaceStateKey();
+    const stateKey = resolveStateKey();
     if (!stateKey) {
       // No app id yet: keep the durable lookup pending until it is learned.
       return false;
@@ -126,35 +132,14 @@ export function createSlackAgentViewState(params: {
 
   const managedThreadKey = (channelId: string, threadTs: string) =>
     JSON.stringify([channelId, threadTs]);
-  const managedThreadStateKey = (channelId: string, threadTs: string) => {
-    const apiAppId = params.getApiAppId();
-    return apiAppId
-      ? JSON.stringify([
-          "thread",
-          params.accountId,
-          params.getTeamId(),
-          apiAppId,
-          channelId,
-          threadTs,
-        ])
-      : undefined;
-  };
   const rememberManagedThread = (key: string) => {
-    managedThreads.delete(key);
-    managedThreads.set(key, true);
-    if (managedThreads.size <= SLACK_MANAGED_THREAD_CACHE_MAX_ENTRIES) {
-      return;
-    }
-    const oldestKey = managedThreads.keys().next().value;
-    if (oldestKey !== undefined) {
-      managedThreads.delete(oldestKey);
-    }
+    writeLruMapEntry(managedThreads, key, true, SLACK_MANAGED_THREAD_CACHE_MAX_ENTRIES);
   };
 
   const recordManagedThread = async (channelId: string, threadTs: string) => {
     const key = managedThreadKey(channelId, threadTs);
     rememberManagedThread(key);
-    const stateKey = managedThreadStateKey(channelId, threadTs);
+    const stateKey = resolveStateKey([channelId, threadTs]);
     const openedStore = stateKey ? openThreadStore() : undefined;
     if (!openedStore || !stateKey) {
       return;
@@ -174,7 +159,7 @@ export function createSlackAgentViewState(params: {
     if (managedThreads.has(key)) {
       return true;
     }
-    const stateKey = managedThreadStateKey(channelId, threadTs);
+    const stateKey = resolveStateKey([channelId, threadTs]);
     const openedStore = stateKey ? openThreadStore() : undefined;
     if (!openedStore || !stateKey) {
       return false;

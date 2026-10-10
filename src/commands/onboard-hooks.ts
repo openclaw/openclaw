@@ -1,28 +1,10 @@
 /** Onboarding defaults for workspace hooks. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const DEFAULT_ONBOARDING_INTERNAL_HOOKS = ["session-memory"] as const;
-
 export function enableDefaultOnboardingInternalHooks(cfg: OpenClawConfig): OpenClawConfig {
   const existingInternal = cfg.hooks?.internal;
-  if (existingInternal?.enabled === false) {
-    return cfg;
-  }
-
-  let changed = false;
-  const entries = { ...existingInternal?.entries };
-  for (const hookName of DEFAULT_ONBOARDING_INTERNAL_HOOKS) {
-    const entry = entries[hookName];
-    if (entry?.enabled === false) {
-      continue;
-    }
-    if (entry?.enabled !== true) {
-      entries[hookName] = { ...entry, enabled: true };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
+  const entry = existingInternal?.entries?.["session-memory"];
+  if (existingInternal?.enabled === false || entry?.enabled === false || entry?.enabled === true) {
     return cfg;
   }
 
@@ -32,7 +14,10 @@ export function enableDefaultOnboardingInternalHooks(cfg: OpenClawConfig): OpenC
       ...cfg.hooks,
       internal: {
         ...existingInternal,
-        entries,
+        entries: {
+          ...existingInternal?.entries,
+          "session-memory": { ...entry, enabled: true },
+        },
       },
     },
   };

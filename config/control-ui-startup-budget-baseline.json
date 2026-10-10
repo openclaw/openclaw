@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 363407,
-  "reason": "Maintainer-approved measured refresh for #152240: the reviewed tooltip repair measured 363407 B startup gzip with Vite 8.3.0/Pako 3.0.1 on Node 26.8.2; a subsequent canonical build measured 363421 B, within the existing 64 B variance allowance. Pristine main 95b8e0335450 measured 363276 B; repaired raw startup JavaScript is 825 B smaller. The 355 KiB committed-baseline cap and existing 512 B growth / 64 B variance allowances are unchanged.",
-  "updatedAt": "2026-09-19"
+  "startupJsGzipBytes": 372878,
+  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
+  "updatedAt": "2026-10-02"
 }

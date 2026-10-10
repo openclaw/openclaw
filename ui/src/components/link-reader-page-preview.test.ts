@@ -15,7 +15,8 @@ function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const target = resolveHoverPreviewTarget(anchor, owner);
   return target && !target.reader ? new URL(target.href) : null;
 }
-import { prefetchLinkReader } from "./link-reader-hovercard-registration.ts";
+import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
@@ -90,6 +91,60 @@ afterEach(() => {
 });
 
 describe("generic link hovercards", () => {
+  it("keeps a rendered GitHub sign-in link ordinary while genuine issue and PR links preview", async () => {
+    const view = fixture();
+    const login = "https://github.com/login?return_to=%2Facme%2Fproject%2Fpull%2F42";
+    view.pane.innerHTML = toSanitizedMarkdownHtml(
+      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43)`,
+    );
+    const [signIn, pull, issue] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
+    await hover(signIn!);
+    signIn!.focus();
+    signIn!.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await prefetchLinkReader(signIn!, new AbortController().signal);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(document.querySelector(".link-hovercard, .link-reader-hovercard")).toBeNull();
+    expect(signIn!.href).toBe(login);
+    expect(signIn!.target).toBe("_blank");
+    expect(signIn!.textContent).toBe("Sign in");
+    for (const anchor of [pull!, issue!]) {
+      view.request.mockResolvedValue({
+        url: anchor.href,
+        title: "Real resource",
+        subtitle: "acme/project",
+        badge: { label: "Open", tone: "positive" },
+      });
+      await hover(anchor);
+      expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain(
+        "Real resource",
+      );
+      expect(view.request).toHaveBeenLastCalledWith(
+        "forge.preview",
+        { url: anchor.href },
+        { signal: expect.any(AbortSignal) },
+      );
+    }
+  });
+
+  it.each([
+    "https://github.com/",
+    "https://github.com/login/device",
+    "https://github.com/%6cogin/device",
+    "https://github.com/acme/project/settings",
+    "https://github.com/acme/project.git",
+    "https://github.com/acme%2fother/project",
+    "https://github.com:8443/acme/project",
+    "https://www.github.com/acme/project",
+  ])("never substitutes a public-page card for unsupported GitHub URL %s", async (href) => {
+    const view = fixture();
+    view.anchor.href = href;
+    await hover(view.anchor);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(card()).toBeNull();
+    expect(view.anchor.href).toBe(href);
+  });
+
   it("leaves the real wizard sign-in action external without fetching its authorization URL", async () => {
     const view = fixture();
     const authorizationUrl = "https://provider.example/authorize?state=synthetic-state";
@@ -121,26 +176,33 @@ describe("generic link hovercards", () => {
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
   });
-  it("does not prefetch ordinary links or consume a detail-only plugin claim", async () => {
-    const view = fixture();
-    await prefetchLinkReader(view.anchor, new AbortController().signal);
-    expect(view.request).not.toHaveBeenCalled();
-    view.provider.claimedReaders = [
-      {
-        pluginId: "forge",
-        id: "commits",
-        label: "Commits",
-        linkReader: {
-          hosts: ["example.com"],
-          pathPattern: "^/guide$",
-          detailMethod: "forge.detail",
+  it.each([
+    [url, "example.com", "^/guide$"],
+    ["https://github.com/openclaw/openclaw", "github.com", "^/openclaw/openclaw$"],
+  ])(
+    "keeps the detail-only plugin claim authoritative without prefetching %s",
+    async (href, host, pathPattern) => {
+      const view = fixture();
+      view.anchor.href = href;
+      await prefetchLinkReader(view.anchor, new AbortController().signal);
+      expect(view.request).not.toHaveBeenCalled();
+      view.provider.claimedReaders = [
+        {
+          pluginId: "forge",
+          id: "commits",
+          label: "Commits",
+          linkReader: {
+            hosts: [host],
+            pathPattern,
+            detailMethod: "forge.detail",
+          },
         },
-      },
-    ];
-    await hover(view.anchor);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-  });
+      ];
+      await hover(view.anchor);
+      expect(view.request).not.toHaveBeenCalled();
+      expect(card()).toBeNull();
+    },
+  );
 
   it("does not unlock plugin loading hints after a public page succeeds", async () => {
     const view = fixture();
@@ -156,15 +218,14 @@ describe("generic link hovercards", () => {
     await vi.advanceTimersByTimeAsync(1);
   });
 
-  it("retires a visible page when its anchor becomes a file or plugin-owned link", async () => {
-    const view = fixture();
-    await hover(view.anchor);
-    view.anchor.setAttribute("data-file-path", "/guide");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(card()).toBeNull();
-  });
   it("opens after intent, shares metadata, preserves href and crosses the pointer gap", async () => {
     const view = fixture();
+    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    view.anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(card()).toBeNull();
+    expect(view.anchor.hasAttribute("aria-haspopup")).toBe(false);
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
     expect(card()?.textContent).toContain("A practical introduction");
@@ -183,17 +244,7 @@ describe("generic link hovercards", () => {
     expect(view.request).toHaveBeenCalledOnce();
   });
 
-  it("cancels a short hover before fetching", async () => {
-    const view = fixture();
-    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
-    view.anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-    expect(view.anchor.hasAttribute("aria-haspopup")).toBe(false);
-  });
-
-  it.each(["config", "client", "generation", "scope", "href", "removed", "hidden"])(
+  it.each(["config", "client", "generation", "scope", "href", "removed", "hidden", "file"])(
     "retires pending metadata when %s changes",
     async (change) => {
       const view = fixture();
@@ -222,7 +273,12 @@ describe("generic link hovercards", () => {
       if (change === "hidden") {
         view.pane.hidden = true;
       }
-      view.notify();
+      if (change === "file") {
+        view.anchor.setAttribute("data-file-path", "/guide");
+      }
+      if (change !== "file") {
+        view.notify();
+      }
       pending.resolve({ title: "Obsolete" });
       await vi.advanceTimersByTimeAsync(1);
       expect(card()).toBeNull();
@@ -298,32 +354,48 @@ describe("generic link hovercards", () => {
   });
 
   it.each([
-    "https://github.com/openclaw/openclaw/pull/42",
-    "https://github.com/openclaw/openclaw/issues/42",
-    "/chat/main",
-    "#section",
-    "mailto:hello@example.com",
-    "file:///guide",
-    "https://user:pass@example.com/",
-  ])("keeps specialized or non-web URL %s with its owner", (href) => {
-    const { anchor } = fixture();
+    ["https://github.com/openclaw/openclaw/pull/42", false],
+    ["https://github.com/openclaw/openclaw/issues/42", false],
+    ["/chat/main", false],
+    ["#section", false],
+    ["mailto:hello@example.com", false],
+    ["file:///guide", false],
+    ["https://user:pass@example.com/", false],
+    [url, true],
+  ] as const)("keeps specialized links with their owner: %s (tooltip: %s)", (href, tooltip) => {
+    const { anchor, pane } = fixture();
     anchor.href = href;
+    if (tooltip) {
+      expect(linkHovercardUrl(anchor)?.hostname).toBe("example.com");
+      pane.appendChild(document.createElement("openclaw-tooltip")).append(anchor);
+    }
     expect(linkHovercardUrl(anchor)).toBeNull();
   });
-  it.each(["download", "data-file-path", "data-session-href", "data-link-reader-external"])(
-    "excludes %s anchors",
-    (attribute) => {
-      const { anchor } = fixture();
-      anchor.setAttribute(attribute, "guide");
-      expect(linkHovercardUrl(anchor)).toBeNull();
-    },
-  );
-  it("allows ordinary GitHub repository links but not explicit rich tooltip owners", () => {
-    const { anchor, pane } = fixture();
-    anchor.href = "https://github.com/openclaw/openclaw";
-    expect(linkHovercardUrl(anchor)?.hostname).toBe("github.com");
-    const tooltip = pane.appendChild(document.createElement("openclaw-tooltip"));
-    tooltip.append(anchor);
-    expect(linkHovercardUrl(anchor)).toBeNull();
+  it.each([
+    "https://github.com/openclaw/openclaw",
+    "https://github.com/openclaw/clawsweeper/?tab=readme-ov-file#readme",
+    "https://github.com/%6fpenclaw/project.name",
+    "https://github.com/education/students",
+  ])("shows a public GitHub social card on intent without prefetching %s", async (href) => {
+    const { anchor, request } = fixture();
+    anchor.href = href;
+    const imageDataUrl = "data:image/png;base64,AAAA";
+    request.mockResolvedValue({
+      title: "OpenClaw repository",
+      description: "Your own personal assistant.",
+      imageDataUrl,
+    });
+    await prefetchLinkReader(anchor, new AbortController().signal);
+    expect(request).not.toHaveBeenCalled();
+    await hover(anchor);
+    expect(card()?.textContent).toContain("OpenClaw repository");
+    expect(card()?.textContent).toContain("Your own personal assistant.");
+    expect(card()?.querySelector(".link-hovercard__image")?.getAttribute("src")).toBe(imageDataUrl);
+    expect(card()?.querySelector("a")?.href).toBe(href);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "controlUi.linkPreview",
+      { url: href.split("#", 1)[0] },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 });

@@ -1,16 +1,13 @@
-import { normalizeMSTeamsConversationId } from "../inbound.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsReactionEmoji } from "../reaction-types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
+import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 type ReactionDirection = "added" | "removed";
 
-/**
- * Create a handler for MS Teams reaction activities (reactionsAdded / reactionsRemoved).
- * The returned function accepts a turn context and a direction string.
- */
 export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
   const { cfg, log } = deps;
   const core = getMSTeamsRuntime();
@@ -22,7 +19,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
   ): Promise<void> {
     const activity = context.activity;
 
-    // Reactions are carried in reactionsAdded / reactionsRemoved on the activity.
     const rawReactions =
       direction === "added" ? activity.reactionsAdded : activity.reactionsRemoved;
     const reactions: Array<{ type?: string }> = Array.isArray(rawReactions) ? rawReactions : [];
@@ -77,7 +73,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
-    // Resolve the agent route for this conversation/sender.
     // Extract teamId for team-scoped routing bindings (channel/group reactions).
     const teamId = isDirectMessage ? undefined : activity.channelData?.team?.id;
     const route = core.channel.routing.resolveAgentRoute({
@@ -88,6 +83,11 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
         id: isDirectMessage ? senderId : conversationId,
       },
       ...(teamId ? { teamId } : {}),
+    });
+    const sessionKey = resolveMSTeamsRouteSessionKey({
+      baseSessionKey: route.sessionKey,
+      isChannel,
+      conversationMessageId: extractMSTeamsConversationMessageId(rawConversationId),
     });
 
     // The replyToId points to the message that was reacted to.
@@ -110,7 +110,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       });
 
       core.system.enqueueSystemEvent(label, {
-        sessionKey: route.sessionKey,
+        sessionKey,
         contextKey: `msteams:reaction:${conversationId}:${targetMessageId}:${senderId}:${reactionType}:${direction}`,
       });
     }

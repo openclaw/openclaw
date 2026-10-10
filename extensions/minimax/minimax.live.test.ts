@@ -1,4 +1,4 @@
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 // Minimax tests cover minimax plugin behavior.
 import {
   registerProviderPlugin,

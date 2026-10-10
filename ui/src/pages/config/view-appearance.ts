@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
@@ -7,7 +7,9 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type TextScaleStop,
 } from "../../app/settings.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -28,6 +30,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { renderSessionSources } from "./session-sources.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 import {
   renderChatPreferencesSection,
   renderLanguageSection,
@@ -35,6 +38,7 @@ import {
   serverUiPrefProvenanceHint,
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
+import { renderTabIconSection } from "./view-tab-icon.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
@@ -61,7 +65,7 @@ const ACCENT_PRESETS = [
 /* Builtin cards preview their real palette (chip colors live in config.css,
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
-   back to the spark icon otherwise. */
+   back to the download icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
     return html`<span class="settings-theme-card__icon" aria-hidden="true"
@@ -84,20 +88,12 @@ function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customTh
 }
 
 function focusCustomThemeImportInput() {
-  const schedule =
-    typeof requestAnimationFrame === "function"
-      ? requestAnimationFrame
-      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
-  schedule(() => {
-    const input = globalThis.document?.querySelector<HTMLInputElement>(
-      "[data-custom-theme-import-input]",
-    );
+  requestAnimationFrame(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
     if (!input) {
       return;
     }
-    if (typeof input.scrollIntoView === "function") {
-      input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
-    }
+    input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
     input.focus();
     input.select();
   });
@@ -112,9 +108,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
   }));
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.appearance.typography")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.appearance.typography"))}
       <div class="settings-group">
         ${(["ui", "chat"] as const).map((slot) => {
           const isUi = slot === "ui";
@@ -151,10 +145,47 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
             }),
           });
         })}
+        ${renderSettingsRow({
+          title: t("configView.appearance.fonts.terminal"),
+          description: html`${t("configView.appearance.fonts.terminalHint")}<br />${t("configView.appearance.fonts.terminalLigatures")}`,
+          stacked: true,
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-terminal-font
+              aria-label=${t("configView.appearance.fonts.terminal")}
+              placeholder=${t("configView.appearance.fonts.terminalDefault")}
+              maxlength="100"
+              spellcheck="false"
+              .value=${props.terminalFontFamily ?? ""}
+              @input=${(event: Event & { currentTarget: HTMLInputElement }) => event.currentTarget.setCustomValidity("")}
+              @change=${(event: Event & { currentTarget: HTMLInputElement }) => {
+                const input = event.currentTarget;
+                const family = normalizeTerminalFontFamily(input.value);
+                if (input.value.trim() && !family) {
+                  input.setCustomValidity(t("configView.appearance.fonts.terminalInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = family ?? "";
+                props.setTerminalFontFamily(family);
+              }}
+            />
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${!props.terminalFontFamily}
+              @click=${() => props.setTerminalFontFamily(undefined)}
+            >
+              ${t("configView.appearance.fonts.terminalReset")}
+            </button>
+          `,
+        })}
         <div class="settings-row settings-row--stacked">
           <div class="settings-typography-preview">
             <div class="settings-typography-preview__caption">
-              ${t("configView.appearance.fonts.previewCaption")}
+              ${t("configView.appearance.fonts.brandedPreviewCaption", { brand: currentThemeBranding().brandName })}
             </div>
             <p class="settings-typography-preview__prose">
               ${t("configView.appearance.fonts.previewProse")}
@@ -169,10 +200,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
   `;
 }
 
-export function renderAppearanceSection(
-  props: ConfigProps,
-  inputs: { customThemeImport: TemplateResult; chatMessageWidth: TemplateResult },
-) {
+export function renderAppearanceSection(props: ConfigProps) {
   const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
   if (
@@ -259,12 +287,10 @@ export function renderAppearanceSection(
             : t("configView.appearance.customAccent"),
         });
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.appearance.theme"))}
         <p class="settings-section__desc">
           ${t("configView.appearance.chooseTheme")}
           ${renderSettingsDefaultDescription(themeDefault, props.themeOverridden)}
@@ -303,7 +329,7 @@ export function renderAppearanceSection(
                     }
                     title=${opt.description}
                     data-theme-id=${opt.id}
-                    @click=${(e: Event) => {
+                    @click=${() => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
                         props.onOpenCustomThemeImport?.();
                         return;
@@ -312,10 +338,7 @@ export function renderAppearanceSection(
                         opt.id !== props.theme ||
                         (opt.id === props.themeResetValue && props.themeOverridden)
                       ) {
-                        const context: ThemeTransitionContext = {
-                          element: (e.currentTarget as HTMLElement) ?? undefined,
-                        };
-                        props.setTheme(opt.id, context);
+                        props.setTheme(opt.id);
                       }
                     }}
                   >
@@ -342,10 +365,10 @@ export function renderAppearanceSection(
                 { value: "dark", label: t("common.dark") },
               ],
               ariaLabel: t("common.colorMode"),
-              onChange: (mode, element) => props.setThemeMode(mode, { element }),
-              onReselect: (mode, element) => {
+              onChange: (mode) => props.setThemeMode(mode),
+              onReselect: (mode) => {
                 if (props.themeModeOverridden && mode === props.themeModeResetValue) {
-                  props.setThemeMode(mode, { element });
+                  props.setThemeMode(mode);
                 }
               },
             }),
@@ -375,7 +398,19 @@ export function renderAppearanceSection(
                         <span class="settings-theme-import__label"
                           >${t("configView.appearance.themeLink")}</span
                         >
-                        ${inputs.customThemeImport}
+                        <input
+                          class="settings-theme-import__input"
+                          data-custom-theme-import-input
+                          type="text"
+                          spellcheck="false"
+                          placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+                          .value=${props.customThemeImportUrl}
+                          @input=${(event: Event) =>
+                            props.onCustomThemeImportUrlChange(
+                              // SAFETY: The listener is bound directly to this input.
+                              (event.currentTarget as HTMLInputElement).value,
+                            )}
+                        />
                       </label>
                       <div class="settings-theme-import__actions">
                         <button
@@ -444,9 +479,7 @@ export function renderAppearanceSection(
       </section>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.appearance.accent"))}
         <p class="settings-section__desc">${t("configView.appearance.accentHint")}</p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
@@ -530,12 +563,10 @@ export function renderAppearanceSection(
         </p>
       </section>
 
-      ${renderTypography(props, presentedTheme)}
+      ${renderTypography(props, presentedTheme)} ${renderTabIconSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.appearance.textSize")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.appearance.textSize"))}
         <p class="settings-section__desc">
           ${renderSettingsDefaultDescription(
             `${UI_APPEARANCE_DEFAULTS.textScale}%`,
@@ -567,12 +598,10 @@ export function renderAppearanceSection(
       </section>
 
       ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
-      ${renderChatPreferencesSection(props, inputs.chatMessageWidth)} ${renderSessionSources(props)}
+      ${renderChatPreferencesSection(props)} ${renderSessionSources(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.connection.title")}</h2>
-        </div>
+        ${renderSettingsSectionHeader(t("configView.connection.title"))}
         <div class="settings-group">
           ${renderSettingsRow({
             title: t("configView.connection.gateway"),

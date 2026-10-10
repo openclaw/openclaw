@@ -848,13 +848,11 @@ suite.define(() => {
         "chat.startup",
         "config.get",
         "sessions.list",
-        "tasks.list",
         "workboard.cards.list",
       ],
       methodResponses: {
         "board.get": boardSnapshot,
         "config.get": workboardConfigSnapshot(),
-        "tasks.list": { nextCursor: null, tasks: [] },
         "workboard.cards.list": workboardCardsListResponse([card]),
       },
     });

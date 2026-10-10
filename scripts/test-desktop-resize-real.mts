@@ -5,6 +5,8 @@ import net from "node:net";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { WORKER_PROTOCOL_FEATURES } from "../packages/gateway-protocol/src/schema/worker-admission.ts";
+import { createWorkerBundleProducer } from "../src/gateway/worker-environments/bundle.ts";
 import { getFreePort } from "../src/test-utils/ports.ts";
 import { assertPrebuiltUiE2eRuntime } from "../test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
 import { desktopReadinessLines } from "./lib/desktop-readiness-proof.mts";
@@ -526,7 +528,17 @@ async function main() {
     await waitFor(() => tcpReady(sshPort));
     sshd.pid = Number((await readFile(pidFile, "utf8")).trim());
     assert(Number.isSafeInteger(sshd.pid) && sshd.pid > 1);
+    const bundle = await createWorkerBundleProducer({
+      packageRoot: root,
+      cacheDir: path.join(privateRoot, "worker-bundles"),
+      protocolFeatures: WORKER_PROTOCOL_FEATURES,
+    }).prepare();
     const fixture = {
+      bootstrapReceipt: {
+        bundleHash: bundle.bundleHash,
+        openclawVersion: bundle.openclawVersion,
+        protocolFeatures: [...bundle.protocolFeatures],
+      },
       ssh: {
         host: "127.0.0.1",
         port: sshPort,

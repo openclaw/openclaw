@@ -1,25 +1,15 @@
-// Shared mobile pairing setup state for app-level entry points.
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  type GatewayProtocolRequestOptions,
-} from "@openclaw/gateway-client/browser";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   DevicePairSetupCodeParams,
   DevicePairSetupCodeResult,
   DevicePairSetupCompletedEvent,
-  DevicePairSetupDeliveryUncertainEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "./format-error.ts";
 
-type GatewayRequestClient = {
-  request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: GatewayProtocolRequestOptions,
-  ): Promise<T>;
-};
+type GatewayRequestClient = Pick<GatewayBrowserClient, "request">;
 
 export type DevicePairSetup = DevicePairSetupCodeResult & {
   setupId: string;
@@ -31,38 +21,19 @@ export type DevicePairSetupAccess = "full" | "limited" | "node";
 type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" | "access"> & {
   deviceName?: string;
 };
-type DevicePairSetupDeliveryUncertain = Pick<
-  DevicePairSetupDeliveryUncertainEvent,
-  "setupId" | "access"
->;
+type DevicePairSetupDeliveryUncertain = Pick<DevicePairSetupCompletion, "setupId" | "access">;
 
-export type DevicePairSetupLifecycle =
-  | { phase: "selection"; access: DevicePairSetupAccess }
-  | { phase: "loading"; access: DevicePairSetupAccess }
-  | { phase: "waiting"; access: DevicePairSetupAccess; setup: DevicePairSetup }
-  | {
-      phase: "reconciling";
-      access: DevicePairSetupAccess;
-      setupId: string;
-    }
-  | { phase: "error"; source: "create"; access: DevicePairSetupAccess; message: string }
-  | {
-      phase: "error";
-      source: "status";
-      access: DevicePairSetupAccess;
-      setupId: string;
-      message: string;
-    }
-  | {
-      phase: "success";
-      access: DevicePairSetupCompletion["access"];
-      deviceName?: string;
-    }
-  | {
-      phase: "delivery-uncertain";
-      access: DevicePairSetupDeliveryUncertain["access"];
-    }
-  | { phase: "expired"; access: DevicePairSetupAccess };
+export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
+  | { phase: "selection" }
+  | { phase: "loading" }
+  | { phase: "waiting"; setup: DevicePairSetup }
+  | { phase: "reconciling"; setupId: string }
+  | { phase: "error"; source: "create"; message: string }
+  | { phase: "error"; source: "status"; setupId: string; message: string }
+  | { phase: "success"; deviceName?: string }
+  | { phase: "delivery-uncertain" }
+  | { phase: "expired" }
+);
 
 function requestDevicePairSetup(client: GatewayRequestClient, params: DevicePairSetupCodeParams) {
   return client.request<DevicePairSetup>("device.pair.setupCode", params, {
@@ -194,18 +165,22 @@ async function readGatewaySetupCompletion(
   }
 }
 
+function ownsDevicePairSetup(state: DevicePairSetupState, setupId: string): boolean {
+  const lifecycle = state.devicePairSetupLifecycle;
+  return (
+    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === setupId) ||
+    (lifecycle.phase === "reconciling" && lifecycle.setupId === setupId) ||
+    (lifecycle.phase === "error" && lifecycle.source === "status" && lifecycle.setupId === setupId)
+  );
+}
+
 function applyDevicePairSetupCompletionLookup(
   state: DevicePairSetupState,
   setupId: string,
   access: DevicePairSetupAccess,
   lookup: DevicePairSetupCompletionLookup,
 ): void {
-  const lifecycle = state.devicePairSetupLifecycle;
-  const ownsLifecycle =
-    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === setupId) ||
-    (lifecycle.phase === "reconciling" && lifecycle.setupId === setupId) ||
-    (lifecycle.phase === "error" && lifecycle.source === "status" && lifecycle.setupId === setupId);
-  if (!ownsLifecycle) {
+  if (!ownsDevicePairSetup(state, setupId)) {
     return;
   }
   if (lookup.status === "found") {
@@ -280,53 +255,40 @@ export function parseDevicePairSetupDeliveryUncertain(
   return completion ? { setupId: completion.setupId, access: completion.access } : null;
 }
 
-export function completeDevicePairSetup(
+function settleDevicePairSetup(
   state: DevicePairSetupState,
-  completion: DevicePairSetupCompletion,
+  setupId: string,
+  lifecycle: Extract<DevicePairSetupLifecycle, { phase: "success" | "delivery-uncertain" }>,
 ): boolean {
-  const lifecycle = state.devicePairSetupLifecycle;
-  const matchesActiveSetup =
-    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === completion.setupId) ||
-    (lifecycle.phase === "reconciling" && lifecycle.setupId === completion.setupId) ||
-    (lifecycle.phase === "error" &&
-      lifecycle.source === "status" &&
-      lifecycle.setupId === completion.setupId);
-  if (!matchesActiveSetup) {
+  if (!ownsDevicePairSetup(state, setupId)) {
     return false;
   }
   stopDevicePairSetupCountdown(state);
   clearDevicePairSetupExpiry(state);
-  state.devicePairSetupLifecycle = {
+  state.devicePairSetupLifecycle = lifecycle;
+  state.onDevicePairSetupChange();
+  return true;
+}
+
+export function completeDevicePairSetup(
+  state: DevicePairSetupState,
+  completion: DevicePairSetupCompletion,
+): boolean {
+  return settleDevicePairSetup(state, completion.setupId, {
     phase: "success",
     access: completion.access,
     ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
-  };
-  state.onDevicePairSetupChange();
-  return true;
+  });
 }
 
 export function markDevicePairSetupDeliveryUncertain(
   state: DevicePairSetupState,
   outcome: DevicePairSetupDeliveryUncertain,
 ): boolean {
-  const lifecycle = state.devicePairSetupLifecycle;
-  const matchesActiveSetup =
-    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === outcome.setupId) ||
-    (lifecycle.phase === "reconciling" && lifecycle.setupId === outcome.setupId) ||
-    (lifecycle.phase === "error" &&
-      lifecycle.source === "status" &&
-      lifecycle.setupId === outcome.setupId);
-  if (!matchesActiveSetup) {
-    return false;
-  }
-  stopDevicePairSetupCountdown(state);
-  clearDevicePairSetupExpiry(state);
-  state.devicePairSetupLifecycle = {
+  return settleDevicePairSetup(state, outcome.setupId, {
     phase: "delivery-uncertain",
     access: outcome.access,
-  };
-  state.onDevicePairSetupChange();
-  return true;
+  });
 }
 
 export async function openDevicePairSetup(state: DevicePairSetupState) {

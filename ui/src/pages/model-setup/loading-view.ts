@@ -1,20 +1,18 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { renderNativeModelSetupLoading } from "./native-model-setup.ts";
 
 registerModelSetupEnglish();
 
-function renderLoadingSection(params: {
-  title: string;
-  rows?: number;
-  intro?: string;
-  className?: string;
-  status?: string;
-}) {
+function renderLoadingSection(
+  title: string,
+  params: { rows?: number; intro?: string; className?: string; status?: string } = {},
+) {
   return html`
     <section class=${`settings-section ${params.className ?? ""}`.trim()}>
-      <div class="settings-section__header"><h2>${params.title}</h2></div>
-      ${params.intro ? html`<p class="muted">${params.intro}</p>` : nothing}
+      <div class="settings-section__header"><h2>${title}</h2></div>
+      ${params.intro ? html`<p class="muted model-setup__loading-intro">${params.intro}</p>` : nothing}
       <div class="model-setup__rows">
         ${Array.from(
           { length: params.rows ?? 1 },
@@ -49,28 +47,25 @@ export function renderModelSetupLoading(modelConfigured: boolean) {
       <div class="model-setup__loading-sections" aria-hidden="true">
         ${
           modelConfigured
-            ? renderLoadingSection({
-                title: t("modelSetup.verify.title"),
+            ? renderLoadingSection(t("modelSetup.verify.title"), {
                 className: "model-setup__loading-section--selected",
                 status: t("modelSetup.loading"),
               })
             : nothing
         }
-        ${renderLoadingSection({
-          title: t("modelSetup.candidates.title"),
+        ${renderNativeModelSetupLoading()}
+        ${renderLoadingSection(t("modelSetup.candidates.title"), {
           className: "model-setup__loading-section--candidates",
           status: modelConfigured ? undefined : t("modelSetup.loading"),
         })}
-        ${renderLoadingSection({
-          title: t("modelSetup.prepare.title"),
+        ${renderLoadingSection(t("modelSetup.prepare.title"), {
           intro: t("modelSetup.prepare.intro"),
           rows: 2,
         })}
-        ${renderLoadingSection({
-          title: t("modelSetup.signIn.title"),
+        ${renderLoadingSection(t("modelSetup.signIn.title"), {
           className: "model-setup__loading-section--sign-in",
         })}
-        ${renderLoadingSection({ title: t("modelSetup.manual.title") })}
+        ${renderLoadingSection(t("modelSetup.manual.title"))}
       </div>
     </div>
   `;

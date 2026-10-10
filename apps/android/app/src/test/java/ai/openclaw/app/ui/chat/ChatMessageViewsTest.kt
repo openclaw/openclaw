@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.parseChatMessageContent
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
+import android.content.Intent
 import android.graphics.Rect
 import android.provider.Settings
 import android.view.View
@@ -64,6 +65,24 @@ class ChatMessageViewsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun markdownListsPreserveNumberingAndNestedBulletIndentation() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatMarkdown("3. outer\n   - nested\n4. next\n\n- bullet", textColor = ClawTheme.colors.text)
+      }
+    }
+
+    listOf("3.", "4.", "outer", "nested", "next", "bullet").forEach {
+      composeRule.onNodeWithText(it).assertIsDisplayed()
+    }
+    composeRule.onAllNodesWithText("•").assertCountEquals(2)
+    val outer = composeRule.onNodeWithText("outer").fetchSemanticsNode().boundsInRoot
+    val nested = composeRule.onNodeWithText("nested").fetchSemanticsNode().boundsInRoot
+    assertTrue(nested.left > outer.left)
+    assertTrue(nested.top > outer.top)
+  }
+
+  @Test
   fun representedFirstLinkSuppressesOnlyItsOriginalGenericPreview() {
     val represented = setOf("https://example.com/guide", "https://example.org/guide")
     composeRule.setContent {
@@ -104,6 +123,49 @@ class ChatMessageViewsTest {
     composeRule.onAllNodesWithText("Preview · gateway.example").assertCountEquals(0)
     composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
     composeRule.onNodeWithText("Preview · reader.example").assertIsDisplayed()
+  }
+
+  @Test
+  fun linkPreviewExpandsAndCollapsesWithoutOpeningUri() {
+    val application = RuntimeEnvironment.getApplication()
+    val shadowApp = org.robolectric.Shadows.shadowOf(application)
+    shadowApp.clearNextStartedActivities()
+
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatMessageLinkPreview(
+          messageId = "expandable-link",
+          role = "assistant",
+          content = listOf(ChatMessageContent(text = "[issue](https://github.com/openclaw/openclaw/issues/123)")),
+        )
+      }
+    }
+
+    composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
+    composeRule.onNode(hasContentDescription("Expand link preview")).assertIsDisplayed()
+    composeRule.onAllNodesWithText("github.com").assertCountEquals(0)
+
+    composeRule.onNode(hasContentDescription("Expand link preview")).performClick()
+
+    composeRule.onNodeWithText("github.com").assertIsDisplayed()
+    composeRule.onNode(hasContentDescription("Collapse link preview")).assertIsDisplayed()
+    org.junit.Assert.assertNull("Expanding preview must not launch browser activity", shadowApp.nextStartedActivity)
+
+    // Verify collapsing preview returns to compact state without launching browser activity
+    composeRule.onNode(hasContentDescription("Collapse link preview")).performClick()
+
+    composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
+    composeRule.onNode(hasContentDescription("Expand link preview")).assertIsDisplayed()
+    composeRule.onAllNodesWithText("github.com").assertCountEquals(0)
+    org.junit.Assert.assertNull("Collapsing preview must not launch browser activity", shadowApp.nextStartedActivity)
+
+    // Verify re-expanding and tapping card body launches external browser activity with URL
+    composeRule.onNode(hasContentDescription("Expand link preview")).performClick()
+    composeRule.onNodeWithText("github.com").performClick()
+    val launchedIntent = shadowApp.nextStartedActivity
+    org.junit.Assert.assertNotNull("Card body click must launch browser activity", launchedIntent)
+    assertEquals(android.content.Intent.ACTION_VIEW, launchedIntent.action)
+    assertEquals("https://github.com/openclaw/openclaw/issues/123", launchedIntent.dataString)
   }
 
   @Test
@@ -375,7 +437,7 @@ class ChatMessageViewsTest {
     val reference = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("confirmed-reference")))
     val expectedBounds = reference.fetchSemanticsNode().boundsInRoot
     val rowBounds = composeRule.onNodeWithTag("confirmed-reference").fetchSemanticsNode().boundsInRoot
-    assertEquals(rowBounds.width * 0.78f, expectedBounds.width, 1f)
+    assertTrue("Short text does not force a full-width bubble", expectedBounds.width < rowBounds.width * 0.78f)
     assertEquals(rowBounds.right, expectedBounds.right, 1f)
     val expectedPixels = reference.captureToImage().toPixelMap()
     val topBand = with(composeRule.density) { 6.dp.roundToPx() }
@@ -399,15 +461,18 @@ class ChatMessageViewsTest {
       }
       val actual = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("delivery")))
       val bounds = actual.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-      assertEquals("$status: width", expectedBounds.width, bounds.width, 1f)
-      assertEquals("$status: leading edge", expectedBounds.left, bounds.left, 1f)
+      assertTrue("$status: keeps the same maximum text budget", bounds.width <= rowBounds.width * 0.78f + 1f)
+      assertTrue("$status: preserves the leading gutter", bounds.left >= rowBounds.right - rowBounds.width * 0.78f - 1f)
       assertEquals("$status: trailing edge", expectedBounds.right, bounds.right, 1f)
       val pixels = actual.captureToImage().toPixelMap()
       // Above the text: compare the painted corners, fill, and top border, not a style helper.
+      val cornerBand = with(composeRule.density) { 24.dp.roundToPx() }
       for (y in 0 until topBand) {
-        for (x in 0 until expectedPixels.width) {
-          assertEquals("$status: shell pixel $x,$y", expectedPixels[x, y], pixels[x, y])
+        for (x in 0 until cornerBand) {
+          assertEquals("$status: leading corner $x,$y", expectedPixels[x, y], pixels[x, y])
+          assertEquals("$status: trailing corner $x,$y", expectedPixels[expectedPixels.width - 1 - x, y], pixels[pixels.width - 1 - x, y])
         }
+        assertEquals("$status: fill", expectedPixels[expectedPixels.width / 2, y], pixels[pixels.width / 2, y])
       }
       val sideY = with(composeRule.density) { 30.dp.roundToPx() }
       assertEquals("$status: no leading border", userSurface.toArgb(), pixels[0, sideY].toArgb())
@@ -434,7 +499,7 @@ class ChatMessageViewsTest {
   @Test
   @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-420dpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
-  fun typingStreamingAndConfirmedAssistantKeepFullWidthTransparentGeometry() {
+  fun typingStreamingAndConfirmedAssistantKeepInsetTransparentGeometry() {
     val resolver = RuntimeEnvironment.getApplication().contentResolver
     val originalScale = Settings.Global.getString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
@@ -460,7 +525,7 @@ class ChatMessageViewsTest {
         val row = composeRule.onNodeWithTag("assistant-row").fetchSemanticsNode().boundsInRoot
         val bubble = composeRule.onNode(hasContentDescription("OpenClaw"))
         val bounds = bubble.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        assertEquals("Phase $nextPhase: full width", row.width, bounds.width, 1f)
+        assertTrue("Phase $nextPhase: content fits the transcript", bounds.width <= row.width)
         assertEquals("Phase $nextPhase: leading edge", row.left, bounds.left, 1f)
         val pixels = bubble.captureToImage().toPixelMap()
         // The top padding and trailing edge must expose the canvas, not a raised panel or border.
@@ -670,7 +735,9 @@ class ChatMessageViewsTest {
     composeRule.onNode(hasContentDescription("OpenClaw") and hasText("Attachment")).assertIsDisplayed()
     (1..4).forEach { index -> composeRule.onNodeWithText("redacted-$index.png").assertIsDisplayed() }
     composeRule.onAllNodesWithText("redacted-5.png").assertCountEquals(0)
-    composeRule.onNodeWithText("Additional images hidden: 1").assertIsDisplayed()
+    composeRule.onNodeWithText("Next images").assertIsDisplayed().performClick()
+    composeRule.onNodeWithText("redacted-5.png").assertIsDisplayed()
+    (1..4).forEach { index -> composeRule.onAllNodesWithText("redacted-$index.png").assertCountEquals(0) }
     assertEquals(0, artifactRequests)
   }
 

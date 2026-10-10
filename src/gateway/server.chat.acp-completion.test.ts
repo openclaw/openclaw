@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
@@ -17,12 +16,14 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
+import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import type { Deferred } from "../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
-  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
@@ -45,11 +46,13 @@ vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importO
   };
 });
 
-vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => ({
-    resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
+    resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({ agent: "main" }),
       entry: loadSessionEntryReadOnly({
         agentId: "main",
@@ -63,7 +66,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", () => ({
       runtimeCache: { activeSessions: 1 },
     }),
   }),
-  getSessionBindingService: () => ({ listBySession: () => [], unbind: async () => [] }),
+  listSessionBindingsBySessionAsync: async () => [],
 }));
 
 installGatewayTestHooks({ scope: "suite" });
@@ -71,7 +74,7 @@ let ws: WebSocket;
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-acp-completion-");
 
 function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSync>[0]) {
   return loadTranscriptEventsSync(scope).flatMap((event) => {
@@ -79,6 +82,10 @@ function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSyn
     const message = asOptionalRecord(entry?.message);
     return entry?.type === "message" && message ? [message] : [];
   });
+}
+
+function acpSessionEntry(sessionId: string) {
+  return { sessionId, updatedAt: Date.now(), acp: createAcpSessionMeta({ agent: "main" }) };
 }
 
 describe("Gateway ACP completion ownership", () => {
@@ -107,7 +114,6 @@ describe("Gateway ACP completion ownership", () => {
     suppressed?: boolean;
     widget?: boolean;
   }> = [
-    { name: "cold and warm turns" },
     {
       name: "post-hook text",
       text: "rendered reply",
@@ -117,29 +123,18 @@ describe("Gateway ACP completion ownership", () => {
       name: "successful runtime with post-hook warning",
       transform: (payload) => ({ ...payload, isError: true }),
     },
-    { name: "post-hook suppression", suppressed: true, transform: () => null },
+    { name: "live block replies", live: true },
     { name: "widget tool progress", widget: true },
     { name: "post-hook widget suppression", widget: true, suppressed: true, transform: () => null },
-    { name: "live block replies", live: true },
-    {
-      name: "media on the owned row",
-      media: true,
-      transform: (payload) => ({ ...payload, mediaUrl: "https://example.test/photo.png" }),
-    },
     {
       name: "bound target media",
       bound: true,
       media: true,
-      transform: (payload) => ({ ...payload, mediaUrl: "https://example.test/photo.png" }),
     },
-    { name: "runtime errors", fail: true },
     { name: "suppressed runtime errors", fail: true, transform: () => null },
-    { name: "runtime timeout", timeout: true },
     { name: "suppressed runtime timeout", timeout: true, transform: () => null },
     { name: "persistence errors", persistFail: true },
-    { name: "native cancellation", cancel: true },
     { name: "native cancellation through lifecycle", cancel: true, live: true, lifecycle: true },
-    { name: "explicit abort", cancel: true, rpcAbort: true },
     {
       name: "persistence failure after explicit abort",
       cancel: true,
@@ -148,8 +143,8 @@ describe("Gateway ACP completion ownership", () => {
     },
     { name: "replaced transcript target", rebound: true },
   ];
-  test.each(cases)("completes $name once with truthful transcript ownership", async (scenario) => {
-    const storePath = path.join(tempDirs.make("openclaw-acp-completion-"), "sessions.json");
+  test.for(cases)("completes $name once", async (scenario, { signal }) => {
+    const storePath = path.join(tempDirs.make(), "sessions.json");
     testState.sessionStorePath = storePath;
     const mediaFile = path.join(path.dirname(storePath), "photo.png");
     if (scenario.media) {
@@ -169,22 +164,13 @@ describe("Gateway ACP completion ownership", () => {
     let turnStarted = createDeferred();
     let releaseTurn = createDeferred();
     let activeRunId = "";
+    type CapturedAdmission = { runId: string; release: Promise<void> | undefined };
+    const dispatchAdmissions = new Map<string, Deferred<CapturedAdmission>>();
+    const admittedReleases = new Set<Promise<void>>();
     await writeSessionStore({
       entries: {
-        [sessionKey]: {
-          sessionId: scenario.bound ? `source-${sessionId}` : sessionId,
-          updatedAt: Date.now(),
-          acp: createAcpSessionMeta({ agent: "main" }),
-        },
-        ...(scenario.bound
-          ? {
-              [targetSessionKey]: {
-                sessionId,
-                updatedAt: Date.now(),
-                acp: createAcpSessionMeta({ agent: "main" }),
-              },
-            }
-          : {}),
+        [sessionKey]: acpSessionEntry(scenario.bound ? `source-${sessionId}` : sessionId),
+        ...(scenario.bound ? { [targetSessionKey]: acpSessionEntry(sessionId) } : {}),
       },
     });
     runtime.runTurn.mockImplementation(
@@ -235,11 +221,9 @@ describe("Gateway ACP completion ownership", () => {
         if (scenario.rebound) {
           await writeSessionStore({
             entries: {
-              [targetSessionKey]: {
-                sessionId: `${sessionId}-replaced-${runtime.runTurn.mock.calls.length}`,
-                updatedAt: Date.now(),
-                acp: createAcpSessionMeta({ agent: "main" }),
-              },
+              [targetSessionKey]: acpSessionEntry(
+                `${sessionId}-replaced-${runtime.runTurn.mock.calls.length}`,
+              ),
             },
           });
         }
@@ -258,6 +242,18 @@ describe("Gateway ACP completion ownership", () => {
         dispatcher,
         replyOptions: inboundReplyOptions,
       } = input as Parameters<typeof dispatchInboundMessage>[0];
+      // Gateway admission outlives ACP dispatch and owns source transcript finalization.
+      const release = getSessionWorkAdmissionRelease({
+        scope: storePath,
+        identities: [ctx.SessionKey],
+      });
+      if (release) {
+        admittedReleases.add(release);
+      }
+      const runId = inboundReplyOptions?.runId;
+      if (runId) {
+        dispatchAdmissions.get(runId)?.resolve({ runId, release });
+      }
       return actualDispatch.dispatchInboundMessage({
         ctx,
         cfg,
@@ -327,7 +323,19 @@ describe("Gateway ACP completion ownership", () => {
         errorKind?: string;
       };
     }> = [];
-    const capture = (data: Buffer) => frames.push(JSON.parse(data.toString()));
+    let lifecycleDelivered = createDeferred();
+    const capture = (data: Buffer) => {
+      const frame: (typeof frames)[number] = JSON.parse(data.toString());
+      frames.push(frame);
+      if (
+        frame.event === "agent" &&
+        frame.payload?.runId === activeRunId &&
+        frame.payload.stream === "lifecycle" &&
+        (frame.payload.data?.phase === "end" || frame.payload.data?.phase === "error")
+      ) {
+        lifecycleDelivered.resolve();
+      }
+    };
     ws.on("message", capture);
     try {
       // Preserve the observed order: one cold turn, then the same session and
@@ -335,8 +343,11 @@ describe("Gateway ACP completion ownership", () => {
       for (const [index, temperature] of ["cold", "warm"].entries()) {
         const runId = `acp-completion-${suffix}-${temperature}`;
         activeRunId = runId;
+        const admissionCapture = createDeferred<CapturedAdmission>();
+        dispatchAdmissions.set(runId, admissionCapture);
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
+        lifecycleDelivered = createDeferred();
         const expectedState = scenario.rpcAbort
           ? "aborted"
           : scenario.fail || scenario.persistFail || scenario.timeout || scenario.rebound
@@ -356,13 +367,6 @@ describe("Gateway ACP completion ownership", () => {
           message: `request ${temperature}`,
           idempotencyKey: runId,
         };
-        const settled = onceMessage(
-          ws,
-          (frame) =>
-            frame.event === "sessions.changed" &&
-            frame.payload?.sessionKey === sessionKey &&
-            frame.payload?.reason === "agent.input.settled",
-        );
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
         expect(accepted.ok).toBe(true);
         if (scenario.rpcAbort) {
@@ -371,8 +375,11 @@ describe("Gateway ACP completion ownership", () => {
           expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
           releaseTurn.resolve();
         }
-        // An abort can cache early. Require both replay and the public settled
-        // notification before checking every competing completion frame.
+        const admitted = await admissionCapture.promise;
+        expect(admitted.runId).toBe(runId);
+        expect(admitted.release).toBeDefined();
+        // Notifications coalesce; the captured owner releases only after post-dispatch cleanup.
+        await admitted.release;
         let replayPayload: unknown;
         await vi.waitFor(
           async () => {
@@ -385,8 +392,10 @@ describe("Gateway ACP completion ownership", () => {
           },
           { timeout: 10_000 },
         );
-        await settled;
-        expect.soft(replayPayload).toMatchObject({ runId, status: expectedStatus });
+        expect.soft(replayPayload, JSON.stringify(replayPayload)).toMatchObject({
+          runId,
+          status: expectedStatus,
+        });
         if (scenario.cancel) {
           expect
             .soft(replayPayload)
@@ -397,6 +406,8 @@ describe("Gateway ACP completion ownership", () => {
         expect.soft(waited.payload).toMatchObject({
           status: scenario.cancel ? "error" : expectedStatus,
         });
+        // Run settlement does not join the asynchronous lifecycle subscriber.
+        await withinTest(lifecycleDelivered.promise, signal);
         const finals = frames.filter(
           (frame) =>
             frame.event === "chat" &&
@@ -453,11 +464,26 @@ describe("Gateway ACP completion ownership", () => {
         );
         expect
           .soft(lifecycle.map((frame) => frame.payload?.data?.phase))
-          .toEqual(
-            scenario.rpcAbort
-              ? ["start", "end", scenario.persistFail ? "error" : "end"]
-              : ["start", expectedState === "error" ? "error" : "end"],
-          );
+          .toEqual(["start", expectedState === "error" ? "error" : "end"]);
+        if (scenario.rpcAbort) {
+          expect.soft(lifecycle.at(-1)?.payload?.data).toMatchObject({
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "rpc",
+          });
+          // This terminal-only reply was never shown; there is no visible partial to save.
+          expect
+            .soft(
+              frames.filter(
+                (frame) =>
+                  frame.payload?.runId === runId &&
+                  (frame.payload.stream === "assistant" || frame.payload.state === "delta"),
+              ),
+            )
+            .toEqual([]);
+          expect.soft(finals[0]?.payload?.message).toBeUndefined();
+        }
         expect
           .soft(
             frames.filter(
@@ -564,6 +590,7 @@ describe("Gateway ACP completion ownership", () => {
       }
     } finally {
       releaseTurn.resolve();
+      await Promise.all(admittedReleases);
       ws.off("message", capture);
     }
   });

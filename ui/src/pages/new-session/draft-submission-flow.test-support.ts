@@ -1,4 +1,6 @@
+import { createRouter } from "@openclaw/uirouter";
 import { vi } from "vitest";
+import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
@@ -20,12 +22,24 @@ type FixtureOptions = {
   data?: NewSessionRouteData;
   request?: (method: string, params?: unknown) => Promise<unknown>;
   modelCatalog?: (params?: unknown) => Promise<unknown>;
+  placementPolicy?: () => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string, params?: unknown) => {
     if (method === "models.list") {
       return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
+    if (
+      method === "agents.list" &&
+      params &&
+      typeof params === "object" &&
+      "includeSessionPlacement" in params &&
+      params.includeSessionPlacement === true
+    ) {
+      return options.placementPolicy
+        ? options.placementPolicy()
+        : Promise.resolve({ sessionPlacement: {} });
     }
     if (options.request) {
       return options.request(method, params);
@@ -34,7 +48,11 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   });
   const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
   const phase = options.phase ?? "connected";
+  const router = createRouter<RouteId, ApplicationContext>({
+    routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+  });
   const context = {
+    router,
     gateway: options.gateway ?? {
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -74,7 +92,16 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         },
       },
     },
-    sessions: { state: { result: null }, createResult: vi.fn() },
+    sessions: {
+      state: { result: null },
+      createResult: vi.fn(),
+      describe: ((params, describeOptions) => {
+        if (!describeOptions?.client) {
+          throw new Error("placement describe requires its captured client");
+        }
+        return describeOptions.client.request("sessions.describe", params);
+      }) satisfies ApplicationContext["sessions"]["describe"],
+    },
     placementStartup: {
       get: vi.fn(() => undefined),
       hasPendingTurn: vi.fn(() => false),
@@ -87,6 +114,9 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     navigateAndWait: vi.fn(async () => undefined),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
+  // The navigation spy represents an admitted Chat route; route ownership is
+  // exercised with the real router in the transition tests.
+  void router.navigate("chat", context);
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
@@ -123,6 +153,11 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         place?.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true }),
     },
   );
+  // Synchronous unit fixtures that omit catalog discovery model an already-loaded
+  // Gateway with no placement policy. Catalog tests exercise the real async owner.
+  if (!options.methods?.includes("environments.list")) {
+    vi.spyOn(gateway, "placementPolicyReady", "get").mockReturnValue(true);
+  }
   const browser = new DraftPlaceBrowser(
     host,
     gateway,

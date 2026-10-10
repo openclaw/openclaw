@@ -1,8 +1,10 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
   createCodexAppServerProcessReaperService,
+  getCodexAppServerRegisteredTransportIdentity,
   prepareCodexAppServerProcessRegistration,
 } from "./transport-process-registration.js";
 import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
@@ -84,6 +86,46 @@ afterEach(() => {
 });
 
 describe("Codex registration settlement", () => {
+  it("starts process inspection after a slow durable registration read", async () => {
+    const reading = createDeferred<{ key: string; value: unknown }[]>();
+    const existing = {
+      parent: { pid: process.pid, pgid: process.pid, startedAt: "parent-start" },
+      child: { pid: 500001, pgid: 500001, startedAt: "existing-child-start" },
+    };
+    state.rows.set("live-owner", existing);
+    state.entries.mockReturnValue(reading.promise);
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const spawned = child();
+    state.spawn.mockImplementation(() => {
+      queueMicrotask(() => spawned.emit("spawn"));
+      return spawned;
+    });
+
+    const starting = createStdioTransport({
+      transport: "stdio",
+      command: "codex",
+      args: [],
+      headers: {},
+    });
+    const started = expect(starting).resolves.toBe(spawned);
+    await vi.waitFor(() => expect(state.entries).toHaveBeenCalledOnce());
+    expect(state.spawn).not.toHaveBeenCalled();
+    now += 11_000;
+    reading.resolve([{ key: "live-owner", value: existing }]);
+    await started;
+
+    expect(state.spawn).toHaveBeenCalledOnce();
+    expect(state.register).toHaveBeenCalledOnce();
+    expect(state.rows.size).toBe(2);
+    expect(state.rows.get("live-owner")).toEqual(existing);
+    expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+    expect(state.delete).not.toHaveBeenCalled();
+    exit(spawned);
+    await closeCodexAppServerTransportAndWait(spawned);
+    expect([...state.rows.entries()]).toEqual([["live-owner", existing]]);
+  });
+
   it("keeps startup pending until the durable registration commits", async () => {
     const admission = createDeferred<void>();
     state.register.mockImplementation(async (key, value) => {
@@ -99,12 +141,20 @@ describe("Codex registration settlement", () => {
     await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
     expect(published).toBe(false);
     expect(state.rows.size).toBe(0);
+    expect(getCodexAppServerRegisteredTransportIdentity(spawned)).toBeUndefined();
     admission.resolve();
     await registered;
     expect(state.rows.size).toBe(1);
+    const identity = getCodexAppServerRegisteredTransportIdentity(spawned);
+    expect(identity).toEqual({ pid: 500002, startedAt: "child-start" });
+    expect(Reflect.set(identity!, "pid", 500003)).toBe(false);
     exit(spawned);
     await closeCodexAppServerTransportAndWait(spawned);
     expect(state.rows.size).toBe(0);
+    expect(getCodexAppServerRegisteredTransportIdentity(spawned)).toEqual({
+      pid: 500002,
+      startedAt: "child-start",
+    });
   });
 
   it("orders an early exit after the pending insertion and rejects startup", async () => {
@@ -130,18 +180,16 @@ describe("Codex registration settlement", () => {
     admission.resolve();
     await rejected;
     await closing;
+    expect(getCodexAppServerRegisteredTransportIdentity(spawned)).toBeUndefined();
     expect(state.delete).toHaveBeenCalledOnce();
     expect(state.rows.size).toBe(0);
   });
 
-  it.for(["deleted", "retained"])("joins delayed cleanup, leaving a %s fact", async (mode) => {
+  it("joins delayed cleanup, retaining the fact when deletion fails", async () => {
     const deletion = createDeferred<void>();
-    state.delete.mockImplementation(async (key) => {
+    state.delete.mockImplementation(async () => {
       await deletion.promise;
-      if (mode === "retained") {
-        throw new Error("database unavailable");
-      }
-      state.rows.delete(key);
+      throw new Error("database unavailable");
     });
     const spawned = child();
     const { registered } = await startRegistration(spawned);
@@ -156,7 +204,7 @@ describe("Codex registration settlement", () => {
     expect(state.rows.size).toBe(1);
     deletion.resolve();
     await closing;
-    expect(state.rows.size).toBe(mode === "retained" ? 1 : 0);
+    expect(state.rows.size).toBe(1);
   });
 
   it.for(["revoked", "commit failure"])(

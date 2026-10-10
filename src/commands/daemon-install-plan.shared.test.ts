@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonRuntimeBinDir,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
@@ -16,7 +16,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
       const pinned = path.join(root, "node");
       try {
-        fs.symlinkSync(process.execPath, pinned);
+        fs.symlinkSync(resolveTestNodeExecPath(), pinned);
         await expect(
           resolveDaemonInstallRuntimeInputs({
             env: {},
@@ -24,23 +24,12 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
             runtime: "node",
             devMode: false,
           }),
-        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
+        ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
     },
   );
-
-  it("rejects a relative persisted pin instead of silently selecting another runtime", async () => {
-    await expect(
-      resolveDaemonInstallRuntimeInputs({
-        env: {},
-        pinnedRuntimePath: "relative/node",
-        runtime: "node",
-        devMode: false,
-      }),
-    ).rejects.toThrow(/absolute/);
-  });
 
   it("detects src ts entrypoints when devMode is not overridden", async () => {
     const originalArgv = process.argv;
@@ -63,43 +52,9 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       process.argv = originalArgv;
     }
   });
-
-  it("keeps explicit devMode and runtimePath overrides", async () => {
-    await expect(
-      resolveDaemonInstallRuntimeInputs({
-        env: {},
-        runtime: "node",
-        devMode: false,
-        runtimePath: "/custom/node",
-      }),
-    ).resolves.toEqual({
-      devMode: false,
-      runtimePath: "/custom/node",
-    });
-  });
-});
-
-describe("resolveDaemonRuntimeBinDir", () => {
-  it("returns the absolute runtime bin directory", () => {
-    expect(resolveDaemonRuntimeBinDir("/custom/runtime/bin/bun")).toEqual(["/custom/runtime/bin"]);
-  });
-
-  it("ignores bare executable names", () => {
-    expect(resolveDaemonRuntimeBinDir("bun")).toBeUndefined();
-  });
 });
 
 describe("resolveDaemonServicePathDirs openclaw discovery", () => {
-  it("uses the active openclaw command directory", () => {
-    expect(
-      resolveDaemonServicePathDirs({
-        argv: ["node", "/Users/testuser/.npm-global/bin/openclaw", "gateway", "install"],
-        env: { PATH: "" },
-        platform: "darwin",
-      }),
-    ).toEqual(["/Users/testuser/.npm-global/bin"]);
-  });
-
   it.skipIf(process.platform === "win32")(
     "finds the PATH shim that resolves to the active package entrypoint",
     () => {

@@ -3,46 +3,22 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
+import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
+import {
+  RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
+  RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS,
+  resolveLauncherStopTimeoutMs,
+} from "./gateway-shutdown-budget.mjs";
+import { withNodeRuntimePath } from "./node-runtime-env.mjs";
 import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
   SQLITE_CAPABILITY_PROBE,
 } from "./node-sqlite.mjs";
 
-const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+export { consumeLauncherRootOptionToken };
 export const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
-
-const isLauncherRootOptionValueToken = (arg) => {
-  if (!arg || arg === "--") {
-    return false;
-  }
-  if (!arg.startsWith("-")) {
-    return true;
-  }
-  return /^-\d+(?:\.\d+)?$/.test(arg);
-};
-
-export const consumeLauncherRootOptionToken = (args, index) => {
-  const arg = args[index];
-  if (!arg) {
-    return 0;
-  }
-  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
-    return 1;
-  }
-  if (
-    arg.startsWith("--profile=") ||
-    arg.startsWith("--log-level=") ||
-    arg.startsWith("--container=")
-  ) {
-    return 1;
-  }
-  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
-    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
-  }
-  return 0;
-};
 
 // Mirror the entry's foreground Gmail policy: a wrapper would kill that run before descendant cleanup finishes.
 export const isForegroundGmailRunInvocation = (argv) => {
@@ -65,11 +41,19 @@ const respawnSignals =
   process.platform === "win32"
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
-const respawnSignalExitGraceMs = 1_000;
-const respawnSignalForceKillGraceMs = 1_000;
-const respawnSignalHardExitGraceMs = 1_000;
+const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
+const respawnSignalHardExitGraceMs = RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS;
 
 export const runRespawnedChild = (command, args, env) => {
+  // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
+  // supervisor's exit margin, after that owner has had its full shutdown budget.
+  // An already-running older macOS launcher can still enforce its shorter timer;
+  // the serving Gateway retains that cap until it can identify the parent version.
+  const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
+    platform: process.platform,
+    foreground: isForegroundGatewayRunArgv(process.argv),
+  });
+  const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
     stdio: "inherit",
@@ -77,7 +61,10 @@ export const runRespawnedChild = (command, args, env) => {
     windowsHide: !stdioIsTerminal,
   });
   const listeners = new Map();
-  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts.
+  // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts,
+  // which drives src/process/respawn-child-runner.ts. That runner still holds its own
+  // copies of the escalation graces and reaps on a fixed short one, so only this
+  // launcher's deadline is the one the serving Gateway derives.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
@@ -131,7 +118,7 @@ export const runRespawnedChild = (command, args, env) => {
     }
     signalExitTimer = setTimeout(() => {
       requestChildTermination();
-    }, respawnSignalExitGraceMs);
+    }, signalExitGraceMs);
     signalExitTimer.unref?.();
   };
   for (const signal of respawnSignals) {
@@ -758,7 +745,7 @@ export async function recoverNodeRuntime({
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
   runRespawnedChild(nodePath, [...process.execArgv, process.argv[1], ...process.argv.slice(2)], {
-    ...env,
+    ...withNodeRuntimePath(env, nodePath),
     OPENCLAW_NODE_UPDATE_RESPAWNED: "1",
   });
   // The original CLI must not continue while the replacement owns the invocation.

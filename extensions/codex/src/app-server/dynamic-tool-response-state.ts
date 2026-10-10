@@ -1,4 +1,8 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type {
+  captureToolAuthoredSourceReply,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexDynamicToolCallResponse,
   CodexDynamicToolDiagnosticTerminalReason,
@@ -15,6 +19,8 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   replaySafe?: boolean;
   sideEffectEvidence?: boolean;
   terminate?: boolean;
+  /** Candidate reply, committed only when the entire tool batch can complete. */
+  toolAuthoredSourceReply?: ReturnType<typeof captureToolAuthoredSourceReply>;
   transcriptDetails?: unknown;
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };
@@ -36,5 +42,15 @@ export function createFailedDynamicToolResponse(
     executionStarted: options?.executionStarted,
     executedArguments: options?.executedArguments,
     sideEffectEvidence: options?.sideEffectEvidence === true || undefined,
+  };
+}
+
+export function failedToolResult(
+  message: string,
+  status: "blocked" | CodexDynamicToolDiagnosticTerminalReason = "failed",
+): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: message }],
+    details: { status, error: message },
   };
 }

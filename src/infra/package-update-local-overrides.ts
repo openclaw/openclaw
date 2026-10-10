@@ -21,7 +21,7 @@ export async function preparePackageSwapLocalOverrides(
     targetSwapRoot: string;
     backupRoot: string;
   },
-): Promise<(() => Promise<void>) | undefined> {
+): Promise<((roots?: { backupRoot: string; packageRoot: string }) => Promise<void>) | undefined> {
   const packageRoot = params.installTarget.packageRoot;
   const options = params.localOverrides;
   if (!params.hadPackage || params.rootLinked || !options || !packageRoot) {
@@ -40,10 +40,12 @@ export async function preparePackageSwapLocalOverrides(
     params.backupRoot,
     path.relative(params.targetSwapRoot, packageRoot),
   );
-  return async () => {
+  return async (roots) => {
     // Capture only after the real move, so staging/drain-time edits are included.
     const plan = await captureLocalPackageOverrides({
-      packageRoot: retiredPackageRoot,
+      packageRoot: roots
+        ? path.join(roots.backupRoot, path.relative(params.targetSwapRoot, packageRoot))
+        : retiredPackageRoot,
       recordedPackageRoot: packageRoot,
       env: options.env,
     });
@@ -51,7 +53,7 @@ export async function preparePackageSwapLocalOverrides(
       params.onLocalOverrides?.({ ...plan.result, status: "preserved" });
     }
     const result = await applyLocalPackageOverrides({
-      packageRoot: params.stage.packageRoot,
+      packageRoot: roots?.packageRoot ?? params.stage.packageRoot,
       plan,
       reapply: options.reapply,
       runtimeUrls,

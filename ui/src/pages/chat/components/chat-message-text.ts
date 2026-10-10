@@ -3,9 +3,15 @@ import { AsyncDirective, directive } from "lit/async-directive.js";
 import { guard } from "lit/directives/guard.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
+import {
+  toSanitizedJsonHtml,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownParts,
+} from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -20,59 +26,24 @@ type DuplicateSuffix = {
   label: string;
 };
 
-// Bound synchronous parsing so large JSON messages cannot freeze the render loop.
-const MAX_JSON_AUTOPARSE_CHARS = 20_000;
-
-export function detectJson(text: string): { parsed: unknown; text: string } | null {
-  const trimmed = text.trim();
-
-  if (trimmed.length > MAX_JSON_AUTOPARSE_CHARS) {
-    return null;
-  }
-
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      // Parsing is only for the summary; reserialization loses numeric precision and duplicate keys.
-      return { parsed, text: trimmed };
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function jsonSummaryLabel(parsed: unknown): string {
-  if (Array.isArray(parsed)) {
-    return t(
-      parsed.length === 1 ? "chat.codeBlock.jsonArrayItem" : "chat.codeBlock.jsonArrayItems",
-      { count: String(parsed.length) },
-    );
-  }
-  if (parsed && typeof parsed === "object") {
-    const keys = Object.keys(parsed);
-    if (keys.length <= 4) {
-      return `{ ${keys.join(", ")} }`;
-    }
-    return t("chat.codeBlock.jsonObjectKeys", { count: String(keys.length) });
-  }
-  return t("chat.codeBlock.jsonBadge");
-}
+type MessageTextOptions = {
+  role: string;
+  isStreaming: boolean;
+  isForwarded?: boolean;
+  isUserMessageExpanded?: (messageId: string) => boolean;
+  onToggleUserMessageExpanded?: (messageId: string) => void;
+  assistantMessageDisclosure?: AssistantMessageDisclosure;
+};
 
 export function renderMessageJson(
-  result: NonNullable<ReturnType<typeof detectJson>>,
-  open = false,
+  json: MarkdownJson,
+  messageKey: string,
+  opts: MessageTextOptions,
+  options: MarkdownRenderOptions,
 ) {
-  return html`<details class="chat-json-collapse" ?open=${open}>
-    <summary class="chat-json-summary">
-      <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-      <span class="chat-json-label">${jsonSummaryLabel(result.parsed)}</span>
-    </summary>
-    <pre class="chat-json-content"><code>${result.text}</code></pre>
-  </details>`;
+  const parts = [toSanitizedJsonHtml(json, options)];
+  const text = html`<div class="chat-text">${unsafeHTML(parts[0])}</div>`;
+  return renderMessageDisclosure(json.text, messageKey, opts, text, parts);
 }
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
@@ -272,14 +243,7 @@ function messageOverflowRef(expanded: boolean, forwarded: boolean) {
 export function renderMessageMarkdown(
   markdown: string,
   messageKey: string,
-  opts: {
-    role: string;
-    isStreaming: boolean;
-    isForwarded?: boolean;
-    isUserMessageExpanded?: (messageId: string) => boolean;
-    onToggleUserMessageExpanded?: (messageId: string) => void;
-    assistantMessageDisclosure?: AssistantMessageDisclosure;
-  },
+  opts: MessageTextOptions,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
   media?: MarkdownMedia,
@@ -289,15 +253,21 @@ export function renderMessageMarkdown(
   const recoverFullMessage =
     isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
   const recovered = recoverFullMessage && disclosure?.expanded;
-  const { content: text, parts } = renderMarkdownText(
-    recovered ? (disclosure.markdown ?? markdown) : markdown,
-    messageKey,
-    opts.isStreaming,
-    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
-    duplicateSuffix,
-    isAssistant && opts.isStreaming ? messageKey : undefined,
-    media,
-  );
+  const source = recovered ? (disclosure.markdown ?? markdown) : markdown;
+  const options: MarkdownRenderOptions = recovered
+    ? { ...markdownRenderOptions, mode: "document" }
+    : markdownRenderOptions;
+  const parts: [string, string] = opts.isStreaming
+    ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
+    : [toSanitizedMarkdownHtml(source, options), ""];
+  if (duplicateSuffix) {
+    const terminalPart = parts[1].trim() ? 1 : 0;
+    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
+  }
+  const content = markdownParts(messageKey, source, parts, media);
+  const text = html`
+    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">${content}</div>
+  `;
   // Exhausted recovery keeps the preview visible and offers manual re-entry.
   if (recoverFullMessage && disclosure?.onRetryFullMessage) {
     return html`
@@ -314,11 +284,21 @@ export function renderMessageMarkdown(
       </div>
     `;
   }
+  return renderMessageDisclosure(markdown, messageKey, opts, text, parts);
+}
+
+function renderMessageDisclosure(
+  source: string,
+  messageKey: string,
+  opts: MessageTextOptions,
+  text: ReturnType<typeof html>,
+  parts: readonly string[],
+) {
   if (
     !opts.onToggleUserMessageExpanded ||
     (opts.isForwarded
       ? opts.isStreaming
-      : opts.role !== "user" || !shouldCollapseUserMessage(markdown))
+      : opts.role !== "user" || !shouldCollapseUserMessage(source))
   ) {
     return text;
   }
@@ -358,11 +338,14 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
+type MarkdownFragment = { html: string; incremental: boolean };
+
 class MarkdownPartsDirective extends AsyncDirective {
   private messageKey: string | undefined;
   private source = "";
   private stableHtml = "";
-  private fragments: string[] = [];
+  private fragments: MarkdownFragment[] = [];
+  private tail: MarkdownFragment | undefined;
   private generation = {};
   private mediaSlots = new Map<number, { element: HTMLElement; part?: RootPart }>();
   private mediaRender = {};
@@ -397,11 +380,31 @@ class MarkdownPartsDirective extends AsyncDirective {
       !stableHtml.startsWith(this.stableHtml)
     ) {
       this.fragments = [];
+      this.tail = undefined;
       this.stableHtml = "";
       this.generation = {};
     }
     if (stableHtml.length > this.stableHtml.length) {
-      this.fragments.push(stableHtml.slice(this.stableHtml.length));
+      const completed = stableHtml.slice(this.stableHtml.length);
+      if (this.tail) {
+        // Promotion keeps this fragment's Lit part and renderer. Switching to
+        // static HTML would discard its live controls and reader enhancements.
+        this.tail.html = completed;
+        this.tail = undefined;
+      } else {
+        this.fragments.push({ html: completed, incremental: false });
+      }
+    }
+    if (tailHtml) {
+      if (this.tail) {
+        this.tail.html = tailHtml;
+      } else {
+        this.tail = { html: tailHtml, incremental: true };
+        this.fragments.push(this.tail);
+      }
+    } else if (this.tail) {
+      this.fragments.pop();
+      this.tail = undefined;
     }
     this.messageKey = messageKey;
     this.source = source;
@@ -441,37 +444,16 @@ class MarkdownPartsDirective extends AsyncDirective {
     // control choices and Markdown enhancements, which must stay on its nodes.
     return keyed(
       this.generation,
-      html`${this.fragments.map((fragment) => renderMarkdownMedia(fragment, positionedMedia))}${renderMarkdownMedia(tailHtml, positionedMedia)}`,
+      html`${this.fragments.map((fragment) =>
+        guard([fragment.html, positionedMedia], () =>
+          renderMarkdownMedia(fragment.html, positionedMedia, fragment.incremental),
+        ),
+      )}`,
     );
   }
 }
 
 const markdownParts = directive(MarkdownPartsDirective);
-
-function renderMarkdownText(
-  markdown: string,
-  messageKey: string,
-  isStreaming: boolean,
-  markdownRenderOptions?: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
-  media?: MarkdownMedia,
-) {
-  const parts: [string, string] = isStreaming
-    ? toStreamingMarkdownParts(markdown, markdownRenderOptions, streamKey)
-    : [toSanitizedMarkdownHtml(markdown, markdownRenderOptions), ""];
-  if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
-  }
-  const content = markdownParts(messageKey, markdown, parts, media);
-  return {
-    parts,
-    content: html`
-      <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
-    `,
-  };
-}
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
   const template = document.createElement("template");

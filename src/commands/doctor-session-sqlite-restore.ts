@@ -1,4 +1,3 @@
-/** Restore planning across retained migration manifests. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,16 +5,20 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
+import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
+  sameMigrationArtifact,
   statMigrationPath,
-} from "./doctor-session-sqlite-artifact.js";
+  type MigrationArtifactIdentity,
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   assertSafeSessionSqliteMigrationMove,
   canonicalMigrationFilePath,
+  collectRecordedConsumedArchives,
   filterRestoreManifestTargets,
   hasSymbolicLinkInDirectoryPath,
   isRegularFileWithoutFollowingSymlinks,
@@ -28,35 +31,53 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
-const RESTORE_ARCHIVE_HASH_CHUNK_BYTES = 64 * 1024;
 
 export async function restoreSessionSqliteMigrationRuns(params: {
   env: NodeJS.ProcessEnv;
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
 }): Promise<DoctorSessionSqliteRestoreReport> {
-  const restoreReport: DoctorSessionSqliteRestoreReport = emptyRestoreReport();
   const contexts = loadRestoreManifestContexts(
     listSessionSqliteMigrationManifestPaths(params.env).toReversed(),
     params.trustedTargets,
   );
-  await reconcileRestorePublications(contexts, params.env);
+  return restoreManifestContexts(contexts, params.env);
+}
+
+async function restoreManifestContexts(
+  contexts: readonly RestoreManifestContext[],
+  env: NodeJS.ProcessEnv,
+): Promise<DoctorSessionSqliteRestoreReport> {
+  const restoreReport = emptyRestoreReport();
+  await reconcileRestorePublications(contexts, env);
   const restorePlan = createRestorePlan(contexts);
   for (const { manifest, manifestPath, targets } of contexts) {
-    const manifestRestoreReport: DoctorSessionSqliteRestoreReport = {
-      ...emptyRestoreReport(),
-      manifestPaths: [manifestPath],
-    };
+    const manifestRestoreReport = emptyRestoreReport(manifestPath);
     restoreReport.manifestPaths.push(manifestPath);
-    await restoreSessionSqliteMigrationManifest(
-      manifest,
-      manifestPath,
-      targets,
-      manifestRestoreReport,
-      restorePlan,
-    );
+    for (const target of targets) {
+      for (const move of uniqueRestoreMoves(target)) {
+        await restoreMigrationMove({
+          manifest,
+          manifestPath,
+          target,
+          move,
+          restorePlan,
+          restoreReport: manifestRestoreReport,
+        });
+      }
+    }
+    const consumedArchives = collectRecordedConsumedArchives(manifest);
+    manifest.restore = {
+      attemptedAt: new Date().toISOString(),
+      ...(consumedArchives.size > 0 ? { consumedArchives: [...consumedArchives].toSorted() } : {}),
+      conflicts: manifestRestoreReport.conflicts,
+      restoredFiles: manifestRestoreReport.restoredFiles,
+      skippedFiles: manifestRestoreReport.skippedFiles,
+      status: resolveRestoreStatus(manifestRestoreReport),
+    };
     restoreReport.conflicts.push(...manifestRestoreReport.conflicts);
     restoreReport.restoredFiles.push(...manifestRestoreReport.restoredFiles);
     restoreReport.skippedFiles.push(...manifestRestoreReport.skippedFiles);
@@ -101,18 +122,16 @@ async function reconcileRestorePublications(
         }
         const source = statMigrationPath(move.sourcePath);
         const archive = statMigrationPath(move.archivePath);
-        if (!source || !archive) {
-          continue;
-        }
         if (
+          !source ||
+          !archive ||
           !source.isFile() ||
           !archive.isFile() ||
           source.dev !== archive.dev ||
-          source.ino !== archive.ino
+          source.ino !== archive.ino ||
+          source.nlink !== 2 ||
+          archive.nlink !== 2
         ) {
-          continue;
-        }
-        if (source.nlink !== 2 || archive.nlink !== 2) {
           continue;
         }
         if (
@@ -133,7 +152,7 @@ async function reconcileRestorePublications(
         await moveMigrationArtifact(
           move.archivePath,
           move.sourcePath,
-          move.artifact.identity,
+          readRestoreArchiveIdentity(move, 2n),
           () => {
             assertSafeSessionSqliteMigrationMove(move, target);
             recordRestoredMigrationMove(context.manifest, context.manifestPath, move);
@@ -292,13 +311,11 @@ function createRestorePlan(
     }
 
     if (blocked) {
-      for (const candidate of available) {
-        plan.set(restoreMovePlanKey(candidate.context.manifestPath, candidate.move), {
-          action: "conflict",
-          reason:
-            "another archive for this source is unavailable without prior restore evidence; refusing automatic selection",
-        });
-      }
+      setRestoreCandidateConflicts(
+        plan,
+        available,
+        "another archive for this source is unavailable without prior restore evidence; refusing automatic selection",
+      );
       continue;
     }
     if (available.length === 0) {
@@ -351,17 +368,12 @@ function selectRestoreCandidate<
   if (candidates[0]?.move.kind !== "legacy-store") {
     return undefined;
   }
-  const nonemptyDigests = new Set(
-    candidates
-      .filter((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0)
-      .map((candidate) => candidate.snapshot.digest),
-  );
+  const nonempty = candidates.filter((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0);
+  const nonemptyDigests = new Set(nonempty.map((candidate) => candidate.snapshot.digest));
   if (nonemptyDigests.size === 0) {
     return candidates[0];
   }
-  return nonemptyDigests.size === 1
-    ? candidates.find((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0)
-    : undefined;
+  return nonemptyDigests.size === 1 ? nonempty[0] : undefined;
 }
 
 function setRestoreCandidateConflicts(
@@ -384,53 +396,10 @@ function restoreMovePlanKey(manifestPath: string, move: SessionSqliteMigrationMo
   return `${manifestPath}\u0000${migrationMoveKey(move)}`;
 }
 
-export function collectRecordedConsumedArchives(
-  manifest: SessionSqliteMigrationManifest,
-): Set<string> {
-  const consumed = new Set(manifest.restore?.consumedArchives ?? []);
-  const restoredSources = new Set(manifest.restore?.restoredFiles ?? []);
-  if (restoredSources.size === 0) {
-    return consumed;
-  }
-  const movesBySource = new Map<string, SessionSqliteMigrationMove[]>();
-  for (const target of manifest.targets) {
-    for (const move of uniqueRestoreMoves(target)) {
-      const moves = movesBySource.get(move.sourcePath) ?? [];
-      moves.push(move);
-      movesBySource.set(move.sourcePath, moves);
-    }
-  }
-  // Older shipped manifests only recorded restored source paths. Preserve that evidence when the
-  // source identifies exactly one archive, then persist the explicit archive path on this run.
-  for (const sourcePath of restoredSources) {
-    const moves = movesBySource.get(sourcePath);
-    const move = moves?.length === 1 ? moves[0] : undefined;
-    if (move) {
-      consumed.add(move.archivePath);
-    }
-  }
-  return consumed;
-}
-
 type RestoreArchiveInspection =
   | { state: "available"; snapshot: RestoreArchiveSnapshot }
   | { state: "invalid"; reason: string }
   | { state: "missing" };
-
-function hashRestoreArchive(fd: number, size: number): string {
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(RESTORE_ARCHIVE_HASH_CHUNK_BYTES);
-  let offset = 0;
-  while (offset < size) {
-    const read = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - offset), offset);
-    if (read === 0) {
-      throw new Error("archive changed while it was inspected");
-    }
-    hash.update(buffer.subarray(0, read));
-    offset += read;
-  }
-  return hash.digest("hex");
-}
 
 function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchiveInspection {
   if (hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))) {
@@ -449,6 +418,10 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
     return { state: "invalid", reason: "archive is not a regular file; refusing restore" };
   }
 
+  const changed: RestoreArchiveInspection = {
+    state: "invalid",
+    reason: "archive changed while it was inspected; refusing restore",
+  };
   let fd: number | undefined;
   try {
     const flags =
@@ -462,10 +435,7 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       descriptorStat.dev !== pathStat.dev ||
       descriptorStat.ino !== pathStat.ino
     ) {
-      return {
-        state: "invalid",
-        reason: "archive changed while it was inspected; refusing restore",
-      };
+      return changed;
     }
     let digest: string;
     let legacyEntryCount: number | undefined;
@@ -491,7 +461,11 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
     } else {
       // Transcript-like archives can be arbitrarily large. Hash them incrementally so duplicate
       // planning cannot turn a Doctor restore into a synchronous whole-file allocation.
-      digest = hashRestoreArchive(fd, descriptorStat.size);
+      const hashed = hashFileDescriptorSync(fd, descriptorStat.size);
+      if (hashed.sizeBytes !== descriptorStat.size) {
+        throw new Error("archive changed while it was inspected");
+      }
+      digest = hashed.sha256;
     }
     const finalPathStat = fs.lstatSync(move.archivePath);
     if (
@@ -499,10 +473,7 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       finalPathStat.ino !== descriptorStat.ino ||
       finalPathStat.size !== descriptorStat.size
     ) {
-      return {
-        state: "invalid",
-        reason: "archive changed while it was inspected; refusing restore",
-      };
+      return changed;
     }
     return {
       state: "available",
@@ -513,6 +484,13 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       },
     };
   } catch (error) {
+    if (
+      move.kind !== "legacy-store" &&
+      error instanceof FsSafeError &&
+      error.code === "too-large"
+    ) {
+      return changed;
+    }
     const code = isRecord(error) ? error.code : undefined;
     return code === "ENOENT" || code === "ENOTDIR"
       ? { state: "missing" }
@@ -529,86 +507,47 @@ export async function restoreSessionSqliteMigrationRun(params: {
   manifestPath: string;
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
 }): Promise<DoctorSessionSqliteRestoreReport> {
-  const restoreReport: DoctorSessionSqliteRestoreReport = {
-    ...emptyRestoreReport(),
-    manifestPaths: [params.manifestPath],
-  };
+  const restoreReport = emptyRestoreReport(params.manifestPath);
   const manifest = readSessionSqliteMigrationManifest(params.manifestPath);
-  if (!manifest) {
+  const targets = manifest ? filterRestoreManifestTargets(manifest, params.trustedTargets) : [];
+  if (!manifest || targets.length === 0) {
     restoreReport.conflicts.push({
       archivePath: params.manifestPath,
-      reason: "manifest is missing or unreadable",
+      reason: manifest
+        ? "manifest does not match a trusted session target"
+        : "manifest is missing or unreadable",
       sourcePath: params.manifestPath,
     });
     return restoreReport;
   }
-  const targetManifests = filterRestoreManifestTargets(manifest, params.trustedTargets);
-  if (targetManifests.length === 0) {
-    restoreReport.conflicts.push({
-      archivePath: params.manifestPath,
-      reason: "manifest does not match a trusted session target",
-      sourcePath: params.manifestPath,
-    });
-    return restoreReport;
-  }
-  await reconcileRestorePublications(
-    [{ manifest, manifestPath: params.manifestPath, targets: targetManifests }],
+  return restoreManifestContexts(
+    [{ manifest, manifestPath: params.manifestPath, targets }],
     params.env ?? process.env,
   );
-  await restoreSessionSqliteMigrationManifest(
-    manifest,
-    params.manifestPath,
-    targetManifests,
-    restoreReport,
-    createRestorePlan([
-      {
-        manifest,
-        manifestPath: params.manifestPath,
-        targets: targetManifests,
-      },
-    ]),
-  );
-  writeSessionSqliteMigrationManifest({ manifest, manifestPath: params.manifestPath });
-  return restoreReport;
 }
 
-function emptyRestoreReport(): DoctorSessionSqliteRestoreReport {
+function emptyRestoreReport(manifestPath?: string): DoctorSessionSqliteRestoreReport {
   return {
     conflicts: [],
-    manifestPaths: [],
+    manifestPaths: manifestPath === undefined ? [] : [manifestPath],
     restoredFiles: [],
     skippedFiles: [],
   };
 }
 
-async function restoreSessionSqliteMigrationManifest(
-  manifest: SessionSqliteMigrationManifest,
-  manifestPath: string,
-  targets: readonly SessionSqliteMigrationTargetManifest[],
-  restoreReport: DoctorSessionSqliteRestoreReport,
-  restorePlan: ReadonlyMap<string, RestoreMovePlan>,
-): Promise<void> {
-  for (const target of targets) {
-    for (const move of uniqueRestoreMoves(target)) {
-      await restoreMigrationMove({
-        manifest,
-        manifestPath,
-        target,
-        move,
-        restorePlan,
-        restoreReport,
-      });
-    }
+function readRestoreArchiveIdentity(
+  move: SessionSqliteMigrationMove,
+  expectedLinks = 1n,
+): MigrationArtifactIdentity {
+  const identity = readMigrationArtifactIdentity(move.archivePath, expectedLinks);
+  // A retained receipt can predate an APFS remount; publication must bind to the live device.
+  if (
+    move.artifact &&
+    !sameMigrationArtifact(identity, move.artifact.identity, { ignoreDevice: true })
+  ) {
+    throw new Error("archive identity or contents changed; refusing restore");
   }
-  const consumedArchives = collectRecordedConsumedArchives(manifest);
-  manifest.restore = {
-    attemptedAt: new Date().toISOString(),
-    ...(consumedArchives.size > 0 ? { consumedArchives: [...consumedArchives].toSorted() } : {}),
-    conflicts: restoreReport.conflicts,
-    restoredFiles: restoreReport.restoredFiles,
-    skippedFiles: restoreReport.skippedFiles,
-    status: resolveRestoreStatus(restoreReport),
-  };
+  return identity;
 }
 
 async function restoreMigrationMove(params: {
@@ -657,7 +596,7 @@ async function restoreMigrationMove(params: {
     assertRestoreDirectories(move);
     fs.mkdirSync(path.dirname(move.sourcePath), { recursive: true, mode: 0o700 });
     assertRestoreDirectories(move);
-    const identity = move.artifact?.identity ?? readMigrationArtifactIdentity(move.archivePath);
+    const identity = readRestoreArchiveIdentity(move);
     // Publication rechecks these exact bytes; matching the plan also preserves its index count.
     if (
       planned.action === "restore" &&
@@ -687,7 +626,7 @@ async function restoreMigrationMove(params: {
       }
       writeSessionSqliteMigrationManifest({ manifest, manifestPath });
     }
-    await moveMigrationArtifact(move.archivePath, move.sourcePath, move.artifact.identity, () => {
+    await moveMigrationArtifact(move.archivePath, move.sourcePath, identity, () => {
       assertRestoreDirectories(move);
       recordRestoredMigrationMove(manifest, manifestPath, move);
     });
@@ -709,11 +648,8 @@ function assertRestoreDirectories(move: SessionSqliteMigrationMove): void {
 function resolveRestoreStatus(
   report: DoctorSessionSqliteRestoreReport,
 ): NonNullable<SessionSqliteMigrationManifest["restore"]>["status"] {
-  if (report.conflicts.length > 0 && report.restoredFiles.length > 0) {
-    return "partial";
-  }
   if (report.conflicts.length > 0) {
-    return "conflicts";
+    return report.restoredFiles.length > 0 ? "partial" : "conflicts";
   }
   if (report.restoredFiles.length > 0) {
     return "restored";

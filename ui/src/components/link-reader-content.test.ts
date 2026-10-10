@@ -43,6 +43,69 @@ function mount(value: ControlUiLinkReaderDocument, link = target) {
 afterEach(() => document.body.replaceChildren());
 
 describe("link reader document content", () => {
+  it.each([
+    ["success", "Checks passed"],
+    ["failure", "Checks failed"],
+    ["pending", "Checks in progress"],
+    ["neutral", "Checks"],
+    ["unavailable", "Checks unavailable"],
+  ] as const)(
+    "renders %s check results without assuming service-specific labels",
+    (state, label) => {
+      const container = mount({
+        ...detail("Description"),
+        checks: {
+          state,
+          summary: "Provider-owned result",
+          total: 1,
+          items: [
+            {
+              name: "Build",
+              state: "pending",
+              detail: "Queued",
+              url: "/acme/project/actions/runs/1",
+            },
+          ],
+          url: url + "/checks",
+          commit: "abcdef0123456789",
+        },
+      });
+      const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
+      expect(checks.querySelector("summary strong")?.textContent).toBe(label);
+      expect(checks.open).toBe(state === "failure");
+      expect(checks.textContent).toContain("Provider-owned result");
+      expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
+      const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
+      expect(run.href).toBe("https://github.com/acme/project/actions/runs/1");
+      expect(run.rel).toContain("noreferrer");
+      expect(run.hasAttribute("data-link-reader-external")).toBe(true);
+      expect(checks.querySelector(".lr-checks-footer code")?.textContent).toBe("abcdef0");
+      expect(checks.querySelector(".lr-checks-meter") === null).toBe(state === "unavailable");
+    },
+  );
+
+  it("does not present incomplete check collections as a full meter or activate unsafe run URLs", () => {
+    const container = mount({
+      ...detail("Description"),
+      checks: {
+        state: "unavailable",
+        summary: "Some checks could not load",
+        total: 4,
+        truncated: true,
+        items: [{ name: "<script>unsafe</script>", state: "failure", url: "javascript:alert(1)" }],
+        url: "https://user:password@github.com/private",
+      },
+    });
+    expect(container.querySelector(".lr-checks-meter")).toBeNull();
+    expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
+    expect(container.querySelector(".lr-check-copy")?.textContent).toContain(
+      "<script>unsafe</script>",
+    );
+    expect(container.querySelector(".lr-checks")?.textContent).toContain(
+      "Some checks could not be shown",
+    );
+  });
+
   it("hides HTML comment metadata while preserving visible prose and literal code examples", () => {
     const body = [
       "<!-- hidden-block\nmetadata --> <!-- hidden-adjacent -->",
@@ -73,6 +136,81 @@ describe("link reader document content", () => {
       ["<!-- inline example -->", "<!-- fenced example -->", "<!-- indented example -->"],
     );
     expect(container.textContent).toContain("<!-- escaped example -->");
+  });
+
+  it("renders emoji shortcodes in descriptions, comments, tables, links, and summaries", () => {
+    const container = mount(
+      detail("## :rocket: Ready", [
+        {
+          id: "issuecomment-emoji",
+          url: url + "#issuecomment-emoji",
+          author: "coverage-bot",
+          body: [
+            ":white_check_mark: All modified lines are covered.",
+            "| Status | Coverage |\n| --- | --- |\n| :warning: | **:white_check_mark:** |",
+            "[:umbrella: Full report](https://coverage.example/report)",
+            ":loudspeaker: Share feedback.",
+            "<details><summary>:rocket: New features</summary>\n\n:snowflake: Analytics\n\n</details>",
+            ":not_a_real_emoji: :) :+1:",
+          ].join("\n\n"),
+        },
+      ]),
+    );
+    expect(container.querySelector(".lr-description h2")?.textContent).toBe("🚀 Ready");
+    const comment = container.querySelector("#issuecomment-emoji")!;
+    expect(comment.textContent).toContain("✅ All modified lines are covered.");
+    expect(comment.querySelector("td")?.textContent).toBe("⚠️");
+    expect(comment.querySelector("td strong")?.textContent).toBe("✅");
+    expect(comment.querySelector('a[href="https://coverage.example/report"]')?.textContent).toBe(
+      "☔ Full report",
+    );
+    expect(comment.textContent).toContain("📢 Share feedback.");
+    expect(comment.querySelector("summary")?.textContent).toBe("🚀 New features");
+    expect(comment.querySelector("details")?.textContent).toContain("❄️ Analytics");
+    expect(comment.textContent).toContain(":not_a_real_emoji: :) 👍");
+  });
+
+  it("keeps code, URLs, attributes, and escaped shortcodes literal without widening HTML trust", () => {
+    const container = mount(
+      detail(
+        [
+          "Inline `:rocket:`.",
+          "```text\n:warning: :umbrella:\n```",
+          "    :white_check_mark:",
+          "https://coverage.example/:rocket:/report",
+          "<https://coverage.example/:warning:/report>",
+          '[Report :rocket:](https://coverage.example/:rocket:/report ":warning:")',
+          '![Alt :rocket:](https://images.example/:rocket:.png ":warning:")',
+          '<img alt="Raw :rocket:" src="https://images.example/:warning:.png" onerror="alert(1)">',
+          '<span title=":rocket:">:warning:</span>',
+          "[Unsafe :rocket:](javascript:alert(1))",
+          "\\:rocket: :unknown_emoji:",
+        ].join("\n\n"),
+      ),
+    );
+    expect([...container.querySelectorAll("code")].map((node) => node.textContent?.trim())).toEqual(
+      [":rocket:", ":warning: :umbrella:", ":white_check_mark:"],
+    );
+    const links = [...container.querySelectorAll<HTMLAnchorElement>(".lr-description a")];
+    expect(
+      links.find((link) => link.textContent === "https://coverage.example/:rocket:/report")?.href,
+    ).toBe("https://coverage.example/:rocket:/report");
+    expect(
+      links.find((link) => link.textContent === "https://coverage.example/:warning:/report")?.href,
+    ).toBe("https://coverage.example/:warning:/report");
+    const authored = links.find((link) => link.textContent === "Report 🚀")!;
+    expect(authored.href).toBe("https://coverage.example/:rocket:/report");
+    expect(authored.title).toBe(":warning:");
+    expect([...container.querySelectorAll("img")].map((image) => [image.src, image.alt])).toEqual([
+      ["https://images.example/:rocket:.png", "Alt :rocket:"],
+      ["https://images.example/:warning:.png", "Raw :rocket:"],
+    ]);
+    expect(container.textContent).toContain('<span title=":rocket:">⚠️</span>');
+    expect(container.textContent).toContain("Unsafe 🚀");
+    expect(container.textContent).toContain(":rocket: :unknown_emoji:");
+    expect(
+      container.querySelector('[onerror], a[href^="javascript:"], span[title=":rocket:"]'),
+    ).toBeNull();
   });
 
   it("renders Markdown and HTML attachments with anonymous requests, source-relative URLs, and full-size links", () => {
@@ -292,14 +430,13 @@ describe("link reader document content", () => {
       link,
     );
     expect(container.querySelector("h1")?.textContent).toBe("Change C42");
-    expect(container.textContent).toContain("Build: Passed");
+    expect(container.querySelector(".lr-metric dt")?.textContent).toBe("Build");
+    expect(container.querySelector(".lr-metric dd")?.textContent).toBe("Passed");
     expect(container.querySelector(".lr-item-meta a")?.getAttribute("href")).toBe(
       "https://forge.example/users/alex",
     );
     expect(container.querySelector(".lr-coauthors")?.textContent).toBe("Co-authors: Sam, Noor +1");
-    expect(container.querySelector(".lr-item-meta [data-tone=positive]")?.textContent).toBe(
-      "Passed",
-    );
+    expect(container.querySelector(".lr-metric--positive dd")?.textContent).toBe("Passed");
     expect(container.querySelector(".lr-state--attention")?.textContent).toBe("Needs review");
     expect(container.querySelector('a[href="https://forge.example/changes/C43"]')).not.toBeNull();
     expect(

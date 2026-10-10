@@ -28,37 +28,101 @@ afterEach(() => {
 });
 
 describe("image lightbox gallery resource lifecycle", () => {
-  it.each(["close", "reset"] as const)(
-    "releases a late image once after %s without replacing the current selection",
+  it.each(["upgrade reset", "upgrade evict", "neighbor reset"] as const)(
+    "releases a late image once without replacing newer intent: %s",
     async (action) => {
-      const initial = imageItem("initial");
-      const late = imageItem("late");
+      const initial = imageItem("preview");
+      const late = imageItem("original");
       const replacement = imageItem("replacement");
+      const beyond = imageItem("beyond");
       const pending = createDeferred<ImageLightboxItem | null>();
       const load = vi.fn(() => pending.promise);
-      controller.reset({ index: 0, items: [async () => initial, load] }, initial);
-      const moving = controller.move(1);
+      const moving = action === "neighbor reset";
+      const preview = moving ? initial : { ...initial, loadFullResolution: load };
+      controller.reset(
+        {
+          index: 0,
+          items: [async () => preview, moving ? load : async () => replacement, async () => beyond],
+        },
+        preview,
+      );
+      const navigation = moving ? controller.move(1) : undefined;
       await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(initial);
-      expect(controller.busy).toBe(true);
-
-      if (action === "reset") {
-        controller.reset(undefined, replacement);
+      if (moving) {
+        expect(controller.current).toBe(initial);
+        expect(controller.busy).toBe(true);
+      }
+      if (action === "upgrade evict") {
+        expect(await controller.move(1)).toBe(true);
+        expect(await controller.move(1)).toBe(true);
       } else {
-        controller.dispose();
+        controller.reset(undefined, replacement);
       }
       pending.resolve(late);
-
-      expect(await moving).toBe(false);
+      if (navigation) {
+        expect(await navigation).toBe(false);
+      }
       await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(action === "reset" ? replacement : undefined);
+      expect(controller.current).toBe(action === "upgrade evict" ? beyond : replacement);
       expect(controller.busy).toBe(false);
       expect(controller.failed).toBe(false);
       controller.dispose();
       await Promise.resolve();
       expect(late.release).toHaveBeenCalledOnce();
       expect(initial.release).not.toHaveBeenCalled();
-      expect(replacement.release).not.toHaveBeenCalled();
+      if (moving) {
+        expect(replacement.release).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "upgrades a previous image without replacing a neighbor (return while loading=%s)",
+    async (returnWhileLoading) => {
+      const original = imageItem("original");
+      const neighbor = imageItem("neighbor");
+      const pending = createDeferred<ImageLightboxItem | null>();
+      const load = vi.fn(() => pending.promise);
+      const initial = { ...imageItem("preview"), loadFullResolution: load };
+      controller.reset({ index: 0, items: [async () => initial, async () => neighbor] }, initial);
+      expect(await controller.move(1)).toBe(true);
+      const returning = returnWhileLoading ? controller.move(-1) : undefined;
+      pending.resolve(original);
+      if (returning) {
+        expect(await returning).toBe(true);
+      } else {
+        await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2));
+        expect(controller.current).toBe(neighbor);
+        expect(controller.index).toBe(1);
+        expect(await controller.move(-1)).toBe(true);
+      }
+      expect(controller.current).toBe(original);
+      expect(load).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["fetch", "decode"] as const)(
+    "keeps the preview when the full image fails to %s",
+    async (failure) => {
+      const original = imageItem("original");
+      if (failure === "decode") {
+        decode.mockRejectedValueOnce(new Error("Image decode failed"));
+      }
+      const load = vi.fn(async () => {
+        if (failure === "fetch") {
+          throw new Error("Image unavailable");
+        }
+        return original;
+      });
+      const initial = { ...imageItem("preview"), loadFullResolution: load };
+      controller.reset(undefined, initial);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+      if (failure === "decode") {
+        await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
+      }
+      expect(controller.current).toBe(initial);
+      expect(controller.failed).toBe(false);
+      expect(initial.release).not.toHaveBeenCalled();
     },
   );
 

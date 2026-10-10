@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, renameSync, watch, writeFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
 import { parentPort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
@@ -11,6 +10,7 @@ import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reade
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
+  type SqliteWorkerEphemeralTarget,
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -71,26 +71,24 @@ export type FixtureOperations = {
 };
 
 function waitForFile(file: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(path.dirname(file), () => {
+  return new Promise((resolve) => {
+    const check = () => {
       if (existsSync(file)) {
-        watcher.close();
+        clearInterval(poll);
         resolve();
       }
-    });
-    watcher.once("error", reject);
-    if (existsSync(file)) {
-      watcher.close();
-      resolve();
-    }
+    };
+    // Worker watch notifications can be missed or coalesced; observe the persistent gate.
+    const poll = setInterval(check, 50);
+    check();
   });
 }
 
 export function createSqliteWorkerBackend(
   input: FixtureOpenInput | undefined,
-  context: { databasePath: string },
+  context: { databasePath: string; target?: SqliteWorkerEphemeralTarget },
 ): SqliteWorkerPreparedBackend<FixtureOperations> {
-  return createFixtureBackend(input, context.databasePath, false);
+  return createFixtureBackend(input, context.target ? ":memory:" : context.databasePath, false);
 }
 
 export function openExistingSqliteWorkerBackend(

@@ -1,10 +1,14 @@
 import type {
-  AgentHarnessSessionForkParams,
+  AgentHarnessV2,
   AgentHarnessSessionForkResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexSessionCatalogControlFactory } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { forkCanonicalCodexSession } from "./canonical-session-fork.js";
@@ -24,17 +28,15 @@ import {
   resolveCodexUpstreamForkBoundary,
 } from "./upstream-fork-boundary.js";
 
-function readConnectionFingerprint(ref: unknown): string | undefined {
-  if (!isRecord(ref)) {
-    return undefined;
-  }
-  return typeof ref.connectionFingerprint === "string" && ref.connectionFingerprint.trim()
-    ? ref.connectionFingerprint
-    : undefined;
+const UNAVAILABLE_CONNECTION_MESSAGE =
+  "This Codex thread is not available on the current connection. Reconnect to its host and try again.";
+
+function unavailable(message: string): AgentHarnessSessionForkResult {
+  return { status: "failed", code: "upstream-unavailable", message };
 }
 
 export async function forkCodexUpstreamSession(
-  params: AgentHarnessSessionForkParams,
+  params: Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0],
   options: {
     bindingStore: CodexAppServerBindingStore;
     controlFactory: CodexSessionCatalogControlFactory;
@@ -45,19 +47,14 @@ export async function forkCodexUpstreamSession(
 ): Promise<AgentHarnessSessionForkResult> {
   try {
     const sourceFingerprint =
-      params.upstream.kind === "codex-app-server"
-        ? readConnectionFingerprint(params.upstream.ref)
+      params.upstream.kind === "codex-app-server" && isRecord(params.upstream.ref)
+        ? readNonBlankString(params.upstream.ref.connectionFingerprint)
         : undefined;
     const requestControl = sourceFingerprint
       ? await options.controlFactory.forUpstream(params.source.agentId, sourceFingerprint)
       : undefined;
     if (!sourceFingerprint || !requestControl) {
-      return {
-        status: "failed",
-        code: "upstream-unavailable",
-        message:
-          "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
-      };
+      return unavailable(UNAVAILABLE_CONNECTION_MESSAGE);
     }
     return await requestControl.withPinnedConnection(async (control) => {
       const sourceBinding = options.bindingStore.read(
@@ -92,12 +89,7 @@ export async function forkCodexUpstreamSession(
             (sourceBinding.pendingSupervisionBranch?.connectionFingerprint ??
               sourceBinding.appServerRuntimeFingerprint) !== sourceFingerprint))
       ) {
-        return {
-          status: "failed",
-          code: "upstream-unavailable",
-          message:
-            "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
-        };
+        return unavailable(UNAVAILABLE_CONNECTION_MESSAGE);
       }
       const resolved = await resolveCodexUpstreamForkBoundary({
         ...params.source,
@@ -135,12 +127,15 @@ export async function forkCodexUpstreamSession(
       let threadId: string;
       try {
         // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
-        const rawResponse = await control.forkThread({
-          threadId: sourceThreadId,
-          beforeTurnId: resolved.boundary.beforeTurnId,
-          ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
-          excludeTurns: true,
-        });
+        const rawResponse = await control.forkThread(
+          {
+            threadId: sourceThreadId,
+            beforeTurnId: resolved.boundary.beforeTurnId,
+            ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
+            excludeTurns: true,
+          },
+          params.assertCurrent,
+        );
         // Malformed responses do not establish ownership of any purported orphan id.
         response = assertCodexThreadForkResponse(rawResponse);
         threadId = response.thread.id.trim();
@@ -202,7 +197,7 @@ export async function forkCodexUpstreamSession(
           afterImport: async (entry, initialization) => {
             // Link BEFORE bind: a crash cannot expose a bound session to local-only
             // rewind/switch while its canonical upstream ownership is missing.
-            initialization.link({
+            await initialization.linkAsync({
               sessionKey: entry.key,
               agentId: entry.agentId,
               catalogId: params.upstream.catalogId,
@@ -243,24 +238,18 @@ export async function forkCodexUpstreamSession(
         if (!initializerOwnsFork) {
           await options.bindingStore.withThreadArchiveFence(() => archiveFreshFork(forkedThreadId));
         }
-        return {
-          status: "failed",
-          code: "upstream-unavailable",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The Codex fork could not be imported. Refresh sessions and try again.",
-        };
+        return unavailable(
+          error instanceof Error
+            ? error.message
+            : "The Codex fork could not be imported. Refresh sessions and try again.",
+        );
       }
     });
   } catch (error) {
-    return {
-      status: "failed",
-      code: "upstream-unavailable",
-      message:
-        error instanceof Error
-          ? error.message
-          : "The Codex thread could not be forked. Check that Codex is available, then try again.",
-    };
+    return unavailable(
+      error instanceof Error
+        ? error.message
+        : "The Codex thread could not be forked. Check that Codex is available, then try again.",
+    );
   }
 }

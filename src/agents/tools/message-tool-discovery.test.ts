@@ -65,14 +65,58 @@ describe("session-derived message destinations", () => {
     });
   });
 
-  it("uses the current session's canonical destination without changing the route", () => {
-    expect(resolveEffectiveCurrentChannelContext(options, request)).toEqual({
-      accountId: undefined,
+  it.each<{
+    name: string;
+    delivery?: { channel: string; to: string; accountId?: string };
+    direct?: boolean;
+    expected: string;
+  }>([
+    {
+      name: "canonical group",
+      delivery: { channel: "googlechat", to: `googlechat:${canonicalSpace}`, accountId: "default" },
+      expected: canonicalSpace,
+    },
+    { name: "missing delivery", expected: foldedSpace },
+    {
+      name: "another channel",
+      delivery: { channel: "slack", to: canonicalSpace },
+      expected: foldedSpace,
+    },
+    {
+      name: "another peer",
+      delivery: { channel: "googlechat", to: "spaces/Other" },
+      expected: foldedSpace,
+    },
+    {
+      name: "another account",
+      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "other" },
+      expected: foldedSpace,
+    },
+    {
+      name: "direct account and thread",
+      direct: true,
+      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "work" },
+      expected: canonicalSpace,
+    },
+  ])("recovers only the matching route: $name", ({ delivery, direct, expected }) => {
+    readDeliveryMock.mockReturnValue(delivery);
+    expect(
+      resolveEffectiveCurrentChannelContext(
+        direct
+          ? {
+              ...options,
+              agentSessionKey: `agent:main:googlechat:work:direct:${foldedSpace}:thread:Thread1`,
+            }
+          : options,
+        direct ? { ...request, accountId: "work" } : request,
+      ),
+    ).toEqual({
+      accountId: direct ? "work" : undefined,
       currentChannelProvider: "googlechat",
-      currentChannelId: canonicalSpace,
-      currentMessagingTarget: canonicalSpace,
-      currentChatType: "group",
-      currentThreadTs: undefined,
+      currentChannelId: expected,
+      currentMessagingTarget: expected,
+      currentChatType: direct ? "direct" : "group",
+      currentThreadTs: direct ? "Thread1" : undefined,
     });
   });
 
@@ -117,77 +161,36 @@ describe("session-derived message destinations", () => {
     },
   );
 
-  it.each([
-    { name: "missing delivery", delivery: undefined },
-    { name: "another channel", delivery: { channel: "slack", to: canonicalSpace } },
-    { name: "another peer", delivery: { channel: "googlechat", to: "spaces/Other" } },
-    {
-      name: "another account",
-      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "other" },
-    },
-  ])("keeps the inferred destination for $name", ({ delivery }) => {
-    readDeliveryMock.mockReturnValue(delivery);
-    expect(resolveEffectiveCurrentChannelContext(options, request).currentMessagingTarget).toBe(
-      foldedSpace,
+  it.each<{
+    name: string;
+    params?: Record<string, unknown>;
+    discovery?: boolean;
+    lowercase?: boolean;
+    inbound?: boolean;
+  }>([
+    { name: "explicit target", params: { target: "spaces/Explicit" } },
+    { name: "explicit to", params: { to: "spaces/Explicit" } },
+    { name: "explicit channelId", params: { channelId: "spaces/Explicit" } },
+    { name: "explicit targets", params: { targets: ["spaces/Explicit"] } },
+    { name: "reusable discovery", discovery: true },
+    { name: "lowercase-canonical channel", lowercase: true },
+    { name: "normal inbound destination", inbound: true },
+  ])("avoids delivery reads for $name", ({ params, discovery, lowercase, inbound }) => {
+    if (lowercase) {
+      getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
+    }
+    const result = resolveEffectiveCurrentChannelContext(
+      inbound
+        ? { ...options, currentChannelProvider: "googlechat", currentChannelId: canonicalSpace }
+        : options,
+      discovery ? undefined : { ...request, params: params ?? {} },
     );
-  });
-
-  it.each([
-    { target: "spaces/Explicit" },
-    { to: "spaces/Explicit" },
-    { channelId: "spaces/Explicit" },
-    { targets: ["spaces/Explicit"] },
-  ])("does not recover an explicitly addressed action %j", (params) => {
-    expect(
-      resolveEffectiveCurrentChannelContext(options, { ...request, params }).currentMessagingTarget,
-    ).toBe(foldedSpace);
+    if (inbound) {
+      expect(result.currentChannelId).toBe(canonicalSpace);
+    } else if (!discovery) {
+      expect(result.currentMessagingTarget).toBe(foldedSpace);
+    }
     expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("does not read delivery while discovering a reusable tool", () => {
-    resolveEffectiveCurrentChannelContext(options);
-    expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps lowercase-canonical channels free of delivery reads", () => {
-    getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
-    expect(resolveEffectiveCurrentChannelContext(options, request).currentMessagingTarget).toBe(
-      foldedSpace,
-    );
-    expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps a normal inbound destination", () => {
-    const inbound = {
-      ...options,
-      currentChannelProvider: "googlechat",
-      currentChannelId: canonicalSpace,
-    };
-    expect(resolveEffectiveCurrentChannelContext(inbound, request).currentChannelId).toBe(
-      canonicalSpace,
-    );
-    expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves the account and thread encoded by a direct route", () => {
-    readDeliveryMock.mockReturnValue({
-      channel: "googlechat",
-      to: canonicalSpace,
-      accountId: "work",
-    });
-    const direct = {
-      ...options,
-      agentSessionKey: `agent:main:googlechat:work:direct:${foldedSpace}:thread:Thread1`,
-    };
-    expect(
-      resolveEffectiveCurrentChannelContext(direct, { ...request, accountId: "work" }),
-    ).toMatchObject({
-      accountId: "work",
-      currentChatType: "direct",
-      currentThreadTs: "Thread1",
-      currentChannelId: canonicalSpace,
-      currentMessagingTarget: canonicalSpace,
-    });
   });
 });
 
@@ -241,6 +244,64 @@ describe("message tool discovery cache stability", () => {
         expect(tool.description).not.toContain("poll-vote");
       }
     }
+  });
+});
+
+describe("message tool discovery without a current channel", () => {
+  it.each([
+    { allow: undefined, actions: ["broadcast", "send"], compact: true },
+    { allow: ["broadcast"], actions: ["broadcast"], compact: true },
+    { allow: ["send", "react"], actions: ["react", "send"], compact: false },
+  ])("keeps the fields needed by $actions", ({ allow, actions, compact }) => {
+    const deliveryTag = Type.Optional(Type.String());
+    const channels: PreparedMessageToolCatalog["channels"] = [
+      {
+        id: "telegram",
+        reconcilesUnknownSend: false,
+        actions: {
+          describeMessageTool: () => ({
+            actions: compact ? ["send"] : ["send", "react"],
+            capabilities: ["presentation", "delivery-pin"],
+            schema: { visibility: "all-configured", properties: { deliveryTag } },
+          }),
+        },
+      },
+    ];
+    const params: MessageToolDiscoveryParams = {
+      cfg: { tools: { message: { actions: { allow } } } },
+      preparedMessageToolCatalog: {
+        version: 1,
+        channels,
+        getChannel: (id) => channels.find((channel) => channel.id === id),
+      },
+    };
+    const discovered = resolveMessageToolActionSchemaActions(params);
+    const schema = buildMessageToolSchema(params, discovered);
+    const properties = expectDefined(
+      asOptionalRecord(schema.properties),
+      "message schema properties",
+    );
+
+    expect(discovered).toEqual(actions);
+    for (const field of ["target", "targets", "media", "attachments", "presentation", "delivery"]) {
+      expect(properties).toHaveProperty(field);
+    }
+    expect(properties.deliveryTag).toEqual(deliveryTag);
+    for (const field of ["messageId", "pollId", "eventName", "deleteDays", "activityState"]) {
+      expect(Object.hasOwn(properties, field)).toBe(!compact);
+    }
+    const payload = {
+      action: compact ? "broadcast" : "send",
+      target: "telegram:chat:one",
+      targets: ["telegram:chat:one", "telegram:chat:two"],
+      message: "Hello",
+      attachments: [{ type: "file", media: "https://example.com/report.txt" }],
+      presentation: { blocks: [{ type: "text", text: "Report" }] },
+      delivery: { pin: true },
+      deliveryTag: "report",
+    };
+    expect(Value.Check(schema, payload)).toBe(true);
+    expect(Value.Check(schema, { ...payload, deliveryTag: 1 })).toBe(false);
   });
 });
 

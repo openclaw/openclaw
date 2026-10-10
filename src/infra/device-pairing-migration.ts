@@ -9,8 +9,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preserveLegacyDesktopStreamOptOut } from "./device-pairing-node-desktop-migration.js";
 import { withPairedDeviceRecords, type PairedDevice } from "./device-pairing.js";
 import {
+  archiveLegacyPairingFile,
   coercePairingStateRecord,
   readJsonIfExists,
   resolvePairingPaths,
@@ -65,14 +68,6 @@ function normalizeLegacyPairedDevice(
   return { device, omittedFields };
 }
 
-async function archiveLegacyFile(filePath: string): Promise<void> {
-  try {
-    await fs.rename(filePath, `${filePath}.migrated`);
-  } catch {
-    // Missing file or a racing second gateway process; nothing left to archive.
-  }
-}
-
 async function fileExists(filePath: string): Promise<boolean> {
   return await fs.access(filePath).then(
     () => true,
@@ -90,6 +85,7 @@ async function fileExists(filePath: string): Promise<boolean> {
  */
 export async function migrateLegacyDevicePairingStore(params?: {
   baseDir?: string;
+  cfg?: OpenClawConfig;
   log?: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<LegacyDevicePairingMigrationResult | null> {
   const { dir, pendingPath, pairedPath } = resolvePairingPaths(params?.baseDir, "devices");
@@ -123,7 +119,9 @@ export async function migrateLegacyDevicePairingStore(params?: {
           continue;
         }
         omittedInvalidFields += normalized.omittedFields;
-        pairedByDeviceId[deviceId] = { ...normalized.device, deviceId };
+        const device = { ...normalized.device, deviceId };
+        preserveLegacyDesktopStreamOptOut(device, params?.cfg ?? {}, Date.now());
+        pairedByDeviceId[deviceId] = device;
         imported += 1;
       }
       return { value: undefined, persist: imported > 0 };
@@ -142,9 +140,9 @@ export async function migrateLegacyDevicePairingStore(params?: {
   }
 
   await Promise.all([
-    archiveLegacyFile(pairedPath),
-    archiveLegacyFile(pendingPath),
-    archiveLegacyFile(bootstrapPath),
+    archiveLegacyPairingFile(pairedPath),
+    archiveLegacyPairingFile(pendingPath),
+    archiveLegacyPairingFile(bootstrapPath),
   ]);
   const result = { imported, skippedExisting };
   params?.log?.info(

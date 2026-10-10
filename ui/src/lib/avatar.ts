@@ -19,15 +19,9 @@ export function resolveAgentAvatarUrl(
     normalizeOptionalString(agent.identity?.avatarUrl),
     normalizeOptionalString(agent.identity?.avatar),
   ];
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    if (isRenderableControlUiAvatarUrl(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
+  return (
+    candidates.find((candidate) => candidate && isRenderableControlUiAvatarUrl(candidate)) ?? null
+  );
 }
 
 // Chat-render variant: accept blob URLs produced by authenticated avatar fetches.
@@ -45,16 +39,13 @@ export function resolveChatAvatarRenderUrl(
 
 export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
-  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
-    return null;
-  }
-  if (trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed)) {
-    return null;
-  }
   if (
+    !trimmed ||
+    trimmed === DEFAULT_ASSISTANT_AVATAR ||
+    trimmed.startsWith("blob:") ||
+    isRenderableControlUiAvatarUrl(trimmed) ||
     trimmed.length > 8 ||
-    /\s/.test(trimmed) ||
-    /[\\/.:]/.test(trimmed) ||
+    /[\s\\/.:]/.test(trimmed) ||
     UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
   ) {
     return null;

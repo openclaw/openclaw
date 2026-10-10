@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
+  holdRetentionAssetRead,
   withRetentionFixture,
   writeRetentionBuild,
 } from "./control-ui-asset-retention.test-support.js";
@@ -21,6 +23,44 @@ const boundaries = [
 ] as const;
 
 describe("Control UI retention cancellation", () => {
+  it("releases a pending retained asset lookup when inventory is aborted", async ({ signal }) => {
+    await withRetentionFixture(async ({ root, seed }) => {
+      const prior = await seed("prior");
+      const current = await writeRetentionBuild(path.join(root, "current"), "current");
+      const owner = createControlUiAssetRetention(current.root);
+      const controller = new AbortController();
+      const gate = holdRetentionAssetRead(path.join(prior.target, prior.assetPath));
+      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
+        const preparing = owner.prepare({ signal: controller.signal });
+        const aborted = expect(preparing).rejects.toMatchObject({ name: "AbortError" });
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              gate.entered,
+              preparing,
+              "Inventory did not read the prior asset",
+            ),
+            signal,
+          );
+          let settled = false;
+          const lookup = Promise.resolve(owner.resolveAsset(prior.assetPath)).then((asset) => {
+            settled = true;
+            return asset;
+          });
+          await Promise.resolve();
+          expect(settled).toBe(false);
+          controller.abort();
+          gate.release();
+          await expect(lookup).resolves.toBeNull();
+        } finally {
+          controller.abort();
+          gate.release();
+          await aborted;
+        }
+      });
+    });
+  });
+
   it.each(boundaries)("stops at %s and cleans only its staging", async (boundary) => {
     await withRetentionFixture(async ({ root, cache, seed }) => {
       const old = await seed("old");
@@ -161,17 +201,17 @@ describe("Control UI retention cancellation", () => {
       if (boundary === "before-start") {
         cancel();
       }
-      const nativeConfig = getFsSafeNativeConfig();
+      const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
       try {
         if (boundary === "retained-read") {
           // Inject a deterministic abort during hashing through the supported JS backend.
-          configureFsSafeNative({ mode: "off" });
+          setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
         }
         await expect(owner.prepare({ signal: controller.signal })).rejects.toMatchObject({
           name: "AbortError",
         });
       } finally {
-        configureFsSafeNative(nativeConfig);
+        nativeModeEnv.restore();
       }
       expect(controller.signal.aborted).toBe(true);
       expect(readsAfterAbort).toBe(0);
@@ -204,7 +244,7 @@ describe("Control UI retention cancellation", () => {
       }
       expect(await fs.readFile(path.join(old.target, old.assetPath), "utf8")).toContain("old");
       if (boundary !== "refresh") {
-        expect(owner.resolveAsset(build.assetPath)).toBeNull();
+        expect(await owner.resolveAsset(build.assetPath)).toBeNull();
         expect(
           await fs.access(target).then(
             () => true,

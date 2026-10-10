@@ -30,6 +30,11 @@ async function openProgress(page: Page) {
     methodResponses: { "progressCard.get": { card } },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
+  const disclosure = page.locator(".session-progress-card--composer");
+  await disclosure.waitFor();
+  if ((await disclosure.getAttribute("open")) === null) {
+    await disclosure.locator("summary").click();
+  }
   await page.locator(".session-progress-card__body").waitFor();
   await page.evaluate(() => document.fonts.ready);
   return { gateway, card };
@@ -42,7 +47,7 @@ suite.define(() => {
     { width: 390, touch: true },
     { width: 1440, touch: true },
   ])(
-    "shows the handle by hover capability at $width px, touch=$touch",
+    "aligns checklist icons and shows the handle by hover capability at $width px, touch=$touch",
     async ({ width, touch }) => {
       const context = await suite.newBrowserContext({
         viewport: { width, height: 900 },
@@ -53,6 +58,27 @@ suite.define(() => {
       try {
         const page = await context.newPage();
         await openProgress(page);
+        if (!touch) {
+          const measurements = await page
+            .locator(".session-progress-card__step")
+            .evaluateAll((rows) =>
+              rows.map((row) => {
+                const marker = row.querySelector(".session-progress-card__step-marker > *")!;
+                const text = row.querySelector(".session-progress-card__step-text")!;
+                const icon = marker.getBoundingClientRect();
+                const bounds = text.getBoundingClientRect();
+                const line = Number.parseFloat(getComputedStyle(text).lineHeight);
+                return {
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
+                  lines: bounds.height / line,
+                };
+              }),
+            );
+          expect(measurements.some(({ lines }) => lines > 1.5)).toBe(true);
+          for (const { delta } of measurements) {
+            expect(delta).toBeLessThanOrEqual(1);
+          }
+        }
         const summary = page.locator(".session-progress-card__summary");
         const opacity = () => summary.evaluate((el) => getComputedStyle(el, "::before").opacity);
         await page.mouse.move(0, 0);
@@ -87,7 +113,7 @@ suite.define(() => {
     },
   );
 
-  it.each(["light", "dark"] as const)("fades only unread overflow in %s mode", async (mode) => {
+  it.each(["light", "dark"] as const)("keeps one border and unread fade in %s", async (mode) => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
     try {
       await context.addInitScript(
@@ -96,6 +122,24 @@ suite.define(() => {
       );
       const page = await context.newPage();
       const { gateway, card } = await openProgress(page);
+      await page.locator(".session-progress-card__summary").focus();
+      const frame = await page.locator(".session-progress-card--composer").evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          width: style.borderTopWidth,
+          color: style.borderTopColor,
+          shadow: style.boxShadow,
+        };
+      });
+      expect(frame.width).toBe("1px");
+      expect(frame.color).not.toBe("rgba(0, 0, 0, 0)");
+      expect(frame.shadow).toBe("none");
+      if (mode === "light") {
+        const composerShadow = await page
+          .locator(".agent-chat__input")
+          .evaluate((element) => getComputedStyle(element).boxShadow);
+        expect(composerShadow.startsWith(`${frame.color} 0px 0px 0px 1px`)).toBe(true);
+      }
       const body = page.locator(".session-progress-card--composer .session-progress-card__body");
       const mask = () => body.evaluate((el) => getComputedStyle(el).maskImage);
       const height = () => body.evaluate((el) => el.clientHeight);
@@ -122,36 +166,6 @@ suite.define(() => {
       await page.locator(".session-progress-card__summary").click();
       await page.locator(".session-progress-card__summary").click();
       await expect.poll(mask).not.toBe("none");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it.each([1440, 390])("centers checklist icons on their first line at %i px", async (width) => {
-    const context = await suite.newBrowserContext({
-      viewport: { width, height: 900 },
-      deviceScaleFactor: 2,
-    });
-    try {
-      const page = await context.newPage();
-      await openProgress(page);
-      const measurements = await page.locator(".session-progress-card__step").evaluateAll((rows) =>
-        rows.map((row) => {
-          const marker = row.querySelector(".session-progress-card__step-marker > *")!;
-          const text = row.querySelector(".session-progress-card__step-text")!;
-          const icon = marker.getBoundingClientRect();
-          const bounds = text.getBoundingClientRect();
-          const line = Number.parseFloat(getComputedStyle(text).lineHeight);
-          return {
-            delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
-            lines: bounds.height / line,
-          };
-        }),
-      );
-      expect(measurements.some(({ lines }) => lines > 1.5)).toBe(true);
-      for (const { delta } of measurements) {
-        expect(delta).toBeLessThanOrEqual(1);
-      }
     } finally {
       await suite.closeBrowserContext(context);
     }

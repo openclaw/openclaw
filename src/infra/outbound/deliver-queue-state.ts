@@ -15,7 +15,7 @@ import {
   type PlatformMessageNotDispatchedError,
   type PlatformSendRoute,
 } from "./deliver-types.js";
-import { rejectDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
+import { settleDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
 import { retireUnsentDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -31,7 +31,7 @@ import {
   stageDeliveryFailureSettlement,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement, QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -79,12 +79,12 @@ export function createQueuedDeliveryOwner(
       failure.queueCustody = custody;
       return failure;
     },
-    retireUnsent(terminalOutcome?: "failed"): ReturnType<typeof retireUnsentDelivery> {
+    async retireUnsent(terminalOutcome?: "failed"): ReturnType<typeof retireUnsentDelivery> {
       owner.signal?.throwIfAborted();
       if (!owner.claimId) {
         return undefined;
       }
-      const release = retireUnsentDelivery(
+      const release = await retireUnsentDelivery(
         {
           id: owner.queueId,
           producerClaimId: owner.claimId,
@@ -113,10 +113,10 @@ export function createQueuedDeliveryOwner(
       custody = "released";
     },
     // Staged failure has left send custody; exact row equality now fences compaction.
-    finalizeFailure(entry: QueuedDelivery): boolean {
+    async finalizeFailure(entry: QueuedDelivery): Promise<boolean> {
       if (
         entry.id !== owner.queueId ||
-        !finalizeDeliveryFailureSettlement(entry, owner.stateDir, context)
+        !(await finalizeDeliveryFailureSettlement(entry, owner.stateDir, context))
       ) {
         return false;
       }
@@ -126,14 +126,11 @@ export function createQueuedDeliveryOwner(
     fail(record: QueuedDeliveryFailureRecorder, error: string): Promise<void> {
       owner.signal?.throwIfAborted();
       // Internal transitions retain captured state; caller-supplied recorders keep their public arguments.
-      const recordInState =
-        record === failDelivery
-          ? failDelivery
-          : record === failDeliveryAfterPlatformSend
-            ? failDeliveryAfterPlatformSend
-            : record === failDeliveryBeforePlatformSend
-              ? failDeliveryBeforePlatformSend
-              : undefined;
+      const recordInState = [
+        failDelivery,
+        failDeliveryAfterPlatformSend,
+        failDeliveryBeforePlatformSend,
+      ].find((candidate) => candidate === record);
       return recordInState
         ? recordInState(owner.queueId, error, owner.stateDir, owner.claimId, context)
         : record(owner.queueId, error, owner.stateDir, owner.claimId);
@@ -219,7 +216,7 @@ export async function rejectQueuedDelivery(
     } catch (error) {
       // A staging failure may leave only the unsent claim. Its owner can retain
       // a failed receipt without bypassing send evidence or completion recovery.
-      const release = owner.retireUnsent("failed");
+      const release = await owner.retireUnsent("failed");
       if (!release) {
         throw error;
       }
@@ -232,19 +229,19 @@ export async function rejectQueuedDelivery(
     // The exact claim is now durably unsendable. Recovery resumes only this
     // idempotent completion projection if projection or terminal cleanup fails.
     if (entry.deliveryCompletion) {
-      await rejectDurableDelivery(
+      await settleDurableDelivery(
         entry.deliveryCompletion,
-        rejection.message,
+        { rejectionError: rejection.message },
         owner.stateDir,
         params.deliveryQueueStateContext,
         params.conversationDeliveryTarget,
       );
     }
     const spoolPaths = collectEntrySpoolPaths(
-      acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload),
+      preparedOutboundPayloads(entry.preparedBatch),
       owner.stateDir,
     );
-    if (!owner.finalizeFailure(entry)) {
+    if (!(await owner.finalizeFailure(entry))) {
       return false;
     }
     await releaseSpoolArtifacts(spoolPaths, owner.stateDir);
@@ -268,24 +265,13 @@ export async function persistQueuedPreSendState(
   const { owner } = params;
   owner.signal?.throwIfAborted();
   try {
-    const route = { replyToId: params.route.replyToId ?? null };
-    if (owner.claimId) {
-      await markDeliveryPlatformSendAttemptStarted(
-        owner.queueId,
-        owner.stateDir,
-        route,
-        owner.claimId,
-        context,
-      );
-    } else {
-      await markDeliveryPlatformSendAttemptStarted(
-        owner.queueId,
-        owner.stateDir,
-        route,
-        undefined,
-        context,
-      );
-    }
+    await markDeliveryPlatformSendAttemptStarted(
+      owner.queueId,
+      owner.stateDir,
+      { replyToId: params.route.replyToId ?? null },
+      owner.claimId || undefined,
+      context,
+    );
     return "marked";
   } catch (markErr: unknown) {
     if (params.queuePolicy === "required") {

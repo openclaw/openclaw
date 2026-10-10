@@ -124,8 +124,11 @@ treats a thread that its supervision App Server reports as `notLoaded` as
 **Stored / activity unknown**, not as idle.
 
 Apply the same opt-in on every headless node host whose sessions should appear.
-The native OpenClaw macOS app reads the same local setting when it advertises
-its Codex catalog to the paired Gateway. That paired native Mac catalog supports
+The native OpenClaw macOS app uses the local `sessionCatalog.enabled` setting
+when it advertises its Codex catalog to the paired Gateway; enabling agent-facing
+`supervision` tools is not required. An explicit `sessionCatalog.enabled: false`
+keeps the catalog disabled, including the macOS first-run default before opt-in.
+That paired native Mac catalog supports
 only the default or explicit `appServer.transport: "stdio"` with an unset or
 explicit `appServer.homeScope: "user"`. `command`, `args`, and `clearEnv` are
 honored for that stdio process. If the Mac config selects `"unix"`,
@@ -197,9 +200,14 @@ hide results from healthy hosts.
 All queries of the same local home share one resident index. Initial native
 hydration uses the existing source failure backoff; completed rows remain in
 memory and in the reconstructible SQLite snapshot. Normal list requests never
-restart discovery after a TTL. Paired nodes retain their separate eight-second
-foreground response deadline; upgrade their catalog reader to obtain resident
-listing on those hosts too.
+restart discovery after a TTL. Progressive sidebar lists reuse the last published
+paired-node page for the same query and refresh it in the background. A node
+without a matching page gets up to 250 ms to answer; after that its host is marked
+pending, preserving visible rows until the existing host update event arrives.
+Node disconnects, reconnects, configuration changes, and newer publications
+invalidate retained pages. Older refreshes cannot replace a newer publication.
+One-shot lists, host-specific lookups, and pagination still await fresh node data
+under the existing eight-second response deadline.
 
 The sidebar hides the Codex group when it has no visible sessions, including
 when discovery fails. Normal discovery refreshes continue, so the group appears
@@ -316,8 +324,8 @@ real approval, elicitation, event, and delivery handlers. It uses an ephemeral
 native fork on the supervision connection to pin the source snapshot without
 supplying a model or provider override. Codex App Server selects both from its
 current native configuration and returns the actual selection. OpenClaw confirms
-the probe's subscription is released before creating the canonical branch. The
-probe never becomes stored history or an archive artifact. On that same
+the check's subscription is released before creating the canonical branch. The
+check never becomes stored history or an archive artifact. On that same
 connection, OpenClaw starts the canonical `appServer`-source full harness thread
 under its cwd and runtime policy with exactly that returned pair, injects the
 bounded visible history, and commits the branch binding. The canonical thread

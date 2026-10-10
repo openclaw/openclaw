@@ -26,6 +26,22 @@ started.
 Native sqlite-vec queries run in a separate, read-only process so a slow query
 does not block the Gateway event loop. Cancelling a search terminates its query
 process; OpenClaw does not retry that native query on the Gateway thread.
+Queries reuse a process for each database, with at most two processes alive.
+Idle processes retire after 30 minutes or when another database needs capacity.
+Each query reopens the database so committed updates and replaced indexes remain visible.
+
+Keyword retrieval, recall metadata, curated trigger and project candidates, and
+source timestamps use the memory search worker. The Gateway awaits projected
+rows and applies the same ranking. Session-only searches retain their final
+metadata and timestamp reads on the caller because an additional worker request
+increased measured latency; other retrieval reads run off the Gateway event loop. Searches retain their index generation until the worker closes its
+reader; recall metadata is read after candidate retrieval so forgotten chunks
+are excluded. This does not change stored data, configuration, or upgrade behavior.
+
+After Gateway readiness, idle warmup loads the active Memory Core retrieval
+worker before the first search. It does not open an index, start an embedding
+provider, or delay readiness. Requests arriving before warmup completes still
+initialize retrieval normally; the worker keeps its existing idle retirement policy.
 
 If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a
@@ -142,6 +158,21 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When Memory Core owns the memory slot, its Gateway service schedules each configured
+agent's memory manager to open at startup and after plugin replacement. This
+background activation waits for that agent's database preparation, including
+after an upgrade or restart, without delaying Gateway readiness. Failed
+preparation reports the database's repair guidance. Watched file changes can
+then update the index without a search or agent turn. Retiring an
+instance closes its managers, including file watchers, timers, and session
+listeners. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+and schedules their index activation before reporting the previous runtime restored.
+Service stop joins pending activation before closing its managers. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
+
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
@@ -152,6 +183,19 @@ its full-retry state; ordinary dirty content does not itself force a rebuild.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
+
+When native file watching is unavailable, Memory Core uses background polling
+with a 30-second default interval, including when polling is explicitly enabled
+with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
+with a 20 ms minimum. Shorter intervals increase background scanning cost,
+especially for large memory trees. Native events
+still trigger prompt, debounced updates. Automatic fallback logs one warning per
+watcher lifetime. A running memory manager exposes each local observation's
+mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
+standalone status inspection does not start a watcher. The filesystem
+library does not currently retain the fallback reason or retry native selection;
+the warning says when no reason was reported. Restart the Gateway after resolving
+the native backend problem to try native watching again.
 
 If the host runs out of native file-watch capacity, Memory Core logs one warning
 and disables its watchers. Later searches trigger incremental synchronization
@@ -173,10 +217,24 @@ Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for
 memory-only repair.
 
-`openclaw memory status` reports stored chunk text and JSON embedding bytes
+`openclaw memory status` reports stored chunk text and binary embedding bytes
 for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
 not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
 WAL/free pages are excluded.
+
+Chunk and embedding-cache vectors use little-endian 64-bit floating-point
+BLOBs. The software search fallback reads these full-precision vectors even
+when the optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
+separate 32-bit vector index. The keyword index uses each chunk's stable integer
+identity, so edits and deletion update the corresponding FTS rows directly.
+
+Agent schema 23 converts existing JSON vectors locally, without contacting an
+embedding provider. It preserves chunk IDs, provenance, recall metadata, and
+cache identities. Malformed legacy vectors retain their searchable text and
+mark their sources for reindexing. Unknown schema extensions that cannot be
+preserved cause migration to stop without rewriting those tables. Follow the
+[database versioning and rollback contract](/reference/database-schemas/versioning)
+when upgrading or returning to an older build.
 
 After an upgrade, automatic project and trigger recall may need to repair
 legacy provenance. That repair runs in the background. Replies continue while
@@ -205,9 +263,13 @@ and adds `sessions` to `memory.search.sources` without enabling broader
 cross-conversation recall. Retained session-reset transcripts remain in the
 agent's sessions directory and are indexed from those original artifacts.
 
-When Memory Core finds a retired per-agent QMD workspace under
-`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
-indexes, model downloads, collection metadata, and session exports.
+Doctor removes only empty per-agent QMD directories under
+`~/.openclaw/agents/<agentId>/qmd/`. Nonempty directories stay untouched:
+OpenClaw's retired QMD backend used the same layout as standalone QMD, without
+an ownership marker. Retained directories do not block migration or Gateway
+startup. After backing them up, you can remove old indexes, model downloads,
+collection metadata, and session exports manually if you have confirmed that
+no standalone QMD installation uses them.
 
 Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next

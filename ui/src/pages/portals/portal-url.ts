@@ -1,14 +1,21 @@
-import type { PortalSummary } from "@openclaw/gateway-protocol";
-import { resolveGatewayHttpOrigin } from "../../components/sandbox-host.ts";
+import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 
-export function resolvePortalUrl(
-  portal: Pick<PortalSummary, "listenPort" | "path"> & { tokenQuery: string },
-  gatewayUrl: string,
-  hostOrigin: string,
-): string {
-  const url = new URL(resolveGatewayHttpOrigin(gatewayUrl, hostOrigin));
-  url.port = String(portal.listenPort);
-  url.pathname = portal.path ?? "/";
-  url.search = portal.tokenQuery;
-  return url.href;
+/** HTTP previews require a matching UI scheme and host to keep their authentication cookies. */
+export function portalNeedsNewTab(portalUrl: string, controlUiUrl: string): boolean {
+  const portal = new URL(portalUrl);
+  const controlUi = new URL(controlUiUrl);
+  // Without secure partitioned cookies, prefer a working top-level launch over
+  // guessing registrable-domain relationships between different hostnames.
+  return (
+    portal.protocol === "http:" &&
+    (controlUi.protocol !== portal.protocol || controlUi.hostname !== portal.hostname)
+  );
+}
+
+/** A remote Gateway's loopback endpoint points at the browser, not the Gateway. */
+export function portalNeedsRemoteIngress(portalUrl: string, gatewayUrl: string): boolean {
+  return (
+    isLoopbackHostname(new URL(portalUrl).hostname) &&
+    !isLoopbackHostname(new URL(gatewayUrl).hostname)
+  );
 }

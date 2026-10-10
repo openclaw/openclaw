@@ -1,7 +1,7 @@
 import { setWorkboardCards } from "./card-state.ts";
 import {
   getWorkboardState,
-  stopWorkboardLifecycleRefresh,
+  resetWorkboardConnectionState,
   stopWorkboardLiveRefresh,
 } from "./runtime.ts";
 import type { WorkboardUiState } from "./types.ts";
@@ -44,7 +44,6 @@ export function createWorkboardCapability(): WorkboardCapability {
       boardsReady = false;
       capability.state.boards = [];
       setWorkboardCards(capability.state, []);
-      capability.state.tasksByCardId.clear();
       capability.state.loaded = false;
       capability.state.loadAttempted = false;
       if (hadRows || wasReady) {
@@ -58,7 +57,7 @@ export function createWorkboardCapability(): WorkboardCapability {
     dispose() {
       disposed = true;
       stopWorkboardLiveRefresh(capability);
-      stopWorkboardLifecycleRefresh(capability);
+      resetWorkboardConnectionState(capability);
       listeners.clear();
     },
   };

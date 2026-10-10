@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { SessionGoal } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -10,6 +11,8 @@ import { resetSkillMenuState } from "./chat-composer-skill-menu.ts";
 import { resetSlashMenuState } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+registerChatGoalsEnglish();
 
 export function createGoalComposerController(
   props: ChatComposerProps,
@@ -46,17 +49,20 @@ export function createGoalComposerController(
     }
   };
   const focus = () => queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
+  const clearMode = (mode: ChatGoalDraftMode) => {
+    state.goalComposer = null;
+    props.onGoalDraftModeChange?.(null);
+    // Editing borrows the composer; leaving it restores the conversation draft.
+    if (mode.action === "edit") {
+      replaceDraft(mode.previousDraft);
+    }
+  };
   const cancel = () => {
     const mode = current();
     if (!mode || mode.pending) {
       return;
     }
-    state.goalComposer = null;
-    props.onGoalDraftModeChange?.(null);
-    // Editing borrows the composer; cancelling returns its original conversation draft.
-    if (mode.action === "edit") {
-      replaceDraft(mode.previousDraft);
-    }
+    clearMode(mode);
     requestUpdate();
     focus();
   };
@@ -105,13 +111,7 @@ export function createGoalComposerController(
     },
     begin,
     activateDraft,
-    // Argument selection commits the draft before requesting command submission.
-    submitCommand: () => {
-      if (!activateDraft(props.getDraft?.() ?? props.draft, true)) {
-        void props.onSend();
-      }
-    },
-    activateCommand(command: SlashCommandDef) {
+    activateCommand: (command: SlashCommandDef) => {
       if (
         command.key !== "goal" ||
         command.source !== "native" ||
@@ -144,11 +144,7 @@ export function createGoalComposerController(
           submissionAction,
         );
         if (submitted && current() === mode) {
-          state.goalComposer = null;
-          props.onGoalDraftModeChange?.(null);
-          if (mode.action === "edit") {
-            replaceDraft(mode.previousDraft);
-          }
+          clearMode(mode);
         }
       } finally {
         mode.pending = false;

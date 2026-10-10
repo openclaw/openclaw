@@ -1,10 +1,8 @@
-import fs, { type BigIntStats } from "node:fs";
-import {
-  hashFileDescriptorSync,
-  sameFileMutationFingerprint,
-  type FileMutationFingerprint,
-} from "./file-descriptor.js";
-import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
+import fs from "node:fs";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { FileMutationFingerprint } from "./file-descriptor.js";
+import { hashPublishedFileSync, sameFileStatFingerprint } from "./sqlite-snapshot-file.js";
 
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
@@ -19,15 +17,7 @@ export function readSqliteIntegrityFileIdentity(
 
 type SqliteFileFingerprint = FileMutationFingerprint & { sha256: string };
 
-type SerializedSqliteFileFingerprint = {
-  birthtimeNs: string;
-  ctimeNs: string;
-  dev: string;
-  ino: string;
-  mtimeNs: string;
-  sha256: string;
-  size: string;
-};
+type SerializedSqliteFileFingerprint = Record<keyof SqliteFileFingerprint, string>;
 
 export type SqliteFileGeneration = {
   database: SqliteFileFingerprint;
@@ -35,33 +25,20 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
-function assertRegularFile(stat: BigIntStats): void {
-  if (!stat.isFile()) {
-    throw new Error("SQLite generation target must be a regular file");
-  }
-}
-
-function sameFileState(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    sameFileIdentity(left, right) &&
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.mtimeNs === right.mtimeNs &&
-    left.size === right.size
-  );
-}
-
 function fingerprintFile(pathname: string): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
-    assertRegularFile(before);
-    const { sha256 } = hashFileDescriptorSync(fd);
+    if (!before.isFile()) {
+      throw new Error("SQLite generation target must be a regular file");
+    }
+    const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });
-    if (!sameFileState(before, after) || !sameFileState(after, current)) {
+    if (!sameFileStatFingerprint(before, after) || !sameFileStatFingerprint(after, current)) {
       throw new Error(`SQLite generation target changed while hashing: ${pathname}`);
     }
+    // Retain native descriptor IDs when Windows pathname stats report unknown IDs.
     return {
       birthtimeNs: after.birthtimeNs,
       ctimeNs: after.ctimeNs,
@@ -108,7 +85,12 @@ export function readStableSqliteFileGeneration(pathname: string): SqliteFileGene
 }
 
 function sameFileFingerprint(left: SqliteFileFingerprint, right: SqliteFileFingerprint): boolean {
-  return sameFileMutationFingerprint(left, right) && left.sha256 === right.sha256;
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    sameFileStatFingerprint(left, right) &&
+    left.sha256 === right.sha256
+  );
 }
 
 function sameOptionalFileFingerprint(
@@ -127,7 +109,11 @@ export function sameSqliteFileGeneration(
   return (
     sameFileFingerprint(left.database, right.database) &&
     sameOptionalFileFingerprint(left.journal, right.journal) &&
-    sameOptionalFileFingerprint(left.wal, right.wal)
+    // SQLite can create/delete an empty WAL while opening a closed reader; it contains no frames.
+    sameOptionalFileFingerprint(
+      left.wal?.size === 0n ? undefined : left.wal,
+      right.wal?.size === 0n ? undefined : right.wal,
+    )
   );
 }
 
@@ -153,11 +139,10 @@ export function serializeSqliteFileGeneration(generation: SqliteFileGeneration):
   });
 }
 
-function parseFileFingerprint(value: unknown): SqliteFileFingerprint {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseFileFingerprint(fingerprint: unknown): SqliteFileFingerprint {
+  if (!isRecord(fingerprint)) {
     throw new Error("SQLite file fingerprint must be an object");
   }
-  const fingerprint = value as Record<string, unknown>;
   const fields = ["birthtimeNs", "ctimeNs", "dev", "ino", "mtimeNs", "size"] as const;
   for (const field of fields) {
     if (typeof fingerprint[field] !== "string" || !/^-?\d+$/u.test(fingerprint[field])) {
@@ -179,11 +164,10 @@ function parseFileFingerprint(value: unknown): SqliteFileFingerprint {
 }
 
 export function parseSqliteFileGeneration(serialized: string): SqliteFileGeneration {
-  const value = JSON.parse(serialized) as unknown;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const generation: unknown = JSON.parse(serialized);
+  if (!isRecord(generation)) {
     throw new Error("SQLite file generation must be an object");
   }
-  const generation = value as Record<string, unknown>;
   return {
     database: parseFileFingerprint(generation.database),
     ...(generation.journal === undefined

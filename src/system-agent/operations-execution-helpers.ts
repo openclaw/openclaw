@@ -1,18 +1,16 @@
-// Shared execution helpers keep the public dispatcher small and reviewable.
-import { parseConfigSetPath } from "../cli/config-cli-path.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { isDeepStrictEqual } from "node:util";
+import { getAtPath, parseConfigSetPath } from "../cli/config-cli-path.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
-import {
-  projectDefaultInferenceRoute,
-  projectInferenceRoute,
-  sameDefaultInferenceRoute,
-  type DefaultInferenceRouteProjection,
-} from "./inference-route.js";
+import { projectInferenceRoute, type DefaultInferenceRouteProjection } from "./inference-route.js";
 import type {
   SystemAgentCommandDeps,
   SystemAgentOperation,
@@ -21,11 +19,6 @@ import type {
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
-
-type ConfigModule = typeof import("../config/config.js");
-type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
-const loadConfigModule = async () => await import("../config/config.js");
-const loadOverviewModule = async () => await import("./overview.js");
 
 export const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 export const CONFIG_SCHEMA_CHILDREN_MAX = 40;
@@ -82,7 +75,7 @@ export async function runGatewayLifecycle(
 }
 
 export async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
-  const { readConfigFileSnapshot } = await loadConfigModule();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
   return await readConfigFileSnapshot();
 }
 
@@ -92,7 +85,7 @@ export async function loadOverviewForOperation(
   if (deps?.loadOverview) {
     return await deps.loadOverview();
   }
-  const { loadSystemAgentOverview } = await loadOverviewModule();
+  const { loadSystemAgentOverview } = await import("./overview.js");
   return await loadSystemAgentOverview();
 }
 
@@ -261,7 +254,7 @@ export async function applyPersistentOperation(params: {
     return { applied: false, message };
   }
   runtime.log(`[openclaw] running: ${auditOperation}`);
-  const { readConfigFileSnapshot } = await loadConfigModule();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
   const before = await readConfigFileSnapshot();
   const assertPersistentApply = opts.beforePersistentApply;
   const commit: PersistentApplyContext["commit"] = async (effect) => {
@@ -304,29 +297,113 @@ export async function applyPersistentOperation(params: {
 export async function runConfigSetOperation(params: {
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>;
   ctx: PersistentApplyContext;
-}): Promise<void> {
+}): Promise<{ storeEntry?: string; storeProvider?: string }> {
   const { operation, ctx } = params;
   const runConfigSet =
     ctx.deps?.runConfigSet ??
     (async (setOpts: Parameters<NonNullable<SystemAgentCommandDeps["runConfigSet"]>>[0]) => {
       const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
-      await importedRunConfigSet({ ...setOpts, runtime: createNoExitRuntime(ctx.runtime) });
+      await importedRunConfigSet({
+        ...setOpts,
+        runtime: createNoExitRuntime(ctx.runtime),
+        throwOnError: operation.kind === "config-set-ref" && operation.secret !== undefined,
+      });
     });
-  await ctx.commit(() =>
-    runConfigSet({
-      path: operation.path,
-      ...(operation.kind === "config-set"
-        ? { value: operation.value, cliOptions: {} }
-        : {
-            cliOptions: {
-              refProvider: operation.provider ?? "default",
-              refSource: operation.source,
-              refId: operation.id,
-            },
-          }),
-      ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
+  const beforePersistentApply = ctx.assertPersistentApply
+    ? { beforePersistentApply: ctx.assertPersistentApply }
+    : {};
+  if (operation.kind === "config-set" || operation.secret === undefined) {
+    await ctx.commit(() =>
+      runConfigSet({
+        path: operation.path,
+        ...(operation.kind === "config-set"
+          ? { value: operation.value, cliOptions: {} }
+          : {
+              cliOptions: {
+                refProvider: operation.provider ?? "default",
+                refSource: operation.source,
+                refId: operation.id,
+              },
+            }),
+        ...beforePersistentApply,
+      }),
+    );
+    return {};
+  }
+  const secret = operation.secret;
+  const snapshot = await readConfigFileSnapshotLazy();
+  const configPath = parseConfigSetPath(operation.path);
+  const currentRef = coerceSecretRef(
+    getAtPath(snapshot.sourceConfig, configPath).value,
+    snapshot.config.secrets?.defaults,
+  );
+  const defaultStoreProvider = resolveDefaultSecretProviderAlias(snapshot.config, "store", {
+    preferFirstProviderForSource: true,
+  });
+  // Rotating a key keeps the store provider it already uses.
+  const refProvider =
+    operation.provider ??
+    (currentRef?.source === "store" &&
+    (currentRef.provider === defaultStoreProvider ||
+      snapshot.config.secrets?.providers?.[currentRef.provider]?.source === "store")
+      ? currentRef.provider
+      : defaultStoreProvider);
+  // The SQLite store stays off the load path of every other config write.
+  const { writeSecretStoreEntryForConfigRef } = await import("../secrets/store/secret-store.js");
+  // Every save gets a fresh entry and no entry is ever overwritten or deleted
+  // here: another config key or auth profile may use, or start using, any
+  // entry at any time. The new ref is picked up by the normal config reload.
+  const storeEntry = await ctx.commit(() =>
+    writeSecretStoreEntryForConfigRef({
+      baseName: operation.id,
+      value: secret,
+      updatedBy: "openclaw",
+      // The worker re-checks the requester at transaction and commit admission.
+      ...(ctx.assertPersistentApply ? { assertCurrent: ctx.assertPersistentApply } : {}),
     }),
   );
+  try {
+    await runConfigSet({
+      path: operation.path,
+      cliOptions: { refProvider, refSource: "store", refId: storeEntry },
+      ...beforePersistentApply,
+    });
+  } catch (error) {
+    // The writer can fail after publication and can decline or fail rollback.
+    // Reconcile persisted source, not the possibly stale active runtime snapshot.
+    const postCommit = error instanceof ConfigWritePostCommitError ? error : undefined;
+    let referenceState = `Could not establish whether ${operation.path} references the saved entry.`;
+    try {
+      const { readConfigFileSnapshot } = await import("../config/config.js");
+      const current = await readConfigFileSnapshot({ observe: false, isolateEnv: true });
+      if (
+        current.path === (postCommit?.configPath ?? snapshot.path) &&
+        current.exists &&
+        current.valid
+      ) {
+        const ref = coerceSecretRef(
+          getAtPath(current.sourceConfig, configPath).value,
+          current.config.secrets?.defaults,
+        );
+        const referencesEntry = ref?.source === "store" && ref.id === storeEntry;
+        referenceState = `At the recovery check, ${operation.path} ${referencesEntry ? "referenced" : "did not reference"} the saved entry.`;
+      }
+    } catch {
+      // An unreadable/invalid config is unknown, never evidence of non-use.
+    }
+    // Even an absent target ref cannot certify non-use by other config/auth
+    // consumers or later writers. Keep the entry and never offer blind cleanup.
+    throw new Error(
+      [
+        `Saved the secret as ${storeEntry}, but ${postCommit ? "config post-write processing" : "the config operation"} failed: ${formatErrorMessage(error)}`,
+        referenceState,
+        "The entry was kept; other config keys or auth profiles may use it. Do not remove it while references are present or uncertain.",
+        "Resolve the config/runtime error and inspect current references before retrying; reuse the saved entry instead of saving the secret again.",
+      ].join(" "),
+      { cause: error },
+    );
+  }
+  return { storeEntry, storeProvider: refProvider };
 }
 
 async function verifyCurrentSetupInference(
@@ -337,7 +414,7 @@ async function verifyCurrentSetupInference(
   route: DefaultInferenceRouteProjection;
   latencyMs: number;
 }> {
-  const { readConfigFileSnapshot } = await loadConfigModule();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
   const before = await readConfigFileSnapshot();
   if (!before.exists || !before.valid) {
     throw new Error(
@@ -345,7 +422,7 @@ async function verifyCurrentSetupInference(
     );
   }
   const beforeConfig = before.runtimeConfig ?? before.config;
-  const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
+  const beforeRoute = await projectInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
       "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
@@ -368,9 +445,9 @@ async function verifyCurrentSetupInference(
     );
   }
   const afterConfig = after.runtimeConfig ?? after.config;
-  const afterRoute = await projectDefaultInferenceRoute(afterConfig);
+  const afterRoute = await projectInferenceRoute(afterConfig);
   if (
-    !sameDefaultInferenceRoute(beforeRoute, afterRoute) ||
+    !isDeepStrictEqual(beforeRoute, afterRoute) ||
     verification.modelRef !== afterRoute.route?.modelLabel
   ) {
     throw new Error(
@@ -489,20 +566,19 @@ export async function executeSetDefaultModel(
     runtime,
     opts,
     run: async (ctx) => {
-      const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
-      const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
-        await import("./setup-model-selection.js");
+      const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
+      const { createSystemAgentModelSelectionUpdater } = await import("./setup-model-selection.js");
       const targetAgentId = operation.agentId;
       const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
       // agent scope, so a per-agent selection is verified against that agent's
       // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
-      const stagedConfig = await applySystemAgentModelSelection({
-        config: snapshot.sourceConfig,
+      const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
         ...(targetAgentId ? { targetAgentId } : {}),
       });
+      const stagedConfig = selectModel(snapshot.sourceConfig);
       const beforeRoute = await projectRoute(snapshot.sourceConfig);
       const verifiedRoute = await projectRoute(stagedConfig);
       const verifyInferenceConfig =
@@ -528,10 +604,6 @@ export async function executeSetDefaultModel(
       let persistedVerification = initialVerification;
       let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
-      const selectModel = await createSystemAgentModelSelectionUpdater({
-        model: operation.model,
-        ...(targetAgentId ? { targetAgentId } : {}),
-      });
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
@@ -541,7 +613,7 @@ export async function executeSetDefaultModel(
             : {}),
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
-            if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
+            if (!isDeepStrictEqual(commitRoute, selectedRouteForCommit)) {
               throw new Error(
                 "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
               );
@@ -587,7 +659,7 @@ export async function executeSetDefaultModel(
           // Verification may take time. Preserve unrelated edits, but never
           // combine the passing result with a concurrently changed route.
           const currentRoute = await projectRoute(cfg);
-          if (!sameDefaultInferenceRoute(currentRoute, beforeRoute)) {
+          if (!isDeepStrictEqual(currentRoute, beforeRoute)) {
             throw new Error(
               "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
             );
@@ -639,13 +711,13 @@ export async function executeSetDefaultModel(
  * standard approval gate — matching what the operator can do from the UI/CLI.
  */
 export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Promise<boolean> {
-  const { readConfigFileSnapshot } = await loadConfigModule();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return true;
   }
   const config = snapshot.runtimeConfig ?? snapshot.config;
-  const route = (await projectDefaultInferenceRoute(config ?? {})).route;
+  const route = (await projectInferenceRoute(config ?? {})).route;
   if (!route) {
     return false;
   }

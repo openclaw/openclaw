@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
@@ -24,9 +26,8 @@ import {
 } from "../skills/library/selection.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
 import {
@@ -38,11 +39,14 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareGatewaySkillAuthoring } from "./skill-library-authoring.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
+const fixtureLifetime = createFixtureLifetime();
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    await fixtureLifetime.cleanup();
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    for (const stateDir of temps.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -99,7 +103,7 @@ async function fixture(
         ],
       })
     : undefined;
-  const pins = seedSkillLibrarySelection(authority);
+  const pins = await seedSkillLibrarySelection(authority);
   const sessionKey = "agent:main:node-skills";
   const sessionId = "node-skills";
   const entry = {
@@ -112,7 +116,7 @@ async function fixture(
   };
   await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
   const runId = "node-skill-turn";
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     agentId: "main",
     sessionKey,
     sessionId,
@@ -123,7 +127,7 @@ async function fixture(
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
   const admitted = await admission.admit("plugin-harness");
   const capability = options.authoring
-    ? prepareGatewaySkillAuthoring(owner, sessionKey, true)
+    ? await prepareGatewaySkillAuthoring(owner, sessionKey, true)
     : undefined;
   capability?.bind(admitted);
   const snapshot = options.managed
@@ -332,9 +336,12 @@ async function fixture(
 }
 
 describe("paired-node Claude skill invocation", () => {
-  it("serializes pinned resources, rewrites references, executes support bytes, and removes node artifacts", async () => {
-    const f = await fixture(
-      `
+  it("serializes pinned resources, rewrites references, executes support bytes, and removes node artifacts", async ({
+    signal,
+  }) =>
+    fixtureLifetime.run(async () => {
+      const f = await fixture(
+        `
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), crypto = require('node:crypto');
 let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end', () => {
  const promptPath = process.argv[process.argv.indexOf('--append-system-prompt-file') + 1];
@@ -343,52 +350,78 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
  const dir = path.dirname(skillPath), script = path.join(dir, 'scripts/check.sh');
  console.log(JSON.stringify({ type:'result', skillPath, prompt, input, readRoot:process.argv[process.argv.indexOf('--add-dir')+1], instruction:fs.readFileSync(skillPath,'utf8'), hash:crypto.createHash('sha256').update(fs.readFileSync(path.join(dir,'references/data.bin'))).digest('hex'), mode:fs.statSync(script).mode & 511, executed:cp.execFileSync(script,{encoding:'utf8'}) }));
 });`,
-      { managed: true },
-    );
-    try {
-      const selected = f.context.params.skillsSnapshot!.resolvedSkills![0]!;
-      await saveSkillLibrary(f.authority, {
-        skillId: f.saved!.entry.skillId,
-        slug: "guide",
-        expectedRevision: f.saved!.entry.revision,
-        content: content + "Changed later.\n",
-      });
-      const result = await f.execute(
-        `Read ${selected.filePath}; run ${selected.baseDir}/scripts/check.sh`,
+        { managed: true },
       );
-      expect(result.result.exitCode).toBe(0);
-      const actual = JSON.parse(f.output()) as {
-        skillPath: string;
-        prompt: string;
-        input: string;
-        instruction: string;
-        readRoot: string;
-        hash: string;
-        mode: number;
-        executed: string;
-      };
-      expect(actual.instruction).toBe(content);
-      expect(actual.executed).toBe("pinned");
-      expect(actual.mode).toBe(0o500);
-      expect(actual.hash).toBe(
-        createHash("sha256").update(Buffer.alloc(150_000, 129)).digest("hex"),
+      const artifactRemoval = createDeferredCore();
+      const removedPaths = new Set<string>();
+      let artifactRoot: string | undefined;
+      const remove = fs.rm.bind(fs);
+      const removalObserver = vi.spyOn(fs, "rm").mockImplementation((target, options) =>
+        fixtureLifetime.track(
+          (async () => {
+            await remove(target, options);
+            const removedPath = String(target);
+            removedPaths.add(removedPath);
+            if (removedPath === artifactRoot) {
+              artifactRemoval.resolve();
+            }
+          })(),
+        ),
       );
-      expect(actual.prompt).toContain(f.pins[0]!.name);
-      expect(actual.input).toContain(actual.skillPath);
-      expect(actual.input).not.toContain(selected.baseDir);
-      expect(actual.skillPath.startsWith(f.workspace)).toBe(false);
-      expect(actual.skillPath.startsWith(`${actual.readRoot}${path.sep}`)).toBe(true);
-      expect(f.requests[0]).toMatchObject({ skillRuntime: true });
-      expect(JSON.stringify(f.requests)).not.toContain("files");
-      expect(f.maxWireBytes()).toBeLessThan(16 * 1024);
-      await vi.waitFor(async () =>
-        expect(await fs.stat(actual.skillPath).catch(() => undefined)).toBeUndefined(),
-      );
-      expect(await fs.readdir(f.workspace)).toEqual([]);
-    } finally {
-      await f.close();
-    }
-  });
+      try {
+        const selected = f.context.params.skillsSnapshot!.resolvedSkills![0]!;
+        await saveSkillLibrary(f.authority, {
+          skillId: f.saved!.entry.skillId,
+          slug: "guide",
+          expectedRevision: f.saved!.entry.revision,
+          content: content + "Changed later.\n",
+        });
+        const result = await f.execute(
+          `Read ${selected.filePath}; run ${selected.baseDir}/scripts/check.sh`,
+        );
+        expect(result.result.exitCode).toBe(0);
+        const actual = JSON.parse(f.output()) as {
+          skillPath: string;
+          prompt: string;
+          input: string;
+          instruction: string;
+          readRoot: string;
+          hash: string;
+          mode: number;
+          executed: string;
+        };
+        expect(actual.instruction).toBe(content);
+        expect(actual.executed).toBe("pinned");
+        expect(actual.mode).toBe(0o500);
+        expect(actual.hash).toBe(
+          createHash("sha256").update(Buffer.alloc(150_000, 129)).digest("hex"),
+        );
+        expect(actual.prompt).toContain(f.pins[0]!.name);
+        expect(actual.input).toContain(actual.skillPath);
+        expect(actual.input).not.toContain(selected.baseDir);
+        expect(actual.skillPath.startsWith(f.workspace)).toBe(false);
+        expect(actual.skillPath.startsWith(`${actual.readRoot}${path.sep}`)).toBe(true);
+        expect(f.requests[0]).toMatchObject({ skillRuntime: true });
+        expect(JSON.stringify(f.requests)).not.toContain("files");
+        expect(f.maxWireBytes()).toBeLessThan(16 * 1024);
+        // The result can precede descendant extinction and its artifact-removal continuation.
+        artifactRoot = actual.readRoot;
+        if (removedPaths.has(artifactRoot)) {
+          artifactRemoval.resolve();
+        }
+        await withinTest(artifactRemoval.promise, signal);
+        expect(await fs.stat(actual.skillPath).catch(() => undefined)).toBeUndefined();
+        expect(await fs.readdir(f.workspace)).toEqual([]);
+      } finally {
+        await fixtureLifetime.verifyCleanup(async () => {
+          try {
+            await f.close();
+          } finally {
+            removalObserver.mockRestore();
+          }
+        });
+      }
+    }));
 
   it("keeps the original request and raw progress for turns without managed skills or authoring", async () => {
     const f = await fixture(
@@ -404,49 +437,46 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
     }
   });
 
-  it.each([false, true])(
-    "refuses retired request authority after pairing awaits (managed skills: %s)",
-    async (managed) => {
-      const pairingStarted = createDeferredCore();
-      const pairing = createDeferredCore<{ identity: string; generation: string }>();
-      const f = await fixture(
-        "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
-        {
-          managed,
-          resolveCurrentPairingState: async () => {
-            pairingStarted.resolve();
-            return await pairing.promise;
-          },
+  it("refuses retired request authority after managed-skill pairing awaits", async () => {
+    const pairingStarted = createDeferredCore();
+    const pairing = createDeferredCore<{ identity: string; generation: string }>();
+    const f = await fixture(
+      "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
+      {
+        managed: true,
+        resolveCurrentPairingState: async () => {
+          pairingStarted.resolve();
+          return await pairing.promise;
         },
-      );
-      const retired = new Error("request authority retired while resolving node pairing");
-      let current = true;
-      f.context.params.assertCurrent = () => {
-        if (!current) {
-          throw retired;
-        }
-      };
-      const running = f.execute();
-      const outcome = Promise.allSettled([running]);
-      try {
-        await Promise.race([
-          pairingStarted.promise,
-          running.then(() => {
-            throw new Error("Node turn completed before pairing resolution");
-          }),
-        ]);
-        current = false;
-        pairing.resolve({ identity: "node-1", generation: "generation-1" });
-
-        expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-        expect(f.requests).toEqual([]);
-      } finally {
-        pairing.resolve({ identity: "node-1", generation: "generation-1" });
-        await outcome;
-        await f.close();
+      },
+    );
+    const retired = new Error("request authority retired while resolving node pairing");
+    let current = true;
+    f.context.params.assertCurrent = () => {
+      if (!current) {
+        throw retired;
       }
-    },
-  );
+    };
+    const running = f.execute();
+    const outcome = Promise.allSettled([running]);
+    try {
+      await Promise.race([
+        pairingStarted.promise,
+        running.then(() => {
+          throw new Error("Node turn completed before pairing resolution");
+        }),
+      ]);
+      current = false;
+      pairing.resolve({ identity: "node-1", generation: "generation-1" });
+
+      expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+      expect(f.requests).toEqual([]);
+    } finally {
+      pairing.resolve({ identity: "node-1", generation: "generation-1" });
+      await outcome;
+      await f.close();
+    }
+  });
 
   it("requires the additive node capability before dispatching a selected bundle", async () => {
     const f = await fixture("process.exit(99)", { managed: true, capability: false });
@@ -487,7 +517,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
         type: "string",
         enum: expect.arrayContaining(["create", "update"]),
       });
-      const entries = listSkillLibrary(f.authority).entries;
+      const entries = (await listSkillLibrary(f.authority)).entries;
       expect(entries).toHaveLength(1);
       const published = await readSkillLibrary(f.authority, entries[0]!.skillId);
       expect(published.content).toBe(content + "Updated on node.\n");
@@ -530,7 +560,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
           f.admission.close();
         }
         if (failure === "claim-loss") {
-          f.placements.releaseTurn(f.claim);
+          await f.placements.releaseTurn(f.claim);
         }
         if (failure === "disconnect") {
           f.registry.unregister("connection-1");
@@ -546,7 +576,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
         }
         resume.resolve();
         await running.catch(() => undefined);
-        expect(listSkillLibrary(f.authority).entries).toEqual([]);
+        expect((await listSkillLibrary(f.authority)).entries).toEqual([]);
       } finally {
         resume.resolve();
         await running?.catch(() => undefined);

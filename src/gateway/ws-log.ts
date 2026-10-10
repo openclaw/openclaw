@@ -1,20 +1,17 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Gateway WebSocket log formatting.
-// Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { SESSION_LIST_SOURCES } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
-/**
- * WebSocket logging helpers for gateway request, response, and event traffic.
- */
 const LOG_VALUE_LIMIT = 240;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WS_LOG_REDACT_OPTIONS = {
@@ -23,9 +20,55 @@ const WS_LOG_REDACT_OPTIONS = {
 
 let wsLastCompactConnId: string | undefined;
 const wsInflightSince = new Map<string, number>();
+const MAX_WS_INFLIGHT_TIMINGS = 2000;
 const wsLog = createSubsystemLogger("gateway/ws");
 
 const WS_META_SKIP_KEYS = new Set(["connId", "id", "method", "ok", "event"]);
+const SESSION_LIST_FILTERS = [
+  "activeMinutes",
+  "activeOnly",
+  "requireLastInteraction",
+  "includeGlobal",
+  "includeUnknown",
+  "excludeSubagents",
+  "excludeCron",
+  "excludeSystem",
+  "configuredAgentsOnly",
+  "label",
+  "projectId",
+  "workspaceDir",
+  "group",
+  "pinned",
+  "boardFace",
+  "hasBoard",
+  "creatorId",
+  "ownerId",
+  "involvingMe",
+  "profileRelation",
+  "involvingProfileId",
+  "spawnedBy",
+  "agentId",
+  "search",
+  "archived",
+] as const;
+
+/** Request shape only: never log search text, identities, paths, or arbitrary caller tags. */
+export function summarizeSessionListForWsLog(input: unknown): Record<string, unknown> {
+  const params = isRecord(input) ? input : {};
+  return {
+    source: SESSION_LIST_SOURCES.find((source) => source === params.source) ?? "unspecified",
+    rowMode: params.rowMode === "compact" ? "compact" : "full",
+    limit:
+      typeof params.limit === "number" && Number.isSafeInteger(params.limit) && params.limit > 0
+        ? params.limit
+        : "default",
+    offset:
+      typeof params.offset === "number" && Number.isSafeInteger(params.offset) && params.offset >= 0
+        ? params.offset
+        : 0,
+    filterKind: SESSION_LIST_FILTERS.filter((key) => params[key] !== undefined).join("+") || "none",
+  };
+}
 
 function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
   const restMeta: string[] = [];
@@ -44,46 +87,6 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
     restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
   }
   return restMeta;
-}
-
-function buildWsHeadline(params: {
-  kind: string;
-  method?: string;
-  event?: string;
-}): string | undefined {
-  if ((params.kind === "req" || params.kind === "res") && params.method) {
-    return chalk.bold(params.method);
-  }
-  if (params.kind === "event" && params.event) {
-    return chalk.bold(params.event);
-  }
-  return undefined;
-}
-
-function buildWsStatusToken(kind: string, ok?: boolean): string | undefined {
-  if (kind !== "res" || ok === undefined) {
-    return undefined;
-  }
-  return ok ? chalk.greenBright("✓") : chalk.redBright("✗");
-}
-
-function logWsInfoLine(params: {
-  prefix: string;
-  statusToken?: string;
-  headline?: string;
-  durationToken?: string;
-  restMeta: string[];
-  trailing: string[];
-}): void {
-  const tokens = [
-    params.prefix,
-    params.statusToken,
-    params.headline,
-    params.durationToken,
-    ...params.restMeta,
-    ...params.trailing,
-  ].filter((t): t is string => Boolean(t));
-  wsLog.info(tokens.join(" "));
 }
 
 /** Returns true when a frame can produce console output or required timing state. */
@@ -117,10 +120,7 @@ export function formatForLog(value: unknown): string {
     if (value instanceof Error) {
       const combined = renderErrorChainForLog(value);
       if (combined) {
-        const redacted = redactSensitiveText(combined, WS_LOG_REDACT_OPTIONS);
-        return redacted.length > LOG_VALUE_LIMIT
-          ? `${truncateUtf16Safe(redacted, LOG_VALUE_LIMIT)}...`
-          : redacted;
+        return redactLogText(combined);
       }
     }
     if (value && typeof value === "object") {
@@ -133,26 +133,24 @@ export function formatForLog(value: unknown): string {
         if (code) {
           parts.push(`code=${code}`);
         }
-        const combined = redactSensitiveText(parts.join(": ").trim(), WS_LOG_REDACT_OPTIONS);
-        return combined.length > LOG_VALUE_LIMIT
-          ? `${truncateUtf16Safe(combined, LOG_VALUE_LIMIT)}...`
-          : combined;
+        return redactLogText(parts.join(": ").trim());
       }
     }
     const str =
       typeof value === "string" || typeof value === "number"
         ? String(value)
         : JSON.stringify(value);
-    if (!str) {
-      return "";
-    }
-    const redacted = redactSensitiveText(str, WS_LOG_REDACT_OPTIONS);
-    return redacted.length > LOG_VALUE_LIMIT
-      ? `${truncateUtf16Safe(redacted, LOG_VALUE_LIMIT)}...`
-      : redacted;
+    return str ? redactLogText(str) : "";
   } catch {
-    return String(value);
+    return redactLogText(String(value));
   }
+}
+
+function redactLogText(text: string): string {
+  const redacted = redactSensitiveText(text, WS_LOG_REDACT_OPTIONS);
+  return redacted.length > LOG_VALUE_LIMIT
+    ? `${truncateUtf16Safe(redacted, LOG_VALUE_LIMIT)}...`
+    : redacted;
 }
 
 function renderSingleErrorForLog(error: Error): string {
@@ -234,7 +232,7 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     extra.aseq = seq;
   }
 
-  if (!data) {
+  if (!data || isIncognitoSessionKey(sessionKey)) {
     return extra;
   }
 
@@ -310,9 +308,7 @@ export function logWs(
   if (direction === "in" && kind === "req" && inflightKey) {
     wsInflightSince.set(inflightKey, Date.now());
     // Unanswered requests must stay bounded in every log style.
-    if (wsInflightSince.size > 2000) {
-      wsInflightSince.clear();
-    }
+    pruneMapToMaxSize(wsInflightSince, MAX_WS_INFLIGHT_TIMINGS);
   } else if (direction === "out" && kind === "res" && inflightKey) {
     const startedAt = wsInflightSince.get(inflightKey);
     wsInflightSince.delete(inflightKey);
@@ -322,144 +318,76 @@ export function logWs(
   }
 
   const style = getGatewayWsLogStyle();
-  if (!isVerbose()) {
-    logWsOptimized(direction, kind, meta, durationMs);
-    return;
-  }
-
-  if (style === "compact" || style === "auto") {
-    logWsCompact(direction, kind, meta, durationMs);
-    return;
-  }
-
-  const method = typeof meta?.method === "string" ? meta.method : undefined;
+  const verbose = isVerbose();
+  const compact = verbose && (style === "compact" || style === "auto");
   const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  const event = typeof meta?.event === "string" ? meta.event : undefined;
-
-  const dirArrow = direction === "in" ? "←" : "→";
-  const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
-  const prefix = `${dirColor(dirArrow)} ${chalk.bold(kind)}`;
-
-  const headline = buildWsHeadline({ kind, method, event });
-  const statusToken = buildWsStatusToken(kind, ok);
-
-  const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
-
-  const restMeta = collectWsRestMeta(meta);
-
-  const trailing: string[] = [];
-  if (connId) {
-    trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
-  }
-  if (id) {
-    trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
-  }
-
-  logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
-}
-
-function logWsOptimized(
-  direction: "in" | "out",
-  kind: string,
-  meta: Record<string, unknown> | undefined,
-  durationMs: number | undefined,
-) {
-  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
-  const id = typeof meta?.id === "string" ? meta.id : undefined;
-  const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  const method = typeof meta?.method === "string" ? meta.method : undefined;
-
-  if (kind === "parse-error") {
-    const errorMsg = typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
-    wsLog.warn(
-      [
-        `${chalk.redBright("✗")} ${chalk.bold("parse-error")}`,
-        errorMsg ? `${chalk.dim("error")}=${errorMsg}` : undefined,
-        `${chalk.dim("conn")}=${chalk.gray(shortId(connId ?? "?"))}`,
-      ]
-        .filter((t): t is string => Boolean(t))
-        .join(" "),
-    );
-    return;
-  }
-
-  if (direction !== "out" || kind !== "res") {
-    return;
-  }
-
-  const shouldLog =
-    ok === false || (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS);
-  if (!shouldLog) {
-    return;
-  }
-
-  const statusToken = buildWsStatusToken("res", ok);
-  const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
-
-  const restMeta = collectWsRestMeta(meta);
-
-  logWsInfoLine({
-    prefix: `${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
-    statusToken,
-    headline: method ? chalk.bold(method) : undefined,
-    durationToken,
-    restMeta,
-    trailing: [
-      connId ? `${chalk.dim("conn")}=${chalk.gray(shortId(connId))}` : "",
-      id ? `${chalk.dim("id")}=${chalk.gray(shortId(id))}` : "",
-    ].filter(Boolean),
-  });
-}
-
-function logWsCompact(
-  direction: "in" | "out",
-  kind: string,
-  meta: Record<string, unknown> | undefined,
-  durationMs: number | undefined,
-) {
-  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
-  const id = typeof meta?.id === "string" ? meta.id : undefined;
-  const method = typeof meta?.method === "string" ? meta.method : undefined;
-  const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  if (kind === "req" && direction === "in" && connId && id) {
-    return;
-  }
-
-  const compactArrow = (() => {
-    if (kind === "req" || kind === "res") {
-      return "⇄";
+  if (!verbose) {
+    if (kind === "parse-error") {
+      const errorMsg = typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
+      wsLog.warn(
+        [
+          `${chalk.redBright("✗")} ${chalk.bold("parse-error")}`,
+          errorMsg ? `${chalk.dim("error")}=${errorMsg}` : undefined,
+          `${chalk.dim("conn")}=${chalk.gray(shortId(connId ?? "?"))}`,
+        ]
+          .filter((t): t is string => Boolean(t))
+          .join(" "),
+      );
+      return;
     }
-    return direction === "in" ? "←" : "→";
-  })();
-  const arrowColor =
-    kind === "req" || kind === "res"
-      ? chalk.yellowBright
-      : direction === "in"
-        ? chalk.greenBright
-        : chalk.cyanBright;
+    if (
+      direction !== "out" ||
+      kind !== "res" ||
+      !(
+        ok === false ||
+        (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS) ||
+        (meta?.method === "sessions.list" &&
+          typeof meta.bytes === "number" &&
+          meta.bytes >= 200 * 1024)
+      )
+    ) {
+      return;
+    }
+  } else if (compact && kind === "req" && direction === "in" && connId && id) {
+    return;
+  }
 
-  const prefix = `${arrowColor(compactArrow)} ${chalk.bold(kind)}`;
-
-  const statusToken = buildWsStatusToken(kind, ok);
-
-  const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
-
-  const headline = buildWsHeadline({
-    kind,
-    method,
-    event: typeof meta?.event === "string" ? meta.event : undefined,
-  });
-
+  const combined = !verbose || (compact && (kind === "req" || kind === "res"));
+  const arrow = combined ? "⇄" : direction === "in" ? "←" : "→";
+  const arrowColor = combined
+    ? chalk.yellowBright
+    : direction === "in"
+      ? chalk.greenBright
+      : chalk.cyanBright;
+  const headline = readStringValue(
+    kind === "req" || kind === "res" ? meta?.method : kind === "event" ? meta?.event : undefined,
+  );
   const restMeta = collectWsRestMeta(meta);
-
   const trailing: string[] = [];
-  if (connId && connId !== wsLastCompactConnId) {
+  if (connId && (!compact || connId !== wsLastCompactConnId)) {
     trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
-    wsLastCompactConnId = connId;
+    if (compact) {
+      wsLastCompactConnId = connId;
+    }
   }
   if (id) {
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
+  wsLog.info(
+    [
+      `${arrowColor(arrow)} ${chalk.bold(kind)}`,
+      kind === "res" && ok !== undefined
+        ? ok
+          ? chalk.greenBright("✓")
+          : chalk.redBright("✗")
+        : undefined,
+      headline ? chalk.bold(headline) : undefined,
+      typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined,
+      ...restMeta,
+      ...trailing,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 }

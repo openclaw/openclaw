@@ -1,4 +1,15 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
+import type { PluginStateStoreError } from "./plugin-state-error.js";
+
+export {
+  PluginStateStoreError,
+  type PluginStateStoreErrorCode,
+  type PluginStateStoreOperation,
+} from "./plugin-state-error.js";
 
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
@@ -37,8 +48,7 @@ export type PluginStateMoveEntries = {
   entries: Array<{ sourceKey: string; targetKey: string }>;
 };
 
-/** Async plugin state API exposed to plugin runtimes. */
-export type PluginStateKeyedStore<T> = {
+type PluginStateKeyedStoreBase<T> = {
   /** Prepares a mutation observation through canonical writable admission; may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
   /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
@@ -47,7 +57,11 @@ export type PluginStateKeyedStore<T> = {
     comparison: string,
     intent: PluginStateCompareIntent<T>,
   ) => Promise<PluginStateCompareResult<T>>;
-  register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+  register(
+    key: string,
+    value: T,
+    opts?: { ttlMs?: number; assertCurrent?: () => void },
+  ): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   /**
    * The updater runs synchronously in the transaction; undefined leaves the entry unchanged.
@@ -73,7 +87,10 @@ export type PluginStateKeyedStore<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
+  delete(
+    key: string,
+    opts?: { assertCurrent?: () => void; signal?: AbortSignal },
+  ): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
@@ -87,6 +104,18 @@ export type PluginStateKeyedStore<T> = {
   clear(): Promise<void>;
 };
 
+/** Version 2 is an action-bound, data-only view; legacy stores remain source-compatible. */
+export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extends 2
+  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf">>
+  : PluginStateKeyedStoreBase<T> & {
+      /** Bind current action authority through read completion and final write admission. */
+      withCurrent?: (authority: {
+        assertCurrent: () => void;
+        /** Restricts native writes and comparisons; ordinary reads use assertCurrent. */
+        sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
+      }) => PluginStateKeyedStore<T, 2>;
+    };
+
 /**
  * Synchronous plugin-state compatibility contract.
  * @deprecated Use PluginStateKeyedStore from api.runtime.state.openKeyedStore
@@ -95,6 +124,7 @@ export type PluginStateKeyedStore<T> = {
 export type PluginStateSyncKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
+  /** Expiry options are consumed after the synchronous updater returns. */
   update?: (
     key: string,
     updateValue: (current: T | undefined) => T | undefined,
@@ -137,51 +167,3 @@ export type OpenRetainedKeyedStoreOptions = {
 };
 
 export type OpenAsyncKeyedStoreOptions = OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions;
-
-export type PluginStateStoreErrorCode =
-  | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
-  | "PLUGIN_STATE_OPEN_FAILED"
-  | "PLUGIN_STATE_WRITE_FAILED"
-  | "PLUGIN_STATE_READ_FAILED"
-  | "PLUGIN_STATE_CORRUPT"
-  | "PLUGIN_STATE_LIMIT_EXCEEDED"
-  | "PLUGIN_STATE_INVALID_INPUT";
-
-export type PluginStateStoreOperation =
-  | "load-sqlite"
-  | "open"
-  | "ensure-schema"
-  | "register"
-  | "lookup"
-  | "consume"
-  | "delete"
-  | "entries"
-  | "count"
-  | "clear"
-  | "sweep"
-  | "probe"
-  | "close";
-
-type PluginStateStoreErrorOptions = {
-  code: PluginStateStoreErrorCode;
-  operation: PluginStateStoreOperation;
-  path?: string;
-  cause?: unknown;
-};
-
-/** Typed error thrown for plugin-state validation and sqlite failures. */
-export class PluginStateStoreError extends Error {
-  readonly code: PluginStateStoreErrorCode;
-  readonly operation: PluginStateStoreOperation;
-  readonly path?: string;
-
-  constructor(message: string, options: PluginStateStoreErrorOptions) {
-    super(message, { cause: options.cause });
-    this.name = "PluginStateStoreError";
-    this.code = options.code;
-    this.operation = options.operation;
-    if (options.path) {
-      this.path = options.path;
-    }
-  }
-}

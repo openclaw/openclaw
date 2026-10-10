@@ -15,10 +15,18 @@ When the selected model uses the Codex harness, Codex app-server owns native
 token-pressure and manual thread compaction. OpenClaw separately owns its
 transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw requires semantic
+heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
 This host compaction does not itself replace or rewrite Codex's canonical
 native thread.
+
+If the context engine declines host compaction or leaves history oversized,
+OpenClaw continues with a bounded projection of recent whole turns. The native
+thread follows that projection so omitted history cannot remain in its context.
+A visible notice asks you to resend any essential earlier details; saved history
+is unchanged. The failure reason is logged at warning level. Failed attempts do
+not count as successful compaction, and suppressed retries still receive bounded
+context. System instructions and the current request remain intact.
 
 After host mirror compaction commits, OpenClaw may request
 `thread/compact/start` to synchronize an eligible native thread. This request
@@ -54,6 +62,12 @@ Codex turn, compaction, or side question continues the same native thread even i
 immediately after committing the new generation. Only the recorded predecessor
 under that session key can be adopted. Native tool catalogs, connection ownership,
 and supervision checks still apply before the resumed thread executes.
+
+A successful local rewind or branch switch is a context change. It invalidates
+the old native binding as part of the transcript mutation and releases its
+subscription before returning. The next Codex turn starts a fresh native thread
+with the selected OpenClaw history; erased turns cannot return through a native
+resume. Invalid cuts and rolled-back transcript mutations preserve the binding.
 
 When OpenClaw projects an existing session's continuity into a fresh Codex
 thread, it includes saved compaction and branch summaries, even when no

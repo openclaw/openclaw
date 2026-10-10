@@ -1,6 +1,7 @@
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readStoredTranscriptNotes,
   readTranscriptEntry,
@@ -9,12 +10,17 @@ import type {
   TranscriptReadPurpose,
 } from "./store-read.js";
 import type {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
   readStoredTranscriptSummary,
   readTranscriptUtterances,
   readTranscriptSummarySnapshot,
+  readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
 import type {
   readRecentStoppedTranscriptSession,
@@ -24,6 +30,26 @@ import type {
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 
 export type TranscriptReadRequests = {
+  "transcripts.canonicalSessionRow": {
+    input: { selector: string };
+    output: ReturnType<typeof readTranscriptCanonicalSessionRow>;
+  };
+  "transcripts.readEntries": {
+    input: Parameters<typeof queryTranscriptReadEntries>[1];
+    output: ReturnType<typeof queryTranscriptReadEntries>;
+  };
+  "transcripts.exportOwnership": {
+    input: { session: SessionIdentity };
+    output: ReturnType<typeof readTranscriptExportOwnership>;
+  };
+  "transcripts.exportPathCollisions": {
+    input: { exportKey: string };
+    output: ReturnType<typeof readTranscriptExportPathCollisions>;
+  };
+  "transcripts.exportPathOwners": {
+    input: { exportKey: string };
+    output: ReturnType<typeof readTranscriptExportPathOwners>;
+  };
   "transcripts.summarySnapshot": {
     input: { session: SessionIdentity; maxUtterances: number };
     output: ReturnType<typeof readTranscriptSummarySnapshot>;
@@ -68,6 +94,10 @@ export type TranscriptReadRequests = {
   "transcripts.summary": {
     input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptSummary>;
+  };
+  "transcripts.exportDigest": {
+    input: { session: SessionIdentity };
+    output: ReturnType<typeof readTranscriptJsonlDigest>;
   };
 };
 

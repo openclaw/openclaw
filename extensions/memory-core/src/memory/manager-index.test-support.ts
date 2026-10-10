@@ -7,15 +7,17 @@ import type {
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
@@ -391,6 +393,7 @@ export function createManagerIndexFixture(deps: {
   let workspace = "";
   let memory = "";
   let state: OpenClawTestState;
+  let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
 
   const resetManager = (manager: MemoryIndexManager): void => {
@@ -445,7 +448,7 @@ export function createManagerIndexFixture(deps: {
       },
       agents: {
         defaults: { workspace },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);
@@ -455,7 +458,7 @@ export function createManagerIndexFixture(deps: {
     missingMessage = "manager missing",
   ): MemoryIndexManager => {
     if (!result.manager) {
-      throw new Error(missingMessage);
+      throw new Error(result.error ?? missingMessage);
     }
     return result.manager as unknown as MemoryIndexManager;
   };
@@ -465,7 +468,13 @@ export function createManagerIndexFixture(deps: {
   };
 
   const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
     resetManager(manager);
     return manager;
@@ -477,7 +486,13 @@ export function createManagerIndexFixture(deps: {
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
     const manager = requireManager(
-      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose, inspectSources }),
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+        purpose,
+        inspectSources,
+      }),
     );
     trackManager(manager);
     return manager;
@@ -519,11 +534,31 @@ export function createManagerIndexFixture(deps: {
       sessionMemory: true,
       minScore: 0,
     });
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
     resetManager(manager);
     return manager.status().fts?.available ? manager : null;
   };
+
+  beforeAll(async () => {
+    workerState = await createOpenClawTestState({
+      prefix: "openclaw-mem-worker-fixture-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    // A file-owned store keeps shared SQLite workers available across complete case cleanup.
+    await createPluginStateKeyedStoreForTests<boolean>("memory-core", {
+      namespace: "index-fixture-worker",
+      maxEntries: 1,
+      env: workerState.env,
+    }).register("ready", true);
+  });
 
   afterEach(async () => {
     vi.useRealTimers();
@@ -533,6 +568,10 @@ export function createManagerIndexFixture(deps: {
     resetMemoryCoreDreamingStateForTests();
     clearRegistry();
     managers.clear();
+  });
+
+  afterAll(async () => {
+    await workerState?.cleanup();
   });
 
   beforeEach(async () => {

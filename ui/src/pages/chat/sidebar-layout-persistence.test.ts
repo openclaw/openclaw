@@ -17,31 +17,32 @@ import {
 } from "./sidebar-layout.ts";
 
 describe("sidebar session layout settings", () => {
-  it("retains only a normalized task identity on the detail panel", () => {
+  it("drops retired task panels and selections while preserving other panels", () => {
     const saved = normalizeSidebarSessionLayouts({
       main: {
         columns: [
           {
             id: "side",
             side: "right",
-            activePanelId: "detail",
+            activePanelId: "tasks",
+            width: 600,
             panels: [
-              {
-                id: "detail",
-                slot: "detail",
-                taskId: "  selected-task  ",
-                result: "not persisted",
-              },
-              { id: "workspace", slot: "workspace", taskId: "wrong-slot" },
+              { id: "tasks", slot: "tasks", taskId: "retired" },
+              { id: "old-review", slot: "detail", taskId: "retired" },
+              { id: "files", slot: "workspace", taskId: "ignored" },
+              { id: "review", slot: "detail" },
             ],
           },
         ],
       },
-    });
-    expect(saved.main?.columns[0]?.panels).toEqual([
-      { id: "detail", slot: "detail", taskId: "selected-task" },
-      { id: "workspace", slot: "workspace" },
+    }).main!;
+    expect(saved.columns[0]!.panels).toEqual([
+      { id: "files", slot: "workspace" },
+      { id: "review", slot: "detail" },
     ]);
+    expect(saved.columns[0]!.activePanelId).toBe("files");
+    expect(saved.columns[0]!.width).toBe(600);
+    expect(normalizeSidebarSessionLayouts({ main: saved }).main).toEqual(saved);
   });
 
   it.each(["split", "expanded", null, undefined] as const)(

@@ -10,6 +10,7 @@ import type {
   MatrixStoredCredentialRecord,
   MatrixStoredCredentials,
 } from "./credentials-state.js";
+import { updateMatrixKeyedState } from "./sqlite-state.js";
 
 export {
   clearMatrixCredentials,
@@ -25,29 +26,22 @@ export async function saveMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<void> {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const preparedCredentials = { ...credentials };
-  const now = new Date().toISOString();
-  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
-    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
-    return {
-      accountId: normalizedAccountId,
-      homeserver: preparedCredentials.homeserver,
-      userId: preparedCredentials.userId,
-      accessToken: preparedCredentials.accessToken,
-      ...(typeof preparedCredentials.deviceId === "string"
-        ? { deviceId: preparedCredentials.deviceId }
-        : {}),
-      createdAt: existing?.createdAt ?? now,
-      lastUsedAt: now,
-    } satisfies MatrixStoredCredentialRecord;
-  });
+  await persistMatrixCredentials(credentials, env, accountId, false);
 }
 
 export async function saveBackfilledMatrixDeviceId(
   credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
+): Promise<"saved" | "skipped"> {
+  return persistMatrixCredentials(credentials, env, accountId, true);
+}
+
+async function persistMatrixCredentials(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv,
+  accountId: string | null | undefined,
+  backfill: boolean,
 ): Promise<"saved" | "skipped"> {
   const normalizedAccountId = normalizeAccountId(accountId);
   const preparedCredentials = { ...credentials };
@@ -56,12 +50,13 @@ export async function saveBackfilledMatrixDeviceId(
   await updateMatrixCredentials(env, normalizedAccountId, (current) => {
     result = "saved";
     // A delayed login backfill must not resurrect credentials after logout.
-    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
+    if (backfill && isMatrixCredentialRevocation(current, normalizedAccountId)) {
       result = "skipped";
       return current;
     }
     const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
     if (
+      backfill &&
       existing &&
       (existing.homeserver !== preparedCredentials.homeserver ||
         existing.userId !== preparedCredentials.userId ||
@@ -109,24 +104,8 @@ async function updateMatrixCredentials(
 ): Promise<void> {
   const store = openMatrixCredentialsAsyncStore(env);
   const key = matrixCredentialsStoreKey(accountId);
-  if (!store.observe || !store.compareAndApply) {
+  await updateMatrixKeyedState(store, key, update, () => {
     // Matrix's published >=2026.9.4 host floor predates data-only comparisons.
-    openMatrixCredentialsStore(env).update(key, update);
-    return;
-  }
-  let observation = await store.observe(key);
-  for (;;) {
-    const value = update(observation.value);
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      value === undefined
-        ? { operation: "update", action: "keep" }
-        : { operation: "update", action: "set", value },
-    );
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
+    return openMatrixCredentialsStore(env).update(key, update);
+  });
 }

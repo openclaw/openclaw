@@ -11,6 +11,7 @@ import {
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
@@ -66,39 +67,64 @@ export function createToolCallLookup<Value>() {
   };
 }
 
-function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
-  return item.kind === "message" && chatItemStartsUserTurn(item);
-}
-
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const item = items.findLast(isUserChatItem);
-  return item ? { afterKey: item.key } : null;
+  const userTurn = items.findLast(
+    (item) => item.kind === "message" && chatItemStartsUserTurn(item),
+  );
+  return userTurn ? { afterKey: userTurn.key } : null;
 }
 
 export function createRunTurnLookup(items: ChatItem[]) {
   let bounds: Map<string, TurnInsertionBounds> | undefined;
-  return (runId: string): TurnInsertionBounds | null => {
+  const inputs = new Map<string, TurnInsertionBounds>();
+  const pagedInputCeilings = new Map<string, TurnInsertionBounds>();
+  return (runId: string, afterUserSendId?: string): TurnInsertionBounds | null => {
     if (!bounds) {
       bounds = new Map();
-      let nextUserKey: string | undefined;
-      // Keys survive canvas splices. Rebuild after user rows are filtered or
-      // inserted; the earliest user for a run owns its next-user ceiling.
-      for (let index = items.length - 1; index >= 0; index--) {
-        const item = items[index]!;
-        if (!isUserChatItem(item)) {
+      let previousInput: TurnInsertionBounds | undefined;
+      const open = new Map<string, TurnInsertionBounds>();
+      // Accepted steers divide the transcript, not the run they continue.
+      // Keep that run open, but cap unrelated runs at every user boundary.
+      for (const item of items) {
+        if (!chatItemStartsUserTurn(item)) {
           continue;
         }
-        const owner = userTurnRunId(item.message);
-        if (owner !== null) {
-          bounds.set(owner, {
-            afterKey: item.key,
-            ...(nextUserKey ? { beforeKey: nextUserKey } : {}),
-          });
+        if (previousInput) {
+          previousInput.beforeKey = item.key;
         }
-        nextUserKey = item.key;
+        previousInput = { afterKey: item.key };
+        const sendId =
+          item.kind === "message" ? readSessionMessageIdentity(item.message)?.sendId : null;
+        if (sendId) {
+          inputs.set(sendId, previousInput);
+        }
+        const target = item.kind === "message" ? persistedSteerTargetRunId(item.message) : null;
+        for (const [owner, interval] of open) {
+          if (owner !== target) {
+            interval.beforeKey = item.key;
+            open.delete(owner);
+          }
+        }
+        const owner = item.kind === "message" ? userTurnRunId(item.message) : null;
+        for (const id of [owner, target]) {
+          if (id && !bounds.has(id)) {
+            const interval = { afterKey: item.key };
+            bounds.set(id, interval);
+            open.set(id, interval);
+            if (id === target) {
+              pagedInputCeilings.set(id, { beforeKey: item.key });
+            }
+          }
+        }
       }
     }
-    return bounds.get(runId) ?? null;
+    return (
+      (afterUserSendId
+        ? (inputs.get(afterUserSendId) ?? pagedInputCeilings.get(runId))
+        : undefined) ??
+      bounds.get(runId) ??
+      null
+    );
   };
 }
 
@@ -113,8 +139,7 @@ export function resolveRunInsertionBounds(
   }
   const runBounds = findRunBounds(runId);
   if (runId === currentRunId) {
-    // Active runs can span steers: the original prompt is a floor, not a ceiling.
-    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
+    return runBounds ?? currentTurnBounds;
   }
   if (runBounds || currentRunId == null) {
     return runBounds;

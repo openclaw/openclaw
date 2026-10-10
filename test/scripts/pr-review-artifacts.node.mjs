@@ -214,6 +214,108 @@ test("substantive findings and runtime proof still gate READY", (t) => {
   assert.match(f.validate().stdout, /passing tests/);
 });
 
+test("investigated local failures retain failed proof and gate READY on complete evidence", (t) => {
+  const f = fixture(t, true);
+  f.review.recommendation = "READY FOR /prepare-pr";
+  Object.assign(f.review.issueValidation, { performed: true, status: "valid" });
+  Object.assign(f.review.behavioralSweep, {
+    performed: true,
+    status: "pass",
+    silentDropRisk: "none",
+    branches: [{ path: "src/example.ts", decision: "empty input", outcome: "explicit error" }],
+  });
+  f.review.tests = {
+    result: "fail",
+    ran: ["original live command failed; one diagnostic replay passed"],
+    gaps: ["The original failure remains unexplained."],
+    investigatedLocalFailures: {
+      head,
+      failures: [
+        {
+          failure: "The unchanged live command returned an incomplete reply.",
+          reproductionAttempts: ["One same-head diagnostic replay returned the complete reply."],
+          evidence: ["Original failure log and replay trace in the PR."],
+          remainingUncertainty: "The replay did not establish a cause or prove a fix.",
+        },
+      ],
+    },
+  };
+  const accepted = f.validate();
+  assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+  const rendered = cli("render", f.reviewPath);
+  assert.equal(rendered.status, 0);
+  assert.match(rendered.stdout, /Tests: fail/);
+  assert.match(rendered.stdout, /Unresolved local test failures/);
+  assert.ok(rendered.stdout.includes(head));
+  const failure = f.review.tests.investigatedLocalFailures.failures[0];
+  for (const text of [
+    failure.failure,
+    ...failure.reproductionAttempts,
+    ...failure.evidence,
+    failure.remainingUncertainty,
+  ]) {
+    assert.ok(rendered.stdout.includes(text), rendered.stdout);
+  }
+
+  const valid = structuredClone(f.review);
+  for (const mutate of [
+    (review) => {
+      review.tests.result = "pass";
+    },
+    (review) => {
+      review.tests.result = "not_run";
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.head = "c".repeat(40);
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures = null;
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures = [];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures = [null];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].failure = " ";
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].reproductionAttempts = [];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].reproductionAttempts = [""];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].evidence = [];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].evidence = [""];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].remainingUncertainty = " ";
+    },
+  ]) {
+    Object.assign(f.review, structuredClone(valid));
+    mutate(f.review);
+    const rejected = f.validate();
+    assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+    assert.match(rejected.stdout, /Invalid investigated local failures/);
+  }
+  Object.assign(f.review, structuredClone(valid));
+  f.review.findings.push({
+    id: "F1",
+    severity: "IMPORTANT",
+    title: "Regression",
+    area: "input",
+    fix: "Handle input",
+  });
+  assert.match(f.validate().stdout, /cannot include BLOCKER or IMPORTANT findings/);
+  f.review.findings = [];
+  f.review.behavioralSweep.status = "needs_work";
+  assert.match(f.validate().stdout, /requires behavioralSweep.status/);
+});
+
 test(
   "native preflight rejects locally and never evaluates metadata shell code",
   { skip: process.platform === "win32" },
@@ -286,6 +388,7 @@ ${invocation}
     for (const [invocation, contents] of [
       ["review_validate_artifacts 42", "invalid JSON"],
       ["prepare_init 42", JSON.stringify(f.review)],
+      ["prepare_init 42 '' correction", JSON.stringify(f.review)],
     ]) {
       writeFileSync(join(local, "review.json"), contents);
       writeFileSync(
@@ -325,5 +428,173 @@ ${invocation} || exit 1
         "",
       );
     }
+  },
+);
+
+function correctionFixture(t, incomingPaths = ["docs/incoming.md"]) {
+  const root = mkdtempSync(join(tmpdir(), "pr-correction-paths-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    OPENCLAW_PR_GIT: "",
+    GIT_EXEC: "",
+  };
+  const git = (args, input) =>
+    execFileSync("git", args, { cwd: root, env, input, encoding: "utf8" });
+  git(["init", "-q", "-b", "topic"]);
+  git(["config", "commit.gpgSign", "false"]);
+  // Synthetic index-only names need not be representable on the host filesystem.
+  git(["config", "core.protectNTFS", "false"]);
+  git(["config", "core.hooksPath", process.platform === "win32" ? "NUL" : "/dev/null"]);
+  mkdirSync(join(root, ".local"));
+  writeFileSync(join(root, ".gitignore"), ".local/\n");
+  git(["add", ".gitignore"]);
+  git(["commit", "-qm", "incoming"]);
+  const incoming = git(["rev-parse", "HEAD"]).trim();
+  const review = JSON.parse(cli("template", "42", incoming).stdout);
+  review.findings = [
+    { id: "F1", severity: "IMPORTANT", title: "Fix behavior", area: "paths", fix: "Correct it" },
+  ];
+  const incomingFiles = {
+    "review.json": JSON.stringify(review),
+    "pr-meta.json": JSON.stringify({
+      number: 42,
+      headRefOid: incoming,
+      files: incomingPaths.map((path) => ({ path })),
+    }),
+  };
+  for (const [name, bytes] of Object.entries(incomingFiles)) {
+    writeFileSync(join(root, ".local", name), bytes);
+  }
+  const jsonOid = git(["hash-object", "--no-filters", ".local/review.json"]).trim();
+  const commitPaths = (paths) => {
+    const blob = git(["hash-object", "-w", "--stdin"], "fixture\n").trim();
+    git(
+      ["update-index", "-z", "--index-info"],
+      paths.map((path) => `100644 ${blob}\t${path}\0`).join(""),
+    );
+    git(["commit", "-qm", "correction"]);
+    // Let Git mark exact index names without host-specific path normalization.
+    // Only .gitignore is materialized; the synthetic paths stay in the index.
+    git(["sparse-checkout", "set", "--no-cone", "/.gitignore"]);
+  };
+  const run = (command, envOverrides = {}) =>
+    spawnSync(
+      process.execPath,
+      [
+        join(scripts, "pr-lib/correction-review.mjs"),
+        command,
+        "42",
+        incoming,
+        git(["rev-parse", "HEAD"]).trim(),
+        jsonOid,
+      ],
+      { cwd: root, env: { ...env, ...envOverrides }, encoding: "utf8" },
+    );
+  const approve = (runtime = false) => {
+    const path = join(root, ".local/correction-review.json");
+    const correction = JSON.parse(readFileSync(path, "utf8"));
+    correction.recommendation = "READY FOR /prepare-pr";
+    correction.findings = [];
+    Object.assign(correction.issueValidation, { performed: true, status: "valid" });
+    Object.assign(correction.behavioralSweep, {
+      performed: true,
+      status: runtime ? "pass" : "not_applicable",
+      silentDropRisk: "none",
+      branches: runtime
+        ? [{ path: "ui/last-雪\n\tfile.ts", decision: "changed", outcome: "verified" }]
+        : [],
+    });
+    correction.tests = { result: "pass", ran: ["regression fixture"], gaps: [] };
+    correction.correction.resolvedFindings[0].resolution = "Verified corrected behavior.";
+    writeFileSync(path, JSON.stringify(correction));
+  };
+  const assertIncomingUnchanged = () => {
+    for (const [name, bytes] of Object.entries(incomingFiles)) {
+      assert.equal(readFileSync(join(root, ".local", name), "utf8"), bytes);
+    }
+  };
+  return { root, git, incoming, commitPaths, run, approve, assertIncomingUnchanged };
+}
+
+test("correction review accepts Git path output above 1 MiB without dropping the final runtime path", (t) => {
+  const f = correctionFixture(t);
+  const directory = "d".repeat(80);
+  const paths = Array.from({ length: 12000 }, (_, i) => `docs/${directory}/${i}.md`);
+  paths.push("ui/last-雪\n\tfile.ts");
+  f.commitPaths(paths);
+  assert.ok(Buffer.byteLength(`${paths.join("\0")}\0`) > 1024 * 1024);
+  assert.throws(() => f.git(["diff", "--name-only", "-z", f.incoming, "HEAD"]), {
+    code: "ENOBUFS",
+  });
+  const initialized = f.run("init");
+  assert.equal(initialized.status, 0, initialized.stdout + initialized.stderr);
+  // A runtime path after the former capture ceiling still requires runtime proof.
+  f.approve();
+  const validated = f.run("validate");
+  assert.equal(validated.status, 1, validated.stdout + validated.stderr);
+  assert.match(validated.stderr, /runtime file changes require/);
+  f.approve(true);
+  const accepted = f.run("validate");
+  assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+  assert.match(accepted.stdout, /READY FOR \/prepare-pr/);
+  f.assertIncomingUnchanged();
+});
+
+for (const incomingRuntime of [false, true]) {
+  test(`correction review preserves NUL path boundaries and incoming scope, runtime=${incomingRuntime}`, (t) => {
+    const f = correctionFixture(t, [incomingRuntime ? "src/incoming.ts" : "docs/incoming.md"]);
+    f.commitPaths(["docs/line\nsrc/not-a-separate-path.ts", 'docs/ space\t"\\雪.md']);
+    const initialized = f.run("init");
+    assert.equal(initialized.status, 0, initialized.stdout + initialized.stderr);
+    f.approve();
+    const result = f.run("validate");
+    assert.equal(result.status, incomingRuntime ? 1 : 0, result.stdout + result.stderr);
+    if (incomingRuntime) {
+      assert.match(result.stderr, /runtime file changes require/);
+    } else {
+      assert.match(result.stdout, /READY FOR \/prepare-pr/);
+    }
+    f.assertIncomingUnchanged();
+  });
+}
+
+test(
+  "correction review rejects a failed path query without writing review artifacts",
+  {
+    skip: process.platform === "win32",
+  },
+  (t) => {
+    const f = correctionFixture(t);
+    f.commitPaths(["docs/fix.md"]);
+    const selectedGit = join(f.root, ".local", "git-query-error");
+    writeFileSync(
+      selectedGit,
+      `#!/bin/sh
+if [ "$1" = diff ]; then
+  for arg in "$@"; do
+    if [ "$arg" = --name-only ]; then
+      printf 'docs/partial.md\\0'
+      echo 'fixture changed-path failure' >&2
+      exit 73
+    fi
+  done
+fi
+exec git "$@"
+`,
+      { mode: 0o755 },
+    );
+    const result = f.run("init", { OPENCLAW_PR_GIT: selectedGit });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /fixture changed-path failure/);
+    assert.equal(existsSync(join(f.root, ".local/correction-review.json")), false);
+    assert.equal(existsSync(join(f.root, ".local/correction-incoming-review.json")), false);
+    f.assertIncomingUnchanged();
   },
 );

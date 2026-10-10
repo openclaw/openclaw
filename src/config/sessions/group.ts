@@ -1,4 +1,3 @@
-// Group session keys convert channel-specific group metadata into stable store ids.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -13,26 +12,16 @@ import type { GroupKeyResolution } from "./types.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
-type LegacyGroupSessionSurface = {
-  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
-};
-
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   // Legacy plugin resolvers stay first-class because some channels still expose native group ids
   // only through channel-owned context parsing.
   for (const plugin of listChannelPlugins()) {
-    const resolved = (
-      plugin.messaging as LegacyGroupSessionSurface | undefined
-    )?.resolveLegacyGroupSessionKey?.(ctx);
+    const resolved = plugin.messaging?.resolveLegacyGroupSessionKey?.(ctx);
     if (resolved) {
       return resolved;
     }
   }
   return null;
-}
-
-function normalizeGroupLabel(raw?: string) {
-  return normalizeHyphenSlug(raw);
 }
 
 function joinOpaqueTail(parts: string[], start: number): string | null {
@@ -60,24 +49,10 @@ function resolveOriginatingGroupTargetId(params: {
   if (secondIsKind && (head === params.provider || getGroupSurfaces().has(head))) {
     return joinOpaqueTail(parts, 2);
   }
-  if (head === params.provider || head === "chat" || head === "room" || head === "group") {
-    return joinOpaqueTail(parts, 1);
-  }
-  if (head === "channel") {
+  if (head === params.provider || ["chat", "room", "group", "channel"].includes(head)) {
     return joinOpaqueTail(parts, 1);
   }
   return null;
-}
-
-function shortenGroupId(value?: string) {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.length <= 14) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
 /**
@@ -125,11 +100,7 @@ export function buildGroupDisplayName(params: {
       : groupChannel || subject || space || "") || "";
   const fallbackId = normalizeOptionalString(params.id) ?? params.key;
   const rawLabel = detail || fallbackId;
-  let token = normalizeGroupLabel(rawLabel);
-  // Very long opaque ids become a readable stable token instead of leaking full route ids into UI.
-  if (!token) {
-    token = normalizeGroupLabel(shortenGroupId(rawLabel));
-  }
+  let token = normalizeHyphenSlug(rawLabel);
   if (!params.groupChannel && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }

@@ -4,6 +4,13 @@ import { en } from "./en.ts";
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    openClawWorker: "OpenClaw worker",
+    requiredWorkerHint: "Say what you’d like to work on.",
+    requiredWorker: "Worker",
+    requiredWorkerUnavailable:
+      "The required worker is unavailable. Ask an administrator to check the worker profile, then retry.",
+    requiredWorkerChanged:
+      "The required worker policy changed. Start a new session; this saved message has not been sent.",
     title: en.newSession.title,
     hint: en.newSession.hint,
     environments: "Environments",
@@ -16,6 +23,7 @@ const enNewSessionSetup = {
       "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     deviceRuntimeUnsupported: "This runtime does not support paired devices",
     placementStartFailed: "The session was created, but startup needs attention: {error}",
+    placementCreateFailed: "Couldn't prepare session recovery. Your draft has been kept.",
     placementStillStarting:
       "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
     placementCompletionUnconfirmed:
@@ -98,7 +106,8 @@ const enNewSessionSetup = {
     worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
-    incognitoDescription: "Keep this session only until the Gateway restarts",
+    incognitoDescription:
+      "Keep this session for 24 hours or until the Gateway restarts, whichever comes first",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
@@ -130,6 +139,7 @@ const enNewSessionSetup = {
     checkout: "Checkout",
     checkoutCurrent: "Current checkout",
     checkoutWorktree: "New worktree",
+    checkoutWorktreeNamed: "Worktree · {name}",
     checkoutWorktreeSub: "Isolated copy of the repo",
     checkoutWorktreeFrom: "New worktree from {branch}",
     checkoutCloud: "Starting branch",
@@ -173,6 +183,8 @@ const enNewSessionSetup = {
     restoringPreferences: "Restoring your last session setup…",
     checkingPlace: "Checking the selected place…",
     agentsUnavailable: "No agents are available on this Gateway yet.",
+    loadingAgentDefaults: "Refreshing agent defaults…",
+    agentDefaultsUnavailable: "Could not refresh agent defaults. Reload to try again.",
     terminalHostUnavailable:
       "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
     terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",

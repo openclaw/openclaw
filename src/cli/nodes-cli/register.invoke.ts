@@ -1,16 +1,13 @@
 // Generic node.invoke command with shell-exec commands intentionally blocked.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
+  buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -25,7 +22,6 @@ function parseNodeInvokeParams(value = "{}"): unknown {
   }
 }
 
-/** Register direct node command invocation. */
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -43,27 +39,25 @@ export function registerNodesInvokeCommands(nodes: Command) {
           if (!nodeQuery || !command) {
             throw new Error("--node and --command required");
           }
-          if (BLOCKED_NODE_INVOKE_COMMANDS.has(normalizeLowercaseStringOrEmpty(command))) {
+          if (BLOCKED_NODE_INVOKE_COMMANDS.has(command.toLowerCase())) {
             throw new Error(
               `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
             );
           }
           const params = parseNodeInvokeParams(opts.params);
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
+          if (opts.idempotencyKey === "") {
+            throw new Error("--idempotency-key must not be empty.");
+          }
           const nodeId = await resolveCliNodeId(opts, nodeQuery);
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command,
             params,
-            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
-          };
-          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-            invokeParams.timeoutMs = timeoutMs;
-          }
+            idempotencyKey: opts.idempotencyKey,
+            timeoutMs,
+          });
 
           const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           defaultRuntime.writeJson(result);

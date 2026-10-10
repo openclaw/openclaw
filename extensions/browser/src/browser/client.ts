@@ -1,9 +1,3 @@
-/**
- * Browser control client API.
- *
- * Provides typed helpers for status, profile lifecycle, tabs, and snapshots
- * over the browser-control transport.
- */
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -17,19 +11,31 @@ import type {
   BrowserStatus,
   BrowserTabsResult,
   BrowserTransport,
+  ProfileStatus,
   SnapshotAriaNode,
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { RoleSnapshotResult } from "./pw-role-snapshot.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
+import type {
+  ImportSystemProfileResult as BrowserImportProfileResult,
+  ImportSystemProfileParams,
+  SystemProfileInfo,
+} from "./system-profiles.js";
+
+export type {
+  ImportSystemProfileResult as BrowserImportProfileResult,
+  SystemProfileInfo,
+} from "./system-profiles.js";
 
 export type {
   BrowserStatus,
   BrowserTab,
   BrowserTabsResult,
-  BrowserTransport,
+  ProfileStatus,
 } from "./client.types.js";
-export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
+export type { BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
 const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
@@ -48,62 +54,15 @@ async function sendProfilePost(
   baseUrl: BrowserClientTarget,
   path: string,
   opts: BrowserClientProfileOptions | undefined,
-  fallbackTimeoutMs: number,
 ): Promise<void> {
   await requestBrowserJson(baseUrl, path, {
     profile: opts?.profile,
     method: "POST",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, fallbackTimeoutMs),
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
     signal: opts?.signal,
   });
 }
 
-async function sendTabCloseRequest(
-  baseUrl: BrowserClientTarget,
-  path: string,
-  opts: BrowserClientProfileOptions | undefined,
-): Promise<{ ok: true; targetId?: string }> {
-  return await requestBrowserJson(baseUrl, path, {
-    profile: opts?.profile,
-    method: "DELETE",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
-    signal: opts?.signal,
-  });
-}
-
-/** Profile status record returned by browser profile listing. */
-export type ProfileStatus = {
-  name: string;
-  transport?: BrowserTransport;
-  cdpPort: number | null;
-  cdpUrl: string | null;
-  color: string;
-  driver: "openclaw" | "existing-session" | "extension";
-  running: boolean;
-  tabCount: number;
-  isDefault: boolean;
-  isRemote: boolean;
-  missingFromConfig?: boolean;
-  reconcileReason?: string | null;
-};
-
-export type SystemProfileInfo = {
-  browser: "chrome" | "brave" | "edge" | "chromium";
-  id: string;
-  name: string;
-  hasCookies: boolean;
-};
-
-export type BrowserImportProfileResult = {
-  ok: true;
-  systemProfile: string;
-  into: string;
-  browser: SystemProfileInfo["browser"];
-  cookies: { total: number; imported: number; failed: number; skipped: number };
-  domains: string[];
-};
-
-/** Result returned when a managed browser profile directory is reset. */
 export type BrowserResetProfileResult = {
   ok: true;
   moved: boolean;
@@ -111,33 +70,24 @@ export type BrowserResetProfileResult = {
   to?: string;
 };
 
-/** Snapshot response returned by browserSnapshot. */
-export type SnapshotResult =
+export type SnapshotResult = {
+  ok: true;
+  targetId: string;
+  url: string;
+  truncated?: boolean;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
+} & (
   | {
-      ok: true;
       format: "aria";
-      targetId: string;
-      url: string;
       nodes: SnapshotAriaNode[];
-      truncated?: boolean;
-      blockedByDialog?: boolean;
-      browserState?: unknown;
     }
   | {
-      ok: true;
       format: "ai";
-      targetId: string;
-      url: string;
-      snapshot: string;
-      truncated?: boolean;
-      newElements?: number;
-      refs?: Record<string, { role: string; name?: string; nth?: number }>;
-      stats?: {
-        lines: number;
-        chars: number;
-        refs: number;
-        interactive: number;
-      };
+      snapshot: RoleSnapshotResult["snapshot"];
+      newElements?: RoleSnapshotResult["newElements"];
+      refs?: RoleSnapshotResult["refs"];
+      stats?: RoleSnapshotResult["stats"];
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
@@ -148,11 +98,9 @@ export type SnapshotResult =
       annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
-      blockedByDialog?: boolean;
-      browserState?: unknown;
-    };
+    }
+);
 
-/** Read browser-control status for the selected profile. */
 export async function browserStatus(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
@@ -164,7 +112,6 @@ export async function browserStatus(
   });
 }
 
-/** Run browser doctor checks for the selected profile. */
 export async function browserDoctor(
   baseUrl?: BrowserClientTarget,
   opts?: { profile?: string; deep?: boolean; signal?: AbortSignal },
@@ -181,7 +128,6 @@ export async function browserDoctor(
   });
 }
 
-/** List configured browser profiles and their current status. */
 export async function browserProfiles(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientTimeoutOptions,
@@ -193,7 +139,6 @@ export async function browserProfiles(
   return res.profiles ?? [];
 }
 
-/** List Chrome-family profiles available on the local macOS host. */
 export async function browserSystemProfiles(
   baseUrl?: BrowserClientTarget,
   opts?: { browser?: string; timeoutMs?: number; signal?: AbortSignal },
@@ -210,14 +155,9 @@ export async function browserSystemProfiles(
   return res.systemProfiles ?? [];
 }
 
-/** Import system-profile cookies into a managed browser profile. */
 export async function browserImportProfile(
   baseUrl: BrowserClientTarget,
-  opts: {
-    browser?: string;
-    systemProfile?: string;
-    into?: string;
-    domains?: string[];
+  opts: Omit<ImportSystemProfileParams, "makeDefault"> & {
     signal?: AbortSignal;
   },
 ): Promise<BrowserImportProfileResult> {
@@ -235,35 +175,20 @@ export async function browserImportProfile(
   );
 }
 
-/** Start the selected browser profile. */
 export async function browserStart(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/start", opts, 15000);
+  await sendProfilePost(baseUrl, "/start", opts);
 }
 
-/** Stop the selected browser profile. */
 export async function browserStop(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/stop", opts, 15000);
+  await sendProfilePost(baseUrl, "/stop", opts);
 }
 
-/** Reset the selected managed browser profile directory. */
-export async function browserResetProfile(
-  baseUrl?: BrowserClientTarget,
-  opts?: { profile?: string },
-): Promise<BrowserResetProfileResult> {
-  return await requestBrowserJson<BrowserResetProfileResult>(baseUrl, "/reset-profile", {
-    profile: opts?.profile,
-    method: "POST",
-    timeoutMs: 20000,
-  });
-}
-
-/** Result returned after creating a browser profile. */
 export type BrowserCreateProfileResult = {
   ok: true;
   profile: string;
@@ -275,52 +200,11 @@ export type BrowserCreateProfileResult = {
   isRemote: boolean;
 };
 
-/** Create and persist a browser profile. */
-export async function browserCreateProfile(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    name: string;
-    color?: string;
-    cdpUrl?: string;
-    userDataDir?: string;
-    driver?: "openclaw" | "existing-session";
-  },
-): Promise<BrowserCreateProfileResult> {
-  return await postBrowserJson(
-    baseUrl,
-    "/profiles/create",
-    {
-      name: opts.name,
-      color: opts.color,
-      cdpUrl: opts.cdpUrl,
-      userDataDir: opts.userDataDir,
-      driver: opts.driver,
-    },
-    10000,
-  );
-}
-
-/** Result returned after deleting a browser profile. */
 export type BrowserDeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
 };
-
-/** Delete a configured browser profile. */
-export async function browserDeleteProfile(
-  baseUrl: BrowserClientTarget,
-  profile: string,
-): Promise<BrowserDeleteProfileResult> {
-  return await requestBrowserJson<BrowserDeleteProfileResult>(
-    baseUrl,
-    `/profiles/${encodeURIComponent(profile)}`,
-    {
-      method: "DELETE",
-      timeoutMs: 20000,
-    },
-  );
-}
 
 function normalizeBrowserTabsResult(value: unknown): BrowserTabsResult {
   const result = asNullableRecord(value);
@@ -345,7 +229,6 @@ export async function browserTabs(
   return normalizeBrowserTabsResult(res);
 }
 
-/** Open a new tab in the selected browser profile. */
 export async function browserOpenTab(
   baseUrl: BrowserClientTarget,
   url: string,
@@ -370,7 +253,6 @@ export async function browserOpenTab(
   );
 }
 
-/** Focus an existing browser tab. */
 export async function browserFocusTab(
   baseUrl: BrowserClientTarget,
   targetId: string,
@@ -385,45 +267,20 @@ export async function browserFocusTab(
   );
 }
 
-/** Close an existing browser tab. */
 export async function browserCloseTab(
   baseUrl: BrowserClientTarget,
   targetId: string,
   opts?: BrowserClientProfileOptions,
 ): Promise<{ ok: true; targetId?: string }> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
-  return await sendTabCloseRequest(baseUrl, path, opts);
+  return await requestBrowserJson(baseUrl, path, {
+    profile: opts?.profile,
+    method: "DELETE",
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
+    signal: opts?.signal,
+  });
 }
 
-/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
-export async function browserCloseTabByRawTargetId(
-  baseUrl: BrowserClientTarget,
-  targetId: string,
-  opts?: BrowserClientProfileOptions,
-): Promise<void> {
-  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
-  await sendTabCloseRequest(baseUrl, path, opts);
-}
-
-/** Execute legacy index-based tab actions. */
-export async function browserTabAction(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    action: "list" | "new" | "close" | "select";
-    index?: number;
-    profile?: string;
-  },
-): Promise<unknown> {
-  return await postBrowserJson(
-    baseUrl,
-    "/tabs/action",
-    { action: opts.action, index: opts.index },
-    10_000,
-    { profile: opts.profile },
-  );
-}
-
-/** Capture an ARIA or AI snapshot for the selected tab. */
 export async function browserSnapshot(
   baseUrl: BrowserClientTarget,
   opts: {
@@ -445,55 +302,31 @@ export async function browserSnapshot(
     signal?: AbortSignal;
   },
 ): Promise<SnapshotResult> {
-  const q: Record<string, string | number | boolean | undefined> = {};
-  if (opts.format) {
-    q.format = opts.format;
-  }
-  if (opts.targetId) {
-    q.targetId = opts.targetId;
-  }
-  if (typeof opts.limit === "number") {
-    q.limit = opts.limit;
-  }
-  if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
-    q.maxChars = opts.maxChars;
-  }
-  if (opts.refs === "aria" || opts.refs === "role") {
-    q.refs = opts.refs;
-  }
-  if (typeof opts.interactive === "boolean") {
-    q.interactive = opts.interactive;
-  }
-  if (typeof opts.compact === "boolean") {
-    q.compact = opts.compact;
-  }
-  if (typeof opts.depth === "number" && Number.isFinite(opts.depth)) {
-    q.depth = opts.depth;
-  }
-  if (opts.selector?.trim()) {
-    q.selector = opts.selector.trim();
-  }
-  if (opts.frame?.trim()) {
-    q.frame = opts.frame.trim();
-  }
-  if (opts.labels === true) {
-    q.labels = "1";
-  }
-  if (opts.urls === true) {
-    q.urls = "1";
-  }
-  if (opts.mode) {
-    q.mode = opts.mode;
-  }
   const resolvedTimeoutMs =
     clampPositiveTimerTimeoutMs(opts.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  q.timeoutMs = resolvedTimeoutMs;
   return await requestBrowserJson<SnapshotResult>(baseUrl, "/snapshot", {
-    query: q,
+    query: {
+      ...(opts.format ? { format: opts.format } : {}),
+      ...(opts.targetId ? { targetId: opts.targetId } : {}),
+      ...(typeof opts.limit === "number" ? { limit: opts.limit } : {}),
+      ...(typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)
+        ? { maxChars: opts.maxChars }
+        : {}),
+      ...(opts.refs === "aria" || opts.refs === "role" ? { refs: opts.refs } : {}),
+      ...(typeof opts.interactive === "boolean" ? { interactive: opts.interactive } : {}),
+      ...(typeof opts.compact === "boolean" ? { compact: opts.compact } : {}),
+      ...(typeof opts.depth === "number" && Number.isFinite(opts.depth)
+        ? { depth: opts.depth }
+        : {}),
+      ...(opts.selector?.trim() ? { selector: opts.selector.trim() } : {}),
+      ...(opts.frame?.trim() ? { frame: opts.frame.trim() } : {}),
+      ...(opts.labels === true ? { labels: "1" } : {}),
+      ...(opts.urls === true ? { urls: "1" } : {}),
+      ...(opts.mode ? { mode: opts.mode } : {}),
+      timeoutMs: resolvedTimeoutMs,
+    },
     profile: opts.profile,
     timeoutMs: resolvedTimeoutMs,
     signal: opts.signal,
   });
 }
-
-// Actions beyond the basic read-only commands live in client-actions.ts.

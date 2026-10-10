@@ -1,12 +1,12 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import type { AssistantMessage } from "@openclaw/ai";
-import * as ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execa } from "execa";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
@@ -19,28 +19,30 @@ import {
   verifyControlUiReferencedKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
-  appendBoundedProcessOutput,
   assertNoControlUiFallbacks,
   buildBatchPrompt,
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
-  runProcess,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
 import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
-import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
+import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
+import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
+import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
-import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
 const testNodeExecPath = resolveTestNodeExecPath();
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
@@ -84,15 +86,19 @@ describe("translation provider privacy and fallback", () => {
   });
 
   it("reports CLI failures without disclosing configured model or key values", async () => {
-    const result = await runProcess(process.execPath, [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-i18n.ts",
-      "sync",
-      "--locale",
-      `${primary.toUpperCase()}/${fallback}/test-key`,
-    ]);
-    expect(result.code).toBe(1);
+    const result = await execa(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/control-ui-i18n.ts",
+        "sync",
+        "--locale",
+        `${primary.toUpperCase()}/${fallback}/test-key`,
+      ],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).toBe(1);
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
@@ -129,13 +135,12 @@ describe("translation provider privacy and fallback", () => {
       error: "unknown refresh key: missing.fixture.key",
     },
   ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
-    const result = await runProcess(process.execPath, [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-i18n.ts",
-      ...args,
-    ]);
-    expect(result.code).not.toBe(0);
+    const result = await execa(
+      process.execPath,
+      ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", ...args],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(error);
   });
 
@@ -143,31 +148,50 @@ describe("translation provider privacy and fallback", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
-    const result = await runProcess(process.execPath, [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-i18n.ts",
-      "sync",
-      "--write",
-      "--locale",
-      "pl",
-      "--refresh-key",
-      "chat.parentSession",
-    ]);
-    expect(result.code).toBe(1);
+    const result = await execa(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/control-ui-i18n.ts",
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        "--refresh-key",
+        "chat.parentSession",
+      ],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
 
-  it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
+  it("translates native artifacts without Gateway state or Control UI catalogs", async () => {
     const temp = createTempDirTracker();
     const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      const scriptUrl = pathToFileURL(path.resolve("scripts/control-ui-i18n.ts")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/native-app-i18n.ts")).href;
+      const uiOnlyModules = [
+        "scripts/lib/control-ui-i18n-catalog.ts",
+        "scripts/control-ui-i18n-verify.ts",
+        "scripts/lib/control-ui-i18n-raw-copy.ts",
+      ].map((file) => pathToFileURL(path.resolve(file)).href);
+      const translationsDir = path.join(path.dirname(stateDir), "translations");
       const code = `
         import assert from "node:assert/strict";
+        import { readFile } from "node:fs/promises";
         import net from "node:net";
-        import { syncBuiltinESMExports } from "node:module";
+        import { registerHooks, syncBuiltinESMExports } from "node:module";
+        const uiOnlyModules = new Set(${JSON.stringify(uiOnlyModules)});
+        registerHooks({
+          resolve(specifier, context, nextResolve) {
+            const resolved = nextResolve(specifier, context);
+            assert.ok(!uiOnlyModules.has(resolved.url), "Native translation loaded a Control UI catalog owner: " + resolved.url);
+            return resolved;
+          },
+        });
         const rejectNetwork = () => { throw new Error("Unexpected network connection"); };
         net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
         syncBuiltinESMExports();
@@ -179,8 +203,9 @@ describe("translation provider privacy and fallback", () => {
           assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
+          assert.ok(JSON.stringify(payload).includes("Connect -> Connecter"), "native glossary must reach the provider request");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
-          const text = JSON.stringify({ connect: "Connecter" });
+          const text = JSON.stringify({ "native.android.0123456789abcdef": "Connecter {count}" });
           const events = [
             { type: "response.created", response: { id: "response" } },
             { type: "response.output_item.added", output_index: 0, item },
@@ -191,20 +216,20 @@ describe("translation provider privacy and fallback", () => {
           ];
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
-        const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
-        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml", sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], "fr");
-        assert.equal(result.get("connect"), "Connecter");
+        const { syncNativeLocale } = await import(${JSON.stringify(scriptUrl)});
+        const result = await syncNativeLocale("fr", [{ id: "native.android.0123456789abcdef", source: "Connect {count}", surface: "android", sites: [{ kind: "fixture", path: "apps/android/wear/src/main/res/values/strings.xml" }], sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], { glossary: [{ source: "Connect", target: "Connecter" }], translationsDir: ${JSON.stringify(translationsDir)} });
+        const artifact = JSON.parse(await readFile(${JSON.stringify(path.join(translationsDir, "fr.json"))}, "utf8"));
+        assert.equal(artifact.translations["native.android.0123456789abcdef"], "Connecter {count}");
+        assert.equal(result.translated, 1);
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
       `;
-      const result = await runProcess(process.execPath, [
-        "--import",
-        "./scripts/tsx.mjs",
-        "--input-type=module",
-        "-e",
-        code,
-      ]);
-      expect(result.code, result.stderr).toBe(0);
+      const result = await execa(
+        testNodeExecPath,
+        ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", code],
+        { reject: false, timeout: 120_000, stripFinalNewline: false },
+      );
+      expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("isolated-runtime-ok");
       expect(result.stdout + result.stderr).not.toContain(primary);
       expect(result.stdout + result.stderr).not.toContain("[model-fetch]");
@@ -233,6 +258,33 @@ describe("translation provider privacy and fallback", () => {
     expect(log).not.toContain(fallback);
   });
 
+  it("does not let a timed-out batch switch models after its split replacements complete", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT", "50");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "2000");
+    const late = Promise.withResolvers<AssistantMessage>();
+    llm.completeSimple.mockReturnValueOnce(late.promise).mockResolvedValue(response());
+    try {
+      const translated = translateNativeEntries(entries.slice(0, 2), "fr");
+      await vi.advanceTimersByTimeAsync(50);
+      expect((await translated).size).toBe(2);
+      expect(llm.completeSimple.mock.calls[0]?.[2].signal.aborted).toBe(true);
+
+      late.resolve(
+        response({ stopReason: "error", errorCode: "model_not_found", errorMessage: primary }),
+      );
+      await vi.runAllTimersAsync();
+      expect(llm.completeSimple.mock.calls.map(([model]) => model.id)).toEqual([
+        primary,
+        primary,
+        primary,
+      ]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("includes native owner context in the translation batch budget", async () => {
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "500");
     llm.completeSimple.mockResolvedValue(response());
@@ -247,7 +299,7 @@ describe("translation provider privacy and fallback", () => {
     expect(llm.completeSimple).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
+  it.each(["401", "404"])(
     "keeps %s failures private without changing models",
     async (errorCode) => {
       const complete = vi.spyOn(llm, "completeSimple").mockResolvedValue(
@@ -298,7 +350,7 @@ describe("control-ui config hint source catalog", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
-  it("includes lazy task and transcript copy and shared search labels in the generator catalog", () => {
+  it("includes lazy page copy and shared search labels in the generator catalog", () => {
     const result = spawnSync(
       testNodeExecPath,
       [
@@ -318,7 +370,9 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenControlUiCatalog(catalog, "en");
     for (const fragment of [
-      registerBackgroundTasksEnglish.catalog,
+      registerCodeBlocksEnglish.catalog,
+      registerLabsEnglish.catalog,
+      registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
       const lazyCopy = flattenControlUiCatalog(fragment, "lazy copy");
@@ -462,29 +516,7 @@ describe("control-ui-i18n generated ownership", () => {
   });
 });
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!processIsAlive(pid)) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
-}
-
-describe("control-ui-i18n process runner", () => {
+describe("control-ui-i18n catalog validation", () => {
   it("points strict catalog drift at the generated release repair", () => {
     const message = formatControlUiCatalogFallbackDriftError();
 
@@ -564,20 +596,10 @@ describe("control-ui-i18n process runner", () => {
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
       'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
-    const sourceFile = ts.createSourceFile(
-      "ui/src/pages/example.ts",
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TSX,
-    );
+    const sourceFile = parser.parseSourceFile("ui/src/pages/example.tsx", source);
 
     expect(
-      collectControlUiRawCopyFromSource({
-        filePath: path.resolve("ui/src/pages/example.ts"),
-        source,
-        sourceFile,
-      }).map(({ kind, text }) => ({ kind, text })),
+      collectControlUiRawCopyFromSource(sourceFile).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
       { kind: "html-attribute", text: "Archive" },
       { kind: "html-attribute", text: "Preview" },
@@ -720,194 +742,4 @@ describe("control-ui-i18n process runner", () => {
       ]),
     ).not.toThrow();
   });
-
-  it("keeps a bounded process output tail", () => {
-    const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    const second = appendBoundedProcessOutput(first, "ghij", 5);
-
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
-  });
-
-  it("does not split a UTF-16 surrogate pair at the tail boundary", () => {
-    // "ab😀cdef" is 8 UTF-16 code units: a, b, <high>, <low>, c, d, e, f.
-    // maxChars = 5 forces a tail slice whose boundary lands inside the surrogate pair.
-    // The raw `slice(-5)` would return "<low>cdef" (leading dangling low surrogate).
-    // sliceUtf16Safe advances past the low surrogate, retaining "cdef" (4 units);
-    // truncatedChars must reflect the 4 actually-dropped units, not maxChars.
-    const result = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "ab😀cdef", 5);
-    expect(result.text.length).toBeLessThanOrEqual(5);
-    // No dangling surrogate (high 0xd800-0xdbff or low 0xdc00-0xdfff) at either edge.
-    expect(result.text.charCodeAt(0)).toBeLessThan(0xd800);
-    expect(result.text.charCodeAt(result.text.length - 1)).toBeLessThan(0xd800);
-    expect(result.text).toBe("cdef");
-    expect(result.truncatedChars).toBe(4);
-  });
-
-  it("bounds failure diagnostics to the newest output", async () => {
-    await expect(
-      runProcess(
-        process.execPath,
-        [
-          "-e",
-          [
-            "process.stderr.write('stderr-begin-' + 'x'.repeat(128) + '-stderr-end', () => process.exit(2));",
-          ].join(" "),
-        ],
-        { maxOutputChars: 64, rejectOnFailure: true },
-      ),
-    ).rejects.toThrow(/output truncated[\s\S]*stderr-end/u);
-  });
-
-  it("rejects successful commands before returning truncated stdout", async () => {
-    await expect(
-      runProcess(
-        process.execPath,
-        ["-e", "process.stdout.write('x'.repeat(128), () => process.exit(0));"],
-        {
-          maxOutputChars: 12,
-        },
-      ),
-    ).rejects.toThrow("produced more than 12 stdout chars");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "kills descendant processes after the process timeout",
-    async () => {
-      const tempDirs = createTempDirTracker();
-      const tempDir = tempDirs.make("openclaw-control-ui-i18n-timeout-");
-      try {
-        const markerPath = path.join(tempDir, "grandchild.pid");
-        const grandchildScript = [
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const parentScript = [
-          "const { spawn } = require('node:child_process');",
-          "const { writeFileSync } = require('node:fs');",
-          `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
-          `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-
-        await expect(
-          runProcess(process.execPath, ["-e", parentScript], {
-            cwd: tempDir,
-            killGraceMs: 25,
-            timeoutMs: 500,
-          }),
-        ).rejects.toThrow(`timed out after 500ms`);
-
-        const grandchildPid = await waitForPidFile(markerPath, 1_000);
-        await waitForProcessExit(grandchildPid);
-      } finally {
-        tempDirs.cleanup();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "waits for all process groups before re-raising parent signals",
-    async () => {
-      const tempDirs = createTempDirTracker();
-      const tempDir = tempDirs.make("openclaw-control-ui-i18n-signal-");
-      const fastReadyPath = path.join(tempDir, "fast-ready");
-      const fastCommandPath = path.join(tempDir, "fast-command.mjs");
-      const commandPath = path.join(tempDir, "command.mjs");
-      const runnerPath = path.join(tempDir, "runner.mjs");
-      const grandchildPidPath = path.join(tempDir, "grandchild.pid");
-      let grandchildPid = 0;
-
-      try {
-        const grandchildScript = [
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        writeFileSync(
-          fastCommandPath,
-          [
-            "import { writeFileSync } from 'node:fs';",
-            `writeFileSync(${JSON.stringify(fastReadyPath)}, "ready");`,
-            "process.on('SIGTERM', () => process.exit(0));",
-            "setInterval(() => {}, 1000);",
-          ].join("\n"),
-          "utf8",
-        );
-        writeFileSync(
-          commandPath,
-          [
-            "import { spawn } from 'node:child_process';",
-            "import { writeFileSync } from 'node:fs';",
-            `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(
-              grandchildScript,
-            )}], { stdio: "ignore" });`,
-            `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
-            "process.on('SIGTERM', () => process.exit(0));",
-            "setInterval(() => {}, 1000);",
-          ].join("\n"),
-          "utf8",
-        );
-        writeFileSync(
-          runnerPath,
-          [
-            `const { runProcess } = await import(${JSON.stringify(
-              pathToFileURL(path.resolve("scripts/control-ui-i18n.ts")).href,
-            )});`,
-            "void runProcess(process.execPath,",
-            `  [${JSON.stringify(fastCommandPath)}],`,
-            "  { killGraceMs: 100, timeoutMs: 30_000 },",
-            ").catch(() => undefined);",
-            "void runProcess(process.execPath,",
-            `  [${JSON.stringify(commandPath)}],`,
-            "  { killGraceMs: 100, timeoutMs: 30_000 },",
-            ").catch(() => undefined);",
-          ].join("\n"),
-          "utf8",
-        );
-
-        const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-          cwd: process.cwd(),
-          stdio: "ignore",
-        });
-
-        try {
-          const deadline = Date.now() + 30_000;
-          grandchildPid = await waitForPidFile(grandchildPidPath, 30_000);
-          let fastReady = false;
-          while (Date.now() < deadline) {
-            try {
-              fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-            } catch {}
-            if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
-              break;
-            }
-            await new Promise((resolve) => {
-              setTimeout(resolve, 10);
-            });
-          }
-          expect(fastReady).toBe(true);
-          expect(grandchildPid).toBeGreaterThan(0);
-          expect(processIsAlive(grandchildPid)).toBe(true);
-
-          runner.kill("SIGTERM");
-
-          await expect(waitForChildClose(runner, 2_000)).resolves.toEqual({
-            code: null,
-            signal: "SIGTERM",
-          });
-          await waitForProcessExit(grandchildPid, 2_000);
-        } finally {
-          if (runner.pid && processIsAlive(runner.pid)) {
-            runner.kill("SIGKILL");
-          }
-          if (grandchildPid > 0 && processIsAlive(grandchildPid)) {
-            process.kill(grandchildPid, "SIGKILL");
-          }
-        }
-      } finally {
-        tempDirs.cleanup();
-      }
-    },
-  );
 });

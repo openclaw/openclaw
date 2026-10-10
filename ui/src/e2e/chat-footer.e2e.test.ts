@@ -324,6 +324,14 @@ suite.define(() => {
                 Math.min(stackBounds.y + stackBounds.height, bodyBounds.y + bodyBounds.height)) /
               2,
           };
+          expect(
+            await body.evaluate(
+              (element, point) => element.contains(document.elementFromPoint(point.x, point.y)),
+              scrollPoint,
+            ),
+          ).toBe(true);
+          // Touch inertia can already hand off during the first swipes.
+          const beforeHandoff = await persistentContext.evaluate((element) => element.scrollTop);
           // Reach the inner boundary through native input before checking scroll chaining.
           await scrollDown(page, scrollPoint, touchClient);
           await scrollDown(page, scrollPoint, touchClient);
@@ -334,7 +342,6 @@ suite.define(() => {
               ),
             )
             .toBeLessThanOrEqual(1);
-          const beforeHandoff = await persistentContext.evaluate((element) => element.scrollTop);
           await scrollDown(page, scrollPoint, touchClient);
           await expect
             .poll(() => persistentContext.evaluate((element) => element.scrollTop))

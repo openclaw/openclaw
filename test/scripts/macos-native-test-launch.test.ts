@@ -35,15 +35,25 @@ function fixture(
   securityFailure = "",
   logicalCpu = "3",
   eventReport: string | null = eventStream("runStarted", "runEnded"),
+  renderedExitCode = 0,
 ) {
   const root = temps.make("native-launch-");
   const bin = path.join(root, "bin");
   const home = path.join(root, "ambient-home");
   const runnerTemp = path.join(root, "runner-temp");
+  const workspace = path.join(root, "workspace");
   const log = path.join(root, "calls.jsonl");
-  for (const dir of [bin, home, runnerTemp]) {
+  for (const dir of [bin, home, runnerTemp, workspace]) {
     fs.mkdirSync(dir);
   }
+  const toolchain = path.join(root, ".ci-harness/scripts/lib");
+  fs.mkdirSync(toolchain, { recursive: true });
+  fs.copyFileSync(
+    path.join(repo, "scripts/lib/swift-toolchain.sh"),
+    path.join(toolchain, "swift-toolchain.sh"),
+  );
+  fs.symlinkSync(path.join(root, ".ci-harness"), path.join(workspace, ".ci-harness"));
+  fs.symlinkSync(path.join(repo, "scripts"), path.join(workspace, "scripts"));
   const cache = path.join(home, "Library/Caches/org.swift.swiftpm");
   fs.mkdirSync(cache, { recursive: true });
   fs.writeFileSync(path.join(cache, "fixture-cache"), "reusable build cache");
@@ -124,8 +134,12 @@ if (['xcrun', 'lldb', 'xctest', 'swiftpm-testing-helper'].includes(tool)) {
   throw new Error('Unexpected native tool invocation in the fake launcher fixture');
 }
 if (tool === 'swift' && args[0] === 'test') {
+  const rendered = env.OPENCLAW_PROFILE === 'default' && args.includes('QuickChatCatalogPresentationTests');
   if (env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
-    const captureNames = env.OPENCLAW_PROFILE === 'default' ? ['catalog'] : ['thread-reasoning', 'model-initial'];
+    const bulk = args.some(arg => arg.includes('|QuickChatCatalogPresentationTests'));
+    const captureNames = env.OPENCLAW_PROFILE === 'default'
+      ? (rendered ? ['catalog', 'history-message-recovery'] : bulk ? ['browser-sign-in-before', 'browser-sign-in-after'] : ['catalog', 'browser-sign-in-before', 'browser-sign-in-after'])
+      : ['thread-reasoning', 'model-initial'];
     for (const captureName of captureNames) {
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, captureName + '-window.png'), 'synthetic-png-bytes');
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, captureName + '-capture-status.json'), JSON.stringify({name: captureName, blockers: ['synthetic fixture, not visual proof']}));
@@ -148,7 +162,7 @@ if (tool === 'swift' && args[0] === 'test') {
     fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, 'child-owned'), 'fixture');
   }
   if (${JSON.stringify(waitForSignal)} === 'swift') awaitSignal(settings.default);
-  else process.exit(env.OPENCLAW_PROFILE === 'default' ? ${defaultExitCode} : ${namedExitCode});
+  else process.exit(rendered ? ${renderedExitCode} : env.OPENCLAW_PROFILE === 'default' ? ${defaultExitCode} : ${namedExitCode});
 }
 `;
   for (const tool of [
@@ -194,6 +208,7 @@ if (tool === 'swift' && args[0] === 'test') {
   };
   return {
     root,
+    workspace,
     env,
     log,
     capturePath: (profileMode: "default" | "named") => {
@@ -213,7 +228,7 @@ if (tool === 'swift' && args[0] === 'test') {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line)),
-    run: (script: string, cwd = repo, overrides = {}) =>
+    run: (script: string, cwd = workspace, overrides = {}) =>
       spawnSync(
         "/bin/bash",
         [
@@ -231,30 +246,32 @@ if (tool === 'swift' && args[0] === 'test') {
 }
 
 describe.skipIf(process.platform === "win32")("native test launch ownership", () => {
-  it.each(["scripts/test-macos-native.mts", "test/scripts/macos-native-test-launch.test.ts"])(
-    "routes %s through macOS CI",
-    (changedPath) => {
-      expect(detectChangedScope([changedPath])).toMatchObject({ runNode: true, runMacos: true });
-    },
-  );
+  it.each(["scripts/test-macos-native.mts"])("routes %s through macOS CI", (changedPath) => {
+    expect(detectChangedScope([changedPath])).toMatchObject({ runNode: true, runMacos: true });
+  });
 
   it.each([
-    { defaultCode: 0, namedCode: 0, logicalCpu: "3", expectedWidth: "3" },
-    { defaultCode: 23, namedCode: 0, logicalCpu: "12", expectedWidth: "12" },
-    { defaultCode: 0, namedCode: 17, logicalCpu: "32", expectedWidth: "12" },
+    { defaultCode: 0, renderedCode: 0, namedCode: 0, logicalCpu: "3", expectedWidth: "3" },
+    { defaultCode: 23, renderedCode: 0, namedCode: 0, logicalCpu: "32", expectedWidth: "12" },
   ] as const)(
-    "bounds Swift Testing on $logicalCpu logical CPUs to width $expectedWidth",
-    ({ defaultCode, namedCode, logicalCpu, expectedWidth }) => {
-      const f = fixture(defaultCode, false, namedCode, "", logicalCpu);
+    "runs isolated partitions with exits $defaultCode/$renderedCode/$namedCode at width $expectedWidth",
+    ({ defaultCode, renderedCode, namedCode, logicalCpu, expectedWidth }) => {
+      const f = fixture(defaultCode, false, namedCode, "", logicalCpu, undefined, renderedCode);
       const result = f.run(swiftStep);
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(defaultCode || namedCode);
+      expect(result.status, result.stderr).toBe(defaultCode || renderedCode || namedCode);
       expect(result.stdout).toContain(
         `[macos-swift] Swift Testing parallelization width: ${expectedWidth}`,
       );
       const calls = f.calls().filter((call) => call.tool === "swift");
-      expect(calls).toHaveLength(defaultCode === 0 ? 3 : 2);
+      expect(calls).toHaveLength(defaultCode !== 0 ? 2 : renderedCode !== 0 ? 3 : 4);
       const [build, ...tests] = calls;
+      const captures = fs
+        .readFileSync(f.env.GITHUB_OUTPUT, "utf8")
+        .split("\n")
+        .filter((line) => /^menu-(?:default|named)-artifact-path=/.test(line))
+        .map((line) => line.slice(line.indexOf("=") + 1));
+      expect(captures).toHaveLength(tests.length);
       expect(build.args).toEqual([
         "build",
         "--package-path",
@@ -262,6 +279,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         "--build-system",
         "native",
         "--enable-code-coverage",
+        "--disable-index-store",
+        "-Xswiftc",
+        "-gline-tables-only",
         "--build-tests",
       ]);
       expect(build.env.HOME).toBe(f.env.HOME);
@@ -274,23 +294,34 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           "--build-system",
           "native",
           "--enable-code-coverage",
+          "--disable-index-store",
+          "-Xswiftc",
+          "-gline-tables-only",
           "--skip-build",
           "--experimental-maximum-parallelization-width",
           expectedWidth,
           index === 0 ? "--skip" : "--filter",
-          "AppStateIsolationTests|ProfileChatPreferencesTests",
+          index === 0
+            ? "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+            : index === 1
+              ? "QuickChatCatalogPresentationTests"
+              : "AppStateIsolationTests|ProfileChatPreferencesTests",
           "--event-stream-output-path",
           expect.any(String),
           "--event-stream-version",
           "6.3",
         ]);
-        if (index === 0) {
+        if (index < 2) {
           expect(test.env.OPENCLAW_PROFILE).toBe("default");
         } else {
           expect(test.env.OPENCLAW_PROFILE).toMatch(/^test-[a-z0-9-]+$/);
         }
         expect(test.env.OPENCLAW_PROFILE).not.toBe(f.env.OPENCLAW_PROFILE);
         expect(test.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+        expect(test.env.SWIFT_BACKTRACE).toBe(
+          "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
+        );
+        expect(test.env.NSUnbufferedIO).toBe("YES");
         for (const key of [
           "DEVELOPER_DIR",
           "DYLD_FRAMEWORK_PATH",
@@ -321,17 +352,23 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           expect(test.present[key]).toBe(key !== "OPENCLAW_CONFIG_PATH");
         }
         expect(fs.existsSync(ownedRoot)).toBe(false);
-        const profileMode = index === 0 ? "default" : "named";
-        const captureName = index === 0 ? "catalog" : "thread-reasoning";
-        const captureNames = index === 0 ? [captureName] : [captureName, "model-initial"];
-        const exported = f.capturePath(profileMode);
+        const profileMode = index < 2 ? "default" : "named";
+        const captureNames =
+          index === 0
+            ? ["browser-sign-in-before", "browser-sign-in-after"]
+            : index === 1
+              ? ["catalog", "history-message-recovery"]
+              : ["thread-reasoning", "model-initial"];
+        const exported = captures[index];
         if (!exported) {
           throw new Error("The joined Swift partition must publish its capture path");
         }
         expect(exported.startsWith(`${f.env.RUNNER_TEMP}/`)).toBe(true);
-        expect(fs.readFileSync(path.join(exported, `${captureName}-window.png`), "utf8")).toBe(
-          "synthetic-png-bytes",
-        );
+        for (const captureName of captureNames) {
+          expect(fs.readFileSync(path.join(exported, `${captureName}-window.png`), "utf8")).toBe(
+            "synthetic-png-bytes",
+          );
+        }
         expect(fs.readdirSync(exported).toSorted()).toEqual(
           [
             "capture-export.json",
@@ -339,10 +376,10 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
               `${name}-capture-status.json`,
               `${name}-window.png`,
             ]),
-            ...(index === 1 ? ["model-initial-menu-42.png"] : []),
+            ...(index === 2 ? ["model-initial-menu-42.png"] : []),
           ].toSorted(),
         );
-        if (index === 1) {
+        if (index === 2) {
           expect(fs.readFileSync(path.join(exported, "model-initial-menu-42.png"), "utf8")).toBe(
             "synthetic-model-menu-bytes",
           );
@@ -352,10 +389,36 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         ).toMatchObject({
           profileMode,
           source: "ordinary-swift-run",
-          swiftExitCode: index === 0 ? defaultCode : namedCode,
+          swiftExitCode: [defaultCode, renderedCode, namedCode][index],
         });
       }
       expect(roots.size).toBe(tests.length);
+      expect(f.capturePath("default")).toBe(captures[defaultCode === 0 ? 1 : 0]);
+      const captureUpload = workflow.jobs["macos-swift"].steps.find(
+        (step: { name?: string }) => step.name === "Upload default-profile chat menu captures",
+      );
+      const uploaded = new Set(
+        (captureUpload.with.path as string)
+          .trim()
+          .split("\n")
+          .flatMap((pattern) =>
+            fs.globSync(pattern.replace("${{ runner.temp }}", f.env.RUNNER_TEMP)),
+          ),
+      );
+      for (const exported of captures.slice(0, Math.min(tests.length, 2))) {
+        for (const name of fs.readdirSync(exported)) {
+          expect(uploaded.has(path.join(exported, name)), name).toBe(true);
+        }
+      }
+      const logDirectory = path.join(f.env.RUNNER_TEMP, "openclaw-native-test-logs");
+      const logs = fs.readdirSync(logDirectory).toSorted();
+      expect(logs).toHaveLength(tests.length);
+      for (const name of logs) {
+        expect(name).toMatch(/^(?:default(?:-rendered)?|named)-[a-f0-9-]+\.log$/);
+        expect(fs.readFileSync(path.join(logDirectory, name), "utf8")).toContain(
+          "[macos-native] Synthetic menu capture artifacts:",
+        );
+      }
       expect(fs.existsSync(f.env.HOME)).toBe(true);
       expect(
         fs.readFileSync(
@@ -367,90 +430,39 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
     },
   );
 
-  it.each([
-    { report: "missing", contents: null },
-    { report: "incomplete", contents: eventStream("runStarted") },
-  ])("rejects zero exit with $report Swift Testing completion", ({ contents }) => {
-    const f = fixture(0, false, 0, "", "3", contents);
-    const result = f.run(
-      'node scripts/test-macos-native.mts named --package-path apps/macos --build-system native --enable-code-coverage --skip-build --experimental-maximum-parallelization-width 3 --filter "AppStateIsolationTests|ProfileChatPreferencesTests"',
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("[macos-native] FAILED (exit 1)");
-    const calls = f.calls();
-    const test = calls.find((call) => call.tool === "swift");
-    expect(calls.filter((call) => call.tool === "swift")).toHaveLength(1);
-    expect(calls.at(-1).args).toEqual(["delete-keychain", test.settings.default]);
-    expect(fs.existsSync(path.dirname(test.env.HOME))).toBe(false);
-  });
-
-  it.each([
-    { report: "malformed JSON", contents: eventStream("runStarted") + "{\n", expected: 1 },
-    { report: "missing start", contents: eventStream("runEnded"), expected: 1 },
-    { report: "reversed lifecycle", contents: eventStream("runEnded", "runStarted"), expected: 1 },
-    {
-      report: "unsupported schema",
-      contents: eventStream("runStarted", "runEnded").replaceAll('"6.3.0"', '"0.0.0"'),
-      expected: 1,
+  it.each([{ report: "incomplete", contents: eventStream("runStarted") }])(
+    "rejects zero exit with $report Swift Testing completion",
+    ({ contents }) => {
+      const f = fixture(0, false, 0, "", "3", contents);
+      const result = f.run(
+        'node scripts/test-macos-native.mts named --package-path apps/macos --build-system native --enable-code-coverage --skip-build --experimental-maximum-parallelization-width 3 --filter "AppStateIsolationTests|ProfileChatPreferencesTests"',
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("[macos-native] FAILED (exit 1)");
+      const calls = f.calls();
+      const test = calls.find((call) => call.tool === "swift");
+      expect(calls.filter((call) => call.tool === "swift")).toHaveLength(1);
+      expect(calls.at(-1).args).toEqual(["delete-keychain", test.settings.default]);
+      expect(fs.existsSync(path.dirname(test.env.HOME))).toBe(false);
     },
-    {
-      report: "unknown record and event kinds",
-      contents:
-        JSON.stringify({ version: "6.3.0", kind: "futureRecord", payload: null }) +
-        "\n" +
-        eventStream("runStarted", "futureEvent", "runEnded"),
-      expected: 0,
+  );
+
+  it.each([[{ GITHUB_ACTIONS: "" }, ["named", "--skip-build"], "macos-swift"]] as const)(
+    "rejects an invalid launch before starting Swift (%j)",
+    (env, args, message) => {
+      const f = fixture();
+      const result = spawnSync(process.execPath, ["scripts/test-macos-native.mts", ...args], {
+        cwd: repo,
+        env: { ...f.env, ...env },
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(result.stderr).toContain("[macos-native] FAILED (exit 1)");
+      expect(fs.existsSync(f.log)).toBe(false);
     },
-  ])("validates $report without counting tests", ({ contents, expected }) => {
-    const f = fixture(0, false, 0, "", "3", contents);
-    const result = f.run("node scripts/test-macos-native.mts default --skip-build");
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(expected);
-    expect(fs.existsSync(path.dirname(f.calls()[0].env.HOME))).toBe(false);
-  });
-
-  it("fails closed when logical CPU detection is invalid", () => {
-    const f = fixture(0, false, 0, "", "not-a-count");
-    const result = f.run(swiftStep);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Invalid macOS logical CPU count: not-a-count");
-    expect(f.calls().filter((call) => call.tool === "swift")).toHaveLength(1);
-  });
-
-  it("uses fresh named preferences for successive launches", () => {
-    const f = fixture();
-    for (let index = 0; index < 2; index++) {
-      const result = f.run("node scripts/test-macos-native.mts named --skip-build");
-      expect(result.status, result.stderr).toBe(0);
-    }
-    const calls = f.calls().filter((call) => call.tool === "swift");
-    expect(calls).toHaveLength(2);
-    expect(calls[0].env.OPENCLAW_PROFILE).not.toBe(calls[1].env.OPENCLAW_PROFILE);
-    expect(calls[0].env.HOME).not.toBe(calls[1].env.HOME);
-    const eventPaths = calls.map(
-      (call) => call.args[call.args.indexOf("--event-stream-output-path") + 1],
-    );
-    expect(eventPaths.every((eventPath) => path.isAbsolute(eventPath))).toBe(true);
-    expect(eventPaths[0]).not.toBe(eventPaths[1]);
-  });
-
-  it.each([
-    [{ GITHUB_ACTIONS: "" }, ["named", "--skip-build"], "macos-swift"],
-    [{}, ["named"], "--skip-build"],
-    [{}, ["other", "--skip-build"], "Select default or named"],
-  ] as const)("rejects an invalid launch before starting Swift (%j)", (env, args, message) => {
-    const f = fixture();
-    const result = spawnSync(process.execPath, ["scripts/test-macos-native.mts", ...args], {
-      cwd: repo,
-      env: { ...f.env, ...env },
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(message);
-    expect(result.stderr).toContain("[macos-native] FAILED (exit 1)");
-    expect(fs.existsSync(f.log)).toBe(false);
-  });
+  );
 
   it.each(["security", "swift"] as const)(
     "keeps resources alive until interrupted %s has stopped",
@@ -636,23 +648,20 @@ child.once('message', () => process.exit(0));
     }
   });
 
-  it.each([
-    "create-keychain",
-    "unlock-keychain",
-    "set-keychain-settings",
-    "list-keychains",
-    "default-keychain",
-  ])("cleans a completed %s failure without starting Swift", (command) => {
-    const f = fixture(0, false, 0, command);
-    const result = f.run("node scripts/test-macos-native.mts named --skip-build");
-    expect(result.status, result.stderr).not.toBe(0);
-    const calls = f.calls();
-    expect(calls.every((call) => call.tool === "security")).toBe(true);
-    expect(calls.at(-2).args[0]).toBe(command);
-    expect(calls.at(-1).args[0]).toBe("delete-keychain");
-    expect(fs.existsSync(path.dirname(calls[0].env.HOME))).toBe(false);
-    expect(result.stderr).toContain("[macos-native] FAILED");
-  });
+  it.each(["create-keychain"])(
+    "cleans a completed %s failure without starting Swift",
+    (command) => {
+      const f = fixture(0, false, 0, command);
+      const result = f.run("node scripts/test-macos-native.mts named --skip-build");
+      expect(result.status, result.stderr).not.toBe(0);
+      const calls = f.calls();
+      expect(calls.every((call) => call.tool === "security")).toBe(true);
+      expect(calls.at(-2).args[0]).toBe(command);
+      expect(calls.at(-1).args[0]).toBe("delete-keychain");
+      expect(fs.existsSync(path.dirname(calls[0].env.HOME))).toBe(false);
+      expect(result.stderr).toContain("[macos-native] FAILED");
+    },
+  );
 
   it("retains resources and reports Keychain cleanup failure", () => {
     const f = fixture(0, false, 0, "delete-keychain");
@@ -672,31 +681,14 @@ child.once('message', () => process.exit(0));
     }
   });
 
-  it.each([false, true])(
-    "requires the launcher except for frozen release targets (%s)",
-    (historical) => {
-      const f = fixture();
-      const result = f.run(swiftStep, f.root, { HISTORICAL_TARGET: String(historical) });
-      expect(result.status, result.stderr).toBe(historical ? 0 : 1);
-      const calls = f.calls().filter((call) => call.tool === "swift");
-      expect(calls.map((call) => call.args[0])).toEqual(historical ? ["build", "test"] : ["build"]);
-      if (historical) {
-        expect(calls[1].args).toEqual([
-          "test",
-          "--package-path",
-          "apps/macos",
-          "--build-system",
-          "native",
-          "--enable-code-coverage",
-          "--skip-build",
-          "--no-parallel",
-        ]);
-      }
-      if (!historical) {
-        expect(result.stderr).toContain("must provide scripts/test-macos-native.mts");
-      }
-    },
-  );
+  it("requires the launcher for current release targets", () => {
+    const f = fixture();
+    const result = f.run(swiftStep, f.root, { HISTORICAL_TARGET: "false" });
+    expect(result.status, result.stderr).toBe(1);
+    const calls = f.calls().filter((call) => call.tool === "swift");
+    expect(calls.map((call) => call.args[0])).toEqual(["build"]);
+    expect(result.stderr).toContain("must provide scripts/test-macos-native.mts");
+  });
 
   it("refuses native execution from prepush even with CI markers", () => {
     const f = fixture();

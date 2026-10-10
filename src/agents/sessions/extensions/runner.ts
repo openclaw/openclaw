@@ -1,18 +1,22 @@
-/**
- * Extension runner - executes extensions and manages their lifecycle.
- */
-
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
-import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
+import { registerListener } from "../../../shared/listeners.js";
+import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
+import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
+import {
+  bindExtensionMetadataActions,
+  bindExtensionPersistenceActions,
+} from "./metadata-actions.js";
+import { bindExtensionProviderActions } from "./provider-actions.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -23,6 +27,7 @@ import type {
   ContextUsage,
   Extension,
   ExtensionActions,
+  ExtensionActionsV2,
   ExtensionCommandContext,
   ExtensionCommandContextActions,
   ExtensionContext,
@@ -83,7 +88,7 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
-  const builtinKeybindings = {} as BuiltInKeyBindings;
+  const builtinKeybindings: BuiltInKeyBindings = {};
   for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
     if (keys === undefined) {
       continue;
@@ -109,11 +114,15 @@ const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltI
   return builtinKeybindings;
 };
 
-/** Combined result from all before_agent_start handlers */
 interface BeforeAgentStartCombinedResult {
   messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
   systemPrompt?: string;
 }
+
+type DiscoveredResourcePaths = Record<
+  keyof ResourcesDiscoverResult,
+  Array<{ path: string; extensionPath: string }>
+>;
 
 /**
  * Events handled by the generic emit() method.
@@ -130,17 +139,6 @@ type RunnerEmitEvent = Exclude<
   | MessageEndEvent
   | ResourcesDiscoverEvent
   | InputEvent
->;
-
-type SessionBeforeEvent = Extract<
-  RunnerEmitEvent,
-  {
-    type:
-      | "session_before_switch"
-      | "session_before_fork"
-      | "session_before_compact"
-      | "session_before_tree";
-  }
 >;
 
 type SessionBeforeEventResult =
@@ -165,10 +163,6 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 
 export type ShutdownHandler = () => void;
 
-/**
- * Helper function to emit session_shutdown event to extensions.
- * Returns true if the event was emitted, false if there were no handlers.
- */
 export async function emitSessionShutdownEvent(
   extensionRunner: ExtensionRunner,
   event: SessionShutdownEvent,
@@ -208,60 +202,60 @@ const noOpUIContext: ExtensionUIContext = {
   },
   getAllThemes: () => [],
   getTheme: () => undefined,
-  setTheme: (nextTheme: string | Theme) => {
-    void nextTheme;
-    return { success: false, error: "UI not available" };
-  },
+  setTheme: () => ({ success: false, error: "UI not available" }),
   getToolsExpanded: () => false,
   setToolsExpanded: () => {},
 };
 
+const noOpCommandContextActions: ExtensionCommandContextActions = {
+  waitForIdle: async () => {},
+  newSession: async () => ({ cancelled: false }),
+  fork: async () => ({ cancelled: false }),
+  navigateTree: async () => ({ cancelled: false }),
+  switchSession: async () => ({ cancelled: false }),
+  reload: async () => {},
+};
+
 export class ExtensionRunner {
-  private extensions: Extension[];
-  private runtime: ExtensionRuntime;
   private uiContext: ExtensionUIContext;
-  private cwd: string;
-  private sessionManager: SessionManager;
-  private modelRegistry: ModelRegistry;
   private errorListeners: Set<ExtensionErrorListener> = new Set();
   private getModel: () => Model | undefined = () => undefined;
   private isIdleFn: () => boolean = () => true;
   private getSignalFn: () => AbortSignal | undefined = () => undefined;
-  private waitForIdleFn: () => Promise<void> = async () => {};
+  private waitForIdleFn = noOpCommandContextActions.waitForIdle;
   private abortFn: () => void = () => {};
   private hasPendingMessagesFn: () => boolean = () => false;
   private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
   private compactFn: (options?: CompactOptions) => void = () => {};
   private getSystemPromptFn: () => string = () => "";
-  private newSessionHandler: ExtensionCommandContextActions["newSession"] = async () => ({
-    cancelled: false,
-  });
-  private forkHandler: ExtensionCommandContextActions["fork"] = async () => ({ cancelled: false });
-  private navigateTreeHandler: ExtensionCommandContextActions["navigateTree"] = async () => ({
-    cancelled: false,
-  });
-  private switchSessionHandler: ExtensionCommandContextActions["switchSession"] = async () => ({
-    cancelled: false,
-  });
-  private reloadHandler: ExtensionCommandContextActions["reload"] = async () => {};
+  private newSessionHandler = noOpCommandContextActions.newSession;
+  private forkHandler = noOpCommandContextActions.fork;
+  private navigateTreeHandler = noOpCommandContextActions.navigateTree;
+  private switchSessionHandler = noOpCommandContextActions.switchSession;
+  private reloadHandler = noOpCommandContextActions.reload;
   private shutdownHandler: ShutdownHandler = () => {};
   private shortcutDiagnostics: ResourceDiagnostic[] = [];
   private commandDiagnostics: ResourceDiagnostic[] = [];
   private staleMessage: string | undefined;
 
   constructor(
-    extensions: Extension[],
-    runtime: ExtensionRuntime,
-    cwd: string,
-    sessionManager: SessionManager,
-    modelRegistry: ModelRegistry,
+    private extensions: Extension[],
+    private runtime: ExtensionRuntime,
+    private cwd: string,
+    private sessionManager: SessionManager,
+    private modelRegistry: ModelRegistry,
   ) {
-    this.extensions = extensions;
-    this.runtime = runtime;
     this.uiContext = noOpUIContext;
-    this.cwd = cwd;
-    this.sessionManager = sessionManager;
-    this.modelRegistry = modelRegistry;
+  }
+
+  /** Bind host actions with worker-backed persistence; legacy bindCore remains source-compatible. */
+  bindCoreAsync(
+    actions: ExtensionActionsV2,
+    contextActions: ExtensionContextActions,
+    providerActions?: Parameters<ExtensionRunner["bindCore"]>[2],
+  ): void {
+    this.bindCore(actions, contextActions, providerActions);
+    bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
   bindCore(
@@ -284,11 +278,9 @@ export class ExtensionRunner {
     this.runtime.setActiveTools = actions.setActiveTools;
     this.runtime.refreshTools = actions.refreshTools;
     this.runtime.getCommands = actions.getCommands;
-    this.runtime.setModel = actions.setModel;
+    bindExtensionMetadataActions(this.sessionManager, this.runtime, actions);
     this.runtime.getThinkingLevel = actions.getThinkingLevel;
-    this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
-    // Context actions (required)
     this.getModel = contextActions.getModel;
     this.isIdleFn = contextActions.isIdle;
     this.getSignalFn = contextActions.getSignal;
@@ -299,60 +291,22 @@ export class ExtensionRunner {
     this.compactFn = contextActions.compact;
     this.getSystemPromptFn = contextActions.getSystemPrompt;
 
-    // Flush provider registrations queued during extension loading
-    for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
-      try {
-        if (providerActions?.registerProvider) {
-          providerActions.registerProvider(name, config);
-        } else {
-          this.modelRegistry.registerProvider(name, config);
-        }
-      } catch (err) {
-        this.emitError({
-          extensionPath,
-          event: "register_provider",
-          error: coerceErrorMessage(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-      }
-    }
-    this.runtime.pendingProviderRegistrations = [];
-
-    // From this point on, provider registration/unregistration takes effect immediately
-    // without requiring a /reload.
-    this.runtime.registerProvider = (name, config) => {
-      if (providerActions?.registerProvider) {
-        providerActions.registerProvider(name, config);
-        return;
-      }
-      this.modelRegistry.registerProvider(name, config);
-    };
-    this.runtime.unregisterProvider = (name) => {
-      if (providerActions?.unregisterProvider) {
-        providerActions.unregisterProvider(name);
-        return;
-      }
-      this.modelRegistry.unregisterProvider(name);
-    };
+    bindExtensionProviderActions(
+      this.runtime,
+      this.modelRegistry,
+      (error) => this.emitError(error),
+      providerActions,
+    );
   }
 
   bindCommandContext(actions?: ExtensionCommandContextActions): void {
-    if (actions) {
-      this.waitForIdleFn = actions.waitForIdle;
-      this.newSessionHandler = actions.newSession;
-      this.forkHandler = actions.fork;
-      this.navigateTreeHandler = actions.navigateTree;
-      this.switchSessionHandler = actions.switchSession;
-      this.reloadHandler = actions.reload;
-      return;
-    }
-
-    this.waitForIdleFn = async () => {};
-    this.newSessionHandler = async () => ({ cancelled: false });
-    this.forkHandler = async () => ({ cancelled: false });
-    this.navigateTreeHandler = async () => ({ cancelled: false });
-    this.switchSessionHandler = async () => ({ cancelled: false });
-    this.reloadHandler = async () => {};
+    const boundActions = actions ?? noOpCommandContextActions;
+    this.waitForIdleFn = boundActions.waitForIdle;
+    this.newSessionHandler = boundActions.newSession;
+    this.forkHandler = boundActions.fork;
+    this.navigateTreeHandler = boundActions.navigateTree;
+    this.switchSessionHandler = boundActions.switchSession;
+    this.reloadHandler = boundActions.reload;
   }
 
   setUIContext(uiContext?: ExtensionUIContext): void {
@@ -384,7 +338,6 @@ export class ExtensionRunner {
     return Array.from(toolsByName.values());
   }
 
-  /** Get a tool definition by name. Returns undefined if not found. */
   getToolDefinition(toolName: string): RegisteredTool["definition"] | undefined {
     for (const ext of this.extensions) {
       const tool = ext.tools.get(toolName);
@@ -473,15 +426,16 @@ export class ExtensionRunner {
     }
   }
 
-  private assertActive(): void {
+  private requireActive(): this {
     if (this.staleMessage) {
       throw new Error(this.staleMessage);
     }
+    this.runtime.assertActive();
+    return this;
   }
 
   onError(listener: ExtensionErrorListener): () => void {
-    this.errorListeners.add(listener);
-    return () => this.errorListeners.delete(listener);
+    return registerListener(this.errorListeners, listener);
   }
 
   emitError(error: ExtensionError): void {
@@ -491,13 +445,7 @@ export class ExtensionRunner {
   }
 
   hasHandlers(eventType: string): boolean {
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get(eventType);
-      if (handlers && handlers.length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return this.extensions.some((ext) => (ext.handlers.get(eventType)?.length ?? 0) > 0);
   }
 
   getMessageRenderer(customType: string): MessageRenderer | undefined {
@@ -570,10 +518,7 @@ export class ExtensionRunner {
    * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
    */
   createContext(): ExtensionContext {
-    const requireActiveRunner = () => {
-      this.assertActive();
-      return this;
-    };
+    const requireActiveRunner = () => this.requireActive();
     // Model selection snapshots its getter; all other context values stay live.
     const getModel = this.getModel;
     return {
@@ -612,44 +557,19 @@ export class ExtensionRunner {
   createCommandContext(): ExtensionCommandContext {
     // Add commands to the fresh context without reading its guarded getters.
     return Object.assign(this.createContext(), {
-      waitForIdle: () => {
-        this.assertActive();
-        return this.waitForIdleFn();
-      },
-      newSession: (options) => {
-        this.assertActive();
-        return this.newSessionHandler(options);
-      },
-      fork: (entryId, options) => {
-        this.assertActive();
-        return this.forkHandler(entryId, options);
-      },
-      navigateTree: (targetId, options) => {
-        this.assertActive();
-        return this.navigateTreeHandler(targetId, options);
-      },
-      switchSession: (sessionPath, options) => {
-        this.assertActive();
-        return this.switchSessionHandler(sessionPath, options);
-      },
-      reload: () => {
-        this.assertActive();
-        return this.reloadHandler();
-      },
+      waitForIdle: () => this.requireActive().waitForIdleFn(),
+      newSession: (options) => this.requireActive().newSessionHandler(options),
+      fork: (entryId, options) => this.requireActive().forkHandler(entryId, options),
+      navigateTree: (targetId, options) =>
+        this.requireActive().navigateTreeHandler(targetId, options),
+      switchSession: (sessionPath, options) =>
+        this.requireActive().switchSessionHandler(sessionPath, options),
+      reload: () => this.requireActive().reloadHandler(),
     } satisfies ExtensionCommandContextActions);
   }
 
-  private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
-    return (
-      event.type === "session_before_switch" ||
-      event.type === "session_before_fork" ||
-      event.type === "session_before_compact" ||
-      event.type === "session_before_tree"
-    );
-  }
-
   private async dispatchHandlers<TResult>(
-    eventType: Exclude<ExtensionEvent["type"], "tool_call">,
+    eventType: ExtensionEvent["type"],
     invoke: (
       handler: NonNullable<ReturnType<Extension["handlers"]["get"]>>[number],
       ctx: ExtensionContext,
@@ -668,6 +588,14 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
+          if (eventType === "tool_call") {
+            throw err;
+          }
+          // Runtime faults must escape before another handler can run.
+          rethrowIncognitoSessionError(err);
+          if (err instanceof SessionMetadataCommittedError) {
+            throw err;
+          }
           this.emitError({
             extensionPath: ext.path,
             event: eventType,
@@ -685,7 +613,13 @@ export class ExtensionRunner {
 
     const cancelled = await this.dispatchHandlers(event.type, async (handler, ctx) => {
       const handlerResult = await handler(event, ctx);
-      if (this.isSessionBeforeEvent(event) && handlerResult) {
+      if (
+        (event.type === "session_before_switch" ||
+          event.type === "session_before_fork" ||
+          event.type === "session_before_compact" ||
+          event.type === "session_before_tree") &&
+        handlerResult
+      ) {
         result = handlerResult as SessionBeforeEventResult;
         if (result.cancel) {
           return result;
@@ -758,28 +692,17 @@ export class ExtensionRunner {
   }
 
   async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    let ctx: ExtensionContext | undefined;
     let result: ToolCallEventResult | undefined;
-
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("tool_call");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
-        ctx ??= this.createContext();
-        const handlerResult = await handler(event, ctx);
-
-        if (handlerResult) {
-          result = handlerResult as ToolCallEventResult;
-          if (result.block) {
-            return result;
-          }
+    await this.dispatchHandlers("tool_call", async (handler, ctx) => {
+      const handlerResult = await handler(event, ctx);
+      if (handlerResult) {
+        result = handlerResult as ToolCallEventResult;
+        if (result.block) {
+          return result;
         }
       }
-    }
-
+      return undefined;
+    });
     return result;
   }
 
@@ -836,7 +759,7 @@ export class ExtensionRunner {
     let currentSystemPrompt = systemPrompt;
     const ctx = this.createContext();
     ctx.getSystemPrompt = () => {
-      this.assertActive();
+      this.requireActive();
       return currentSystemPrompt;
     };
     const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
@@ -879,31 +802,22 @@ export class ExtensionRunner {
   async emitResourcesDiscover(
     cwd: string,
     reason: ResourcesDiscoverEvent["reason"],
-  ): Promise<{
-    skillPaths: Array<{ path: string; extensionPath: string }>;
-    promptPaths: Array<{ path: string; extensionPath: string }>;
-    themePaths: Array<{ path: string; extensionPath: string }>;
-  }> {
-    const skillPaths: Array<{ path: string; extensionPath: string }> = [];
-    const promptPaths: Array<{ path: string; extensionPath: string }> = [];
-    const themePaths: Array<{ path: string; extensionPath: string }> = [];
+  ): Promise<DiscoveredResourcePaths> {
+    const paths: DiscoveredResourcePaths = { skillPaths: [], promptPaths: [], themePaths: [] };
 
     await this.dispatchHandlers("resources_discover", async (handler, ctx, extensionPath) => {
       const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
       const result = (await handler(event, ctx)) as ResourcesDiscoverResult | undefined;
 
-      if (result?.skillPaths?.length) {
-        skillPaths.push(...result.skillPaths.map((path) => ({ path, extensionPath })));
-      }
-      if (result?.promptPaths?.length) {
-        promptPaths.push(...result.promptPaths.map((path) => ({ path, extensionPath })));
-      }
-      if (result?.themePaths?.length) {
-        themePaths.push(...result.themePaths.map((path) => ({ path, extensionPath })));
+      for (const key of ["skillPaths", "promptPaths", "themePaths"] as const) {
+        const discovered = result?.[key];
+        if (discovered?.length) {
+          paths[key].push(...discovered.map((path) => ({ path, extensionPath })));
+        }
       }
     });
 
-    return { skillPaths, promptPaths, themePaths };
+    return paths;
   }
 
   /** Emit input event. Transforms chain, "handled" short-circuits. */

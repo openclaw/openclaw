@@ -1,20 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  isVisibleAssistantResultEventForRun,
+  matchesTranscriptEvent,
+} from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import {
   testing,
-  readChildCompletionFindings,
-  readSubagentRunAnnounceResult,
+  readChildCompletionFindings as readChildCompletionFindingsFromRegistry,
+  readSubagentRunAnnounceResult as readSubagentRunAnnounceResultFromRegistry,
 } from "./subagent-announce-output.test-support.js";
-import { isVisibleSubagentResultEventForRun } from "./subagent-announce-result.js";
 
 describe("exact-run announcement results", () => {
+  const published = new Map<string, SubagentRunRecord>();
+  const readCurrent = (runId: string) => published.get(runId);
+  const readSubagentRunAnnounceResult = (child: SubagentRunRecord) =>
+    readSubagentRunAnnounceResultFromRegistry(child, readCurrent);
+  const readChildCompletionFindings = (children: SubagentRunRecord[]) =>
+    readChildCompletionFindingsFromRegistry(children, readCurrent);
   type FindTranscriptEvent =
     typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent;
 
   function completedChild(text: string): SubagentRunRecord {
-    return {
+    const child: SubagentRunRecord = {
       runId: "completed-run",
       childSessionKey: "agent:main:subagent:completed",
       requesterSessionKey: "agent:main:main",
@@ -37,11 +47,15 @@ describe("exact-run announcement results", () => {
         terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
       },
     };
+    published.set(child.runId, child);
+    return child;
   }
 
   function installTranscript(events: unknown[], archiveEvents?: unknown[], deletedSession = false) {
     const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async (_scope, match) => {
-      const event = events.toReversed().find(match);
+      const event = events
+        .toReversed()
+        .find((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     testing.setDepsForTest({
@@ -59,7 +73,7 @@ describe("exact-run announcement results", () => {
           sessionKey: "agent:main:subagent:completed",
         });
         const event = archiveEvents?.findLast((candidate) =>
-          isVisibleSubagentResultEventForRun(candidate, runId),
+          isVisibleAssistantResultEventForRun(candidate, runId),
         );
         return event === undefined ? undefined : { event };
       },
@@ -79,7 +93,10 @@ describe("exact-run announcement results", () => {
     };
   }
 
-  afterEach(() => testing.setDepsForTest());
+  afterEach(() => {
+    testing.setDepsForTest();
+    published.clear();
+  });
 
   it("announces the complete exact-run final while lifecycle evidence remains bounded", async () => {
     const text = `${"<result>".repeat(700)}required-tail`;
@@ -108,10 +125,10 @@ describe("exact-run announcement results", () => {
     expect(findings).not.toContain("older result");
     expect(findings).not.toContain("newer result");
     expect(findings).not.toContain("unfinished follow-up");
-    expect(findTranscriptEvent).toHaveBeenCalledWith(
-      child.execution.transcriptTarget,
-      expect.any(Function),
-    );
+    expect(findTranscriptEvent).toHaveBeenCalledWith(child.execution.transcriptTarget, {
+      kind: "visible-final",
+      runId: child.runId,
+    });
     expect(child.completion?.terminalReply).toBe(terminalReply);
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });
     expect(prepared.isCurrent()).toBe(true);
@@ -141,23 +158,35 @@ describe("exact-run announcement results", () => {
     const originalTarget = child.execution.transcriptTarget;
     const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async (_scope, match) => {
       await Promise.resolve();
-      child.runId = "replacement-run";
-      child.execution.transcriptTarget = {
-        ...originalTarget,
-        sessionId: "replacement-session",
-      };
+      published.set(child.runId, {
+        ...structuredClone(child),
+        generation: (child.generation ?? 0) + 1,
+        execution: {
+          ...child.execution,
+          transcriptTarget: { ...originalTarget, sessionId: "replacement-session" },
+        },
+      });
       const event = assistant(originalRunId, "original answer");
-      return match(event) ? { event } : undefined;
+      return matchesTranscriptEvent(event, match) ? { event } : undefined;
     });
     testing.setDepsForTest({ findTranscriptEvent });
 
     await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(
       "transcript identity changed during announcement",
     );
-    expect(findTranscriptEvent).toHaveBeenCalledWith(originalTarget, expect.any(Function));
+    expect(findTranscriptEvent).toHaveBeenCalledWith(originalTarget, {
+      kind: "visible-final",
+      runId: originalRunId,
+    });
   });
 
-  it.each(["silent replacement", "failed outcome"] as const)(
+  it.each([
+    "silent replacement",
+    "failed outcome",
+    "transcript target",
+    "retired run",
+    "Gateway recovery",
+  ] as const)(
     "rejects a %s that arrives while the exact transcript read is pending",
     async (change) => {
       const child = completedChild("original answer");
@@ -167,7 +196,7 @@ describe("exact-run announcement results", () => {
         started.resolve();
         await release.promise;
         const event = assistant(child.runId, "original answer");
-        return match(event) ? { event } : undefined;
+        return matchesTranscriptEvent(event, match) ? { event } : undefined;
       });
       testing.setDepsForTest({ findTranscriptEvent });
       const result = readSubagentRunAnnounceResult(child);
@@ -175,10 +204,24 @@ describe("exact-run announcement results", () => {
         "transcript identity changed during announcement",
       );
       await started.promise;
+      const next = structuredClone(child);
+      if (change !== "Gateway recovery") {
+        copySubagentRunRuntimeOwner(child, next);
+      }
       if (change === "silent replacement") {
-        child.completion = { required: true, terminalReply: { disposition: "silent" } };
+        next.completion = { required: true, terminalReply: { disposition: "silent" } };
+      } else if (change === "failed outcome") {
+        next.execution.outcome = { status: "error", error: "cancelled" };
+      } else if (change === "transcript target") {
+        next.execution.transcriptTarget = {
+          ...next.execution.transcriptTarget,
+          sessionId: "replacement-session",
+        };
+      }
+      if (change === "retired run") {
+        published.delete(child.runId);
       } else {
-        child.execution.outcome = { status: "error", error: "cancelled" };
+        published.set(next.runId, next);
       }
       release.resolve();
 
@@ -186,12 +229,30 @@ describe("exact-run announcement results", () => {
     },
   );
 
+  it("retains prepared result authority across an equivalent immutable publication", async () => {
+    const child = completedChild("original answer");
+    const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async () => {
+      const next = copySubagentRunRuntimeOwner(child, structuredClone(child));
+      next.completion!.capturedAt = 10;
+      next.delivery = { status: "delivered" };
+      published.set(next.runId, next);
+      return { event: assistant(child.runId, "original answer") };
+    });
+    testing.setDepsForTest({ findTranscriptEvent });
+    const prepared = await readSubagentRunAnnounceResult(child);
+    expect(prepared.text).toBe("original answer");
+    expect(prepared.isCurrent()).toBe(true);
+    expect(published.get(child.runId)).not.toBe(child);
+  });
+
   it.each(["before batch preparation", "after batch preparation"] as const)(
     "rejects an early child's silent replacement %s",
     async (timing) => {
       const first = completedChild("first answer");
       const second = completedChild("second answer");
       second.runId = "second-run";
+      published.set(first.runId, first);
+      published.set(second.runId, second);
       second.execution.transcriptTarget = {
         ...second.execution.transcriptTarget,
         sessionId: "second-session",
@@ -205,7 +266,7 @@ describe("exact-run announcement results", () => {
           await releaseSecond.promise;
         }
         const event = assistant(child.runId, child === first ? "first answer" : "second answer");
-        return match(event) ? { event } : undefined;
+        return matchesTranscriptEvent(event, match) ? { event } : undefined;
       });
       testing.setDepsForTest({ findTranscriptEvent });
       const result = readChildCompletionFindings([first, second]);
@@ -216,7 +277,13 @@ describe("exact-run announcement results", () => {
         const rejected = expect(result).rejects.toThrow(
           "A child result changed while preparing the completion batch",
         );
-        first.completion = { required: true, terminalReply: { disposition: "silent" } };
+        published.set(
+          first.runId,
+          copySubagentRunRuntimeOwner(first, {
+            ...structuredClone(first),
+            completion: { required: true, terminalReply: { disposition: "silent" } },
+          }),
+        );
         releaseSecond.resolve();
         await rejected;
       } else {
@@ -224,7 +291,13 @@ describe("exact-run announcement results", () => {
         const prepared = await result;
         expect(prepared.isCurrent()).toBe(true);
         expect(prepared.text).toContain("first answer");
-        first.completion = { required: true, terminalReply: { disposition: "silent" } };
+        published.set(
+          first.runId,
+          copySubagentRunRuntimeOwner(first, {
+            ...structuredClone(first),
+            completion: { required: true, terminalReply: { disposition: "silent" } },
+          }),
+        );
         expect(prepared.isCurrent()).toBe(false);
       }
     },
@@ -286,7 +359,7 @@ describe("exact-run announcement results", () => {
         sessionKey: child.childSessionKey,
         storePath: "/tmp/completed-session-store",
       },
-      expect.any(Function),
+      { kind: "visible-final", runId: child.runId },
     );
   });
 

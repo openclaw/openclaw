@@ -23,8 +23,8 @@ export function createDiscordSupplementalContextAccessChecker(params: {
   const userAllowList = params.channelConfig?.users ?? params.guildInfo?.users ?? [];
   const roleAllowList = params.channelConfig?.roles ?? params.guildInfo?.roles ?? [];
   const allowFrom = [...userAllowList, ...roleAllowList];
-  return (sender: DiscordSupplementalContextSender): boolean => {
-    return resolveInboundSupplementalSenderAllowed({
+  return (sender: DiscordSupplementalContextSender): boolean =>
+    resolveInboundSupplementalSenderAllowed({
       isGroup: params.isGuild,
       groupPolicy: allowFrom.length === 0 ? "open" : "allowlist",
       allowFrom,
@@ -39,7 +39,6 @@ export function createDiscordSupplementalContextAccessChecker(params: {
           allowNameMatching: params.allowNameMatching,
         }),
     });
-  };
 }
 
 export function buildDiscordGroupSystemPrompt(
@@ -52,21 +51,17 @@ function buildDiscordChannelStructuredContext(params: {
   isGuild: boolean;
   channelTopic?: string;
 }): MsgContext["ChannelStructuredContext"] | undefined {
-  if (!params.isGuild) {
+  if (!params.isGuild || typeof params.channelTopic !== "string" || !params.channelTopic.trim()) {
     return undefined;
   }
-  const entries: NonNullable<MsgContext["ChannelStructuredContext"]> = [];
-  if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
-    entries.push({
+  return [
+    {
       label: "Discord channel metadata",
       source: "discord",
       type: "channel_metadata",
-      payload: {
-        topic: params.channelTopic.trim(),
-      },
-    });
-  }
-  return entries.length > 0 ? entries : undefined;
+      payload: { topic: params.channelTopic.trim() },
+    },
+  ];
 }
 
 export function buildDiscordInboundAccessContext(params: {
@@ -85,15 +80,7 @@ export function buildDiscordInboundAccessContext(params: {
     groupSystemPrompt: params.isGuild
       ? buildDiscordGroupSystemPrompt(params.channelConfig)
       : undefined,
-    channelStructuredContext: buildDiscordChannelStructuredContext({
-      isGuild: params.isGuild,
-      channelTopic: params.channelTopic,
-    }),
-    ownerAllowFrom: resolveDiscordOwnerAllowFrom({
-      channelConfig: params.channelConfig,
-      guildInfo: params.guildInfo,
-      sender: params.sender,
-      allowNameMatching: params.allowNameMatching,
-    }),
+    channelStructuredContext: buildDiscordChannelStructuredContext(params),
+    ownerAllowFrom: resolveDiscordOwnerAllowFrom(params),
   };
 }

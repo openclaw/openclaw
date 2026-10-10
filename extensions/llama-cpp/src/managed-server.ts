@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   readProviderJsonResponse,
   readProviderTextResponse,
@@ -29,18 +30,22 @@ import {
   resolveLlamaCppModelSource,
 } from "./defaults.js";
 import {
+  findManagedLlamaServerAsset,
+  resolveManagedLlamaServerPaths,
+  type LlamaServerAsset,
+} from "./llama-server-assets.js";
+import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
-  resolveManagedLlamaServerPaths,
   sha256File,
   type LlamaDownloadProgress,
-  type LlamaServerAsset,
 } from "./llama-server-install.js";
 import {
   buildLlamaServerPreset,
   type LlamaServerPresetOptions,
   type ManagedLlamaChatModel,
 } from "./llama-server-preset.js";
+import { recoverManagedLlamaServer } from "./managed-server-orphans.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
 
 type ModelArtifact = {
@@ -78,8 +83,8 @@ const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets rema
 const presetState = {
   appliedRevisions: new Map<string, string>(),
   desiredRevisions: new Map<string, string>(),
-  transition: Promise.resolve(),
 };
+const runPresetTransition = createAsyncLock();
 const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // Allows five seconds beyond model shutdown.
 
 function parseHuggingFaceSource(source: string): {
@@ -251,6 +256,50 @@ async function resolveModelArtifact(source: string, signal?: AbortSignal): Promi
   throw new Error(`Unsupported remote model URI: ${source}`);
 }
 
+async function resolveCachedModelArtifact(
+  source: string,
+  cacheDir: string,
+  signal?: AbortSignal,
+): Promise<ModelArtifact> {
+  const key = `${path.resolve(cacheDir)}\0${source}`;
+  const artifact = resolvedModelArtifacts.get(key) ?? (await resolveModelArtifact(source, signal));
+  resolvedModelArtifacts.set(key, artifact);
+  return artifact;
+}
+
+export async function resolveLlamaCppModelDownloadSize(
+  source: string,
+  cacheDir: string,
+  signal?: AbortSignal,
+): Promise<number | undefined> {
+  const artifact = await resolveCachedModelArtifact(source, cacheDir, signal);
+  if (artifact.expectedSize !== undefined) {
+    return artifact.expectedSize;
+  }
+  // HEAD is advisory setup metadata; cached model reuse stays offline-capable.
+  const result = await fetchWithSsrFGuard({
+    url: artifact.url,
+    init: { method: "HEAD" },
+    signal,
+    requireHttps: true,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(artifact.url),
+    auditContext: "llama-cpp-model-resolve",
+  }).catch(() => {
+    signal?.throwIfAborted();
+    return undefined;
+  });
+  if (!result) {
+    return undefined;
+  }
+  const { response, release } = result;
+  try {
+    const size = response.ok ? Number(response.headers.get("content-length")) : 0;
+    return Number.isSafeInteger(size) && size > 0 ? size : undefined;
+  } finally {
+    await release();
+  }
+}
+
 export async function ensureLlamaCppModel(params: {
   source: string;
   cacheDir: string;
@@ -266,11 +315,7 @@ export async function ensureLlamaCppModel(params: {
     await assertGguf(localPath);
     return localPath;
   }
-  const artifactCacheKey = `${path.resolve(params.cacheDir)}\0${localSource}`;
-  const artifact =
-    resolvedModelArtifacts.get(artifactCacheKey) ??
-    (await resolveModelArtifact(localSource, params.signal));
-  resolvedModelArtifacts.set(artifactCacheKey, artifact);
+  const artifact = await resolveCachedModelArtifact(localSource, params.cacheDir, params.signal);
   const destination = path.join(params.cacheDir, artifact.fileName);
   const load =
     modelPromises.get(destination) ??
@@ -324,12 +369,6 @@ async function writePreset(presetPath: string, contents: string): Promise<void> 
   } finally {
     await fsp.rm(temporary, { force: true });
   }
-}
-
-async function runPresetTransition(run: () => Promise<void>): Promise<void> {
-  const pending = presetState.transition.catch(() => undefined).then(run);
-  presetState.transition = pending;
-  await pending;
 }
 
 async function updatePreset(
@@ -406,7 +445,6 @@ export async function prepareManagedLlamaServer(params: {
   // Runtime embedding refreshes preserve chat. Explicit embedding-only setup removes it.
   chatModel: ManagedLlamaChatModel;
   configuredChatModelIds?: readonly string[];
-  embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
   port?: number;
@@ -418,15 +456,25 @@ export async function prepareManagedLlamaServer(params: {
   onProgress?: LlamaDownloadProgress;
 }): Promise<ManagedLlamaServer> {
   params.signal?.throwIfAborted();
-  const command =
-    params.localService?.command ??
-    (
-      await ensureLlamaServerInstalled({
-        asset: params.asset,
-        signal: params.signal,
-        onProgress: params.onProgress,
-      })
-    ).command;
+  let command = params.localService?.command;
+  const asset = command === undefined ? params.asset : findManagedLlamaServerAsset(command);
+  if (command !== undefined && asset) {
+    try {
+      await fsp.stat(command);
+    } catch (error) {
+      if (asOptionalRecord(error)?.code !== "ENOENT") {
+        throw error;
+      }
+      command = undefined;
+    }
+  }
+  command ??= (
+    await ensureLlamaServerInstalled({
+      asset,
+      signal: params.signal,
+      onProgress: params.onProgress,
+    })
+  ).command;
   const port = params.port ?? (await findAvailableLlamaServerPort(params.isolated ? 0 : undefined));
   const rootUrl = `http://127.0.0.1:${port}`;
   const reconcileOrigin = params.reconcileBaseUrl
@@ -440,6 +488,15 @@ export async function prepareManagedLlamaServer(params: {
   const configuredPreset =
     params.localService?.args?.find((_, index, args) => args[index - 1] === "--models-preset") ??
     params.localService?.env?.LLAMA_ARG_MODELS_PRESET;
+  if (params.localService && !params.isolated) {
+    await recoverManagedLlamaServer({
+      command,
+      port,
+      cwd: params.localService.cwd,
+      args: params.localService.args,
+      signal: params.signal,
+    });
+  }
   // Existing services may own a direct --model command instead of a router preset.
   // Keep that public localService contract; only setup creates a new router.
   if (params.localService && !configuredPreset && !params.isolated) {
@@ -460,9 +517,13 @@ export async function prepareManagedLlamaServer(params: {
   await updatePreset(presetPath, {
     chatModel: params.chatModel,
     configuredChatModelIds: params.configuredChatModelIds,
-    embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+    // Every launch inherits process.env. An isolated candidate is accepted with generated args
+    // and no service env, so only the configured service contributes its own args and env.
+    serviceSettings: params.isolated
+      ? { env: process.env }
+      : { args: params.localService?.args, env: { ...process.env, ...params.localService?.env } },
     reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
   });
   params.signal?.throwIfAborted();

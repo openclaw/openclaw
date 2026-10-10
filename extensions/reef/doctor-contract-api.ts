@@ -12,22 +12,25 @@ import {
   ReefChannelConfigSchema,
   normalizeReefTarget,
 } from "./src/config-schema.js";
-import { reefAuditStateMigration, reefRuntimeStateMigration } from "./src/doctor-durable-state.js";
 import {
+  openReefDurableMigrationStore,
+  openReefIdentityMigrationStore,
+  reefAuditStateMigration,
+  reefRuntimeStateMigration,
+} from "./src/doctor-durable-state.js";
+import {
+  collectLegacyReefStateBackupResources,
   legacyReefFileExists,
+  listLegacyReefFiles,
   REEF_DURABLE_LEGACY_FILENAMES,
   resolveLegacyReefStateDir,
 } from "./src/doctor-state-paths.js";
 import { ReefPeerTrustSchema, type ReefPeerTrust } from "./src/friend-types.js";
 import {
   REEF_DURABLE_MIGRATION_KEY,
-  REEF_DURABLE_MIGRATION_MAX_ENTRIES,
-  REEF_DURABLE_MIGRATION_NAMESPACE,
   REEF_KEYS_KEY,
   REEF_KEYS_MAX_ENTRIES,
   REEF_KEYS_MIGRATION_KEY,
-  REEF_KEYS_MIGRATION_MAX_ENTRIES,
-  REEF_KEYS_MIGRATION_NAMESPACE,
   REEF_KEYS_NAMESPACE,
   REEF_REGISTRATION_IDENTITY_KEY,
   REEF_REGISTRATION_MAX_ENTRIES,
@@ -36,8 +39,6 @@ import {
   parseReefIdentityBinding,
   parseReefKeys,
   parseReefSetupSession,
-  type ReefIdentityMigrationRecord,
-  type ReefDurableMigrationRecord,
   type ReefIdentityBinding,
   type ReefSetupSession,
 } from "./src/state.js";
@@ -66,21 +67,7 @@ type ReefConfigImportMarker = {
   importedAt: number;
 };
 
-type ReefLegacyRegistrationSource =
-  | {
-      filename: "identity.json";
-      key: typeof REEF_REGISTRATION_IDENTITY_KEY;
-      parse: typeof parseReefIdentityBinding;
-      label: string;
-    }
-  | {
-      filename: "setup-session.json";
-      key: typeof REEF_REGISTRATION_SESSION_KEY;
-      parse: typeof parseReefSetupSession;
-      label: string;
-    };
-
-const REEF_LEGACY_REGISTRATION_SOURCES: ReefLegacyRegistrationSource[] = [
+const REEF_LEGACY_REGISTRATION_SOURCES = [
   {
     filename: "identity.json",
     key: REEF_REGISTRATION_IDENTITY_KEY,
@@ -152,29 +139,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "reef-keys-json-to-plugin-state",
     label: "Reef identity keys",
+    collectBackupResources: collectLegacyReefStateBackupResources,
     async detectLegacyState(params) {
       const stateDir = resolveLegacyReefStateDir(params);
       const filePath = path.join(stateDir, "keys.json");
-      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
-        namespace: REEF_KEYS_MIGRATION_NAMESPACE,
-        maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      const durableMigrationStore =
-        params.context.openPluginStateKeyedStore<ReefDurableMigrationRecord>({
-          namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
-          maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
-          overflowPolicy: "reject-new",
-        });
+      const migrationStore = openReefIdentityMigrationStore(params.context);
+      const durableMigrationStore = openReefDurableMigrationStore(params.context);
       const sourceExists = await legacyReefFileExists(filePath);
       const pending = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
-      const durableSourceExists = (
-        await Promise.all(
-          REEF_DURABLE_LEGACY_FILENAMES.map((filename) =>
-            legacyReefFileExists(path.join(stateDir, filename)),
-          ),
-        )
-      ).some(Boolean);
+      const durableSourceExists =
+        (await listLegacyReefFiles(stateDir, REEF_DURABLE_LEGACY_FILENAMES)).length > 0;
       const durablePending = await durableMigrationStore.lookup(REEF_DURABLE_MIGRATION_KEY);
       return sourceExists || pending || durableSourceExists || durablePending
         ? {
@@ -193,29 +167,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const warnings: string[] = [];
       const stateDir = resolveLegacyReefStateDir(params);
       const filePath = path.join(stateDir, "keys.json");
-      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
-        namespace: REEF_KEYS_MIGRATION_NAMESPACE,
-        maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
+      const migrationStore = openReefIdentityMigrationStore(params.context);
       const store = params.context.openPluginStateKeyedStore<ReefKeys>({
         namespace: REEF_KEYS_NAMESPACE,
         maxEntries: REEF_KEYS_MAX_ENTRIES,
         overflowPolicy: "reject-new",
       });
-      const durableMigrationStore =
-        params.context.openPluginStateKeyedStore<ReefDurableMigrationRecord>({
-          namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
-          maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
-          overflowPolicy: "reject-new",
-        });
-      const durableSourceExists = (
-        await Promise.all(
-          REEF_DURABLE_LEGACY_FILENAMES.map((filename) =>
-            legacyReefFileExists(path.join(stateDir, filename)),
-          ),
-        )
-      ).some(Boolean);
+      const durableMigrationStore = openReefDurableMigrationStore(params.context);
+      const durableSourceExists =
+        (await listLegacyReefFiles(stateDir, REEF_DURABLE_LEGACY_FILENAMES)).length > 0;
       const durablePending = await durableMigrationStore.lookup(REEF_DURABLE_MIGRATION_KEY);
       if (durableSourceExists || durablePending) {
         await durableMigrationStore.register(REEF_DURABLE_MIGRATION_KEY, { pending: true });
@@ -305,21 +265,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "reef-registration-json-to-plugin-state",
     label: "Reef registration state",
+    collectBackupResources: collectLegacyReefStateBackupResources,
     async detectLegacyState(params) {
       const stateDir = resolveLegacyReefStateDir(params);
-      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
-        namespace: REEF_KEYS_MIGRATION_NAMESPACE,
-        maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      const files = (
-        await Promise.all(
-          REEF_LEGACY_REGISTRATION_SOURCES.map(async (source) => ({
-            source,
-            exists: await legacyReefFileExists(path.join(stateDir, source.filename)),
-          })),
-        )
-      ).filter((entry) => entry.exists);
+      const migrationStore = openReefIdentityMigrationStore(params.context);
+      const files = await listLegacyReefFiles(
+        stateDir,
+        REEF_LEGACY_REGISTRATION_SOURCES.map((source) => source.filename),
+      );
       const pending = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
       const configuredBinding = configuredReefIdentityBinding(params.config);
       const configuredBindingNeedsImport =
@@ -329,7 +282,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         ? {
             preview: [
               files.length > 0
-                ? `- Reef registration state -> plugin state (${files.map((entry) => entry.source.filename).join(", ")})`
+                ? `- Reef registration state -> plugin state (${files.join(", ")})`
                 : configuredBindingNeedsImport
                   ? "- Reef configured identity binding -> plugin state"
                   : "- Verify Reef identity binding migration marker",
@@ -348,24 +301,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
         overflowPolicy: "reject-new",
       });
-      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
-        namespace: REEF_KEYS_MIGRATION_NAMESPACE,
-        maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      const durableMigrationStore =
-        params.context.openPluginStateKeyedStore<ReefDurableMigrationRecord>({
-          namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
-          maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
-          overflowPolicy: "reject-new",
-        });
-      const hasRegistrationSource = (
-        await Promise.all(
-          REEF_LEGACY_REGISTRATION_SOURCES.map((source) =>
-            legacyReefFileExists(path.join(stateDir, source.filename)),
-          ),
-        )
-      ).some(Boolean);
+      const migrationStore = openReefIdentityMigrationStore(params.context);
+      const durableMigrationStore = openReefDurableMigrationStore(params.context);
+      const hasRegistrationSource =
+        (
+          await listLegacyReefFiles(
+            stateDir,
+            REEF_LEGACY_REGISTRATION_SOURCES.map((source) => source.filename),
+          )
+        ).length > 0;
       if (
         hasRegistrationSource ||
         (await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)) ||
@@ -489,6 +433,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "reef-config-trust-to-plugin-state",
     label: "Reef peer trust",
+    collectBackupResources: () => [],
     async detectLegacyState({ config, context }) {
       const legacy = inspectLegacyReefFriends(config);
       const markerStore = context.openPluginStateKeyedStore<ReefConfigImportMarker>({

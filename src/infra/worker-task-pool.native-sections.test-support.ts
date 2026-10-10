@@ -5,7 +5,8 @@ import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread, threadId, Worker, workerData } from "node:worker_threads";
 import { deflateSync } from "node:zlib";
-import { serveWorkerTasks, WorkerTaskPool } from "./worker-task-pool.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
+import { serveWorkerTasks } from "./worker-task-server.js";
 
 export type NativeCancellation = "abort" | "timeout" | "close";
 
