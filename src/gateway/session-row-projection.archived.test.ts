@@ -457,7 +457,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
 });
 
 it.each(["catalog", "archive"] as const)(
-  "withdraws pending backfill authority after %s demotion",
+  "keeps archived display rows cold after %s demotion during backfill",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
@@ -495,7 +495,6 @@ it.each(["catalog", "archive"] as const)(
         } else {
           replaceSessionEntrySync(target, { ...entry, archivedAt: 1 });
         }
-        expect(backfill.mock.calls.at(-1)?.[0].shouldCommit?.()).toBe(false);
         await projection.ensureMaterialized();
         const before = projection.materializedCount;
         completion.resolve();

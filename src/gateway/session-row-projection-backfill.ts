@@ -1,9 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
-import {
-  canRunSessionListBackgroundWork,
-  yieldSessionListBackgroundWork,
-} from "./session-projection-work.js";
+import { yieldSessionListBackgroundWork } from "./session-projection-work.js";
 import { identity, type EntryRow, type Row } from "./session-row-projection-record.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 
@@ -48,9 +45,6 @@ export function createSessionRowProjectionBackfill(params: {
       if (disposed) {
         return;
       }
-      if (!canRunSessionListBackgroundWork()) {
-        continue;
-      }
       const id = queued.values().next().value;
       if (id === undefined) {
         continue;
@@ -62,18 +56,6 @@ export function createSessionRowProjectionBackfill(params: {
       if (!row || !entry || !captured) {
         continue;
       }
-      const current = () => {
-        const live = params.read(id);
-        return !disposed && revisions.get(id) === captured && live?.generation === row.generation;
-      };
-      let interrupted = false;
-      const shouldCommit = () => {
-        if (!canRunSessionListBackgroundWork()) {
-          interrupted = true;
-          return false;
-        }
-        return current();
-      };
       try {
         const fields = await backfillSessionRowTranscriptFields({
           ...row.storeTarget,
@@ -82,36 +64,22 @@ export function createSessionRowProjectionBackfill(params: {
           sessionKey: row.key,
           sessionId: entry.sessionId,
           sessionEntry: entry,
-          shouldCommit,
           model: row.materialized && {
             selectedProvider: row.materialized.source.selectedModel.provider,
             selectedModel: row.materialized.source.selectedModel.model,
             config: row.materialized.source.cfg,
           },
         });
-        // Metadata can rematerialize the row without changing its transcript revision.
-        for (;;) {
-          if (interrupted) {
-            break;
-          }
-          await params.ready();
-          if (!shouldCommit()) {
-            break;
-          }
-          const live = params.read(id);
-          if (live && params.current(live)) {
-            params.publish(row, fields);
-            break;
-          }
+        await params.ready();
+        const live = params.read(id);
+        if (!disposed && live?.generation === row.generation && params.current(live)) {
+          // A newer queued transcript update will replace these optional preview fields.
+          params.publish(live, fields);
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
-        if (current()) {
+        if (revisions.get(id) === captured) {
           revisions.delete(id);
-        }
-      } finally {
-        if (interrupted && current()) {
-          queued.add(id);
         }
       }
     }

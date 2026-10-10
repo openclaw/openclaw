@@ -1,15 +1,5 @@
-import { statSync } from "node:fs";
-import path from "node:path";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import {
-  captureSessionStoreReadCandidates,
-  prepareSessionStoreTargetInventory,
-} from "../config/sessions/session-store-target-inventory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  readDatabaseIdentityBirthtime,
-  readDatabasePathIdentitySync,
-} from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import * as records from "./session-row-projection-record.js";
@@ -19,12 +9,10 @@ type ObservationQuery = { agentId: string; storePath?: string } & (
   | { key: string; sessionId?: never }
   | { sessionId: string; key?: never }
 );
-type PhysicalCandidate = { path: string; identity: string; birthtime: string };
 
 /** Pending events observe mutations in the same owner that renews published row generations. */
 export function createSessionRowGenerationObservations(owner: {
   config: () => OpenClawConfig;
-  env: NodeJS.ProcessEnv;
   isActive: () => boolean;
   stores: () => ReadonlyMap<string, records.SessionRowStore>;
   isCurrent: (row: records.Row) => boolean;
@@ -56,64 +44,9 @@ export function createSessionRowGenerationObservations(owner: {
       const canonicalKey = (sessionKey: string) =>
         resolveStoredSessionKeyForAgentStore({ cfg: config, agentId, sessionKey });
       const key = query.key === undefined ? undefined : canonicalKey(query.key);
-      const sources = [...owner.stores().values()];
-      const paths = query.storePath
-        ? [query.storePath]
-        : sources
-            .filter((source) => source.agentId === agentId || source.target.agentId === agentId)
-            .map((source) => source.target.storePath);
-      const candidates = new Map<string, PhysicalCandidate>();
-      try {
-        const captured = [
-          ...[...new Set(paths)].flatMap(captureSessionStoreReadCandidates),
-          ...(query.storePath
-            ? []
-            : prepareSessionStoreTargetInventory(config, [agentId], owner.env).candidates),
-        ];
-        for (const candidate of captured) {
-          // An absent file or an unenumerated sibling cannot witness an original generation.
-          if (candidate.scope) {
-            continue;
-          }
-          const cachedSource = sources.find(
-            (source) =>
-              path.resolve(source.target.storePath) === candidate.path ||
-              path.resolve(source.filename) === candidate.physicalPath,
-          );
-          if (cachedSource) {
-            if (typeof cachedSource.identity === "string" && cachedSource.birthtime !== undefined) {
-              candidates.set(candidate.path, {
-                path: candidate.path,
-                identity: cachedSource.identity,
-                birthtime: cachedSource.birthtime,
-              });
-            }
-            continue;
-          }
-          const identity = readDatabasePathIdentitySync(candidate.path);
-          const file = statSync(candidate.path, { bigint: true, throwIfNoEntry: false });
-          if (file?.isFile() && identity.key === `file:${file.dev}:${file.ino}`) {
-            candidates.set(candidate.path, {
-              path: candidate.path,
-              identity: `${file.dev}:${file.ino}`,
-              birthtime: readDatabaseIdentityBirthtime(file),
-            });
-          }
-        }
-      } catch {
-        // A changed or uninspectable source cannot establish custody for a later row.
-        candidates.clear();
-      }
-      let active = owner.isActive() && candidates.size > 0;
+      let active = true;
       const observation = {
         changed(mutation: SessionIdentityMutation) {
-          if (
-            ![...candidates.values()].some(
-              (source) => source.identity === mutation.databaseIdentity,
-            )
-          ) {
-            return false;
-          }
           const targets = [mutation.previous, ...("current" in mutation ? [mutation.current] : [])];
           return targets.some((target) => {
             const keys = target.sessionKeys.filter(
@@ -132,15 +65,12 @@ export function createSessionRowGenerationObservations(owner: {
           observations.delete(observation);
         },
       };
-      if (active) {
-        observations.add(observation);
-      }
+      observations.add(observation);
       return {
         isCurrent(row: records.Row) {
           if (
             !active ||
             !owner.isActive() ||
-            owner.config() !== config ||
             (row.agentId !== agentId &&
               (key !== undefined || row.storeTarget.agentId !== agentId)) ||
             !owner.isCurrent(row) ||
@@ -148,14 +78,7 @@ export function createSessionRowGenerationObservations(owner: {
           ) {
             return false;
           }
-          const source = owner.stores().get(row.storeTarget.storePath);
-          return Boolean(
-            source &&
-            [...candidates.values()].some(
-              (candidate) =>
-                source.identity === candidate.identity && source.birthtime === candidate.birthtime,
-            ),
-          );
+          return true;
         },
         dispose: observation.dispose,
       };
@@ -166,7 +89,7 @@ export function createSessionRowGenerationObservations(owner: {
           observation.dispose();
         }
       }
-      // Prepared identities follow row publication; replay would overwrite reentrant commits.
+      // Committed receipts have already updated the resident row.
       if (readPreparedSessionSharingChange(mutation) !== undefined) {
         return;
       }
@@ -182,49 +105,21 @@ export function createSessionRowGenerationObservations(owner: {
           }
           owner.markRelated(row);
           if ("current" in mutation && mutation.current.sessionKeys.includes(row.key)) {
-            // An unprepared reset cannot prove which lifecycle revision has already published.
-            const published =
-              mutation.kind !== "reset" &&
-              row.publishedSource?.identity === mutation.databaseIdentity &&
-              row.sharingEntry?.sessionId === mutation.current.sessionId;
-            if (!published) {
-              owner.put(records.renewGeneration(row));
-              owner.dirty.add(records.identity(row));
-            }
+            owner.put(records.renewGeneration(row));
+            owner.dirty.add(records.identity(row));
           } else {
             owner.remove(records.identity(row));
           }
         }
       }
       if ("current" in mutation) {
+        const source = [...owner.stores().values()].find(
+          (store) => store.identity === mutation.databaseIdentity,
+        );
+        if (!source) {
+          return;
+        }
         for (const sessionKey of mutation.current.sessionKeys) {
-          const committedRows = owner
-            .matching({ key: sessionKey, agentId: mutation.agentId })
-            .filter(
-              (row) =>
-                row.publishedSource?.identity === mutation.databaseIdentity &&
-                owner.stores().get(row.storeTarget.storePath)?.identity ===
-                  mutation.databaseIdentity,
-            );
-          const published = committedRows.some(
-            (row) => row.sharingEntry?.sessionId === mutation.current.sessionId,
-          );
-          const superseded = committedRows.some(
-            (row) =>
-              row.sharingEntry &&
-              row.sharingEntry.sessionId !== mutation.current.sessionId &&
-              row.sharingEntry.sessionId !== mutation.previous.sessionId,
-          );
-          // Native row publication precedes its lifecycle notification, including reentrant writes.
-          if (mutation.kind !== "reset" && (published || superseded)) {
-            continue;
-          }
-          const source = [...owner.stores().values()].find(
-            (store) => store.identity === mutation.databaseIdentity,
-          );
-          if (!source) {
-            continue;
-          }
           owner.mark({
             agentId: mutation.agentId,
             sessionKey,

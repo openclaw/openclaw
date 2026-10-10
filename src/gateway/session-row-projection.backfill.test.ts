@@ -424,32 +424,25 @@ it("waits for the first catalog before admitting session reads", async () => {
   });
 });
 
-it("fences superseded and disposed background catalog reads", async () => {
+it("does not adopt a background catalog after disposal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const initial: [] = [];
-    const superseded = createDeferredCore<[]>();
     const current = createDeferredCore<[]>();
     const getModelCatalog = vi
       .fn()
       .mockResolvedValueOnce(initial)
-      .mockReturnValueOnce(superseded.promise)
       .mockReturnValueOnce(current.promise);
     const projection = await createSessionRowProjection({ cfg, getModelCatalog });
     try {
       sessionChanges.emit({ all: true, scope: "catalog" });
       await nextTurn();
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      superseded.resolve([]);
-      await vi.waitFor(() => expect(getModelCatalog).toHaveBeenCalledTimes(3));
-      expect(projection.state.modelCatalog).toBe(initial);
       projection.dispose();
       current.resolve([]);
       await nextTurn();
       expect(projection.state.modelCatalog).toBe(initial);
       expect(projection.selectEntries()).toEqual([]);
     } finally {
-      superseded.resolve([]);
       current.resolve([]);
       projection.dispose();
     }
