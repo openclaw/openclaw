@@ -1,4 +1,9 @@
-import { getEventStreamCompletion, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import {
+  getEventStreamCompletion,
+  getFirstStreamEventTimeoutMs,
+  onLlmRequestActivity,
+} from "@openclaw/ai/internal/runtime";
+import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   finiteSecondsToTimerSafeMilliseconds,
@@ -281,9 +286,9 @@ export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number
  * Wraps a stream function with idle timeout detection for both stream creation
  * and iterator progress. Each successful `next()` resets the timer; a timeout
  * aborts the provider request and surfaces the same Error to the caller.
- * `scope: "creation-only"` bounds only the creation phase: local providers opt
- * out of gap policing, but a request whose headers never arrive must still fail
- * instead of wedging the turn until the run budget.
+ * Creation ends at provider acceptance or stream activity, not when a producer
+ * returns its stream object. `scope: "creation-only"` leaves local providers
+ * free of gap policing after that boundary.
  *
  * When `runId` is provided, run-scoped tool activity can reset the active wait
  * and recent activity before stream creation bridges into the first wait.
@@ -298,17 +303,77 @@ export function streamWithIdleTimeout(
   const runId = opts?.runId;
   return (model, context, options) => {
     const trackCleanup = captureAsyncWorkTracker();
-    const createIdleTimeoutError = () =>
-      new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
+    const createIdleTimeoutError = (budgetMs = timeoutMs) =>
+      new Error(`LLM idle timeout (${Math.floor(budgetMs / 1000)}s): no response from model`);
 
     const streamAbortController = new AbortController();
-    const sourceSignal = options?.signal;
     const abortStream = (reason?: unknown) => {
       if (!streamAbortController.signal.aborted) {
         streamAbortController.abort(reason);
       }
     };
-    const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    const firstEventTimeoutMs = clampTimeoutMs(getFirstStreamEventTimeoutMs(options) ?? timeoutMs);
+    let requestDeadline:
+      | { timer: NodeJS.Timeout; reject: (error: Error) => void; accepted: boolean }
+      | undefined;
+    let iterationWatchdogActive = false;
+    let requestTimedOut = false;
+    const startRequestTimer = (budgetMs: number, reject: (error: Error) => void) => {
+      const timer = setTimeout(() => {
+        // Record expiry before abort callbacks can reenter cleanup so late
+        // consumers still observe this rejection.
+        requestTimedOut = true;
+        clearRequestDeadline();
+        const error = createIdleTimeoutError(budgetMs);
+        abortStream(error);
+        onIdleTimeout?.(error);
+        reject(error);
+      }, budgetMs);
+      timer.unref?.();
+      return timer;
+    };
+    // The request deadline spans synchronous and asynchronous stream creation
+    // until provider acceptance or stream activity.
+    let requestTimeout: Promise<never> | undefined = new Promise<never>((_, reject) => {
+      requestDeadline = {
+        timer: startRequestTimer(firstEventTimeoutMs, reject),
+        reject,
+        accepted: false,
+      };
+    });
+    // A synchronous producer can time out before a consumer starts iterating.
+    void requestTimeout.catch(() => {});
+    const clearRequestDeadline = () => {
+      clearTimeout(requestDeadline?.timer);
+      requestDeadline = undefined;
+      if (!requestTimedOut) {
+        requestTimeout = undefined;
+      }
+      unsubscribeCreationActivity();
+    };
+    const finishCreation = () => {
+      if (!requestDeadline || requestDeadline.accepted) {
+        return;
+      }
+      requestDeadline.accepted = true;
+      unsubscribeCreationActivity();
+      clearTimeout(requestDeadline.timer);
+      // Acceptance can precede factory resolution and iterator admission.
+      if (guardIterationGaps && !iterationWatchdogActive) {
+        requestDeadline.timer = startRequestTimer(timeoutMs, requestDeadline.reject);
+      } else {
+        clearRequestDeadline();
+      }
+    };
+    const unsubscribeCreationActivity = onLlmRequestActivity(
+      streamAbortController.signal,
+      finishCreation,
+    );
+    const sourceSignal = options?.signal;
+    const abortFromSourceSignal = () => {
+      clearRequestDeadline();
+      abortStream(sourceSignal?.reason);
+    };
     // Mirror caller cancellation into the provider request while still allowing
     // this wrapper to abort independently on idle timeout.
     if (sourceSignal?.aborted) {
@@ -317,26 +382,20 @@ export function streamWithIdleTimeout(
       sourceSignal?.addEventListener("abort", abortFromSourceSignal, { once: true });
     }
     const cleanupSourceSignal = () => {
+      clearRequestDeadline();
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
     const withSourceAbort = <T>(promise: Promise<T>) =>
       sourceSignal ? abortable(sourceSignal, promise) : promise;
-    const wrappedOptions = {
-      ...options,
-      signal: streamAbortController.signal,
-    };
-    const createTimeoutPromise = (setTimer: (timer: NodeJS.Timeout) => void): Promise<never> => {
-      return new Promise((_, reject) => {
-        const timer = setTimeout(() => {
-          const error = createIdleTimeoutError();
-          abortStream(error);
-          onIdleTimeout?.(error);
-          reject(error);
-        }, timeoutMs);
-        timer.unref?.();
-        setTimer(timer);
-      });
-    };
+    const withRequestTimeout = <T>(promise: Promise<T>) =>
+      requestTimeout ? Promise.race([promise, requestTimeout]) : promise;
+    const wrappedOptions = withProviderAcceptanceObserver(
+      {
+        ...options,
+        signal: streamAbortController.signal,
+      },
+      finishCreation,
+    );
 
     let maybeStream: ReturnType<StreamFn>;
     try {
@@ -347,6 +406,8 @@ export function streamWithIdleTimeout(
     }
 
     const wrapStream = (stream: MutableAssistantMessageEventStream) => {
+      const producerCompletion = getEventStreamCompletion(stream);
+      void producerCompletion?.then(cleanupSourceSignal, cleanupSourceSignal);
       const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
       stream[Symbol.asyncIterator] = function () {
         const iterator = originalAsyncIterator();
@@ -362,7 +423,6 @@ export function streamWithIdleTimeout(
           void returning.catch(() => recordAgentCleanupFailure());
           return returning;
         };
-        const producerCompletion = getEventStreamCompletion(stream);
         let idleTimer: NodeJS.Timeout | null = null;
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
         let firstArmPending = true;
@@ -403,12 +463,18 @@ export function streamWithIdleTimeout(
           }
           idleTimer = setTimeout(() => {
             idleTimer = null;
+            clearRequestDeadline();
             const error = createIdleTimeoutError();
             abortStream(error);
             onIdleTimeout?.(error);
             rejectIdleTimeout?.(error);
           }, effectiveTimeout);
           idleTimer.unref?.();
+          // The iterator watchdog now owns idle policing after acceptance.
+          iterationWatchdogActive = true;
+          if (requestDeadline?.accepted) {
+            clearRequestDeadline();
+          }
         };
         const unsubscribeLlmActivity = onLlmRequestActivity(streamAbortController.signal, () => {
           armTimer();
@@ -447,7 +513,10 @@ export function streamWithIdleTimeout(
               // Providers may ignore their mirrored abort signal, so caller
               // cancellation must also settle this exact iterator wait.
               pendingNext = streamIterator.next();
-              const result = await withSourceAbort(Promise.race([pendingNext, timeoutPromise]));
+              const result = await withSourceAbort(
+                withRequestTimeout(Promise.race([pendingNext, timeoutPromise])),
+              );
+              finishCreation();
 
               if (result.done) {
                 settle();
@@ -488,39 +557,19 @@ export function streamWithIdleTimeout(
 
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       const source = Promise.resolve(maybeStream);
-      let streamPromiseTimer: NodeJS.Timeout | null = null;
-      const clearStreamPromiseTimer = () => {
-        if (streamPromiseTimer) {
-          clearTimeout(streamPromiseTimer);
-          streamPromiseTimer = null;
-        }
-      };
-
-      // Some providers return a pending Promise before the stream object exists;
-      // protect that creation phase with the same idle watchdog.
-      const timeoutPromise = createTimeoutPromise((timer) => {
-        streamPromiseTimer = timer;
+      const streamPromise = withSourceAbort(withRequestTimeout(source));
+      return streamPromise.then(wrapStream, (error: unknown) => {
+        cleanupSourceSignal();
+        // Cancellation can win before an iterator exists. Retain late setup
+        // and close its eventual stream through the same captured work owner.
+        void trackCleanup(async () => {
+          const late = await source.catch(() => undefined);
+          if (late) {
+            await late[Symbol.asyncIterator]().return?.();
+          }
+        }).catch(() => recordAgentCleanupFailure());
+        throw error;
       });
-      const streamPromise = withSourceAbort(Promise.race([source, timeoutPromise]));
-      return streamPromise.then(
-        (stream) => {
-          clearStreamPromiseTimer();
-          return wrapStream(stream);
-        },
-        (error: unknown) => {
-          clearStreamPromiseTimer();
-          cleanupSourceSignal();
-          // Cancellation can win before an iterator exists. Retain late setup
-          // and close its eventual stream through the same captured work owner.
-          void trackCleanup(async () => {
-            const late = await source.catch(() => undefined);
-            if (late) {
-              await late[Symbol.asyncIterator]().return?.();
-            }
-          }).catch(() => recordAgentCleanupFailure());
-          throw error;
-        },
-      );
     }
     return wrapStream(maybeStream);
   };
