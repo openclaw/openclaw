@@ -395,7 +395,9 @@ export async function connectIrcClient(options: IrcClientOptions) {
         const text = line.trailing ?? line.params[1] ?? "";
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick?.trim() ?? "";
-        if (!target || !senderNick || !text.trim()) {
+        const isCtcpQuery =
+          text.startsWith("\u0001") && !text.toUpperCase().startsWith("\u0001ACTION ");
+        if (!target || !senderNick || !text.trim() || isCtcpQuery) {
           continue;
         }
         if (options.onPrivmsg) {
