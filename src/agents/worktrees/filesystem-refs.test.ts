@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { getRefsFileExtents } from "../../../test/helpers/refs.js";
+import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { extractErrorCode } from "../../infra/errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -35,6 +35,7 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
         ["empty", Buffer.alloc(0)],
         ["short", Buffer.from("fresh data")],
         ["日本語-🦀", Buffer.alloc(4097, 0x37)],
+        ["partial-tail", Buffer.alloc(4 * 1024 * 1024 + 1, 0x37)],
         [path.join("nested", ".payload"), Buffer.alloc(1024 * 1024, 0x5a)],
       ]);
       for (const [name, bytes] of contents) {
@@ -43,12 +44,16 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
       await backend.cloneTemplate(source, destination, options);
       for (const [name, bytes] of contents) {
         expect(await fs.readFile(path.join(destination, name))).toEqual(bytes);
+        expect((await fs.stat(path.join(destination, name))).size).toBe(bytes.length);
+        expect(getRefsFullClusterLcns(path.join(destination, name))).toEqual(
+          getRefsFullClusterLcns(path.join(source, name)),
+        );
       }
       const original = path.join(source, "nested", ".payload");
       const cloned = path.join(destination, "nested", ".payload");
-      const extents = getRefsFileExtents(original);
-      expect(extents.some((extent) => extent.lcn >= 0n)).toBe(true);
-      expect(getRefsFileExtents(cloned)).toEqual(extents);
+      const extents = getRefsFullClusterLcns(original);
+      expect(extents.some((lcn) => lcn >= 0n)).toBe(true);
+      expect(getRefsFullClusterLcns(cloned)).toEqual(extents);
       expect((await fs.stat(cloned, { bigint: true })).ino).not.toBe(
         (await fs.stat(original, { bigint: true })).ino,
       );
@@ -61,7 +66,7 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
       }
       expect(await fs.readFile(original)).toEqual(contents.get(path.join("nested", ".payload")));
       expect((await fs.readFile(cloned))[0]).toBe(0x11);
-      expect(getRefsFileExtents(cloned)).not.toEqual(getRefsFileExtents(original));
+      expect(getRefsFullClusterLcns(cloned)).not.toEqual(getRefsFullClusterLcns(original));
       await expect(backend.cloneTemplate(source, destination, options)).rejects.toThrow();
       expect((await fs.readFile(cloned))[0]).toBe(0x11);
     });
