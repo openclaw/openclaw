@@ -16,7 +16,10 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  withNativeSessionMutationForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
@@ -153,11 +156,18 @@ export function requireExecutorHarness(runtime: PluginRuntime) {
       "The Agents API harness requires run, reset, deletion, context reset, and disposal",
     );
   }
+  const mutationHook =
+    (hook: "withSessionDeletion" | "withSessionContextReset") =>
+    (
+      target: Parameters<typeof withNativeSessionMutationForTest>[0]["target"],
+      run: Parameters<typeof withNativeSessionMutationForTest>[0]["run"],
+    ) =>
+      withNativeSessionMutationForTest({ pluginId: "agentsapi", harness, hook, target, run });
   return {
     runAttempt: harness.runAttempt.bind(harness),
     reset: harness.reset.bind(harness),
-    withSessionDeletion: harness.withSessionDeletion,
-    withSessionContextReset: harness.withSessionContextReset,
+    withSessionDeletion: mutationHook("withSessionDeletion"),
+    withSessionContextReset: mutationHook("withSessionContextReset"),
     dispose: harness.dispose.bind(harness),
   };
 }

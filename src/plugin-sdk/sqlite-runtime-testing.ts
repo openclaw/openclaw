@@ -40,3 +40,5 @@ export {
 
 export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 export { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
+
+export { withNativeSessionMutationForTest } from "./test-helpers/native-session-mutation.js";
