@@ -332,8 +332,16 @@ export async function prepareGitHubPublicationRequesterV2(
           (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
         );
         requester.assertCurrent();
+        const { sourcePath } = sessionFacts.readCurrent(
+          (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
+        );
+        if (!sourcePath) {
+          throw new GitHubPublicationRecoveryPendingError(
+            "GitHub publication source is unavailable; retry after session storage is ready.",
+          );
+        }
         return await prepareGitHubPublicationSource({
-          sourcePath: sessionFacts.storageTarget.storePath,
+          sourcePath,
           selector: {
             ...selector,
             ...(snapshot.actor.kind === "operator"
@@ -413,12 +421,19 @@ export async function restoreGitHubPublicationRequester(
       },
       async prepareSource(selector: GitHubPublicationSourceSelector) {
         requester.assertCurrent();
-        if (selector.agentId !== session.agentId || selector.sessionKey !== session.sessionKey)
+        if (selector.agentId !== session.agentId || selector.sessionKey !== session.sessionKey) {
           throw new GitHubPublicationRequesterUnavailableError();
+        }
         sessionFacts ??= await preparePublicationSession(session, getCommittedRuntimeConfig());
         requester.assertCurrent();
+        const { sourcePath } = sessionFacts.readCurrent(getCommittedRuntimeConfig());
+        if (!sourcePath) {
+          throw new GitHubPublicationRecoveryPendingError(
+            "GitHub publication source is unavailable; retry after session storage is ready.",
+          );
+        }
         return await prepareGitHubPublicationSource({
-          sourcePath: sessionFacts.storageTarget.storePath,
+          sourcePath,
           selector: {
             ...selector,
             ...(snapshot.actor.kind === "operator"

@@ -337,6 +337,12 @@ export function createRepositoryGitHubPublicationRecovery(params: {
                   agentId: row.agent_id,
                   assertActive: assertCurrent,
                 });
+                const sourcePath = loaded.readSource?.path;
+                if (!sourcePath) {
+                  throw new GitHubPublicationRecoveryPendingError(
+                    "GitHub publication source is unavailable; retry after session storage is ready.",
+                  );
+                }
                 const assertRecovery = () => {
                   params.assertCurrent();
                   assertCurrent();
@@ -346,7 +352,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
                   assertCustody: assertRecovery,
                   prepareSource: () =>
                     prepareGitHubPublicationSource({
-                      sourcePath: loaded.storePath,
+                      sourcePath,
                       selector: {
                         agentId: row.agent_id,
                         sessionKey: row.session_key,

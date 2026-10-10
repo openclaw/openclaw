@@ -89,7 +89,7 @@ export function createGitHubPublicationRuntime(params: {
   };
   return {
     ready,
-    close: scope.close,
+    close: () => scope.close(),
     coordinator,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,

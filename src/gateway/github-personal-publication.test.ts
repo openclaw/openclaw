@@ -42,12 +42,12 @@ import {
   createPersonalPublicationFixture,
   readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
   preparePersonalPublicationFixtureV2,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
 import { requirePersonalGitHubPublicationConfirmationAsync } from "./github-publication-store-async.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
   REQUEST,
@@ -64,7 +64,7 @@ describe("personal publication authority and recovery", () => {
   installGitHubPublicationTestHarness();
   let owner: string;
   let otherOwner: string;
-  let action: ReturnType<typeof preparePersonalGitHubSessionAction>;
+  let action: Awaited<ReturnType<typeof createPersonalPublicationFixture>>["action"];
   let client: GatewayClient;
   let config: OpenClawConfig;
   let context: GatewayRequestContext;
@@ -344,9 +344,9 @@ describe("personal publication authority and recovery", () => {
     });
     db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
       BEGIN SELECT stop_personal_admission(); END`);
-    const stopped = preparePersonalGitHubSessionAction(
-      { client, context, signal: controller.signal },
-      { sessionKey: SESSION_KEY },
+    const stopped = await preparePersonalPublicationFixtureAction(
+      { client, context },
+      controller.signal,
     );
     await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
       "current",
@@ -737,7 +737,7 @@ describe("personal publication authority and recovery", () => {
     ).toBe(false);
     expect((await rpc("sessions.github.publish", request()))[0]).toBe(false);
     client.authenticatedUserProfile = ownProfile;
-    action = preparePersonalGitHubSessionAction({ client, context }, { sessionKey: SESSION_KEY });
+    action = await preparePersonalPublicationFixtureAction({ client, context });
     const confirm = {
       sessionKey: SESSION_KEY,
       requestId: discovered[1].pendingPersonal.result.requestId,

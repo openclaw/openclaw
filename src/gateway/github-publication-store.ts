@@ -112,7 +112,9 @@ export function listGitHubPublicationsForClaimInDatabase(
   claim: Pick<WorkerSessionTurnClaim, "sessionId" | "claimId" | "runId">,
   options: { pendingOnly?: boolean } = {},
 ): GitHubPublicationRow[] {
-  if (!tableExists(db, "github_publication_requests")) return [];
+  if (!tableExists(db, "github_publication_requests")) {
+    return [];
+  }
   let query = githubPublicationDatabase(db)
     .selectFrom("github_publication_requests")
     .selectAll()
@@ -130,19 +132,29 @@ export function listSharedGitHubPublicationsInDatabase(
   db: OpenClawStateDatabase["db"],
   filter: SharedGitHubPublicationFilter,
 ): GitHubPublicationRow[] {
-  if (!tableExists(db, "github_publication_requests")) return [];
+  if (!tableExists(db, "github_publication_requests")) {
+    return [];
+  }
   let query = githubPublicationDatabase(db).selectFrom("github_publication_requests").selectAll();
-  if (filter.pending !== undefined)
+  if (filter.pending !== undefined) {
     query = query.where(
       "status",
       "in",
       filter.pending ? ["requested", "publishing"] : ["published", "failed"],
     );
-  if (filter.status !== undefined) query = query.where("status", "=", filter.status);
-  if (filter.claimNull !== undefined)
+  }
+  if (filter.status !== undefined) {
+    query = query.where("status", "=", filter.status);
+  }
+  if (filter.claimNull !== undefined) {
     query = query.where("claim_id", filter.claimNull ? "is" : "is not", null);
-  if (filter.sessionId !== undefined) query = query.where("session_id", "=", filter.sessionId);
-  if (filter.unreported) query = query.where("reported_at_ms", "is", null);
+  }
+  if (filter.sessionId !== undefined) {
+    query = query.where("session_id", "=", filter.sessionId);
+  }
+  if (filter.unreported) {
+    query = query.where("reported_at_ms", "is", null);
+  }
   return executeSqliteQuerySync(
     db,
     query.orderBy(filter.unreported ? "updated_at_ms" : "created_at_ms"),
@@ -153,7 +165,9 @@ export function markSharedGitHubPublicationReportedInDatabase(
   database: OpenClawStateDatabase,
   requestId: string,
 ): GitHubPublicationRow | undefined {
-  if (!tableExists(database.db, "github_publication_requests")) return undefined;
+  if (!tableExists(database.db, "github_publication_requests")) {
+    return undefined;
+  }
   const { db } = database;
   const updated = executeSqliteQueryTakeFirstSync(
     db,
@@ -354,7 +368,7 @@ export function insertGitHubPublicationRequest(
 
 type SharedPublicationTransition = "bind-workspace" | "begin" | "complete";
 
-export function writeGitHubPublicationExecutionInDatabase(
+function writeGitHubPublicationExecutionInDatabase(
   database: OpenClawStateDatabase,
   instanceId: string,
   row: GitHubPublicationRow,
@@ -489,7 +503,9 @@ export function deferGitHubPublicationRequests(requestIds: string[]): void {
     method: "deferGitHubPublicationRequests",
     replacement: "deferGitHubPublicationRequestsAsync",
   });
-  if (!requestIds.length) return;
+  if (!requestIds.length) {
+    return;
+  }
   runOpenClawStateWriteTransaction(
     (database) => deferGitHubPublicationRequestsInDatabase(database, requestIds),
     undefined,
@@ -540,7 +556,9 @@ export function isGitHubPublicationExecutionOwner(
   requestId: string,
   gatewayInstanceId: string,
 ): boolean {
-  if (!hasGitHubPublicationStore()) return false;
+  if (!hasGitHubPublicationStore()) {
+    return false;
+  }
   const db = openOpenClawStateDatabase().db;
   const row = executeSqliteQuerySync(
     db,

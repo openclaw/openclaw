@@ -56,7 +56,9 @@ async function personalMutation(
       source,
     ),
   );
-  if (receipt.kind !== "personal") throw new Error("Invalid personal publication receipt.");
+  if (receipt.kind !== "personal") {
+    throw new Error("Invalid personal publication receipt.");
+  }
   return receipt.rows;
 }
 
@@ -73,7 +75,9 @@ async function repositoryMutation(
       source,
     ),
   );
-  if (receipt.kind !== "repository") throw new Error("Invalid repository publication receipt.");
+  if (receipt.kind !== "repository") {
+    throw new Error("Invalid repository publication receipt.");
+  }
   return receipt.rows;
 }
 
@@ -90,12 +94,16 @@ async function sharedMutation(
       source,
     ),
   );
-  if (receipt.kind !== "shared") throw new Error("Invalid shared publication receipt.");
+  if (receipt.kind !== "shared") {
+    throw new Error("Invalid shared publication receipt.");
+  }
   return receipt.rows;
 }
 
 function requireRow<Row>(rows: Row[]): Row {
-  if (!rows[0]) throw new Error("GitHub publication transition returned no receipt.");
+  if (!rows[0]) {
+    throw new Error("GitHub publication transition returned no receipt.");
+  }
   return rows[0];
 }
 
@@ -106,7 +114,9 @@ function withMutationAuthority<T>(
     source?: () => Promise<GitHubPublicationSourceCapability>,
   ) => Promise<T>,
 ): Promise<T> {
-  if (typeof authority === "function") return operation(authority);
+  if (typeof authority === "function") {
+    return operation(authority);
+  }
   const assertCurrent = () => {
     authority.assertCustody();
     authority.assertAction();
@@ -333,15 +343,20 @@ export async function markGitHubPublicationReportedAsync(
   const scope = mutationScope();
   const input = { operation: "report" as const, requestId };
   const assertOwned = assertCurrent ?? scope.assertLifetimeCurrent;
-  if (kind === "personal") await personalMutation(scope, input, assertOwned);
-  else if (kind === "repository") await repositoryMutation(scope, input, assertOwned);
-  else await sharedMutation(scope, input, assertOwned);
+  if (kind === "personal") {
+    await personalMutation(scope, input, assertOwned);
+  } else if (kind === "repository") {
+    await repositoryMutation(scope, input, assertOwned);
+  } else {
+    await sharedMutation(scope, input, assertOwned);
+  }
 }
 
 async function read(command: SqliteWorkerCommand<PublicationReadOperations>) {
   const result = await executeExistingOpenClawStateRead({}, command);
-  if (result && (!result.ok || result.type !== command.type))
+  if (result && (!result.ok || result.type !== command.type)) {
     throw new Error("GitHub publication read is unavailable.");
+  }
   return result;
 }
 

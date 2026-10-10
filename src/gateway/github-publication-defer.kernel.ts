@@ -37,7 +37,9 @@ export function selectGitHubPublicationDeferralsInDatabase(
   selection: GitHubPublicationDeferral,
 ): string[] {
   if (selection.kind === "request") {
-    if (kind !== "shared") throw new Error("Exact deferral requires a shared GitHub publication.");
+    if (kind !== "shared") {
+      throw new Error("Exact deferral requires a shared GitHub publication.");
+    }
     const expected = selection.row;
     const current = readGitHubPublicationRequest(db, { requestId: expected.request_id });
     return current &&
@@ -54,8 +56,9 @@ export function selectGitHubPublicationDeferralsInDatabase(
   }
   if (selection.kind === "claim" || selection.kind === "claimMissingSnapshot") {
     if (selection.kind === "claimMissingSnapshot") {
-      if (kind !== "shared")
+      if (kind !== "shared") {
         throw new Error("Missing-snapshot deferral requires a shared GitHub publication.");
+      }
       return listGitHubPublicationsForClaimInDatabase(db, selection.claim, { pendingOnly: true })
         .filter((row) => !row.source_head_commit || !row.source_index_tree || !row.workspace_tree)
         .map((row) => row.request_id);

@@ -65,7 +65,9 @@ beforeAll(() => {
 });
 beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 afterEach(async () => {
-  for (const release of heldReplies) release();
+  for (const release of heldReplies) {
+    release();
+  }
   vi.restoreAllMocks();
   await Promise.all([...scopes].map((scope) => scope.close()));
   scopes.clear();
@@ -113,12 +115,12 @@ function holdNextReply(commandType = "githubPublications.repository") {
     ...args
   ) {
     if (request.type === "execute") {
-      const command: unknown = deserialize(request.input);
+      const workerCommand: unknown = deserialize(request.input);
       if (
-        command &&
-        typeof command === "object" &&
-        "type" in command &&
-        command.type === commandType
+        workerCommand &&
+        typeof workerCommand === "object" &&
+        "type" in workerCommand &&
+        workerCommand.type === commandType
       ) {
         target = { worker: this, id: request.id };
         posts.mockRestore();
@@ -181,7 +183,9 @@ function observeAuthority() {
   onTestFinished(
     githubPublicationReceipts.subscribeFacts((change) => {
       if (change.kind === "committed") {
-        for (const [key, fact] of change.receipt.facts) facts.set(key, fact);
+        for (const [key, fact] of change.receipt.facts) {
+          facts.set(key, fact);
+        }
       } else if (change.kind === "unknown") {
         unknown.push(change.identity);
       }
@@ -274,7 +278,9 @@ async function sourceFixture(
       repositoryWorkspaceId: row.workspace_id,
     },
   );
-  if (!entry) throw new Error("Publication source session was not created");
+  if (!entry) {
+    throw new Error("Publication source session was not created");
+  }
   row.session_lifecycle_revision = entry.lifecycleRevision ?? null;
   row.request_digest = repositoryGitHubPublicationDigest(row);
   const source = await prepareGitHubPublicationSource({
@@ -314,7 +320,9 @@ it("revokes personal source authority at commit before reply delivery without re
 }) => {
   const owner = ensureProfileForEmail("publication-source@example.test").id;
   const original = await mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
-  if (!original) throw new Error("Connection fixture missing");
+  if (!original) {
+    throw new Error("Connection fixture missing");
+  }
   const { row, source } = await sourceFixture("source-connection-revocation", () => {}, owner);
   try {
     expect(() =>
@@ -487,7 +495,9 @@ it.for(["superseded", "closed"] as const)(
     const scope = createScope({
       ...context,
       assertPublicationCurrent: () => {
-        if (closed) throw new Error("Synthetic publication owner closed");
+        if (closed) {
+          throw new Error("Synthetic publication owner closed");
+        }
         (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
       },
     });
@@ -644,8 +654,9 @@ it("refuses delayed observation from an execution replaced by a later claim", as
     context.admission.assertCurrent,
     () => undefined,
   );
-  if (receipt.kind !== "repository" || !receipt.rows[0])
+  if (receipt.kind !== "repository" || !receipt.rows[0]) {
     throw new Error("Repository receipt missing");
+  }
   await scope.mutate(
     command({
       operation: "claim",

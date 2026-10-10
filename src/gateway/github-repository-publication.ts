@@ -303,7 +303,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       claim,
       requesterAuthorityJson,
     });
-    if (!workerRequester) return insertRepositoryGitHubPublication(row, assertCurrent);
+    if (!workerRequester) {
+      return insertRepositoryGitHubPublication(row, assertCurrent);
+    }
     const source = await prepareSource(workerRequester, {
       ...session,
       repositoryWorkspaceId: row.workspace_id,

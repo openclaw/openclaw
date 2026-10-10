@@ -31,8 +31,9 @@ async function insert(input: GitHubPublicationInsert, source: GitHubPublicationS
       },
       scope.assertCurrent,
       (receipt) => {
-        for (const change of receipt.changes)
+        for (const change of receipt.changes) {
           emitSessionLifecycleEvent({ ...change, reason: "github-publication" });
+        }
       },
       source,
     );
@@ -48,8 +49,9 @@ export async function insertGitHubPublicationRequestAsync(
   source: GitHubPublicationSourceCapability,
 ): Promise<GitHubPublicationRow> {
   const receipt = await insert({ kind: "shared", input }, source);
-  if (receipt.kind !== "shared" || !receipt.rows[0])
+  if (receipt.kind !== "shared" || !receipt.rows[0]) {
     throw new Error("GitHub publication request receipt is unavailable.");
+  }
   return receipt.rows[0];
 }
 
@@ -59,8 +61,9 @@ export async function insertPersonalGitHubPublicationAsync(
   source: GitHubPublicationSourceCapability,
 ): Promise<PersonalGitHubPublicationRow> {
   const receipt = await insert({ kind: "personal", row, lifecycleRevision }, source);
-  if (receipt.kind !== "personal" || !receipt.rows[0])
+  if (receipt.kind !== "personal" || !receipt.rows[0]) {
     throw new Error("Personal GitHub publication request receipt is unavailable.");
+  }
   return receipt.rows[0];
 }
 
@@ -69,7 +72,8 @@ export async function insertRepositoryGitHubPublicationAsync(
   source: GitHubPublicationSourceCapability,
 ): Promise<RepositoryGitHubPublicationRow> {
   const receipt = await insert({ kind: "repository", row }, source);
-  if (receipt.kind !== "repository" || !receipt.rows[0])
+  if (receipt.kind !== "repository" || !receipt.rows[0]) {
     throw new Error("Repository GitHub publication request receipt is unavailable.");
+  }
   return receipt.rows[0];
 }

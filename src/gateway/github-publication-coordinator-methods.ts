@@ -215,7 +215,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     }
     const expected = input.selection?.expected;
     const assertRequester = input.requester.assertCurrent;
-    if (!workerRequester) ensureSchema();
+    if (!workerRequester) {
+      ensureSchema();
+    }
     if (!input.sessionKey) {
       throw new Error("GitHub publication requires an authoritative session.");
     }
@@ -396,7 +398,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         try {
           assertRequester();
           worktreeOwner.assertCurrent();
-          if (snapshot) assertCaptureAuthority();
+          if (snapshot) {
+            assertCaptureAuthority();
+          }
           bindGitHubPublicationSourceLifetime(source, params.signal);
           return await insertGitHubPublicationRequestAsync(
             {
@@ -490,8 +494,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
     requestForSession: (input: GitHubPublicationSessionRequest) => requestForSession(input),
     requestForSessionV2: (input: GitHubPublicationSessionRequestV2) => {
-      if (!isGitHubPublicationRequesterV2(input.requester))
+      if (!isGitHubPublicationRequesterV2(input.requester)) {
         throw new Error("GitHub publication requires a host-prepared V2 requester.");
+      }
       params.assertCurrent();
       return requestForSession(input, input.requester);
     },

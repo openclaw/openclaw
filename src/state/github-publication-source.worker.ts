@@ -29,9 +29,13 @@ export function createGitHubPublicationSourceWorker() {
   let destination: DatabaseSync | undefined;
   let validated = false;
   const close = () => {
-    if (destination) reservations.delete(destination);
+    if (destination) {
+      reservations.delete(destination);
+    }
     if (source?.isOpen) {
-      if (source.isTransaction) throw new Error("GitHub publication source remains reserved.");
+      if (source.isTransaction) {
+        throw new Error("GitHub publication source remains reserved.");
+      }
       source.close();
     }
     source = undefined;

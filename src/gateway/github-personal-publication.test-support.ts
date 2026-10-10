@@ -15,7 +15,10 @@ import {
   createPersonalGitHubOAuthLifecycle,
   personalGitHubStatus,
 } from "./github-personal-oauth.js";
-import type { PersonalGitHubSessionActionV2 } from "./github-personal-publication.js";
+import type {
+  PersonalGitHubSessionAction,
+  PersonalGitHubSessionActionV2,
+} from "./github-personal-publication.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -24,10 +27,7 @@ import {
 } from "./github-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import {
-  preparePersonalGitHubSessionAction,
-  preparePersonalGitHubSessionActionV2,
-} from "./server-methods/github-personal-authorization.js";
+import { preparePersonalGitHubSessionActionV2 } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
@@ -37,7 +37,8 @@ const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
 
 export async function preparePersonalPublicationFixtureV2(
-  fixture: Pick<Awaited<ReturnType<typeof createPersonalPublicationFixture>>, "client" | "context">,
+  fixture: { client: GatewayClient; context: GatewayRequestContext },
+  signal?: AbortSignal,
 ) {
   const owner = fixture.client.authenticatedUserProfile!.profileId;
   fixture.client.internal = {
@@ -47,11 +48,24 @@ export async function preparePersonalPublicationFixtureV2(
       fixture.context.getRuntimeConfig(),
     ),
   };
-  const prepared = await preparePersonalGitHubSessionActionV2(fixture, {
-    sessionKey: SESSION_KEY,
-  });
+  const prepared = await preparePersonalGitHubSessionActionV2(
+    { ...fixture, signal },
+    {
+      sessionKey: SESSION_KEY,
+    },
+  );
   onTestFinished(prepared.release);
   return prepared.action;
+}
+
+export async function preparePersonalPublicationFixtureAction(
+  fixture: Parameters<typeof preparePersonalPublicationFixtureV2>[0],
+  signal?: AbortSignal,
+): Promise<PersonalGitHubSessionAction> {
+  const { owner, assertCurrent, sessionId, sessionKey, agentId, lifecycleRevision } =
+    await preparePersonalPublicationFixtureV2(fixture, signal);
+  // Omit V2 fields so compatibility tests exercise released synchronous writes.
+  return { owner, assertCurrent, sessionId, sessionKey, agentId, lifecycleRevision };
 }
 
 export function readPersonalPublicationFixtureStatus(
@@ -76,7 +90,7 @@ export async function expectPersonalPublicationReplay(
     action,
   }: Pick<Awaited<ReturnType<typeof createPersonalPublicationFixture>>, "coordinator"> & {
     generation: string;
-    action: ReturnType<typeof preparePersonalGitHubSessionAction> | PersonalGitHubSessionActionV2;
+    action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2;
   },
   capture: (requestId: string) => unknown,
 ) {
@@ -193,10 +207,7 @@ export async function createPersonalPublicationFixture() {
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(runtime.live && (!filter || filter(runtime.client)) ? [runtime.client.connId!] : []),
   } as unknown as GatewayRequestContext;
-  const action = preparePersonalGitHubSessionAction(
-    { client, context },
-    { sessionKey: SESSION_KEY },
-  );
+  const action = await preparePersonalPublicationFixtureAction({ client, context });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   return {
@@ -269,7 +280,7 @@ export async function restartPersonalPublicationFixture(
     previous.workspaceResultInstanceId(),
   );
   fixture.coordinator = createTestGitHubPublicationCoordinator({ placements: fixture.placements });
-  fixture.action = preparePersonalGitHubSessionAction(fixture, { sessionKey: SESSION_KEY });
+  fixture.action = await preparePersonalPublicationFixtureAction(fixture);
 }
 
 export async function createForeignPublicationSession(otherOwner: string, incognito = false) {

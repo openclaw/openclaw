@@ -251,7 +251,7 @@ export async function preparePersonalGitHubActionV2(
 }
 
 /** Authority stays in this direct connection closure; a profile or request id alone grants nothing. */
-export function preparePersonalGitHubAction(
+function preparePersonalGitHubAction(
   options: Request,
   scope: "operator.read" | "operator.write" = "operator.read",
   signal?: AbortSignal,
@@ -285,21 +285,6 @@ export function preparePersonalGitHubAction(
       }
     },
   };
-}
-
-export function preparePersonalGitHubSessionAction(
-  options: Request,
-  { sessionKey, agentId }: SessionMutationTarget,
-): PersonalGitHubAction & {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  lifecycleRevision: string | null;
-} {
-  const action = preparePersonalGitHubAction(options, "operator.write");
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, targetDiscoveryCache });
-  return bindPersonalGitHubSessionAction(options, action, initial, targetDiscoveryCache);
 }
 
 function bindPersonalGitHubSessionAction(

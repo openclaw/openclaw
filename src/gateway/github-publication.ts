@@ -101,16 +101,19 @@ export function createGitHubPublicationCoordinator(params: {
   const signal = params.signal ?? scope.signal;
 
   const readById = (requestId: string): PublicationRow | undefined => {
-    if (!hasGitHubPublicationStore()) return undefined;
-    const db = openOpenClawStateDatabase().db;
-    return readGitHubPublicationRequest(db, { requestId });
+    if (!hasGitHubPublicationStore()) {
+      return undefined;
+    }
+    return readGitHubPublicationRequest(openOpenClawStateDatabase().db, { requestId });
   };
 
   const requestForClaim = async (
     request: GitHubPublicationClaimRequest,
     workerRequester?: GitHubPublicationRequesterV2,
   ): Promise<SessionGitHubPublicationResult> => {
-    if (!workerRequester) ensureSchema();
+    if (!workerRequester) {
+      ensureSchema();
+    }
     const assertRequester = request.requester.assertCurrent;
     const placement = await params.placements.getAsync(request.claim.sessionId);
     assertRequester();
@@ -248,8 +251,9 @@ export function createGitHubPublicationCoordinator(params: {
         { operationLabel: "github-publication.request" },
       );
     }
-    if (!sameClaim(row, request.claim))
+    if (!sameClaim(row, request.claim)) {
       throw new Error("GitHub publication idempotency key was reused.");
+    }
     return publicationResult(row);
   };
 
@@ -281,8 +285,9 @@ export function createGitHubPublicationCoordinator(params: {
                   instanceId,
                   assertCustody,
                 );
-          if (claimed.status === "published" || claimed.status === "failed")
+          if (claimed.status === "published" || claimed.status === "failed") {
             return publicationResult(claimed);
+          }
           const lease = await acquireWorktreeRunLease(claimed.worktree_id);
           const validateCustody = () => {
             assertCustody();
@@ -301,7 +306,7 @@ export function createGitHubPublicationCoordinator(params: {
             }
             return requester;
           };
-          const { bindWorkspaceSnapshot, updatePublishingFacts, complete } =
+          const executionStore =
             mode === "legacy"
               ? createGitHubPublicationExecutionStore(instanceId)
               : createGitHubPublicationExecutionStoreAsync(instanceId, {
@@ -316,10 +321,11 @@ export function createGitHubPublicationCoordinator(params: {
                     signal.throwIfAborted();
                     invocationSignal?.throwIfAborted();
                     assertInvocationCurrent?.();
-                    if (!validateCustody() || lifecycleRevision === undefined)
+                    if (!validateCustody() || lifecycleRevision === undefined) {
                       throw new GitHubPublicationAuthorityLostError(
                         "GitHub publication source custody changed.",
                       );
+                    }
                     const source = await getRequester().prepareSource({
                       agentId: claimed.agent_id,
                       sessionKey: claimed.session_key,
@@ -330,10 +336,11 @@ export function createGitHubPublicationCoordinator(params: {
                     try {
                       invocationSignal?.throwIfAborted();
                       assertInvocationCurrent?.();
-                      if (!validateCustody())
+                      if (!validateCustody()) {
                         throw new GitHubPublicationAuthorityLostError(
                           "GitHub publication source custody changed.",
                         );
+                      }
                       return source;
                     } catch (error) {
                       await source.release();
@@ -396,16 +403,18 @@ export function createGitHubPublicationCoordinator(params: {
                   ...observed,
                 };
               },
-              bindWorkspaceSnapshot,
-              updatePublishingFacts,
-              complete,
+              bindWorkspaceSnapshot: (input) => executionStore.bindWorkspaceSnapshot(input),
+              updatePublishingFacts: (input) => executionStore.updatePublishingFacts(input),
+              complete: (row, result) => executionStore.complete(row, result),
               defer: async (row) => {
-                if (mode === "legacy") deferRequests([row.request_id]);
-                else
+                if (mode === "legacy") {
+                  deferRequests([row.request_id]);
+                } else {
                   await deferGitHubPublicationRequestsAsync(
                     { kind: "request", row },
                     assertCustody,
                   );
+                }
                 const deferred =
                   mode === "legacy"
                     ? readById(row.request_id)
@@ -444,7 +453,7 @@ export function createGitHubPublicationCoordinator(params: {
               const observed = await reconcileGitHubPublication({
                 initial: current,
                 validateCustody,
-                complete,
+                complete: (row, result) => executionStore.complete(row, result),
                 pushOnly:
                   claimed.head_commit === null && effect?.kind === "push"
                     ? effect.status === "observed" && effect.headCommit === current.head_commit
@@ -462,7 +471,7 @@ export function createGitHubPublicationCoordinator(params: {
               );
             }
             return publicationResult(
-              await complete(current, {
+              await executionStore.complete(current, {
                 requestId: current.request_id,
                 status: "failed",
                 ...error.failure,
@@ -522,8 +531,9 @@ export function createGitHubPublicationCoordinator(params: {
         : requestForClaim(request);
     },
     requestForClaimV2: async (request: GitHubPublicationClaimRequestV2) => {
-      if (!isGitHubPublicationRequesterV2(request.requester))
+      if (!isGitHubPublicationRequesterV2(request.requester)) {
         throw new Error("GitHub publication requires a host-prepared V2 requester.");
+      }
       assertCurrent();
       return (
         await prepareGitHubPublicationWorkspaceOwner({
@@ -569,11 +579,13 @@ export function createGitHubPublicationCoordinator(params: {
         : methods.requestForSession(input);
     },
     async requestForSessionV2(input: Parameters<typeof methods.requestForSessionV2>[0]) {
-      if (!isGitHubPublicationRequesterV2(input.requester))
+      if (!isGitHubPublicationRequesterV2(input.requester)) {
         throw new Error("GitHub publication requires a host-prepared V2 requester.");
+      }
       assertCurrent();
-      if (!input.sessionKey)
+      if (!input.sessionKey) {
         throw new Error("GitHub publication requires an authoritative session.");
+      }
       const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: params.getCommittedRuntimeConfig(),
         key: input.sessionKey,

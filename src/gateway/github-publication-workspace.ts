@@ -88,8 +88,9 @@ export async function prepareGitHubPublicationClaimWorkspace(
   for (const row of rows) {
     await bindAcceptedGitHubPublicationClaimSnapshotAsync({ row, claim, ...snapshot }, () => {
       params.assertCurrent();
-      if (!params.placements.validateWorkspaceResultClaim(claim))
+      if (!params.placements.validateWorkspaceResultClaim(claim)) {
         throw new Error("GitHub publication lost its workspace result claim.");
+      }
     });
   }
 }
