@@ -166,14 +166,14 @@ export function actionPointerEvents(button: Locator): Promise<string> {
  * menu; waiting on its focus contract first keeps navigation keys in order.
  */
 export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
-  const parent = page.getByRole("menuitem", { name });
+  const parent = page.getByRole("menuitem", { name, exact: true });
   await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
   const index = await parent.evaluate((element) =>
     [...(element.parentElement?.children ?? [])]
       .filter(
         (item) =>
           item.localName === "wa-dropdown-item" &&
-          item.getAttribute("slot") !== "submenu" &&
+          item.getAttribute("slot") === element.getAttribute("slot") &&
           !(item as HTMLElement & { disabled?: boolean }).disabled,
       )
       .indexOf(element),
@@ -181,13 +181,13 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   expect(index).toBeGreaterThanOrEqual(0);
   await expect
     .poll(() =>
-      page
-        .locator(
-          ":is(openclaw-session-menu, openclaw-chat-header-session-menu) > wa-dropdown > wa-dropdown-item:focus",
-        )
-        .count(),
+      parent.evaluate((element) =>
+        [...(element.parentElement?.children ?? [])].some(
+          (item) => item.localName === "wa-dropdown-item" && item === document.activeElement,
+        ),
+      ),
     )
-    .toBe(1);
+    .toBe(true);
   await page.keyboard.press("Home");
   for (let step = 0; step < index; step += 1) {
     await page.keyboard.press("ArrowDown");

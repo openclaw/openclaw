@@ -170,6 +170,15 @@ original prompt in transcript, use `before_agent_run` on a supported runner.
 To short-circuit an agent turn with a synthetic reply or silence, use
 `before_agent_reply`.
 
+For heartbeat turns, `before_agent_reply` receives
+`ctx.heartbeatEventQueueSessionKey` when the host knows the underlying
+system-event queue. This can differ from `ctx.sessionKey` for an isolated
+heartbeat run. Use the supplied key for event lookup; do not derive a base
+session by removing a `:heartbeat` suffix because a configured session can be
+named `heartbeat`. The field is optional for older hosts. Without it, plugins
+can inspect only `ctx.sessionKey`; they cannot infer an isolated run's base
+queue. The field identifies an existing queue and grants no additional access.
+
 <a id="sessions-and-compaction" />
 
 **Sessions and compaction**

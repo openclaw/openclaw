@@ -107,24 +107,30 @@ export function manifestPluginResolvesRuntimeModelCatalogAugment(
 
 function resolveProviderOwnerPluginIds(
   params: ProviderRegistryLoadParams & {
-    pluginIds: readonly string[];
+    pluginIds?: readonly string[];
     isEligible: (
       plugin: PluginRegistryRecord,
       normalizedConfig: NormalizedPluginsConfig,
     ) => boolean;
   },
 ): string[] {
-  if (params.pluginIds.length === 0) {
+  if (params.pluginIds?.length === 0) {
     return [];
   }
-  const pluginIdSet = new Set(params.pluginIds);
   const registry = loadProviderRegistrySnapshot(params);
+  const pluginIdSet = params.pluginIds
+    ? new Set(params.pluginIds)
+    : resolveProviderSurfacePluginIdSet({ ...params, registry });
+  const scope = params.pluginIds ? null : createPluginIdScopeSet(params.onlyPluginIds);
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
     manifestRegistry: params.manifestRegistry,
   });
   return listRegistryPluginIds(
     registry,
-    (plugin) => pluginIdSet.has(plugin.pluginId) && params.isEligible(plugin, normalizedConfig),
+    (plugin) =>
+      pluginIdSet.has(plugin.pluginId) &&
+      (!scope || scope.has(plugin.pluginId)) &&
+      params.isEligible(plugin, normalizedConfig),
   );
 }
 
@@ -182,22 +188,15 @@ export function resolveBundledProviderCompatPluginIds(params: {
 }
 
 export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadParams): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.pluginId)) &&
+  return resolveProviderOwnerPluginIds({
+    ...params,
+    isEligible: (plugin, normalizedConfig) =>
       resolveEffectiveRegistryPluginActivation({
         plugin,
         normalizedConfig,
         rootConfig: params.config,
       }).activated,
-  );
+  });
 }
 
 export function resolveExternalAuthProfileProviderPluginIds(params: {
@@ -224,24 +223,16 @@ export function resolveDiscoveredProviderPluginIds(params: {
   onlyPluginIds?: readonly string[];
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.pluginId)) &&
+  return resolveProviderOwnerPluginIds({
+    ...params,
+    isEligible: (plugin, normalizedConfig) =>
       isProviderPluginEligibleForSetupDiscovery({
         plugin,
-        shouldFilterUntrustedWorkspacePlugins,
+        shouldFilterUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins !== true,
         normalizedConfig,
         rootConfig: params.config,
       }),
-  );
+  });
 }
 
 function isProviderPluginEligibleForSetupDiscovery(params: {
