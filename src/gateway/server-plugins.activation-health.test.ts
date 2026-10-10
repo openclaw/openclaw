@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
@@ -29,8 +29,23 @@ vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 installInstanceBindingConfigIo();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const PLUGIN_LIFECYCLE_BUSY =
-  "Another plugin or config operation is already running; retry when it completes.";
+
+// Post-ready maintenance refreshes the derived registry under the plugin lifecycle lease, and
+// plugins.reload refuses a busy lease instead of queueing. Tests await that refresh first.
+async function observePostReadyStartupMaintenance(): Promise<{ settled: Promise<void> }> {
+  const startupPlugins = await import("./server-startup-plugins.js");
+  const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+  const settled = createDeferred<void>();
+  const observer = vi
+    .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+    .mockImplementation((params) => {
+      const maintenance = runMaintenance(params);
+      maintenance.then(settled.resolve, settled.resolve);
+      return maintenance;
+    });
+  onTestFinished(() => observer.mockRestore());
+  return { settled: settled.promise };
+}
 
 function readPersistedCount(databasePath: string, engineId: string) {
   const { DatabaseSync } = requireNodeSqlite();
@@ -252,6 +267,7 @@ it.each([false, true])(
     let observer: { mockRestore: () => void } | undefined;
     let commit: { mockRestore: () => void } | undefined;
     try {
+      const maintenance = await observePostReadyStartupMaintenance();
       const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       server = await startTestGatewayServer(claim, {
         auth: { mode: "none" },
@@ -259,6 +275,7 @@ it.each([false, true])(
         sidecarStartup: "start",
       });
       await server.startupSettled;
+      await maintenance.settled;
       socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
       await recordPersistedContextEngineQuarantine({
         engineId,
@@ -289,23 +306,12 @@ it.each([false, true])(
           }
         });
       let reloadSettled = false;
-      const connected = socket;
-      // Post-ready startup maintenance can hold the lifecycle lease; reload refuses that
-      // before entry, so only the refusal is retried.
-      reload = vi
-        .waitUntil(
-          async () => {
-            const result = await rpcReq(connected, "plugins.reload", {
-              plugins: [{ pluginId: "instance-binding-probe" }],
-            });
-            return result.error?.message === PLUGIN_LIFECYCLE_BUSY ? false : result;
-          },
-          { interval: 500, timeout: 30_000 },
-        )
-        .then((result) => {
-          reloadSettled = true;
-          return result;
-        });
+      reload = rpcReq(socket, "plugins.reload", {
+        plugins: [{ pluginId: "instance-binding-probe" }],
+      }).then((result) => {
+        reloadSettled = true;
+        return result;
+      });
       const phase = await Promise.race([
         reached.promise.then(() => "worker"),
         reload.then(() => "settled"),

@@ -36,6 +36,23 @@ import {
   startTestGatewayServer,
 } from "./test-helpers.server.js";
 
+// Post-ready maintenance refreshes the derived registry under the plugin lifecycle lease, and
+// plugins.reload refuses a busy lease instead of queueing. Tests await that refresh first.
+async function observePostReadyStartupMaintenance(): Promise<{ settled: Promise<void> }> {
+  const startupPlugins = await import("./server-startup-plugins.js");
+  const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+  const settled = createDeferredCore<void>();
+  const observer = vi
+    .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+    .mockImplementation((params) => {
+      const maintenance = runMaintenance(params);
+      maintenance.then(settled.resolve, settled.resolve);
+      return maintenance;
+    });
+  onTestFinished(() => observer.mockRestore());
+  return { settled: settled.promise };
+}
+
 // Fixtures must register real plugins after the shared helpers install their mocks.
 vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
@@ -60,9 +77,6 @@ async function useGatewayGraphPluginRuntime(): Promise<void> {
     );
   onTestFinished(() => runtimeLoader.mockRestore());
 }
-
-const PLUGIN_LIFECYCLE_BUSY =
-  "Another plugin or config operation is already running; retry when it completes.";
 
 // A real plugin registry replacement must own accounts before their first route exists.
 describe("Gateway plugin replacement channel ownership", () => {
@@ -437,6 +451,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     await useGatewayGraphPluginRuntime();
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
+    const maintenance = await observePostReadyStartupMaintenance();
     server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
@@ -444,6 +459,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       hotReloadRecovery,
     });
     await server.startupSettled;
+    await maintenance.settled;
     const probe = async (accountId: string) => {
       const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
         method: "POST",
@@ -474,19 +490,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
     await requestSettledInstanceBindingProbe(runtime);
     const initialRegistry = getActivePluginRegistry();
-    const connected = socket;
-    // Post-ready startup maintenance refreshes the derived plugin registry under the lifecycle
-    // lease, and reload refuses immediately instead of queueing. That refusal precedes entry,
-    // so only it is retried; any entered reload result is final.
-    const reload = await vi.waitUntil(
-      async () => {
-        const result = await rpcReq(connected, "plugins.reload", {
-          plugins: [{ pluginId: "instance-binding-probe" }],
-        });
-        return result.error?.message === PLUGIN_LIFECYCLE_BUSY ? false : result;
-      },
-      { interval: 500, timeout: 30_000 },
-    );
+    const reload = await rpcReq(socket, "plugins.reload", {
+      plugins: [{ pluginId: "instance-binding-probe" }],
+    });
     if (teardownFails) {
       expect(reload).toMatchObject({
         ok: false,
