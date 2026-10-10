@@ -88,8 +88,8 @@ async function withActor(
       drain?: Promise<void>;
       onExecuted?: () => void;
     };
-    retireGeneration(): void;
-    nativePatch(updatedAt: number): void;
+    retireGeneration(this: void): void;
+    nativePatch(this: void, updatedAt: number): void;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -342,8 +342,8 @@ it("releases the writer queue across phase awaits and flushes reducers on an exc
   await withActor(async ({ actor, commands }) => {
     await actor.read(authority);
     const continuePhase = Promise.withResolvers<void>();
-    const operation = actor.withPhase("failed-phase", authority, async ({ patch }) => {
-      patch([{ kind: "activity", updatedAt: 987 }]);
+    const operation = actor.withPhase("failed-phase", authority, async (phase) => {
+      phase.patch([{ kind: "activity", updatedAt: 987 }]);
       await continuePhase.promise;
       throw new Error("Provider failed");
     });
@@ -456,11 +456,11 @@ it("release waits actual native settlement and flushes accepted phase work after
     const drain = Promise.withResolvers<void>();
     const released = vi.fn();
     let release: Promise<void> | undefined;
-    const operation = actor.withPhase("turn", authority, async ({ actor: held, patch }) => {
-      patch([{ kind: "activity", updatedAt: 789 }]);
+    const operation = actor.withPhase("turn", authority, async (phase) => {
+      phase.patch([{ kind: "activity", updatedAt: 789 }]);
       release = actor.release().then(released);
       await continuePhase.promise;
-      return held.patch(
+      return phase.actor.patch(
         { commandId: "accepted", phaseId: "turn", expected: initial.version, reducers: [] },
         authority,
       );

@@ -381,7 +381,7 @@ export function prepareSqliteDatabaseWriter(database: DatabaseSync): Admission |
     if (threadId !== 0 && state.exchange.getStore() === undefined) {
       // Unmanaged native writers have no host that can settle their custody on exit.
       state.unproven.add(database);
-      return;
+      return undefined;
     }
     ensureSqliteDatabaseWriter(record, () => {
       rememberEnvironment();
