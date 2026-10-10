@@ -14,8 +14,11 @@ How the Codex model catalog is discovered, and what happens when discovery fails
 
 By default, the Codex plugin asks the app-server for available models. Model
 availability is owned by Codex app-server, so the list can change when
-OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
-points `appServer.command` at a different Codex binary. Availability can also
+OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
+[newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
+or when a deployment points `appServer.command` at a different Codex binary.
+ChatGPT-login model discovery reports the selected binary's version as its
+`client_version`, so the list matches the binary that runs turns. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 

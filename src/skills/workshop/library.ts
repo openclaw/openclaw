@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import {
@@ -25,7 +26,6 @@ import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { withSkillLocks } from "./skill-locks.js";
 import {
   listVersions,
   pruneVersions,
@@ -75,6 +75,7 @@ const MAX_CHANGES_LIMIT = 500;
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
 const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+const skillLocks = new KeyedAsyncQueue();
 
 function emptyForMissingDirectory(error: unknown): never[] {
   if (hasErrnoCode(error, "ENOENT")) {
@@ -307,6 +308,14 @@ async function requireLiveSkill(paths: SkillPaths, name: string): Promise<void> 
       ? `Skill "${name}" is archived. Restore it first with action=restore name=${name}.`
       : `No workshop skill named "${name}". Call action=list to see skills, or action=create to add one.`,
   );
+}
+
+/** Sorted acquisition keeps overlapping multi-skill mutations from deadlocking. */
+async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
+  const [first, ...rest] = [...new Set(keys)].toSorted((a, b) => a.localeCompare(b));
+  return first === undefined
+    ? await run()
+    : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
 }
 
 /** Serializes one skill's mutation, then publishes the snapshot bump and change row. */

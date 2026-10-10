@@ -77,6 +77,7 @@ type RetainedReader = {
   connection: OpenClawStateReadConnection;
   identity: DatabasePathIdentity;
   retiring: boolean;
+  borrowed: boolean;
   idleTimer?: ReturnType<typeof setTimeout>;
   directAdmission?: {
     existingSchema: boolean;
@@ -185,6 +186,7 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
       retained.connection.database.db.isTransaction ||
       getSqlitePinnedReadSnapshot(retained.connection.database.db)
     ) {
+      retained.borrowed = false;
       throw new Error("Direct shared-state reader cannot admit a transaction or snapshot");
     }
     try {
@@ -232,6 +234,9 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
         );
       }
       throw error;
+    } finally {
+      // Preparation retains the connection without keeping an active borrow.
+      retained.borrowed = false;
     }
   });
   const assertCurrent = () => {
@@ -249,6 +254,8 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
     read(operation) {
       return inContext(() => {
         assertCurrent();
+        const wasBorrowed = reader.borrowed;
+        reader.borrowed = true;
         try {
           const value = operation(reader.connection.database);
           if (isPromiseLike(value)) {
@@ -270,6 +277,8 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
             }
           }
           throw error;
+        } finally {
+          reader.borrowed = wasBorrowed;
         }
       });
     },
@@ -338,23 +347,29 @@ function borrowStateReadConnection(
     retireReader(reader);
     reader = undefined;
   }
+  if (reader?.borrowed) {
+    // A nested reader must not close its caller's retained connection.
+    return openStateReadConnectionResult(pathname, pathname, identity.key);
+  }
   if (!reader) {
     const opening = openStateReadConnectionResult(pathname, pathname, identity.key);
     if (opening.status === "unavailable") {
       return opening;
     }
-    reader = { connection: opening.value, identity, retiring: false };
+    reader = { connection: opening.value, identity, retiring: false, borrowed: false };
     retainedReaders.set(identity.key, reader);
     unregisterExitClose ??= registerSqliteCacheExitClose(closeRetainedOpenClawStateReadConnections);
   }
   const retained = reader;
   observeOpenClawDatabaseMaintenanceResource(retained);
+  retained.borrowed = true;
   clearTimeout(retained.idleTimer);
   return {
     status: "available",
     value: {
       database: { db: retained.connection.database.db, path: pathname },
       close(keep) {
+        retained.borrowed = false;
         if (
           keep &&
           retained.connection.database.db.isOpen &&

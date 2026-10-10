@@ -169,6 +169,42 @@ describe("sessions.dispatch device targets", () => {
       vi.restoreAllMocks();
     });
 
+    it.each(["unpaired", "reconnected"] as const)(
+      "reports live %s refusal instead of stale full capacity",
+      async (reason) => {
+        useDeviceSession();
+        const node = connectedNode("unavailable", 0);
+        vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
+          deviceEnvironments([node]),
+        );
+        const dispatch = vi.fn();
+        const context = makeDispatchTestContext({
+          nodeRegistry: { get: () => node } as never,
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        });
+        bindDeviceWorkerAvailability(context.workerEnvironmentService!, async () =>
+          reason === "unpaired"
+            ? { available: false, unavailableReason: "unpaired" }
+            : { available: true, node: { ...node, connId: "replacement-connection" } },
+        );
+
+        const respond = await invokeSessionDispatch(context, { autoDevice: true });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining(
+              reason === "unpaired" ? "not a paired" : "not connected",
+            ),
+          }),
+        );
+      },
+    );
+
     it("dispatches to a capacity-one host whose occupied slot is reclaimable idle", async () => {
       useDeviceSession();
       const node = connectedNode("idle-host", 0);
