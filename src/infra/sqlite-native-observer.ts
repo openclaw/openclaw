@@ -337,7 +337,10 @@ export function observeSqliteNativeOperations(
             return nativeReturn.apply(this, args);
           }
           const result = execute(
-            () => reset(() => nativeReturn.apply(this, args), "return"),
+            () =>
+              lifetime.finished || lifetime.invalidated
+                ? nativeReturn.apply(this, args)
+                : reset(() => nativeReturn.apply(this, args), "return"),
             bindingMutation,
             "bind",
           );

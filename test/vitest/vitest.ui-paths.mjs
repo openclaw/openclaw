@@ -24,15 +24,20 @@ export function isUiBrowserTestFile(relative) {
   return (
     isUiTestTarget(relative) &&
     !/[*?[\]{}]|[@+!]\(/u.test(relative) &&
-    relative.endsWith(".browser.test.ts") &&
+    /\.browser\.test\.tsx?$/u.test(relative) &&
     !uiNodeDrivenBrowserTestFiles.includes(relative)
   );
 }
 
 export const pluginControlUiPathGlob = "extensions/*/browser/**";
-export const controlUiTestGlobs = ["ui/src/**/*.test.ts", "extensions/*/browser/**/*.test.ts"];
+export const controlUiTestGlobs = [
+  "ui/src/**/*.test.ts",
+  "ui/src/**/*.test.tsx",
+  "extensions/*/browser/**/*.test.ts",
+];
 export const controlUiE2eTestGlobs = [
   "ui/src/**/*.e2e.test.ts",
+  "ui/src/**/*.e2e.test.tsx",
   "extensions/*/browser/**/*.e2e.test.ts",
 ];
 
@@ -52,8 +57,8 @@ export function isControlUiSourcePath(file) {
 export function isUiTestTarget(relative) {
   return (
     isControlUiSourcePath(relative) &&
-    relative.endsWith(".test.ts") &&
-    !relative.endsWith(".e2e.test.ts")
+    /\.test\.tsx?$/u.test(relative) &&
+    !/\.e2e\.test\.tsx?$/u.test(relative)
   );
 }
 

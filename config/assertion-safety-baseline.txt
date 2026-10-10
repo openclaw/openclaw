@@ -621,7 +621,7 @@ extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	4
-extensions/ollama/index.ts	6
+extensions/ollama/index.ts	5
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
 extensions/ollama/src/discovery-shared.ts	1
@@ -2666,7 +2666,7 @@ ui/src/app/native-route-memory.ts	1
 ui/src/app/native-web-chrome.ts	2
 ui/src/app/overlays.ts	1
 ui/src/app/server-prefs-state.ts	10
-ui/src/app/server-prefs.ts	6
+ui/src/app/server-prefs.ts	5
 ui/src/app/settings.ts	2
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1

@@ -3,7 +3,6 @@ import Foundation
 import OpenClawKit
 import PeekabooAutomationKit
 import PeekabooFoundation
-@preconcurrency import ScreenCaptureKit
 
 /// Fulfills `computer.act` on this Mac by driving the embedded Peekaboo
 /// automation engine in-process. Peekaboo covers single/right/double click,
@@ -106,7 +105,7 @@ final class ComputerScreenActionExecutor {
 
     private func dispatch(
         _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay,
+        display: ScreenCaptureDisplayGeometry,
         inputScopeId: UUID,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
@@ -212,7 +211,7 @@ final class ComputerScreenActionExecutor {
 
     private func performScroll(
         _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay,
+        display: ScreenCaptureDisplayGeometry,
         modifiers: CGEventFlags,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
@@ -240,17 +239,9 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Coordinate mapping
 
-    /// The target display in global points plus the capture source width used to
-    /// derive the captured screenshot pixel width for coordinate scaling.
-    private struct ResolvedDisplay {
-        var geometry: OpenClawComputerDisplayGeometry
-        var sourceWidth: Double
-        var sourceHeight: Double
-    }
-
     private func requiredPoint(
         _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay) throws -> CGPoint
+        display: ScreenCaptureDisplayGeometry) throws -> CGPoint
     {
         guard let point = try point(params.x, params.y, params: params, display: display) else {
             throw ComputerActionError.missingCoordinate
@@ -262,7 +253,7 @@ final class ComputerScreenActionExecutor {
         _ x: Double?,
         _ y: Double?,
         params: OpenClawComputerActParams,
-        display: ResolvedDisplay) throws -> CGPoint?
+        display: ScreenCaptureDisplayGeometry) throws -> CGPoint?
     {
         if x == nil, y == nil {
             return nil
@@ -436,56 +427,25 @@ final class ComputerScreenActionExecutor {
     }
     #endif
 
-    private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
-        guard AppLaunchRuntimePlan.current.allowsActivation ||
-            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
-        else {
-            throw ComputerActionError.refused(
-                "Screen Recording permission required; relaunch without --no-activate and retry")
-        }
+    private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ScreenCaptureDisplayGeometry {
+        try ScreenCaptureSupport.requirePermission(failure: ComputerActionError.refused)
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
-        let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else { throw ComputerActionError.noDisplays }
-        let idx = params.screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else { throw ComputerActionError.invalidScreenIndex(idx) }
+        let display = try await ScreenCaptureSupport.display(
+            at: params.screenIndex,
+            noDisplays: ComputerActionError.noDisplays,
+            invalidIndex: ComputerActionError.invalidScreenIndex)
         // CGDisplayBounds is the global top-left point space CGEvent uses;
         // SCDisplay.width/height is the capture source size ScreenSnapshotService
         // caps to refWidth, so together they recover the captured pixel scale and
         // the source aspect ratio needed for portrait longest-edge scaling.
-        let bounds = CGDisplayBounds(displays[idx].displayID)
-        let geometry = OpenClawComputerDisplayGeometry(
-            originX: bounds.origin.x,
-            originY: bounds.origin.y,
-            widthPoints: bounds.width,
-            heightPoints: bounds.height)
-        let sourceWidth = Double(displays[idx].width)
-        let sourceHeight = Double(displays[idx].height)
-        // A display can disappear between the ScreenCaptureKit snapshot and
-        // CGDisplayBounds, which returns a zero rectangle for a stale id. Reject
-        // all degenerate geometry here; mapping it would collapse input to (0, 0).
-        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            display: geometry)
-        else {
-            throw ComputerActionError.noDisplays
-        }
+        let resolved = try ScreenCaptureDisplayGeometry(display: display, noDisplays: ComputerActionError.noDisplays)
         if Self.usesScreenshotCoordinates(params) {
             let refWidth = try Self.requiredReferenceWidth(params)
-            let currentFrameId = OpenClawComputerInputGeometry.displayFrameId(
-                displayID: displays[idx].displayID,
-                sourceWidth: sourceWidth,
-                sourceHeight: sourceHeight,
-                referenceWidth: refWidth,
-                display: geometry)
+            let currentFrameId = resolved.frameId(referenceWidth: refWidth)
             try Self.validateDisplayFrame(params, currentFrameId: currentFrameId)
         }
-        return ResolvedDisplay(
-            geometry: geometry,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight)
+        return resolved
     }
 
     private static func usesScreenshotCoordinates(_ params: OpenClawComputerActParams) -> Bool {
