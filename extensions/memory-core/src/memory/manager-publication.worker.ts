@@ -415,9 +415,9 @@ function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbedding
     if (fragment.row !== row) {
       yield parse(parts);
       parts = [];
-      row = Number(fragment.row);
+      row = fragment.row;
     }
-    parts.push(String(fragment.json));
+    parts.push(fragment.json);
   }
   if (parts.length) {
     yield parse(parts);
