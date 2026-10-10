@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
@@ -41,17 +42,22 @@ export function bindUserTurnInputActor(
 
 /** Acquire through the selected writer; never redirect an incognito target to a file. */
 export async function acquireSessionInputActor(
-  target: SessionEntryTargetPatchScope,
+  requestedTarget: SessionEntryTargetPatchScope,
   lifetime: SessionActorLifetime,
 ): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope }> {
-  const agentId = target.readSource?.agentId ?? target.agentId;
-  if (!agentId) throw new Error("Input actor requires its captured agent owner");
+  const agentId = requestedTarget.readSource?.agentId ?? requestedTarget.agentId;
+  if (!agentId) {
+    throw new Error("Input actor requires its captured agent owner");
+  }
   // Sentinel aliases retain their selected physical key (global/unknown).
   const sessionKey = resolveSqliteSessionKey(
-    target.target.storeKeys[0] ?? target.target.canonicalKey,
+    requestedTarget.target.storeKeys[0] ?? requestedTarget.target.canonicalKey,
     agentId,
   );
-  target = { ...target, target: { ...target.target, canonicalKey: sessionKey } };
+  const target = {
+    ...requestedTarget,
+    target: { ...requestedTarget.target, canonicalKey: sessionKey },
+  };
   const database = {
     agentId,
     path: target.readSource?.path ?? target.storePath,
@@ -101,11 +107,13 @@ export async function acquireSessionInputActor(
   return withSessionEntryWorker(
     database,
     target.readSource?.databaseIdentity,
-    lifetime.assertCurrent,
+    () => lifetime.assertCurrent(),
     async (execution, source) => {
       await execution.prepare(source);
       const identity = execution.fileIdentity;
-      if (!identity) throw new Error("Input actor has no admitted physical database");
+      if (!identity) {
+        throw new Error("Input actor has no admitted physical database");
+      }
       const actor = await createSessionActorFactory(database).acquire(
         { database: identity, sessionKey },
         lifetime,
@@ -164,6 +172,8 @@ export function throwSessionInputActorFailure(
   if (outcome.kind === "unknown") {
     throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
   }
-  if (authorityFailure !== undefined) throw authorityFailure;
+  if (authorityFailure !== undefined) {
+    throw toErrorObject(authorityFailure, "Input actor authority rejected the operation");
+  }
   throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
 }

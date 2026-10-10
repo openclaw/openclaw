@@ -213,7 +213,9 @@ export function createSessionActorWorker(
               return operation(opened);
             },
             admit(stage, publication) {
-              if (stage === "commit") commitPublication = publication;
+              if (stage === "commit") {
+                commitPublication = publication;
+              }
               admit(stage, {
                 kind: "session-actor-admission",
                 snapshot: projectSessionActorHotState(working),

@@ -99,11 +99,6 @@ export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionBy
 export function getReplyOperationSessionReader(operation: ReplyOperation | undefined) {
   return operation ? lifecycleAdmissionByOperation.get(operation)?.reader : undefined;
 }
-/** Borrow this operation's retained actor; callers never release it independently. */
-export function getReplyOperationSessionActor(operation: ReplyOperation | undefined) {
-  return operation ? lifecycleAdmissionByOperation.get(operation)?.sessionActor : undefined;
-}
-
 /** Resolve the live operation's captured physical target, without selecting another owner. */
 export function getReplyOperationSessionTarget(operation: ReplyOperation | undefined) {
   return operation

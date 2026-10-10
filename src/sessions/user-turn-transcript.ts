@@ -79,9 +79,10 @@ function admittedUserTurnResult(
 }
 
 async function resolveCommittedUserTurnTranscript(
-  committed: CommittedUserTurnTranscript,
+  originalCommit: CommittedUserTurnTranscript,
   params: PersistUserTurnTranscriptParams,
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
+  let committed = originalCommit;
   if (!committed.anchor) {
     const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
     await waitForSessionTranscriptProjection(params);

@@ -329,7 +329,9 @@ export async function preparePendingInputStore(
             };
             const hot =
               inputActor.actor.snapshot(authority) ?? (await inputActor.actor.read(authority));
-            if (!hot.entry) throw new Error("Input actor lost its staged session");
+            if (!hot.entry) {
+              throw new Error("Input actor lost its staged session");
+            }
             let receipt: ReturnType<typeof readPendingInputMutationReceipt>;
             const outcome = await inputActor.actor.acceptInput(
               {
@@ -347,19 +349,24 @@ export async function preparePendingInputStore(
                     commit.value.pendingInputReceipt,
                     input,
                   );
-                  if (!receipt)
+                  if (!receipt) {
                     throw new Error("Input actor omitted its committed custody receipt");
+                  }
                   publish?.(committedFacts, assertOpen);
                 },
               },
             );
-            if (outcome.kind !== "committed")
+            if (outcome.kind !== "committed") {
               throwSessionInputActorFailure(outcome, authorityFailure);
-            if (outcome.failure && outcome.failure.origin !== "response")
+            }
+            if (outcome.failure && outcome.failure.origin !== "response") {
               throw Object.assign(new Error(outcome.failure.message), {
                 name: outcome.failure.name,
               });
-            if (!receipt) throw new Error("Input actor omitted its native completion receipt");
+            }
+            if (!receipt) {
+              throw new Error("Input actor omitted its native completion receipt");
+            }
             return receipt;
           }
           if (actor && binding) {

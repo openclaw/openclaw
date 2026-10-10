@@ -52,7 +52,9 @@ export function prepareSessionInputFromReplica(
   }
   const messages = [];
   for (const append of plan.options.messages) {
-    if (!isRecord(append.message) || append.message.role !== "user") return undefined;
+    if (!isRecord(append.message) || append.message.role !== "user") {
+      return undefined;
+    }
     const key = readMessageIdempotencyKey(append.message);
     // A retry needs canonical stored bytes, not just membership in the hot index.
     if (
@@ -62,7 +64,9 @@ export function prepareSessionInputFromReplica(
       return undefined;
     }
     const pending = key ? hot.pendingInputs.find((row) => row.idempotency_key === key) : undefined;
-    if (!pending && key === plan.custody?.idempotencyKey) return undefined;
+    if (!pending && key === plan.custody?.idempotencyKey) {
+      return undefined;
+    }
     if (
       pending &&
       (!plan.custody ||

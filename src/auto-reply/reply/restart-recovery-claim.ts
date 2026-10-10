@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
@@ -308,7 +309,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
     }
     if (authorityFailure) {
-      throw authorityFailure;
+      throw toErrorObject(authorityFailure, "Restart recovery authority rejected the operation");
     }
     throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
   };

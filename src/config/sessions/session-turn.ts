@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteLifecycleAggregateError,
@@ -131,14 +132,14 @@ export async function appendSessionTurnInWorker(
   };
   const actor = inputActor?.actor;
   const transportSources = (checks: PreparedSessionSourceAuthority["checks"]) => {
-    const sources = checks.map(({ predicate }) => predicate);
+    const predicates = checks.map(({ predicate }) => predicate);
     return actor?.target.database.kind === "native-incognito"
       ? captureNativeIncognitoSessionActorSources({
           database,
           target: { ...actor.target, database: actor.target.database },
-          sources,
+          sources: predicates,
         })
-      : sources;
+      : predicates;
   };
   if (ownerSource && actor) {
     plan.ownerSources = transportSources(ownerSource.checks);
@@ -442,7 +443,9 @@ export async function appendSessionTurnInWorker(
               committedCompletions.push(completion);
             }
           } catch (error) {
-            const completion = Promise.reject(error);
+            const completion = Promise.reject(
+              toErrorObject(error, "Session transcript completion failed"),
+            );
             void completion.catch(() => undefined);
             committedCompletions.push(completion);
           }
@@ -535,11 +538,15 @@ export async function appendSessionTurnInWorker(
         return operation.run(
           async () => {
             const hot = actor.snapshot(authority) ?? (await actor.read(authority));
-            const prepared = prepareSessionInputFromReplica(plan, hot, scope);
-            if (prepared) return prepared;
+            const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
+            if (replicaPreparation) {
+              return replicaPreparation;
+            }
             if (actor.target.database.kind === "native-incognito") {
               const opened = getOpenClawAgentDatabaseIfOpen(database);
-              if (!opened) throw new Error("Input actor lost its native database");
+              if (!opened) {
+                throw new Error("Input actor lost its native database");
+              }
               const { prepareSessionTurn } = await import("./session-turn.worker.js");
               return prepareSessionTurn(
                 plan,
@@ -574,7 +581,9 @@ export async function appendSessionTurnInWorker(
                     worker.execute({ type: "session.turn.prepare", input: plan }),
                   )
                   .then((prepared) => {
-                    if (!prepared) throw new Error("Input preparation lost its database");
+                    if (!prepared) {
+                      throw new Error("Input preparation lost its database");
+                    }
                     return prepared;
                   }),
               undefined,
@@ -595,7 +604,9 @@ export async function appendSessionTurnInWorker(
               );
             let candidate: SessionTurnCommitted | undefined;
             const record = (turn: SessionTurnCommitted | undefined) => {
-              if (!turn) throw new Error("Input actor omitted its committed turn");
+              if (!turn) {
+                throw new Error("Input actor omitted its committed turn");
+              }
               candidate = turn;
               try {
                 operation.onAcknowledged(turn);
@@ -621,7 +632,7 @@ export async function appendSessionTurnInWorker(
               commandId: randomUUID(),
               phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
             };
-            const outcome =
+            const actorOutcome =
               inputActor.phase === "acceptInput"
                 ? await actor.acceptInput(
                     {
@@ -650,13 +661,17 @@ export async function appendSessionTurnInWorker(
                       committed: (commit) => record(commit.value),
                     },
                   );
-            if (outcome.kind !== "committed")
-              throwSessionInputActorFailure(outcome, authorityFailure);
-            if (outcome.failure && outcome.failure.origin !== "response")
-              throw Object.assign(new Error(outcome.failure.message), {
-                name: outcome.failure.name,
+            if (actorOutcome.kind !== "committed") {
+              throwSessionInputActorFailure(actorOutcome, authorityFailure);
+            }
+            if (actorOutcome.failure && actorOutcome.failure.origin !== "response") {
+              throw Object.assign(new Error(actorOutcome.failure.message), {
+                name: actorOutcome.failure.name,
               });
-            if (!candidate) throw new Error("Input actor omitted its native receipt");
+            }
+            if (!candidate) {
+              throw new Error("Input actor omitted its native receipt");
+            }
             return candidate.result;
           },
         );
