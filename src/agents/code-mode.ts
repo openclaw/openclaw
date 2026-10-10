@@ -207,6 +207,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         ...formatToolSearchControlResult(result, runtime, {
           terminalBatchStatus: result.status,
           compact: true,
+          networkContent: "unavailableMcpServers" in result,
         }),
         ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
       },
@@ -313,6 +314,7 @@ export function applyCodeModeCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   toolExecutionAllow?: ToolSearchToolContext["toolExecutionAllow"];
+  mcpDiagnostics?: Parameters<typeof applyToolCatalogCompaction>[0]["mcpDiagnostics"];
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
 }) {

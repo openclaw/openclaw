@@ -64,3 +64,27 @@ export function isMcpToolAllowed(
     !toolFilter?.exclude?.some(matches)
   );
 }
+
+/**
+ * One server's own tool filter and the session's raw-name denials for it. Both
+ * ride on the server's catalog entry and on every failure diagnostic, so outage
+ * admission judges them with the tool policy exactly as healthy discovery does.
+ */
+export function resolveMcpServerDiscoveryFilter(
+  rawServer: unknown,
+  denialMap: Readonly<Record<string, readonly string[]>> | undefined,
+  serverName: string,
+) {
+  const toolFilter = normalizeMcpToolFilter(isRecord(rawServer) ? rawServer.toolFilter : undefined);
+  const deniedToolNames = new Set(
+    denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
+  );
+  return {
+    toolFilter,
+    deniedToolNames,
+    recorded: {
+      ...(toolFilter ? { toolFilter } : {}),
+      ...(deniedToolNames.size > 0 ? { deniedToolNames: [...deniedToolNames].toSorted() } : {}),
+    },
+  };
+}

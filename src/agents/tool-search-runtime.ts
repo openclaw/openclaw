@@ -39,11 +39,11 @@ import {
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import { formatToolLookupMissError } from "./tool-search-lookup-miss.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
   formatCatalogOutputError,
-  formatUnknownToolIdError,
   type ToolLookupErrorOptions,
 } from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
@@ -94,8 +94,9 @@ function findEntry(
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
     throw new ToolInputError(
-      formatUnknownToolIdError(
+      formatToolLookupMissError(
         needle,
+        catalog,
         entries,
         match === "exact-id" ? { ...options, exactIdOnly: true } : options,
       ),
@@ -563,6 +564,8 @@ export function formatToolSearchControlResult<T>(
   runtime: ToolSearchRuntime | undefined,
   options: {
     parentToolCallId?: string;
+    /** The payload itself carries network-controlled text, such as a recorded MCP outage. */
+    networkContent?: boolean;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
     compact?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
@@ -571,7 +574,8 @@ export function formatToolSearchControlResult<T>(
   const serialized = serializeToolSearchControlResult(payload, options.compact);
   const { text } = renderToolSearchControlText(
     serialized,
-    runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
+    options.networkContent === true ||
+      (runtime?.hasNetworkContent(options.parentToolCallId) ?? false),
   );
   const result = textResult(text, payload);
   if (options.images?.length) {

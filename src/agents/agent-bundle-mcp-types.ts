@@ -29,6 +29,8 @@ export type BundleMcpToolRuntime = {
   /** All MCP tool-call projections, including App-only tools, for policy evaluation. */
   appTools?: AnyAgentTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
+  /** The `diagnostics` whose server materialized no tool at all, so its tools are absent. */
+  unavailableDiagnostics?: readonly McpToolCatalogDiagnostic[];
   restrictAppTools?: (tools: readonly AnyAgentTool[]) => void;
   dispose: () => Promise<void>;
 };
@@ -117,6 +119,11 @@ export type McpToolCatalogDiagnostic = {
   safeServerName: string;
   launchSummary: string;
   message: string;
+  // The failed server's own tool filter and the session's raw-name denials for
+  // it, carried so outage admission judges them with the tool policy, exactly as
+  // healthy discovery would, instead of naming a server no tool of which surfaces.
+  toolFilter?: McpServerToolFilterConfig;
+  deniedToolNames?: readonly string[];
 };
 
 export type McpRequestOptions = {

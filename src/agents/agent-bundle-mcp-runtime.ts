@@ -59,7 +59,7 @@ import {
   McpStartupBackoffError,
   resetMcpStartupBackoff,
 } from "./mcp-startup-backoff.js";
-import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
+import { isMcpToolAllowed, resolveMcpServerDiscoveryFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
@@ -375,6 +375,14 @@ function createServerMcpRuntime(
 ): ServerMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
+  // Fixed for the runtime's lifetime: the manager fingerprints the filter and
+  // denials and builds a new runtime when either changes, so the retirement
+  // diagnostic still judges the outage under the ones this runtime listed with.
+  const discovery = resolveMcpServerDiscoveryFilter(
+    loaded.mcpServers[serverName],
+    params.toolOverrides?.mcpToolsDeny,
+    serverName,
+  );
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
   const startupKey = JSON.stringify([
     params.workspaceDir,
@@ -739,21 +747,14 @@ function createServerMcpRuntime(
           }
         }
         failIfDisposed();
-        const toolFilter = normalizeMcpToolFilter(
-          isRecord(rawServer) ? rawServer.toolFilter : undefined,
-        );
-        const denialMap = params.toolOverrides?.mcpToolsDeny;
-        const deniedToolNames = new Set(
-          denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
-        );
         const normalizedTools = normalizeMcpToolCatalog(
           listedTools,
           schemaValidator,
           (toolName) => {
-            if (!isMcpToolAllowed(toolFilter, toolName)) {
+            if (!isMcpToolAllowed(discovery.toolFilter, toolName)) {
               return "exclude";
             }
-            return deniedToolNames.has(toolName) ? "denied" : "include";
+            return discovery.deniedToolNames.has(toolName) ? "denied" : "include";
           },
         );
         session.toolMetadata = normalizedTools.metadata;
@@ -781,13 +782,12 @@ function createServerMcpRuntime(
                 },
               }
             : {}),
-          ...(toolFilter ? { toolFilter } : {}),
-          ...(deniedToolNames.size > 0 ? { deniedToolNames: [...deniedToolNames].toSorted() } : {}),
+          ...discovery.recorded,
           codexApprovalMode: resolveProjectedMcpCodexToolApprovalMode(serverName, rawServer),
         };
         const projectedTools = projectBundleMcpCatalogTools({
           normalizedTools,
-          deniedToolNames,
+          deniedToolNames: discovery.deniedToolNames,
           serverName,
           safeServerName,
           launchDescription,
@@ -827,6 +827,7 @@ function createServerMcpRuntime(
           safeServerName,
           launchSummary: launchDescription,
           message,
+          ...discovery.recorded,
         });
       }
     })();
@@ -1052,6 +1053,7 @@ function createServerMcpRuntime(
               safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
               launchSummary: serverName,
               message: "MCP server runtime retired; retry discovery on the next turn.",
+              ...discovery.recorded,
             },
           ],
         };

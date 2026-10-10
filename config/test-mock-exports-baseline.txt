@@ -2554,7 +2554,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../local-model-lean.js","d238e34102df2a839ba22583ee58ba7b9569749a58d32d8cb6df758aabab9a16",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../runtime-plan/tools.js","0f5bc9f9a4b93d6940eb9cde2d79ed539bb9b0909e3fa3f647804ecea1c4ad9c",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../tool-schema-projection.js","b7329cf73ab5eff7c86846529c43ba71fc47eb812d1a85eb07aed515383a2892",1]
-["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../effective-tool-policy.js","00a8323dbcbe303916be2c250315b4b74f34bcf566af9c5e94fe8e54f6f9557c",1]
 ["src/agents/embedded-agent-runner/run/attempt-context-guards.test.ts","../../tools/computer-tool.js","7de36fcba44e52f8b45a3d6c37a19a4c521ef0eaadf7bde74e74ccc04226b9d2",1]
 ["src/agents/embedded-agent-runner/run/attempt-context-guards.test.ts","../cache-ttl.js","d653652f8592c9e03a3155b32d75f3aa54b5fce055fcb4358d9e8c479f2f031f",1]
 ["src/agents/embedded-agent-runner/run/attempt-context-guards.test.ts","../tool-result-context-guard.js","91cc6963c1ef26c7d3404b419fc7e10f9d5203bb618c14cfdea62db3a21d432d",1]

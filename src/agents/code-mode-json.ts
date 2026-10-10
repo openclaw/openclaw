@@ -10,6 +10,7 @@ import {
   renderToolSearchControlText,
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
+import type { UnavailableMcpServersNote } from "./tool-search-lookup-miss.js";
 
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
@@ -156,6 +157,9 @@ export class CodeModeOutputState {
   constructor(
     private readonly maxBytes: number,
     private readonly modelBudget?: ToolResultBudget,
+    // The run's recorded MCP outage rides on every exec/wait result, so it is
+    // fitted with the result here instead of appended after the budget was spent.
+    private readonly outage?: UnavailableMcpServersNote,
   ) {}
 
   append(leg: CodeModeOutputSource): void {
@@ -191,30 +195,34 @@ export class CodeModeOutputState {
     params: TerminalChannels & { error: string },
     networkContent?: boolean,
     retainValue?: (source: CodeModeJsonSource) => CodeModeValueRetention,
-  ): T & DeliveredChannels & { error: string };
+  ): T & Partial<UnavailableMcpServersNote> & DeliveredChannels & { error: string };
   takeResult<T extends object>(
     metadata: T,
     params?: TerminalChannels,
     networkContent?: boolean,
     retainValue?: (source: CodeModeJsonSource) => CodeModeValueRetention,
-  ): T & DeliveredChannels;
+  ): T & Partial<UnavailableMcpServersNote> & DeliveredChannels;
   takeResult<T extends object>(
     metadata: T,
     params: TerminalChannels = {},
     networkContent = false,
     retainValue?: (source: CodeModeJsonSource) => CodeModeValueRetention,
-  ): T & DeliveredChannels {
+  ): T & Partial<UnavailableMcpServersNote> & DeliveredChannels {
+    const header = { ...metadata, ...this.outage };
+    // The outage is server-controlled text, so only this render is network
+    // content; retention keeps the caller's flag for the guest value itself.
+    const network = networkContent || this.outage !== undefined;
     const fit = (channels: TerminalChannels) => {
       const project = this.createProjector(channels);
       const fits = (candidate: ReturnType<typeof project>) => {
         const rendered = renderToolSearchControlText(
-          serializeToolSearchControlResult({ ...metadata, ...candidate.channels }, true),
-          networkContent,
+          serializeToolSearchControlResult({ ...header, ...candidate.channels }, true),
+          network,
         );
         return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);
       };
       const projection = project(this.maxBytes);
-      if ((this.modelBudget || networkContent) && !fits(projection)) {
+      if ((this.modelBudget || network) && !fits(projection)) {
         let low = 0;
         let high = this.maxBytes - 1;
         let best: typeof projection | undefined;
@@ -285,7 +293,7 @@ export class CodeModeOutputState {
             prior.prefixBytes === receipt.prefixBytes
           ? []
           : channels.output;
-    return { ...metadata, ...channels, output };
+    return { ...header, ...channels, output };
   }
 
   private createProjector(params: TerminalChannels) {

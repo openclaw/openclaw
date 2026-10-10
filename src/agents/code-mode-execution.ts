@@ -61,6 +61,7 @@ import {
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
+import { resolveUnavailableMcpServers } from "./tool-search-lookup-miss.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -110,7 +111,11 @@ export async function runCodeModeExec(params: {
   );
   const { approvalWait } = owner;
   const signal = owner.bindCall(params.signal);
-  const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
+  const output = new CodeModeOutputState(
+    config.maxOutputBytes,
+    params.resultBudget,
+    resolveUnavailableMcpServers(params.ctx),
+  );
   const pending: PendingBridgeState[] = [];
   let releaseReservation: (() => void) | undefined;
   const context = {

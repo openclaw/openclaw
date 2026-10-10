@@ -17,7 +17,6 @@ import {
   type ClawToolPolicyCandidate,
 } from "./tool-policy-candidates.js";
 
-const frozenToolAllowPolicies = new WeakSet<object>();
 type PreparedClawToolPolicy =
   | { kind: "current" }
   | { kind: "legacy" }
@@ -28,16 +27,6 @@ let preparedStateOptions: OpenClawStateDatabaseOptions = {};
 const uninitializedStateError = new Error(
   "OpenClaw state database has not initialized Claw consent provenance.",
 );
-
-export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
-  if (policy) {
-    frozenToolAllowPolicies.add(policy);
-  }
-}
-
-export function isFrozenClawToolAllowPolicy(policy: object | undefined): boolean {
-  return policy ? frozenToolAllowPolicies.has(policy) : false;
-}
 
 function applyPreparedClawToolPolicyConsent(
   candidates: readonly ClawToolPolicyCandidate[] = preparedCandidates,

@@ -15,7 +15,10 @@ import {
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
+import {
+  TOOL_SEARCH_CONTROL_TOOL_NAMES,
+  type McpCatalogOutageRecord,
+} from "../tool-search-types.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -129,6 +132,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     tools: AnyAgentTool[],
     options: {
       hookContext?: HookContext;
+      /** Recorded MCP server failures this run's catalog explains to the model. */
+      mcpDiagnostics?: McpCatalogOutageRecord;
       localModelLeanApplied?: boolean;
       prepared?: PreparedToolSurface;
     } = {},
@@ -180,6 +185,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
+      mcpDiagnostics: options.mcpDiagnostics,
       codeModeSkills,
     });
     const projectedCompactedTools =
