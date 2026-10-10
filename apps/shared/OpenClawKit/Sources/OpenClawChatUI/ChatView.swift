@@ -766,7 +766,7 @@ extension OpenClawChatView {
             bubble
             ChatMessageReactions(viewModel: self.viewModel, message: msg)
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
-                ChatOutboxStatusLabel(state: outboxState)
+                ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
             }
             if let speech = self.speech,

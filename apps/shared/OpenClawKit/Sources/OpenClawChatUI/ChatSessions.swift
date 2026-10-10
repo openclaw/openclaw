@@ -359,19 +359,27 @@ public struct OpenClawChatSessionSettingsExpectation: Codable, Hashable, Sendabl
     }
 }
 
+public enum OpenClawChatQueueMode: String, Codable, Hashable, Sendable {
+    case steer
+    case followup
+}
+
 public struct OpenClawChatSendTarget: Hashable, Sendable {
     public let agentID: String?
     public let expectedSessionRoutingContract: String?
     public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
+    public let queueMode: OpenClawChatQueueMode?
 
     public init(
         agentID: String?,
         expectedSessionRoutingContract: String?,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?)
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
+        queueMode: OpenClawChatQueueMode? = nil)
     {
         self.agentID = agentID
         self.expectedSessionRoutingContract = expectedSessionRoutingContract
         self.expectedSessionSettings = expectedSessionSettings
+        self.queueMode = queueMode
     }
 }
 

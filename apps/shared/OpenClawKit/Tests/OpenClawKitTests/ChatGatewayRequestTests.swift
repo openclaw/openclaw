@@ -805,6 +805,50 @@ struct ChatGatewayRequestTests {
         #expect(inherited.params["expectedToolOverrides"] == nil)
     }
 
+    @Test(arguments: [nil, .steer, .followup] as [OpenClawChatQueueMode?])
+    func `send request preserves a per message queue mode`(mode: OpenClawChatQueueMode?) throws {
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:main:main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            queueMode: mode,
+            message: "Keep the original wording.",
+            thinking: nil,
+            idempotencyKey: "mode-choice",
+            attachments: [])
+        let serialized = try JSONEncoder().encode(request.params)
+        let params = try #require(JSONSerialization.jsonObject(with: serialized) as? [String: Any])
+        let expectedMode: String? = switch mode {
+        case .steer: "steer"
+        case .followup: "followup"
+        case nil: nil
+        }
+        #expect(params["queueMode"] as? String == expectedMode)
+        #expect(params["message"] as? String == "Keep the original wording.")
+    }
+
+    @Test(arguments: [false, true])
+    func `legacy route leases refuse explicit modes without losing ordinary sends`(withSettings: Bool) async throws {
+        let lease = withSettings
+            ? OpenClawChatTransportRouteLease(
+                sendTargetedMessageWithSettings: { _, _, _, _, _, id, _ in
+                    OpenClawChatSendResponse(runId: id, status: "accepted")
+                }, requestTargetedHistory: { _, _ in throw CancellationError() })
+            : OpenClawChatTransportRouteLease(
+                sendMessage: { _, _, _, id, _ in
+                    OpenClawChatSendResponse(runId: id, status: "accepted")
+                }, requestHistory: { _ in throw CancellationError() })
+        let ordinary = try await lease.sendMessage(
+            sessionKey: "main", message: "default", thinking: "off",
+            idempotencyKey: "ordinary", attachments: [])
+        #expect(ordinary.runId == "ordinary" && ordinary.status == "accepted")
+        await #expect(throws: OpenClawChatQueueModeUnsupportedError.self) {
+            try await lease.sendMessage(
+                sessionKey: "main", queueMode: .steer, message: "explicit", thinking: "off",
+                idempotencyKey: "explicit", attachments: [])
+        }
+    }
+
     @Test func `question resolve request uses the gateway answer envelope`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
