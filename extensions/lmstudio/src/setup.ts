@@ -886,8 +886,7 @@ export async function configureLmstudioNonInteractive(
   };
 }
 
-/** Discovers provider settings, merging explicit config with live model discovery. */
-// The published helper stays advisory; the registered catalog opts into strict acquisition.
+/** Acquires live inventory for the registered catalog; public helper calls stay advisory. */
 export function discoverLmstudioProvider(ctx: ProviderCatalogContext): Promise<{
   provider: ModelProviderConfig;
 } | null>;
