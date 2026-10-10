@@ -58,11 +58,11 @@ enum AppKitTestSupport {
         diagnosticContext: String? = nil) async throws -> [AnyObject]
     {
         let before = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        // SwiftUI materializes its virtual accessibility children after a real client request.
+        // Prime SwiftUI's virtual children without depending on the application's changing window list.
         let result = await Task.detached {
             let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-            var windows: CFTypeRef?
-            return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+            var children: CFTypeRef?
+            return AXUIElementCopyAttributeValue(application, kAXChildrenAttribute as CFString, &children)
         }.value
         let after = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
         try #require(result == .success, diagnosticContext.map {

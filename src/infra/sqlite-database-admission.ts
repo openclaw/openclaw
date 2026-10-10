@@ -29,7 +29,7 @@ import {
   getSqliteNativeAdmissionFacts,
   hasSqliteNativeAdmissionOperation,
 } from "./sqlite-native-admission.js";
-import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import {
   isSoleDatabaseFileDescriptor,
   readDatabaseIdentityBirthtime,
@@ -497,6 +497,24 @@ export function readSqliteDatabaseWriteTokenForPath(location: string): string | 
   }
   const revision = readWriteRevision(record, 0, exchange);
   return revision === undefined ? undefined : `${record.identity}:${revision}`;
+}
+
+/** The managed writer's next settlement advances its physical revision exactly once. */
+export function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
+  if (
+    !database.isOpen ||
+    !database.isTransaction ||
+    !hasSqlitePostCommitScope(database) ||
+    state.suspended.has(database)
+  ) {
+    return undefined;
+  }
+  const record = state.dataWriters.get(database);
+  if (!record || isRetired(record)) {
+    return undefined;
+  }
+  const revision = readWriteRevision(record, 1, exchange);
+  return revision === undefined ? undefined : `${record.identity}:${(revision + 1) | 0}`;
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */

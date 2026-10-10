@@ -1959,6 +1959,7 @@ src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.types.ts
+src/config/sessions/session-accessor.sqlite-entry-facts.worker.ts
 src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
 src/config/sessions/session-transcript-authority.ts
@@ -1976,6 +1977,7 @@ src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts
 src/config/sessions/session-entry-capability-facts.ts
 src/config/sessions/session-entry-navigation.ts
+src/config/sessions/session-entry-publication-source.ts
 src/config/sessions/session-pin-policy.ts
 src/config/sessions/session-sharing-store.kernel.ts
 src/config/sessions/session-transcript-anchor-read.kernel.ts
