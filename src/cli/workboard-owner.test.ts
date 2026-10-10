@@ -155,6 +155,13 @@ describe("Workboard CLI owner routing", () => {
     await cli.parseAsync(["workboard", "create", "Offline card"], { from: "user" });
     await cli.parseAsync(["workboard", "list", "--json"], { from: "user" });
     expect(fixture.output).toContain("Offline card");
+    const outputStart = fixture.output.length;
+    await cli.parseAsync(["workboard", "dispatch", "--json"], { from: "user" });
+    expect(JSON.parse(fixture.output.slice(outputStart))).toMatchObject({
+      gatewayUnavailable: true,
+      started: [],
+      startFailures: [],
+    });
     expect(ownerTransport.request).not.toHaveBeenCalled();
     expect(await readActiveGatewayLockIdentity({ env: process.env })).toBeUndefined();
   });

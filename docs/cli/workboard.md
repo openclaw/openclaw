@@ -150,7 +150,7 @@ Fallback output is explicit:
 gateway unavailable; data dispatch only: promoted=1 blocked=0
 ```
 
-JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`. Data-only fallback includes `gatewayUnavailable: true`. Claim tokens are redacted from card JSON output.
+JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`. Data-only fallback includes `gatewayUnavailable: true` and empty `started` and `startFailures` arrays. Claim tokens are redacted from card JSON output.
 
 In the dashboard, the same dispatch result appears as a short summary. An operator can see how many cards started, promoted, blocked, reclaimed, or failed without opening card details.
 

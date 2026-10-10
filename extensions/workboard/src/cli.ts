@@ -269,7 +269,9 @@ export function registerWorkboardCli(params: {
             ...redactDispatchResult(
               await store.dispatch({ boardId: options.board, assertOwnerCurrent: assertCurrent }),
             ),
-            gatewayUnavailable: true as const,
+            gatewayUnavailable: true,
+            started: [],
+            startFailures: [],
           }),
           {
             scopes,
