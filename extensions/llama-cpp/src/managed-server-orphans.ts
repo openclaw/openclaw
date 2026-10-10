@@ -20,7 +20,6 @@ function readUniqueArgument(argv: readonly string[], name: string): string | und
 export async function recoverManagedLlamaServer(params: {
   command: string;
   port: number;
-  presetPath?: string;
   cwd?: string;
   args?: readonly string[];
   signal?: AbortSignal;
@@ -29,19 +28,18 @@ export async function recoverManagedLlamaServer(params: {
   if (!findManagedLlamaServerAsset(params.command)) {
     return;
   }
-  const preset = params.presetPath ?? readUniqueArgument(params.args ?? [], "--models-preset");
-  if (!preset) {
+  const args = params.args ?? [];
+  const preset = readUniqueArgument(args, "--models-preset");
+  const host = readUniqueArgument(args, "--host");
+  if (!preset || !host || readUniqueArgument(args, "--port") !== String(params.port)) {
     return;
   }
   const required = new Map([
     ["--port", String(params.port)],
     ["--models-preset", preset],
+    ["--host", host],
   ]);
   const cwd = !path.isAbsolute(preset) ? path.resolve(params.cwd ?? process.cwd()) : undefined;
-  const host = readUniqueArgument(params.args ?? [], "--host");
-  if (host) {
-    required.set("--host", host);
-  }
   const key = JSON.stringify([params.command, [...required], cwd]);
   let recovery = recoveries.get(key);
   if (!recovery) {

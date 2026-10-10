@@ -453,7 +453,6 @@ export async function prepareManagedLlamaServer(params: {
     await recoverManagedLlamaServer({
       command,
       port,
-      presetPath: configuredPreset,
       cwd: params.localService.cwd,
       args: params.localService.args,
       signal: params.signal,

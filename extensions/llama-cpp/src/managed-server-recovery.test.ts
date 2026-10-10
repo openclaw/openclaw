@@ -72,7 +72,10 @@ async function createFixture() {
   } satisfies ModelDefinitionConfig;
   const provider = {
     baseUrl: "http://127.0.0.1:19432/v1",
-    localService: { command, args: ["--models-preset", presetPath] },
+    localService: {
+      command,
+      args: ["--host", "127.0.0.1", "--port", "19432", "--models-preset", presetPath],
+    },
     params: { modelCacheDir: root },
     models: [model],
   };
@@ -80,9 +83,27 @@ async function createFixture() {
 }
 
 describe("managed llama-server recovery", () => {
+  it.each(["missing host", "duplicate preset", "different port"])(
+    "leaves routers untouched for a configuration with %s",
+    async (kind) => {
+      const { model, presetPath, provider } = await createFixture();
+      if (kind === "missing host") {
+        provider.localService.args.splice(0, 2);
+      } else if (kind === "duplicate preset") {
+        provider.localService.args.push("--models-preset", `${presetPath}.other`);
+      } else {
+        provider.localService.args[3] = "19433";
+      }
+
+      await ensureManagedLlamaServerForChat({ model, provider });
+
+      expect(mocks.reap).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not recover a router for a direct-model configuration without a preset", async () => {
     const { model, modelPath, provider } = await createFixture();
-    provider.localService.args = ["--model", modelPath, "--port", "19432"];
+    provider.localService.args = ["--host", "127.0.0.1", "--model", modelPath, "--port", "19432"];
 
     await ensureManagedLlamaServerForChat({ model, provider });
 
@@ -106,24 +127,31 @@ describe("managed llama-server recovery", () => {
       const localService = {
         ...provider.localService,
         ...(kind === "relative" ? { cwd: root } : {}),
-        args: kind === "equals" ? [`--models-preset=${preset}`] : ["--models-preset", preset],
+        args: [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "19432",
+          ...(kind === "equals" ? [`--models-preset=${preset}`] : ["--models-preset", preset]),
+        ],
       };
       let orphanAlive = true;
       mocks.reap.mockImplementation(async ({ command: executable, matchesArguments, cwd }) => {
         expect(executable).toBe(command);
-        expect(matchesArguments([command, "--port", "19432", "--models-preset", preset])).toBe(
+        const argv = [command, "--host", "127.0.0.1"];
+        expect(matchesArguments([...argv, "--port", "19432", "--models-preset", preset])).toBe(
           true,
         );
         expect(cwd).toBe(kind === "relative" ? root : undefined);
-        expect(matchesArguments([command, "--port", "19433", "--models-preset", preset])).toBe(
+        expect(matchesArguments([...argv, "--port", "19433", "--models-preset", preset])).toBe(
           false,
         );
         expect(
-          matchesArguments([command, "--port", "19432", "--models-preset", `${preset}.other`]),
+          matchesArguments([...argv, "--port", "19432", "--models-preset", `${preset}.other`]),
         ).toBe(false);
         expect(
           matchesArguments([
-            command,
+            ...argv,
             "--port",
             "19432",
             "--port",
