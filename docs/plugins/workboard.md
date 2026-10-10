@@ -353,6 +353,29 @@ plugin using the linked run and session lifecycle (see
 
 ## Agent tools
 
+The card tools below are optional plugin tools. Enabling Workboard exposes only
+the three Sessions board tools to agents; an agent that should create, claim, or
+complete cards needs the card tools allowed for it. Add the plugin id to the
+agent's tool policy to allow every Workboard tool, or list individual tool names
+or a pattern such as `workboard_*`:
+
+```json5
+{
+  agents: {
+    entries: {
+      main: {
+        tools: { alsoAllow: ["workboard"] },
+      },
+    },
+  },
+}
+```
+
+Without that entry the agent sees only `workboard_sessions_board_*` and cannot
+manage cards. Workers that Workboard starts from a card (**Start** or dispatch)
+do not need it: each worker run is granted `workboard_heartbeat`,
+`workboard_complete`, and `workboard_block` for its card.
+
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
