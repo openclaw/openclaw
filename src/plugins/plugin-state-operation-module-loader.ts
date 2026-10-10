@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
 import { isTypeScriptPackageEntry } from "./package-entrypoints.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type {
@@ -8,7 +9,11 @@ import type {
 } from "./plugin-instance.types.js";
 import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.js";
 import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
-import { preparePluginLoaderAliases, type PluginSdkResolutionPreference } from "./sdk-alias.js";
+import {
+  preparePluginLoaderAliases,
+  resolveLoaderPackageRoot,
+  type PluginSdkResolutionPreference,
+} from "./sdk-alias.js";
 
 /** Bundled worker modules share captured bytes across logical recovery of the same host code. */
 export function captureBundledPluginStateOperationModules(params: {
@@ -17,17 +22,29 @@ export function captureBundledPluginStateOperationModules(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
-  const operationDirectory = isTypeScriptPackageEntry(params.source)
-    ? params.rootDir
-    : path.dirname(params.source);
-  if (
-    !fs
-      .readdirSync(operationDirectory, { withFileTypes: true })
-      .some((entry) => entry.isFile() && /-operation-api\.[cm]?[jt]s$/u.test(entry.name))
-  ) {
+  const sourceFamily = isTypeScriptPackageEntry(params.source);
+  const operationDirectory = sourceFamily ? params.rootDir : path.dirname(params.source);
+  const entries = fs
+    .readdirSync(operationDirectory, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        /-operation-api\.[cm]?[jt]s$/u.test(entry.name) &&
+        isTypeScriptPackageEntry(entry.name) === sourceFamily,
+    )
+    .map((entry) => path.join(operationDirectory, entry.name))
+    .toSorted();
+  if (entries.length === 0) {
     return undefined;
   }
-  const artifact = capturePluginGenerationArtifact(params.rootDir);
+  // Keep shared build chunks in scope without making the capture an SDK host package.
+  const hostRoot = !sourceFamily && resolveLoaderPackageRoot({ modulePath: params.source });
+  const buildRoot =
+    hostRoot &&
+    ["dist", "dist-runtime"]
+      .map((directory) => path.join(hostRoot, directory))
+      .find((directory) => isPathInside(path.join(directory, "extensions"), operationDirectory));
+  const artifact = capturePluginGenerationArtifact(buildRoot || params.rootDir, entries);
   try {
     const aliases = preparePluginLoaderAliases({
       modulePath: params.source,

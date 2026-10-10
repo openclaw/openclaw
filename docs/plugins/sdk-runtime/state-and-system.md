@@ -366,6 +366,15 @@ It does not rediscover a current plugin by id, serialize a closure, or open anot
 database owner. Plugins do not need a process-runtime import or their own knowledge
 of source, bundled-build, and standalone-package directory layouts.
 
+For bundled plugins, capture follows all operation entrypoints in the selected
+source or build family and their actual imports. Packages compiled into those
+files do not also need an installed runtime copy merely because the source
+manifest declares them. External imports still need their runtime dependencies.
+The entries share one captured generation, including their common dependencies,
+and recovery retains those bytes until the last owning instance releases them.
+Compiled entries can also capture shared chunks from their owning host package.
+This also applies when Doctor loads the plugin during an update.
+
 An empty `writeStores` array selects a noncreating read. Supply `missingValue`
 when an absent physical database has a defined result, including explicit
 `undefined`; the host returns that value without creating the database or

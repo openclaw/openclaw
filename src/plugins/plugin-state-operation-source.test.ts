@@ -134,12 +134,21 @@ describe("plugin state operation module ownership", () => {
     expect(() => source!.resolve(moduleName)).toThrow("Plugin operation-fixture is retiring");
   });
 
-  it("retains bundled operation bytes through recovery after the original instance retires", async () => {
+  it("captures bundled operation closures without requiring bundled-away dependencies through recovery", async () => {
     const root = fixture({
-      "package.json": '{"name":"operation-fixture"}',
+      "package.json": JSON.stringify({
+        name: "operation-fixture",
+        dependencies: { "bundled-away": "1.0.0", "operation-dependency": "1.0.0" },
+      }),
       "index.cjs": "module.exports = { id: 'operation-fixture' };",
       "state-operation-api.cjs": "module.exports = require('./src/operation.cjs');",
       "src/operation.cjs": "module.exports = { version: 'retained generation' };",
+      "other-operation-api.cjs":
+        "module.exports = { ...require('./src/operation.cjs'), dependency: require('operation-dependency').value };",
+      "node_modules/operation-dependency/package.json": '{"main":"index.cjs"}',
+      "node_modules/operation-dependency/index.cjs": "exports.value = 'captured dependency';",
+      "source-only-operation-api.ts": "import 'missing-source-only-dependency';",
+      "unrelated.cjs": "require('missing-unrelated-dependency');",
     });
     const original = bind(root, "index.cjs", "bundled");
     const recovery = original.captureModuleLoaderRecovery();
@@ -152,6 +161,54 @@ describe("plugin state operation module ownership", () => {
 
     expect(readVersion(source, "state-operation-api.cjs")).toMatchObject({
       version: "retained generation",
+    });
+    expect(readVersion(source, "other-operation-api.cjs")).toMatchObject({
+      version: "retained generation",
+      dependency: "captured dependency",
+    });
+    expect(() => source!.resolve("source-only-operation-api.js")).toThrow(
+      "absent from its captured source family",
+    );
+  });
+
+  it("refuses a bundled operation whose actual dependency is missing", () => {
+    const root = fixture({
+      "package.json": '{"name":"operation-fixture"}',
+      "index.cjs": "module.exports = { id: 'operation-fixture' };",
+      "state-operation-api.cjs": "module.exports = require('missing-operation-dependency');",
+    });
+    const instance = bind(root, "index.cjs", "bundled");
+    const source = capturePluginStateOperationModuleSource(instance, () => {});
+
+    expect(() => readVersion(source, "state-operation-api.cjs")).toThrow(
+      "missing-operation-dependency",
+    );
+  });
+
+  it("retains shared host chunks imported by compiled bundled operations", () => {
+    const root = fixture({
+      "package.json": '{"name":"openclaw","type":"module"}',
+      "dist/extensions/operation-fixture/package.json": JSON.stringify({
+        name: "operation-fixture",
+        dependencies: { "bundled-away": "1.0.0" },
+      }),
+      "dist/extensions/operation-fixture/index.js": "export const id = 'operation-fixture';",
+      "dist/extensions/operation-fixture/state-operation-api.js":
+        "export { version } from '../../shared-operation.js';",
+      "dist/shared-operation.js":
+        "import { isRecord } from 'openclaw/plugin-sdk/string-coerce-runtime'; export const version = isRecord({}) ? 'captured host chunk' : 'invalid';",
+      "dist/unrelated.js": "import 'missing-unrelated-dependency';",
+    });
+    const instance = bind(
+      path.join(root, "dist/extensions/operation-fixture"),
+      "index.js",
+      "bundled",
+    );
+    const source = capturePluginStateOperationModuleSource(instance, () => {});
+    fs.unlinkSync(path.join(root, "dist/shared-operation.js"));
+
+    expect(readVersion(source, "state-operation-api.js")).toMatchObject({
+      version: "captured host chunk",
     });
   });
 });
