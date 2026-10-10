@@ -103,7 +103,9 @@ send input, or stop them; foreground commands still stop when their turn is canc
 The retained worker occupies one node worker slot. Reusing it needs no additional
 slot. If a command finishes between turns, its retained output remains available
 to the next turn, subject to the normal process output limits and TTL. Once a turn
-finishes with no live background commands, the worker exits. Moving or retiring
+finishes with no live background commands, the worker exits unless negotiated
+idle retention keeps it ready for a follow-up. See [node session hosting](/nodes/session-hosting)
+for idle limits and eviction. Moving or retiring
 the environment, replacing its ownership, or stopping the node also stops its
 processes. Process handles do not survive a worker or node restart.
 

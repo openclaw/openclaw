@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -13,6 +14,10 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import {
+  readRetainedSessionEntryFacts,
+  retainSessionEntryReadFacts,
+} from "./session-entry-read-facts.js";
 import { readAdmittedSessionEntry } from "./session-entry-read-ordered.js";
 import {
   captureSessionEntryReadScope,
@@ -141,9 +146,21 @@ export async function readSessionEntryInWorker(
           await owner.refreshBeforeDispatch(() => execution.assertCurrent());
           execution.assertCurrent();
           await execution.prepare(source);
-          const selected = await execution.runExisting(source, (worker) =>
-            worker.execute({ type: "session.entry.read", input: { sessionKey } }),
-          );
+          assertCurrent();
+          const nativeOwner = execution.captureGenerationClaim();
+          const request = { sessionKeys: [sessionKey] };
+          const before = readSqliteDatabaseWriteTokenForPath(options.path);
+          const cached = readRetainedSessionEntryFacts(options, request, nativeOwner);
+          const selected =
+            cached ??
+            (await execution.runExisting(source, (worker) =>
+              worker.execute({ type: "session.entry.read", input: request }),
+            ));
+          assertCurrent();
+          nativeOwner.assertCurrent();
+          if (!cached && selected) {
+            retainSessionEntryReadFacts(options, request, selected, before);
+          }
           return selected?.entries.find((row) => row.sessionKey === sessionKey)?.entry;
         });
         await owner.revalidateTarget();

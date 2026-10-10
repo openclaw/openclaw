@@ -1,6 +1,8 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionProvenanceRow = {
@@ -36,20 +38,25 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
   previousEntry?: SessionEntry;
 }): T & { transcript_observed_at: number } {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
-  const existingRoot = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .select([
-        "session_entry_provenance",
-        "acp_owned",
-        "plugin_owner_id",
-        "hook_external_content_source",
-        "transcript_observed_at",
-        "transcript_updated_at",
-      ])
-      .where("session_id", "=", params.entry.sessionId),
-  );
+  const actor = readSessionActorTransactionState(params.database, {
+    sessionId: params.entry.sessionId,
+  });
+  const existingRoot = actor
+    ? actor.window
+    : executeSqliteQueryTakeFirstSync(
+        params.database.db,
+        db
+          .selectFrom("session_windows")
+          .select([
+            "session_entry_provenance",
+            "acp_owned",
+            "plugin_owner_id",
+            "hook_external_content_source",
+            "transcript_observed_at",
+            "transcript_updated_at",
+          ])
+          .where("session_id", "=", params.entry.sessionId),
+      );
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   const boundSessionRow = {
@@ -60,16 +67,7 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
   if (
     existingRoot?.session_entry_provenance === 0 &&
     (params.previousEntry?.sessionId === params.entry.sessionId ||
-      Boolean(
-        executeSqliteQueryTakeFirstSync(
-          params.database.db,
-          db
-            .selectFrom("transcript_events")
-            .select("seq")
-            .where("session_id", "=", params.entry.sessionId)
-            .limit(1),
-        ),
-      ))
+      hasStoredTranscriptEvents(params.database, params.entry.sessionId))
   ) {
     return {
       ...boundSessionRow,

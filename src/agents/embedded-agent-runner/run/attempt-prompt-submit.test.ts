@@ -35,6 +35,7 @@ import {
 } from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import {
   beginPromptCacheObservation,
   completePromptCacheObservation,
@@ -441,9 +442,28 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(session.getLastAssistantText()).toBe("recovered");
   });
 
-  it.each([false, true])(
-    "persists context across retry and reopen: append-only=%s",
-    async (appendOnlyRuntimeContext) => {
+  it.each([
+    { name: "transient override", api: "openai-completions", override: false, retained: false },
+    { name: "retained override", api: "openai-completions", override: true, retained: true },
+    { name: "generic completions", api: "openai-completions", retained: true },
+    { name: "native Ollama", api: "ollama", retained: true },
+  ])(
+    "persists runtime context across provider retry and session reopen: $name",
+    async ({ api, override, retained }) => {
+      const { appendOnlyRuntimeContext } = resolveTranscriptPolicy({
+        modelApi: api,
+        runtimeHandle: {
+          provider: "fixture",
+          plugin: {
+            id: "fixture",
+            label: "Fixture",
+            auth: [],
+            ...(override === undefined
+              ? {}
+              : { buildReplayPolicy: () => ({ appendOnlyRuntimeContext: override }) }),
+          },
+        },
+      });
       await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
         const target = {
           agentId: "main",
@@ -469,7 +489,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
           sessionManager: SessionManager.open(target, state.workspaceDir),
           settingsManager,
         });
-        if (appendOnlyRuntimeContext) {
+        if (retained) {
           await first.session.sendCustomMessage(
             { customType: "test.extension-context", content: "extension context", display: false },
             { deliverAs: "nextTurn" },
@@ -506,8 +526,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
           (entry) =>
             entry.type === "custom_message" && entry.customType === "openclaw.runtime-context",
         );
-        expect(carriers).toHaveLength(appendOnlyRuntimeContext ? 2 : 0);
-        if (appendOnlyRuntimeContext) {
+        expect(carriers).toHaveLength(retained ? 2 : 0);
+        if (retained) {
           for (const carrier of carriers) {
             expect(carrier).toMatchObject({ display: false });
             const previous = entries[entries.indexOf(carrier) - 1];

@@ -1,4 +1,5 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionTurnClaim,
@@ -25,6 +26,7 @@ export type ClaimChange = {
       facts?: WorkerSessionTurnClaimFacts;
       workspaceResult?: WorkspaceResultPostimage;
       workspacePlacement?: WorkerSessionPlacementRecord;
+      projection?: WorkerSessionPlacementReadResult;
       retired?: true;
     }
   | { kind: "workspace-result"; facts?: WorkspaceResultPostimage; cleared?: true }
@@ -55,7 +57,6 @@ export type RetainedPlacement = {
 };
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
-  incarnation: string;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
   observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
@@ -66,4 +67,6 @@ export type PlacementAuthorityOwner = {
   published: Map<string, number>;
   tools: Map<string, { sequence: number; authority?: ToolAuthority }>;
   workspaceResults: Map<string, WorkspaceResultFacts>;
+  projections: Map<string, WorkerSessionPlacementReadResult>;
+  preservation?: WorkerSessionPlacementRecord[];
 };

@@ -60,6 +60,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     This distinguishes first-time pairing from pending role/scope upgrades and from stale token/device-identity drift, closing the common "already paired but still getting pairing required" hole.
 
+    Node-hosting preconditions are checked only when config requests node execution or a browser node target, allows node commands, opts into remote pairing through CIDRs or SSH verification, or explicitly enables/configures the device-pair plugin. The plugin's bundled default, empty node settings, and deny-only policies do not request hosting. A local-only loopback Gateway therefore receives no node-hosting warning; remote-client profiles leave these checks to the server. Explicit pairing and join-code requests still report an unreachable origin. This diagnostic-only change does not rewrite config or alter update repairs.
+
   </Accordion>
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.

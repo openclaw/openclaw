@@ -9,7 +9,7 @@ import {
   emptyConfig,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
-import { dispatchReplyFromConfig, setNoAbort } from "./dispatch-from-config.test-harness.js";
+import { dispatchReplyFromConfig, setNoAbort } from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 

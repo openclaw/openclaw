@@ -29,6 +29,7 @@ describe("settings search target manifest", () => {
       ]),
     ).toEqual([
       ["webSearch", "/settings/search", "", ""],
+      ["appearanceBackground", "/settings/appearance", "", "#settings-appearance-background"],
       ["sessionStorage", "/settings/ai-agents", "?section=session", "#settings-session-storage"],
       [
         "meetingCapture",

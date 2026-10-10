@@ -7,7 +7,6 @@ import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import * as skillSelection from "../../skills/library/selection.js";
-import * as skillService from "../../skills/library/service.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
@@ -67,14 +66,9 @@ it("acknowledges durable chat input while unrelated history cannot dispatch", as
   }
 });
 
-it.for([
-  { preparation: "selection", outcome: "dispatch" },
-  { preparation: "authoring", outcome: "dispatch" },
-  { preparation: "authoring", outcome: "failure" },
-  { preparation: "authoring", outcome: "cancel" },
-] as const)(
-  "acknowledges durable input before skill $preparation preparation ($outcome)",
-  async ({ preparation, outcome }, { signal }) => {
+it.for(["dispatch", "failure", "cancel"] as const)(
+  "acknowledges durable input before skill session preparation (%s)",
+  async (outcome, { signal }) => {
     const fixture = await createFixture({ active: false });
     const profile = ensureProfileForEmail("preparation-ack@example.test");
     fixture.client.authenticatedUserProfile = {
@@ -92,22 +86,13 @@ it.for([
         throw new Error("Skill authoring preparation failed");
       }
     };
-    const seed = skillSelection.seedSkillLibrarySelection;
-    const presentation = skillService.resolveSkillLibraryPresentation;
-    const preparationSpy =
-      preparation === "selection"
-        ? vi
-            .spyOn(skillSelection, "seedSkillLibrarySelection")
-            .mockImplementation(async (...args) => {
-              await waitForPreparation();
-              return seed(...args);
-            })
-        : vi
-            .spyOn(skillService, "resolveSkillLibraryPresentation")
-            .mockImplementation(async (...args) => {
-              await waitForPreparation();
-              return presentation(...args);
-            });
+    const prepare = skillSelection.prepareSkillLibrarySession;
+    const preparationSpy = vi
+      .spyOn(skillSelection, "prepareSkillLibrarySession")
+      .mockImplementation(async (...args) => {
+        await waitForPreparation();
+        return prepare(...args);
+      });
     const observer = new DatabaseSync(
       resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, { agentId: "main" }).path,
       { readOnly: true },

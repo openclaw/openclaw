@@ -27,6 +27,7 @@ import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   retainSqliteWorkerErrorCode,
+  SqliteWorkerAdmissionTimeoutError,
   SqliteWorkerError,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
@@ -303,6 +304,9 @@ function decodeSqliteWorkerReplyValue(
 function decodeSqliteWorkerReplyError(
   error: Extract<SqliteWorkerReply, { ok: false }>["error"],
 ): Error {
+  if (error.name === "SqliteWorkerAdmissionTimeoutError" && error.code === "admission-timeout") {
+    return new SqliteWorkerAdmissionTimeoutError();
+  }
   const failure = Object.assign(new Error(error.message), {
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),

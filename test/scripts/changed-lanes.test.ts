@@ -40,6 +40,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
@@ -151,8 +152,8 @@ function createGitRepo(prefix: string) {
 
 function createRootTestLintFixture() {
   const dir = createGitRepo("openclaw-changed-root-lint-");
+  copyOxlintConfigFixture(dir);
   for (const file of [
-    ".oxlintrc.json",
     "tsconfig.json",
     "test/tsconfig.json",
     "test/tsconfig/tsconfig.test.json",

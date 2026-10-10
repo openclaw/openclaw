@@ -206,6 +206,8 @@ function restoreEvent(event: AssistantMessageEvent, state: TransformState): Assi
       // Dynamic-record wire JSON is not prefix-compatible with restored object JSON.
       // Defer argument bytes so consumers emit one canonical payload at toolcall_end.
       restored.delta = "";
+      // SAFETY: This restored tool block may carry the producer-only scratch field.
+      delete (call as ToolCall & { partialJson?: string }).partialJson;
     }
   } else if (restored.type === "toolcall_end") {
     restored.toolCall = { ...restored.toolCall };

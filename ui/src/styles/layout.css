@@ -44,6 +44,13 @@
   overflow: hidden;
 }
 
+/* Once personal background placement is explicit, only its enabled pane renderer
+   may use artwork. None/custom must not resurrect theme images on Settings or
+   on an independently disabled surface, even before a pane has mounted. */
+.shell[data-background-managed] {
+  background-image: none;
+}
+
 .control-ui-environment-stripe {
   position: fixed;
   z-index: 260;
@@ -2512,7 +2519,7 @@ openclaw-settings-save-indicator:empty {
 
 @media (prefers-reduced-motion: no-preference) {
   @starting-style {
-    .sidebar-r .sidebar-zone-entry {
+    .sidebar-r .sidebar:not([data-snapshot-state="cached"]) .sidebar-zone-entry {
       opacity: 0;
       transform: translateX(-8px) scale(0.98);
     }

@@ -22,6 +22,17 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Browser requirements
+
+Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
+or Chrome or Firefox released within the last six months (Chrome 147+ and
+Firefox 150+ as of October 2026). Embedded web views need the same browser capabilities.
+
+Browsers missing required overlay features show an update screen before the
+dashboard starts. In the native apps, **Open in browser** opens the current
+page in your default browser. Update the browser or operating system if that
+browser also shows the update screen.
+
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
 the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
 and **Circle**. Square preserves the full image; rounded and circular icons use a
@@ -29,6 +40,8 @@ centered crop. The choice is saved with your tab-icon preference, and activity
 badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 

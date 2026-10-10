@@ -27,6 +27,7 @@ import {
   adoptOpenClawAgentDatabaseValidation,
   captureOpenClawAgentDatabaseAdmissionPublication,
   captureOpenClawAgentDatabaseAliasPublication,
+  captureOpenClawAgentDatabaseReadValidation,
   captureOpenClawAgentDatabaseValidationTransfer,
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
@@ -72,6 +73,29 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
+  it("shares restart reader proof with admission through a directory symlink", async () => {
+    await withReceiptFixture(true, (database) => {
+      const aliasDir = path.join(path.dirname(database.path), "reader-alias");
+      fs.symlinkSync(path.dirname(database.path), aliasDir, "junction");
+      const alias = {
+        agentId: database.agentId,
+        path: path.join(aliasDir, path.basename(database.path)),
+      };
+      const reader = captureOpenClawAgentDatabaseReadValidation(alias);
+      expect(reader).toBeDefined();
+      const receipt = getOpenClawAgentDatabaseValidation(database)!;
+      const publish = captureOpenClawAgentDatabaseAdmissionPublication(alias);
+      publish(receipt.identity, structuredClone(receipt));
+      expect(() => reader!.assertCurrent()).not.toThrow();
+      expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBe(receipt);
+      expect(alias.path).toContain("reader-alias");
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      expect(() => reader!.assertCurrent()).toThrow(
+        "Session reader validation is no longer current",
+      );
+    });
+  });
+
   it("shares admitted schema without marker queries while retaining explicit revocation", async () => {
     await withReceiptFixture(false, (database, options) => {
       const observe = (db: DatabaseSync) =>
@@ -90,22 +114,20 @@ describe("canonical proof on physical database validation", () => {
         );
       const warm = observe(database.db);
       try {
-        runSqliteReadOperationSync(
-          database.db,
-          () => {
-            expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
-            expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
-          },
-          "fresh",
-        );
-        expect(warm.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
+        runSqliteReadOperationSync(database.db, () => {
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+        });
+        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
         database.db.exec("BEGIN");
         try {
           expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
-          expect(warm.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
+          expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
         } finally {
           database.db.exec("COMMIT");
         }
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
       } finally {
         warm.restore();
       }
@@ -117,13 +139,11 @@ describe("canonical proof on physical database validation", () => {
       const cold = observe(reader.database.db);
       try {
         expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true);
-        expect(cold.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
-        runSqliteReadOperationSync(
-          reader.database.db,
-          () => expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true),
-          "fresh",
+        expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+        runSqliteReadOperationSync(reader.database.db, () =>
+          expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true),
         );
-        expect(cold.counts).toEqual({ data_version: 2, schema_version: 0, user_version: 0 });
+        expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
       } finally {
         cold.restore();
         reader.database.close();
@@ -267,7 +287,10 @@ describe("canonical proof on physical database validation", () => {
           expect(adopt(receipt.identity, receipt)).toBe(true);
         }
         closeOpenClawAgentDatabaseByPath(database.path);
+        const blockedDirectory = path.join(source.dir, "not-a-directory");
+        fs.writeFileSync(blockedDirectory, "synthetic non-directory");
         const candidates = [
+          { path: path.join(blockedDirectory, "unreadable.sqlite") },
           { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
         ];
 

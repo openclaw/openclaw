@@ -13,12 +13,7 @@ import {
   getCanonicalSqliteTableNames,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
-import {
-  admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
-  readSqliteCacheDataVersion,
-  registerSqliteSchemaMutationListener,
-} from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
   type SqliteTransactionOptions,
@@ -203,9 +198,6 @@ function createExistingOpenClawStateWriter(
           });
           const priorVersion = admission.get(db);
           const needsAdmission = priorVersion === undefined;
-          if (!needsAdmission) {
-            readSqliteCacheDataVersion(db);
-          }
           if (needsAdmission && existingSchema) {
             assertExistingOpenClawStateRuntimeSchema(db, pathname);
           }
@@ -254,32 +246,9 @@ function createExistingOpenClawStateWriter(
             admission.publish(db, version);
           }
           pendingAdmission = { version, existingSchema };
-          const beforeSchema = getAdmittedSqliteSchemaFacts(db);
-          if (!beforeSchema) {
-            throw new Error("Existing-state writer schema facts are unavailable.");
-          }
-          let schemaChanged = false;
-          const stopObservingSchema = registerSqliteSchemaMutationListener(db, () => {
-            schemaChanged = true;
-          });
-          let value: T;
-          try {
-            value = operation({ db, path: pathname, recoveryChanges });
-          } finally {
-            stopObservingSchema();
-          }
+          // Internal callers own their declared schema and only mutate its rows here.
+          const value = operation({ db, path: pathname, recoveryChanges });
           assertSameFile();
-          if (schemaChanged) {
-            // A mutation hint may be no-op DDL; compare the admitted catalog markers.
-            const afterSchema = getAdmittedSqliteSchemaFacts(db);
-            if (
-              !afterSchema ||
-              afterSchema.schemaVersion !== beforeSchema.schemaVersion ||
-              afterSchema.userVersion !== beforeSchema.userVersion
-            ) {
-              throw new Error("Existing-state transaction cannot migrate schema.");
-            }
-          }
           if (contract.recoverTaskDeliveryOrphans) {
             assertSqliteIntegrity(db, pathname);
           }

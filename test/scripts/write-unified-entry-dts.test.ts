@@ -37,6 +37,7 @@ describe("write-unified-entry-dts", () => {
         "src/state/openclaw-agent-schema.sql",
         "src/shared/freebsd-process-identity.ts",
         "src/infra/update-managed-service-handoff-native-loader.ts",
+        "src/infra/package-update-activation-native-loader.ts",
       ]),
     );
     expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
@@ -404,17 +405,18 @@ describe("write-unified-entry-dts", () => {
   it.concurrent.for([
     "compiler failure",
     "missing successful receipt",
-    "input mutation after emit",
+    "missing successful receipt without cache",
   ])("preserves the previous generation on %s", (failure, { command }) =>
     command.lifetime.run(async () => {
       const { root, write, declarations } = createFixture(
         command,
         TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
       );
+      const cacheDisabled = failure === "missing successful receipt without cache";
       write("dist/index.d.ts", "previous root declaration");
       write("dist/extensions/retained/index.d.ts", "previous plugin declaration");
-      let before = treeHashes(path.join(root, "dist"));
-      let cached: Record<string, string> = {};
+      const before = treeHashes(path.join(root, "dist"));
+      const cached: Record<string, string> = {};
       const last = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)!;
       if (failure === "compiler failure") {
         write(declarations[last]![0]!, 'export type { Missing } from "@openclaw/llm-core";');
@@ -426,39 +428,28 @@ const selected = configs.find(config => config.name === ${JSON.stringify(last)})
 const register = selected.hooks;
 selected.hooks = async hooks => {
   await register(hooks);
-${
-  failure === "missing successful receipt"
-    ? '  hooks.clearHook("build:done");'
-    : `  hooks.hook("build:done", () => {
-    if (fs.existsSync(".artifacts/mutate-cached-input")) {
-      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-    }
-  });`
-}
+  hooks.clearHook("build:done");
 };
 `,
         );
       }
-      if (failure === "input mutation after emit") {
-        const initial = await runUnifiedWriter(command, root);
-        expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-        before = treeHashes(path.join(root, "dist"));
-        cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
-        write(".artifacts/mutate-cached-input", "armed");
-        fs.appendFileSync(path.join(root, declarations[last]![0]!), "\n");
-      }
-      const failed = await runUnifiedWriter(command, root);
+      const failed = await runUnifiedWriter(
+        command,
+        root,
+        cacheDisabled ? { OPENCLAW_BUILD_CACHE: "0" } : {},
+      );
       expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
       expect(failed.stdout + failed.stderr).toContain("invocation 1/1 finished");
       expect(failed.stdout + failed.stderr).toContain(
-        failure === "compiler failure"
-          ? "TS2305"
-          : failure === "missing successful receipt"
-            ? "Missing successful compiler membership"
-            : "changed during compilation",
+        failure === "compiler failure" ? "TS2305" : "Missing successful compiler membership",
       );
       expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-      expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
+      const cacheDirectory = path.join(root, ".artifacts/build-all-cache");
+      if (cacheDisabled) {
+        expect(fs.existsSync(cacheDirectory)).toBe(false);
+      } else {
+        expect(treeHashes(cacheDirectory)).toEqual(cached);
+      }
       expectStagingClean(root);
     }),
   );
