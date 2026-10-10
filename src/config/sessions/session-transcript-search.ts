@@ -92,8 +92,9 @@ export function isSessionTranscriptSearchCurrentSync(
 }
 
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
-  return query
-    .split(/\s+/u)
+  const terms = query.split(/\s+/u);
+  const indexed = terms.filter((term) => /[\p{L}\p{N}\p{Co}]/u.test(term));
+  return (indexed.length > 0 ? indexed : terms)
     .map(
       (token, index, tokens) =>
         `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
