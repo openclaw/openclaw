@@ -21,6 +21,7 @@ import {
   publishUserProfileAliasChange,
   readUserProfileVersion,
 } from "./user-profile-events.js";
+import { isUserProfileCatalogReady, readUserProfileIdentity } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -262,19 +263,30 @@ export async function prepareUserProfileRoleAuthority(
   return prepareUserProfileAuthority(profileId, options, "authority", options.includeProfile);
 }
 
-/** Prepare role policy without loading profile display or alias lists. */
+/** Reuse retained canonical role facts; standalone callers read existing storage off-thread. */
 export async function prepareUserProfileRolePolicyAuthority(
   profileId: string,
   options: IdentityOptions = {},
 ) {
-  return prepareUserProfileAuthorityRead(profileId, options, "authority", (context) =>
-    runOpenClawStateWorkerOperation(
+  return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
+    const source = { path: context.admission.databasePath };
+    if (isUserProfileCatalogReady(source)) {
+      const profile = readUserProfileIdentity(profileId, source);
+      return (
+        profile && {
+          profileId: profile.profileId,
+          role: profile.role,
+          githubLogin: profile.githubLogin ?? null,
+        }
+      );
+    }
+    return runOpenClawStateWorkerOperation(
       context,
       (scope) =>
         scope.execute({ type: "userProfiles.roleAuthority.resolve", input: { profileId } }),
       { existingOnly: true },
-    ),
-  );
+    );
+  });
 }
 
 export async function prepareUserProfileSelectionAuthority(

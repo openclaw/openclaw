@@ -201,9 +201,12 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     expect(renewed?.isCurrent()).toBe(false);
 
     const admin = await prepareUserProfileRoleAuthority(ada.id, options);
+    const rolePolicy = await prepareUserProfileRolePolicyAuthority(ada.id, options);
     const selectedSource = await prepareUserProfileSelectionAuthority(ada.id, options);
     const selectedTarget = await prepareUserProfileSelectionAuthority(grace.id, options);
     expect(admin?.role).toBe("admin");
+    expect(rolePolicy).toMatchObject({ profileId: ada.id, role: "admin" });
+    expect(rolePolicy?.isCurrent()).toBe(true);
     expect(selectedSource?.isCurrent()).toBe(true);
     expect(selectedTarget?.isCurrent()).toBe(true);
     let mutation: "demote" | "reject" | "rollback" | "recover" | "merge" = "demote";
@@ -223,6 +226,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
         } else if (request.stage === "commit" && mutation === "demote") {
           queries.mockClear();
           expect(admin?.isCurrent()).toBe(false);
+          expect(rolePolicy?.isCurrent()).toBe(false);
           expect(selectedSource?.isCurrent()).toBe(true);
           expect(queries).not.toHaveBeenCalled();
           pendingRole = prepareUserProfileRoleAuthority(ada.id, options);
@@ -250,6 +254,11 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
         }),
       ).resolves.toMatchObject({ id: ada.id, role: "member" });
       expect(admin?.isCurrent()).toBe(false);
+      expect(rolePolicy?.isCurrent()).toBe(false);
+      expect(await prepareUserProfileRolePolicyAuthority(ada.id, options)).toMatchObject({
+        profileId: ada.id,
+        role: "member",
+      });
       expect(selectedSource?.isCurrent()).toBe(true);
       expect(pendingRole).toBeDefined();
       await expect(pendingRole).resolves.toMatchObject({ profileId: ada.id, role: "member" });
