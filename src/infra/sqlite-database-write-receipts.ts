@@ -28,7 +28,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
   pathAdmission(this: void, location: string): Admission | undefined;
   readRevision(this: void, database: DatabaseSync): number | undefined;
-  hasWriter(this: void, database: DatabaseSync): boolean;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
   exchange(this: void, location?: string): void;
@@ -233,12 +232,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return revision === undefined ? undefined : `${record.identity}:${revision}`;
   }
 
-  /** The managed writer's next settlement advances its physical revision exactly once. */
-  function readSqliteDatabasePendingWriteRevision(database: DatabaseSync): number | undefined {
-    const revision = owner.readRevision(database);
-    return revision === undefined ? undefined : revision + (owner.hasWriter(database) ? 1 : 0);
-  }
-
   /** Predict a committed token while its native mutation still holds the writer fence. */
   function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
     if (
@@ -302,7 +295,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     readSqliteDatabaseScopedWriteTokenForPath,
     readSqliteDatabasePendingScopedWriteToken,
     readSqliteDatabaseWriteTokenForPath,
-    readSqliteDatabasePendingWriteRevision,
     readSqliteDatabasePendingWriteToken,
   };
 }

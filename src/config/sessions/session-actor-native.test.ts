@@ -41,6 +41,7 @@ import { addSessionMember, removeSessionMember } from "./session-sharing-store.n
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -611,7 +612,11 @@ it("retains unrelated session replicas through native entry, sharing, participan
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { actor, database, factory, owner, scope } = await nativeSession(env);
     const siblingScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-sibling" };
-    const siblingEntry = { sessionId: "sibling-session", updatedAt: 1, incognito: true };
+    const siblingEntry = {
+      sessionId: "sibling-session",
+      updatedAt: 1,
+      incognito: true,
+    } satisfies InternalSessionEntry;
     replaceSessionEntrySync(siblingScope, siblingEntry);
     const siblingTarget = expectDefined(
       captureNativeIncognitoSessionActorTarget({ database, sessionKey: siblingScope.sessionKey }),
@@ -642,8 +647,8 @@ it("retains unrelated session replicas through native entry, sharing, participan
           }),
         () =>
           assignSessionOwner(siblingScope, {
-            owner: { type: "profile", id: "owner-profile" },
-            assignedBy: { type: "profile", id: "admin-profile" },
+            owner: { type: "human", id: "owner-profile" },
+            assignedBy: { type: "human", id: "admin-profile" },
             assignedAt: 3,
           }),
         () =>

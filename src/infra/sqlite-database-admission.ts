@@ -65,7 +65,6 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
   readRevision: readSqliteDatabaseWriteRevision,
-  hasWriter: (database) => state.dataWriters.has(database),
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
   exchange,
@@ -81,7 +80,6 @@ export const {
   readSqliteDatabaseScopedWriteTokenForPath,
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
-  readSqliteDatabasePendingWriteRevision,
   readSqliteDatabasePendingWriteToken,
 } = scopedWrites;
 export { sqliteSessionIdWriteScope } from "./sqlite-database-write-receipts.js";
