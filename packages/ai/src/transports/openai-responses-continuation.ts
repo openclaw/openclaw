@@ -1,6 +1,11 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
+import type {
+  ResponseInput,
+  ResponseInputItem,
+  ResponseInputText,
+  ResponseOutputItem,
+} from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
   getSessionResourceOwnerId,
@@ -409,6 +414,71 @@ function restoreRawCallIdsInDelta(
   return restoredDelta;
 }
 
+type ExplicitCacheContinuationInput = {
+  input: NonNullable<ResponsesContinuationRequest["input"]>;
+  dynamicInput: ResponseInput;
+  hasExplicitBoundary: boolean;
+};
+
+function isInstructionInputMessage(
+  item: ResponseInputItem | ResponsesConfigurationUpdate,
+): item is ResponseInputItem.Message {
+  return (
+    item.type === "message" &&
+    "role" in item &&
+    (item.role === "developer" || item.role === "system") &&
+    "content" in item &&
+    Array.isArray(item.content)
+  );
+}
+
+function isResponseInputText(
+  part: ResponseInputItem.Message["content"][number],
+): part is ResponseInputText {
+  return part.type === "input_text";
+}
+
+// Full-history requests keep the volatile suffix after the explicit breakpoint for cache hits.
+// Continuation compares only the stable message and appends the current suffix after the stored
+// response, so changing runtime facts neither invalidate previous_response_id nor move before the
+// cached prefix.
+function splitExplicitCacheContinuationInput(
+  input: NonNullable<ResponsesContinuationRequest["input"]>,
+): ExplicitCacheContinuationInput {
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (!item || !isInstructionInputMessage(item)) {
+      continue;
+    }
+    const boundaryIndex = item.content.findIndex(
+      (part) => part.type === "input_text" && part.prompt_cache_breakpoint?.mode === "explicit",
+    );
+    if (boundaryIndex < 0) {
+      continue;
+    }
+    const dynamicParts = item.content.slice(boundaryIndex + 1);
+    if (!dynamicParts.every(isResponseInputText)) {
+      return { input, dynamicInput: [], hasExplicitBoundary: false };
+    }
+    const stableMessage: ResponseInputItem.Message = {
+      ...item,
+      content: item.content.slice(0, boundaryIndex + 1),
+    };
+    const stableInput = input.slice();
+    stableInput[index] = stableMessage;
+    const dynamicMessage: ResponseInputItem.Message = {
+      ...item,
+      content: dynamicParts,
+    };
+    return {
+      input: stableInput,
+      dynamicInput: dynamicParts.length > 0 ? [dynamicMessage] : [],
+      hasExplicitBoundary: true,
+    };
+  }
+  return { input, dynamicInput: [], hasExplicitBoundary: false };
+}
+
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
@@ -443,13 +513,32 @@ export function resolveResponsesContinuationRequest(
   ) {
     return { request, continuationStatus: "request_changed" };
   }
-  const currentInput = prepared.input ?? [];
-  const previousInput = continuation.lastRequest.input ?? [];
-  const baselineLength = previousInput.length + continuation.lastResponseItems.length;
-  if (currentInput.length < baselineLength) {
+  const canExtractExplicitCacheDynamicInput =
+    prepared.instructions === undefined && continuation.lastRequest.instructions === undefined;
+  const currentInput = canExtractExplicitCacheDynamicInput
+    ? splitExplicitCacheContinuationInput(prepared.input ?? [])
+    : { input: prepared.input ?? [], dynamicInput: [], hasExplicitBoundary: false };
+  const previousInput = canExtractExplicitCacheDynamicInput
+    ? splitExplicitCacheContinuationInput(continuation.lastRequest.input ?? [])
+    : {
+        input: continuation.lastRequest.input ?? [],
+        dynamicInput: [],
+        hasExplicitBoundary: false,
+      };
+  if (currentInput.hasExplicitBoundary !== previousInput.hasExplicitBoundary) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  if (previousInput.dynamicInput.length > 0 && currentInput.dynamicInput.length === 0) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  const baselineLength = previousInput.input.length + continuation.lastResponseItems.length;
+  if (currentInput.input.length < baselineLength) {
     return { request, continuationStatus: "history_shorter" };
   }
-  const replayedToolRoundInput = currentInput.slice(previousInput.length, baselineLength);
+  const replayedToolRoundInput = currentInput.input.slice(
+    previousInput.input.length,
+    baselineLength,
+  );
   const replayedToolRound = normalizeAssistantReplayInput(replayedToolRoundInput);
   // Replay may keep or omit function_call.id, so compare both cached forms.
   const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
@@ -459,13 +548,16 @@ export function resolveResponsesContinuationRequest(
     ),
   );
   if (
-    !continuationHistoryMatches(previousInput, currentInput.slice(0, previousInput.length)) ||
+    !continuationHistoryMatches(
+      previousInput.input,
+      currentInput.input.slice(0, previousInput.input.length),
+    ) ||
     !historyToolRoundUnchanged
   ) {
     return { request, continuationStatus: "history_changed" };
   }
   const restoredInput = restoreRawCallIdsInDelta(
-    currentInput.slice(baselineLength),
+    currentInput.input.slice(baselineLength),
     continuation.lastResponseItems,
     replayedToolRoundInput,
     continuation.pendingToolCalls ?? [],
@@ -481,7 +573,7 @@ export function resolveResponsesContinuationRequest(
     request: {
       ...prepared,
       previous_response_id: continuation.lastResponseId,
-      input: restoredResponseInput,
+      input: [...currentInput.dynamicInput, ...restoredResponseInput],
     },
     ...(prepared !== request ? { fullRequest: prepared } : {}),
     continuationStatus: "continued",

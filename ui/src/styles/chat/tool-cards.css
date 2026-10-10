@@ -935,6 +935,12 @@
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
+/* The 36px icon toolbar needs flow space above the preview so it clears
+   the first transcript row and the conversation's Details gutter. */
+.chat-tool-card__preview[data-widget-actions-above] {
+  margin-top: calc(36px + var(--space-3));
+}
+
 .chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
   top: auto;
   bottom: 100%;

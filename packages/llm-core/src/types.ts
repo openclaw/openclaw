@@ -690,8 +690,12 @@ export interface OpenAIResponsesCompat {
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Whether the provider supports `prompt_cache_key`. Defaults on for native OpenAI endpoints; compatible endpoints require opt-in. */
+  supportsPromptCacheKey?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Provider-owned declaration that this Responses model supports GPT-5.6 explicit cache options and content breakpoints. Defaults on only for native OpenAI GPT-5.6 Responses. */
+  supportsExplicitPromptCaching?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
   /**
