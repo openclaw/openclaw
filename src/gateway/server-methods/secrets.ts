@@ -200,7 +200,7 @@ export function createSecretsHandlers(params: {
         : undefined;
     } catch (error) {
       respond(false, undefined, localStateOwnerChangedError(error));
-      return;
+      return Promise.resolve();
     }
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond, () => {
       requestAuthority.assertCurrent();

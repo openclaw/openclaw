@@ -250,9 +250,9 @@ describe("administrative CLI state owner routing", () => {
 
   afterAll(async () => {
     await closeMinimalGatewayServer(server);
-    await new Promise<void>((resolve, reject) =>
-      catalogServer.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      catalogServer.close((error) => (error ? reject(error) : resolve()));
+    });
     await closeOpenClawStateDatabaseAsync();
     await owner?.release();
     await claim.release();
@@ -390,21 +390,24 @@ describe("administrative CLI state owner routing", () => {
         env,
         input: "synthetic-rotated",
       });
-      if (!owner)
+      if (!owner) {
         owner = await acquireGatewayLock({
           env,
           port: claim.port,
           allowInTests: true,
           timeoutMs: 0,
         });
+      }
       expect(result.code, result.stderr).toBe(mode === "live" || mode === "offline" ? 0 : 1);
       const observation = JSON.parse(
         await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
       );
-      if (mode === "offline") expect(observation.secretWrites).toBeGreaterThan(0);
-      else expect(observation.secretWrites).toBe(0);
-      if (mode === "offline")
+      if (mode === "offline") {
+        expect(observation.secretWrites).toBeGreaterThan(0);
         expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
+      } else {
+        expect(observation.secretWrites).toBe(0);
+      }
       expect(methods).toEqual(mode === "offline" ? [] : ["secrets.store.set"]);
       expect(
         await readSecretStoreValue({ scope: { kind: "team" }, name: "OWNER_SECRET" }),
@@ -412,8 +415,12 @@ describe("administrative CLI state owner routing", () => {
         ok: true,
         value: mode === "refused" ? "synthetic-original" : "synthetic-rotated",
       });
-      if (mode === "refused") expect(result.stderr).toContain("No local mutation was attempted");
-      if (mode === "lost-reply") expect(result.stderr).toContain("outcome may be partial");
+      if (mode === "refused") {
+        expect(result.stderr).toContain("No local mutation was attempted");
+      }
+      if (mode === "lost-reply") {
+        expect(result.stderr).toContain("outcome may be partial");
+      }
     },
   );
 
