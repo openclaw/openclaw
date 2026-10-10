@@ -142,7 +142,7 @@ export async function main(argv = process.argv.slice(2)) {
       name: "lint",
       parallel: false,
       commands: [
-        { name: "lint", args: ["lint"] },
+        { name: "lint", args: ["lint", ...(args.base ? ["--base", args.base] : [])] },
         { name: "format", args: ["format:check"] },
       ],
     },

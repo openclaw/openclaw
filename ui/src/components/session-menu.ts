@@ -152,6 +152,7 @@ class SessionMenu extends OpenClawLightDomElement {
   private readonly handleAfterHide = (event: Event) => {
     // A keyed replacement can finish hiding after its successor opens.
     if (event.currentTarget instanceof Node && event.currentTarget.isConnected) {
+      this.managementActions.settings.close();
       this.onClose();
     }
   };

@@ -49,7 +49,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -100,7 +99,6 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
@@ -147,7 +145,7 @@ import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   composeCliPromptContext,
-  prependCliSessionDriftUserContext,
+  createCliCurrentPromptRenderer,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
@@ -1556,6 +1554,8 @@ async function prepareCliRunContextWithinReadFence(
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
         runtimeContextFragments: params.runtimeContextFragments,
+        // Caller-owned memory cannot grant access to persisted interrupted inputs.
+        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
         context: [
           turnRuntimeFacts?.relocatable,
           promptBuildHookResult?.appendContext,
@@ -1567,19 +1567,7 @@ async function prepareCliRunContextWithinReadFence(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
-      const currentInboundContext = prependCliSessionDriftUserContext(
-        params.currentInboundContext,
-        reusableCliSession,
-      );
-      const renderCurrentPrompt = (prompt: string, preferResumableText = false) =>
-        annotateInterSessionPromptText(
-          buildCurrentInboundPrompt({
-            context: currentInboundContext,
-            prompt,
-            preferResumableText,
-          }),
-          params.inputProvenance,
-        );
+      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
       historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
