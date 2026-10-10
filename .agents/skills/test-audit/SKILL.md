@@ -28,11 +28,7 @@ add it yet:
 4. Does it need a production seam (export, flag, wrapper, injection hook) that no
    production caller needs? If yes, move the test to the real boundary instead.
 
-Choose the boundary using the [behavioral integration guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary).
-For runtime behavior, keep the production decision and its collaborating owners
-real; fake external I/O rather than the contract being asserted. Judge an
-integration test by this same value bar: booting more components does not make
-a mock echo or duplicate scenario useful. Preserve independent unit contracts.
+For production-path and failure proof, use the [boundary guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary); integration tests face the same value bar below.
 
 Then check the test against every [junk pattern](#junk-patterns); a match fails
 the gate unless the [retention bar](#retention-bar) names the contract it

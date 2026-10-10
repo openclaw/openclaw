@@ -108,14 +108,8 @@ For proof files, prefer linking CI artifacts, GitHub-uploaded screenshots or
 recordings, or a short redacted log excerpt. Do not commit generated proof files
 unless they are part of the actual docs, tests, or product change.
 
-For behavioral changes, follow the [boundary-proof guide](/help/testing/writing-tests#prove-behavior-at-the-owning-boundary).
-Evidence should identify the invariant, the real production path exercised, and
-the credible regression that makes the test fail; helper mocks and test counts
-are not substitutes. Check relevant failure and reconstruction paths. Provider
-changes need final-request evidence and explicit permitted differences, with
-paid-attempt accounting, fallback diagnostics, and durable replay checks where
-affected. Keep independent unit contracts and existing test-cost budgets; this
-is not a requirement to boot the whole product or buy live calls for every PR.
+For behavioral changes, use the [boundary-proof guide](/help/testing/writing-tests#prove-behavior-at-the-owning-boundary)
+to review production-path, provider-request, and failure/reconstruction evidence.
 
 Redacting sensitive data is the contributor's responsibility. Remove secrets,
 tokens, private URLs, user data, and unrelated logs before posting proof.
