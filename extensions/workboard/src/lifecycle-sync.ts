@@ -8,7 +8,6 @@ import {
   type WorkboardWorktreeCleanupRuntime,
 } from "./dispatcher-workspace.js";
 import {
-  sessionKeyMatchesCard,
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
@@ -49,7 +48,7 @@ type WorkboardLifecycleSession = {
   abortedLastRun?: boolean;
 };
 
-export type WorkboardLifecycleSessionSnapshot = {
+type WorkboardLifecycleSessionSnapshot = {
   sessions: WorkboardLifecycleSession[];
   complete: boolean;
 };
@@ -64,17 +63,9 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
   );
 }
 
-export type WorkboardLifecycleSessionReadOptions = {
+type WorkboardLifecycleSessionReadOptions = {
   includeUnknown: boolean;
 };
-
-export type WorkboardLifecycleSessionReader = (
-  options: WorkboardLifecycleSessionReadOptions,
-) => Promise<WorkboardLifecycleSessionSnapshot>;
-
-function isLiveWorkboardLifecycleSession(session: WorkboardLifecycleSession): boolean {
-  return session.hasActiveRun === true || session.status === "running";
-}
 
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
@@ -119,78 +110,15 @@ async function syncWorkboardLifecycleEvent(params: {
   source: { sessionKey?: string; runId?: string };
   observation: WorkboardLifecycleObservation;
   now: number;
-  readSessions?: WorkboardLifecycleSessionReader;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
-  // Attempt-level end events (agent_end) fire per model candidate: a failed
-  // attempt can precede a fallback that continues the same run, so its terminal
-  // outcome is not authoritative. Consult the session rows before writing a
-  // failure; a live run keeps the card running and leaves the terminal
-  // transition to its run-level owners (subagent_ended, lifecycle sweep).
-  // An absent session or failed read keeps the event's own outcome so genuine
-  // failures are never lost.
-  //
-  // Liveness matching preserves the sweep's session-ownership rules: the
-  // event's exact session key is authoritative, and an agentless
-  // "subagent:workboard-*" card link borrows a suffix match only when the
-  // complete snapshot shows exactly one session with that suffix. A different
-  // agent's live session never vouches for this event's terminal outcome.
-  let liveness:
-    | {
-        sessions: readonly WorkboardLifecycleSession[];
-        liveKeys: ReadonlySet<string>;
-        complete: boolean;
-      }
-    | undefined;
-  if (params.readSessions && params.observation.state === "failed") {
-    try {
-      const snapshot = await params.readSessions({ includeUnknown: false });
-      liveness = {
-        sessions: snapshot.sessions,
-        liveKeys: new Set(
-          snapshot.sessions.filter(isLiveWorkboardLifecycleSession).map((session) => session.key),
-        ),
-        complete: snapshot.complete,
-      };
-    } catch {
-      liveness = undefined;
-    }
-  }
-  const isLiveRunForCard = (card: WorkboardCard): boolean => {
-    if (!liveness) {
-      return false;
-    }
-    if (params.source.sessionKey) {
-      return liveness.liveKeys.has(params.source.sessionKey);
-    }
-    const cardLookupKey = workboardCardSessionLookupKey(card);
-    if (!cardLookupKey.startsWith("subagent:workboard-")) {
-      return liveness.liveKeys.has(cardLookupKey);
-    }
-    if (!liveness.complete) {
-      return false;
-    }
-    const suffixMatches = liveness.sessions.filter((session) =>
-      sessionKeyMatchesCard(session.key, cardLookupKey),
-    );
-    const [soleMatch] = suffixMatches;
-    return (
-      suffixMatches.length === 1 &&
-      soleMatch !== undefined &&
-      isLiveWorkboardLifecycleSession(soleMatch)
-    );
-  };
   const updates = Promise.all(
     cards.map(async (card) => {
-      const state =
-        params.observation.state === "failed" && isLiveRunForCard(card)
-          ? ("running" as const)
-          : params.observation.state;
       return await params.store.syncLifecycle(card.id, {
-        ...LIFECYCLE_TARGETS[state],
+        ...LIFECYCLE_TARGETS[params.observation.state],
         sourceUpdatedAt: params.observation.sourceUpdatedAt,
         stale: params.observation.stale,
         now: params.now,
@@ -261,10 +189,25 @@ export async function syncWorkboardAgentEnded(params: {
   event: { runId?: string; success: boolean };
   context: { runId?: string; sessionKey?: string };
   now?: number;
-  readSessions?: WorkboardLifecycleSessionReader;
+  readSessions: (
+    options: WorkboardLifecycleSessionReadOptions,
+  ) => Promise<WorkboardLifecycleSessionSnapshot>;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
+  // An attempt can finish before fallback settles, even with success=true.
+  // Only the session owner can establish the run's terminal outcome.
+  const snapshot = await params.readSessions({
+    includeUnknown: params.context.sessionKey === "unknown",
+  });
+  const session = snapshot.sessions.find((entry) => entry.key === params.context.sessionKey);
+  if (!session) {
+    return 0;
+  }
+  const observation = lifecycleFromSession(session, now);
+  if (observation.state !== "succeeded" && observation.state !== "failed") {
+    return 0;
+  }
   return (
     await syncWorkboardLifecycleEvent({
       store: params.store,
@@ -272,12 +215,8 @@ export async function syncWorkboardAgentEnded(params: {
         sessionKey: params.context.sessionKey,
         runId: params.event.runId ?? params.context.runId,
       },
-      observation: {
-        state: params.event.success ? "succeeded" : "failed",
-        sourceUpdatedAt: now,
-      },
+      observation,
       now,
-      ...(params.readSessions ? { readSessions: params.readSessions } : {}),
       ...(params.onMatched ? { onMatched: params.onMatched } : {}),
     })
   ).count;

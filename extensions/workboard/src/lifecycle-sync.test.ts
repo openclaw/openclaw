@@ -382,6 +382,17 @@ describe("Workboard gateway lifecycle sync", () => {
         store,
         event: args[0] as Parameters<typeof syncWorkboardAgentEnded>[0]["event"],
         context: args[1] as Parameters<typeof syncWorkboardAgentEnded>[0]["context"],
+        readSessions: async () => ({
+          sessions: [
+            {
+              key: sessionKey,
+              status: success ? "done" : "failed",
+              hasActiveRun: false,
+              updatedAt: card.updatedAt + 1,
+            },
+          ],
+          complete: true,
+        }),
         now: card.updatedAt + 1,
       }),
     );
@@ -400,40 +411,59 @@ describe("Workboard gateway lifecycle sync", () => {
     }
   });
 
-  it("keeps a live fallback run out of blocked on an attempt-level agent_end failure", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const sessionKey = "agent:worker:subagent:workboard-ops-fallback-live";
-    const card = await createLinkedCard(store, {
-      sessionKey,
-      runId: "run-agent",
-      execution: execution(sessionKey, "run-agent"),
-    });
-    const readSessions = vi.fn().mockResolvedValue({
-      sessions: [
-        { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
-      ],
-      complete: true,
-    });
+  it.each([false, true])(
+    "waits for fallback exhaustion after agent_end success=%s",
+    async (success) => {
+      const store = createWorkboardSqliteTestStore();
+      const sessionKey = "agent:worker:subagent:workboard-ops-fallback-live";
+      const card = await createLinkedCard(store, {
+        sessionKey,
+        runId: "run-agent",
+        execution: execution(sessionKey, "run-agent"),
+      });
+      const readSessions = vi.fn().mockResolvedValue({
+        sessions: [
+          { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+        ],
+        complete: true,
+      });
 
-    await syncWorkboardAgentEnded({
-      store,
-      event: { runId: "run-agent", success: false },
-      context: { runId: "run-agent", sessionKey },
-      now: card.updatedAt + 2,
-      readSessions,
-    });
+      await syncWorkboardAgentEnded({
+        store,
+        event: { runId: "run-agent", success },
+        context: { runId: "run-agent", sessionKey },
+        now: card.updatedAt + 2,
+        readSessions,
+      });
 
-    expect(readSessions).toHaveBeenCalledOnce();
-    const vetoed = await store.get(card.id);
-    expect(vetoed).toMatchObject({
-      status: "running",
-      execution: { status: "running" },
-    });
-    expect(vetoed?.metadata?.failureCount).toBeUndefined();
-    expect(
-      vetoed?.events?.some((event) => event.kind === "moved" && event.toStatus === "blocked"),
-    ).toBe(false);
-  });
+      const vetoed = await store.get(card.id);
+      expect(vetoed).toMatchObject({
+        status: "running",
+        execution: { status: "running" },
+      });
+      expect(vetoed?.metadata?.failureCount).toBeUndefined();
+      expect(
+        vetoed?.events?.some((event) => event.kind === "moved" && event.toStatus === "blocked"),
+      ).toBe(false);
+
+      await runSessionSweep({
+        store,
+        sessions: [
+          {
+            key: sessionKey,
+            status: "failed",
+            hasActiveRun: false,
+            updatedAt: card.updatedAt + 3,
+          },
+        ],
+        now: card.updatedAt + 3,
+      });
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        status: "blocked",
+        execution: { status: "blocked" },
+      });
+    },
+  );
 
   it("still blocks immediately when agent_end fails after the run ended", async () => {
     const store = createWorkboardSqliteTestStore();
@@ -465,7 +495,7 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
-  it("keeps the event terminal outcome when the lifecycle liveness read fails", async () => {
+  it("defers terminal settlement when the lifecycle snapshot is unavailable", async () => {
     const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:worker:subagent:workboard-ops-read-failure";
     const card = await createLinkedCard(store, {
@@ -473,7 +503,7 @@ describe("Workboard gateway lifecycle sync", () => {
       runId: "run-agent",
       execution: execution(sessionKey, "run-agent"),
     });
-    const readSessions = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const readSessions = vi.fn().mockResolvedValue({ sessions: [], complete: false });
 
     await syncWorkboardAgentEnded({
       store,
@@ -483,10 +513,9 @@ describe("Workboard gateway lifecycle sync", () => {
       readSessions,
     });
 
-    expect(readSessions).toHaveBeenCalledOnce();
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "blocked",
-      execution: { status: "blocked" },
+      status: "running",
+      execution: { status: "running" },
     });
   });
 
@@ -522,35 +551,7 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
-  it("vetoes an agentless card link on a unique live suffix match in a complete snapshot", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, {
-      sessionKey: "subagent:workboard-ops-agentless",
-      runId: "run-agent",
-      execution: execution("subagent:workboard-ops-agentless", "run-agent"),
-    });
-    const liveKey = "agent:beta:subagent:workboard-ops-agentless";
-    const readSessions = vi.fn().mockResolvedValue({
-      sessions: [{ key: liveKey, status: "running", hasActiveRun: true }],
-      complete: true,
-    });
-
-    await syncWorkboardAgentEnded({
-      store,
-      event: { runId: "run-agent", success: false },
-      context: { runId: "run-agent" },
-      now: card.updatedAt + 2,
-      readSessions,
-    });
-
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "running",
-      execution: { status: "running" },
-    });
-    expect((await store.get(card.id))?.metadata?.failureCount).toBeUndefined();
-  });
-
-  it("does not veto an agentless card link when the suffix matches several sessions", async () => {
+  it("defers an attempt without an exact session key to the session sweep", async () => {
     const store = createWorkboardSqliteTestStore();
     const card = await createLinkedCard(store, {
       sessionKey: "subagent:workboard-ops-ambiguous",
@@ -582,8 +583,8 @@ describe("Workboard gateway lifecycle sync", () => {
     });
 
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "blocked",
-      execution: { status: "blocked" },
+      status: "running",
+      execution: { status: "running" },
     });
   });
 

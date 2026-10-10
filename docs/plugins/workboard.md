@@ -558,11 +558,13 @@ If an active linked session stops reporting recent activity, Workboard marks the
 `stale` and stores that as metadata until the lifecycle clears it.
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
-not depend on an open browser tab. Agent and subagent completion hooks persist
-terminal outcomes immediately. A bounded session sweep runs once per minute to
-reconcile active, idle, missing, and stale session state. Each store mutation
-emits the normal `plugin.workboard.changed` invalidation, so an open Workboard tab
-reloads the canonical card instead of writing its own lifecycle projection.
+not depend on an open browser tab. Subagent completion hooks persist terminal
+outcomes immediately. Agent attempt hooks consult the linked session state:
+finishing a model attempt does not move a card into `review` or `blocked` while
+its run is still active. A bounded session sweep runs once per minute to reconcile
+terminal, active, idle, missing, and stale session state. Each store mutation emits
+the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
+the canonical card instead of writing its own lifecycle projection.
 
 While a card is in an active work state, Workboard follows the linked session:
 

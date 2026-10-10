@@ -17,7 +17,7 @@ export function workboardSessionKeyForCard(card: WorkboardCard): string {
   return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
 }
 
-export function sessionKeyMatchesCard(candidate: string, cardKey: string): boolean {
+function sessionKeyMatchesCard(candidate: string, cardKey: string): boolean {
   return (
     candidate === cardKey ||
     (cardKey.startsWith("subagent:workboard-") && candidate.endsWith(`:${cardKey}`))
