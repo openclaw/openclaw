@@ -5,6 +5,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { createBrowserHistory } from "../../app/browser.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
@@ -107,6 +108,69 @@ describe("AgentsPage routing", () => {
     expect(page.context.navigate).not.toHaveBeenCalled();
     page.subscriptions.hostDisconnected();
     selection.dispose();
+  });
+
+  it("keeps Back at Settings when the roster defaults after Agents route data", async () => {
+    const previousUrl = window.location.href;
+    const previousState: unknown = window.history.state;
+    const history = createBrowserHistory();
+    const listeners = new Set<() => void>();
+    const rosterSource = {
+      state: { agentsList: null as AgentsListResult | null },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const selection = createAgentSelectionCapability(
+      {
+        connection: { gatewayUrl: "ws://settings.test" },
+        snapshot: { assistantAgentId: "main" },
+        subscribe: () => () => undefined,
+      },
+      rosterSource,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    );
+    const currentGateway = gateway(snapshot(null, false));
+    const agents = agentsCapability(async () => files("main", "main"));
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = {
+      ...pageContext(currentGateway, agents),
+      basePath: "",
+      settingsAgentSelection: selection,
+      navigate: (_routeId, options) =>
+        history.push({
+          pathname: options?.pathname ?? "/settings/agents",
+          search: options?.search ?? "",
+          hash: options?.hash ?? "",
+        }),
+    };
+    try {
+      window.history.replaceState({}, "", "/settings");
+      history.push({ pathname: "/settings/agents", search: "", hash: "" });
+      page.subscriptions.hostConnected();
+      page.routeData = {
+        ...agentsRouteData(currentGateway, null, null, selection),
+        panel: "overview",
+      };
+      page.willUpdate(new Map([["routeData", undefined]]));
+
+      rosterSource.state.agentsList = roster;
+      listeners.forEach((listener) => listener());
+      expect(page.agentsSelectedId).toBe("main");
+      const back = new Promise<void>((resolve) => {
+        window.addEventListener("popstate", () => resolve(), { once: true });
+      });
+      window.history.back();
+      await back;
+      expect(window.location.pathname).toBe("/settings");
+    } finally {
+      page.subscriptions.hostDisconnected();
+      selection.dispose();
+      window.history.replaceState(previousState, "", previousUrl);
+    }
   });
 
   it.each([

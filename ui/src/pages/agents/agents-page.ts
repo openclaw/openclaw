@@ -195,15 +195,20 @@ class AgentsPage
       () => this.context?.settingsAgentSelection,
       (selection) => {
         this.syncSettingsSelection();
+        let observedIntentRevision = selection.intentRevision;
         return selection.subscribe(() => {
           if (this.context.settingsAgentSelection !== selection) {
             return;
           }
+          // Roster defaults update the view without adding a user navigation entry.
+          const explicitIntent = selection.intentRevision !== observedIntentRevision;
+          observedIntentRevision = selection.intentRevision;
           const previousId = this.agentsSelectedId;
           this.syncSettingsSelection();
           const agentId = this.agentsSelectedId;
           const route = this.context.router.getState();
           if (
+            explicitIntent &&
             !this.applyingRouteSelection &&
             this.routeDataInitialized &&
             this.routeData &&
