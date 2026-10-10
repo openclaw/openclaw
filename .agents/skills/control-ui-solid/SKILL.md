@@ -38,7 +38,7 @@ Use the exact installed Solid 2 pins and APIs in the owning package manifests. A
 | `@some-event=${fn}`                     | `onSome-event={fn}` or `ref={listen("some-event", fn, opts)}`                                                                                                                |
 | `repeat(items, key, tpl)`               | `<For each={items} keyed={key}>` (item and index are accessors)                                                                                                              |
 | `keyed(k, tpl)`                         | `<Show when={k} keyed>` only for truthy identities; it hides falsy keys that Lit would render. Preserve every valid identity and explicit reset; never key by streaming text |
-| `guard(deps, fn)`                       | `createMemo(fn, { equals })`, keeping every invalidation input                                                                                                               |
+| `guard(deps, fn)`                       | Equality-gated dependency memo feeding an untracked render computation; preserve every explicit dependency and parked-work gate                                              |
 | `live(v)`                               | `liveValue` ref factory: compare the DOM value before writing                                                                                                                |
 | `ref()`                                 | `ref={el}` or a callback (unowned: no cleanup inside)                                                                                                                        |
 | class strings / `classMap`              | `class={["a", { b: cond }]}`                                                                                                                                                 |
@@ -61,6 +61,7 @@ Render light DOM under the existing host tag. Scope former shadow styles to that
 - `onWaSelect` listens to `waselect`. Dashed events need `onWa-select` or `listen(...)`.
 - Reads after a write see the old value until `flush()`. Don't write-then-read in handlers; derive.
 - Reactive reads after the first `await` in an async memo are not tracked.
+- A memo's `equals` compares results after computation; it does not replace Lit `guard`'s check before rendering. Compare the explicit dependency vector element by element in a dependency memo, then read that memo from a separate computation and invoke `untrack(fn)`. An equivalent owner-controlled gate is also valid. Hidden data must not become a new rendering dependency for parked content.
 - Ref callbacks run without an owner, so `onCleanup` inside them does nothing. Create reactive work and register cleanup in the ref factory's owned setup or component body. For one-shot settled DOM work, return cleanup from `onSettled`.
 - Nonkeyed `Show` callback children get accessors; keyed children get raw values. Calling a branch accessor after its branch unmounted throws.
 - Solid 1 APIs such as `createResource`, `onMount`, `mergeProps`, and `Context.Provider` do not carry over. Use async computations, `onSettled`, `merge`, and the context component itself.
