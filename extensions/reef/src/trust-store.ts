@@ -718,11 +718,14 @@ export function openReefTrustStore(
     openStores(runtime.state.openKeyedStoreV2),
     config,
     (key) => {
-      readPeerAuthority ??= runtime.state.openSyncKeyedStore<ReefPeerStateSnapshot>({
-        namespace: REEF_TRUST_STORE_NAMESPACE,
-        maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      }).lookup;
+      if (!readPeerAuthority) {
+        const store = runtime.state.openSyncKeyedStore<ReefPeerStateSnapshot>({
+          namespace: REEF_TRUST_STORE_NAMESPACE,
+          maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+        });
+        readPeerAuthority = store.lookup.bind(store);
+      }
       return readPeerAuthority(key);
     },
     (assertCurrent) => openStores(runtime.state.openKeyedStoreV2, assertCurrent),
