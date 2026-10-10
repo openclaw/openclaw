@@ -606,4 +606,24 @@ describe("lintMemoryWikiVault", () => {
       await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
     },
   );
+  it("refuses to rewrite a lint report that is not valid UTF-8", async () => {
+    const { rootDir, config } = await createVault();
+    const reportsDir = path.join(rootDir, "reports");
+    await fs.mkdir(reportsDir, { recursive: true });
+    const reportPath = path.join(reportsDir, "lint.md");
+    const malformed = Buffer.concat([
+      Buffer.from(
+        "---\npageType: report\nid: report.lint\ntitle: Lint Report\nstatus: active\n---\n# Lint Report\n\nnotes: caf",
+        "utf8",
+      ),
+      Buffer.from([0xff]),
+      Buffer.from("\n", "utf8"),
+    ]);
+    await fs.writeFile(reportPath, malformed);
+
+    await expect(lintMemoryWikiVault(config)).rejects.toMatchObject({
+      name: "WikiPageNotUtf8Error",
+    });
+    expect(await fs.readFile(reportPath)).toEqual(malformed);
+  });
 });

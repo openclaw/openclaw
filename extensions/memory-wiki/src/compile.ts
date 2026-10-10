@@ -52,6 +52,7 @@ import {
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
+  decodeWikiPageUtf8,
   scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
@@ -732,7 +733,9 @@ async function refreshPageRelatedBlocks(params: {
     if (page.kind === "report") {
       continue;
     }
-    const original = await root.readText(page.relativePath);
+    // Strict admission: the Related-block refresh re-emits the whole page, so
+    // replacement-decodable bytes would be persisted over human content.
+    const original = decodeWikiPageUtf8(await root.readBytes(page.relativePath), page.relativePath);
     params.signal?.throwIfAborted();
     if (original.trim().length === 0) {
       continue;
@@ -767,7 +770,11 @@ async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
-  const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  const originalBytes = await root.readBytes(params.relativePath).catch(() => null);
+  const original =
+    originalBytes === null
+      ? `# ${params.title}\n`
+      : decodeWikiPageUtf8(originalBytes, params.relativePath);
   params.signal?.throwIfAborted();
   // Generated indexes bypass page discovery. Parse existing content here so
   // managed-block updates cannot rewrite malformed frontmatter.
@@ -803,17 +810,19 @@ async function refreshDashboardPages(params: {
     params.signal?.throwIfAborted();
     const relativePath = `reports/${name}.md`;
     const root = await fsRoot(params.config.vault.path);
-    const original = await root.readText(relativePath).catch(() =>
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "report",
-          id: `report.${name}`,
-          title: definition.title,
-          status: "active",
-        },
-        body: `# ${definition.title}\n`,
-      }),
-    );
+    const originalBytes = await root.readBytes(relativePath).catch(() => null);
+    const original =
+      originalBytes === null
+        ? renderWikiMarkdown({
+            frontmatter: {
+              pageType: "report",
+              id: `report.${name}`,
+              title: definition.title,
+              status: "active",
+            },
+            body: `# ${definition.title}\n`,
+          })
+        : decodeWikiPageUtf8(originalBytes, relativePath);
     const parsed = parseWikiMarkdown(original);
     const originalBody = parsed.body.trim().length > 0 ? parsed.body : `# ${definition.title}\n`;
     const updatedBody = replaceManagedMarkdownBlock({
