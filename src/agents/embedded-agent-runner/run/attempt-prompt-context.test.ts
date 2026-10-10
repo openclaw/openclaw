@@ -387,7 +387,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     });
     // The carrier bypasses the canonical prompt-projection redaction, so it must
     // sanitize hook text itself; dispatch and replay see identical sanitized bytes.
-    const fragment = result.runtimeContextMessageForCurrentTurn?.details.fragments.find(
+    const fragment = result.runtimeContextMessageForCurrentTurn?.details.fragments?.find(
       (candidate) =>
         candidate.kind === "conversation-data" && candidate.text.includes("Remember token="),
     );
