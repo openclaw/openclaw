@@ -404,38 +404,40 @@ async function executeSessionBackfillBatchCore(
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),
     ] as const;
-    const [diary, staged] = await Promise.all(removals).finally(async () => {
+    try {
+      const [diary, staged] = await Promise.all(removals);
+      const rewind = await rewindSessionBackfillIngestionState({
+        workspaceDir,
+        agentId: params.agentId,
+      });
+      if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
+        // Applies from before the rewind journal shipped have no owned offsets to restore.
+        // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
+        await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
+      }
+      await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
+      return {
+        result: {
+          agentId: params.agentId,
+          workspaceDir,
+          applied: false,
+          rem: false,
+          days: [],
+          candidateCount: 0,
+          stagedEntries: 0,
+          writtenDiaryEntries: 0,
+          replacedDiaryEntries: 0,
+          rollback: {
+            removedDiaryEntries: diary.removed,
+            removedStagedEntries: staged.removed,
+          },
+        },
+        continuation: { advanced: false, hasMore: false },
+      };
+    } finally {
       // Keep request authority and the workspace lease until both accepted removals settle.
       await Promise.allSettled(removals);
-    });
-    const rewind = await rewindSessionBackfillIngestionState({
-      workspaceDir,
-      agentId: params.agentId,
-    });
-    if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
-      // Applies from before the rewind journal shipped have no owned offsets to restore.
-      // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
-      await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
     }
-    await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
-    return {
-      result: {
-        agentId: params.agentId,
-        workspaceDir,
-        applied: false,
-        rem: false,
-        days: [],
-        candidateCount: 0,
-        stagedEntries: 0,
-        writtenDiaryEntries: 0,
-        replacedDiaryEntries: 0,
-        rollback: {
-          removedDiaryEntries: diary.removed,
-          removedStagedEntries: staged.removed,
-        },
-      },
-      continuation: { advanced: false, hasMore: false },
-    };
   }
 
   const { from, to, limitDays } = normalizeSessionBackfillSelection(params);

@@ -1,10 +1,10 @@
+import type { MemoryCliSearchOutcome } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   formatCliJsonFailure,
   shortenHomePath,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import type { MemoryCliSearchOutcome } from "./memory-search-operation.js";
 
 export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolean): void {
   if ("status" in result) {

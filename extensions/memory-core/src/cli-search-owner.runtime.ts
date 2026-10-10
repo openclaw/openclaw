@@ -1,7 +1,7 @@
 import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
+import type { MemoryCliSearchOutcome } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { renderMemorySearch } from "./cli-search-output.js";
 import type { MemorySearchCommandOptions } from "./cli.types.js";
-import type { MemoryCliSearchOutcome } from "./memory-search-operation.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export async function runMemorySearchWithOwner(

@@ -1,10 +1,10 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemorySearchStaleness,
-  type MemorySearchManager,
+  type MemoryCliSearchParams,
+  type MemoryCliSearchResult,
   type MemorySearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingConfig,
@@ -16,28 +16,10 @@ import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 
-export type MemoryCliSearchResult = {
-  results: MemorySearchResult[];
-  stale?: true;
-  warning?: string;
-  action?: string;
-};
-
-export type MemoryCliSearchOutcome =
-  | MemoryCliSearchResult
-  | { agentId: string; status: "disabled" }
-  | { agentId: string; status: "failed"; error: string };
-
 /** Shared CLI search semantics, independent of transport and terminal rendering. */
-export async function searchMemoryForCli(params: {
-  manager: MemorySearchManager;
-  cfg: OpenClawConfig;
-  agentId: string;
-  query: string;
-  maxResults?: number;
-  minScore?: number;
-  assertCurrent?: () => void;
-}): Promise<MemoryCliSearchResult> {
+export async function searchMemoryForCli(
+  params: MemoryCliSearchParams,
+): Promise<MemoryCliSearchResult> {
   const { manager, cfg, agentId, query, assertCurrent } = params;
   assertCurrent?.();
   let readRebuildWarning: () => string | undefined = () => undefined;

@@ -159,7 +159,7 @@ export function registerSessionBackfillGatewayMethods(api: OpenClawPluginApi): v
               throw new Error("expectedOwnerId must be a non-empty string");
             }
             request = readGatewayParams(params, rollback, () =>
-              resolveDefaultAgentId(api.runtime.config.current()),
+              resolveDefaultAgentId(invocation.context.getRuntimeConfig()),
             );
           } catch (error) {
             respondInvalid(respond, error);

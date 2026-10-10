@@ -1,12 +1,16 @@
-export { captureMemoryRebuildNotice } from "./src/memory-rebuild-notice.js";
+import type {
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 export type {
   MemoryCliSearchResult,
   MemoryCliSearchOutcome,
-} from "./src/memory-search-operation.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+export { captureMemoryRebuildNotice } from "./src/memory-rebuild-notice.js";
 
 export async function searchMemoryForCli(
-  params: Parameters<typeof import("./src/memory-search-operation.js").searchMemoryForCli>[0],
-) {
+  params: MemoryCliSearchParams,
+): Promise<MemoryCliSearchResult> {
   const runtime = await import("./src/memory-search-operation.js");
   return runtime.searchMemoryForCli(params);
 }

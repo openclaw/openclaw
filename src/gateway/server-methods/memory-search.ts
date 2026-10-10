@@ -1,12 +1,11 @@
-import type {
-  searchMemoryForCli,
-  MemoryCliSearchOutcome,
-} from "../../../extensions/memory-core/search-api.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
+  MemoryCliSearchOutcome,
   MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchResult,
@@ -226,7 +225,7 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     if (assertCurrent) {
       assertCurrent();
       const api = loadBundledPluginPublicArtifactModuleSync<{
-        searchMemoryForCli: typeof searchMemoryForCli;
+        searchMemoryForCli: (params: MemoryCliSearchParams) => Promise<MemoryCliSearchResult>;
       }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
       const payload = await api.searchMemoryForCli({
         manager,
@@ -303,7 +302,7 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
     let domainEntered = false;
     try {
       let response: Parameters<GatewayRequestHandlerOptions["respond"]> | undefined;
-      const assertCurrent = await runWithLocalStateMutationOwner(
+      const assertOwnerCurrent = await runWithLocalStateMutationOwner(
         expectedOwnerId,
         options,
         async (assertCurrent) => {
@@ -320,7 +319,7 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
           return assertCurrent;
         },
       );
-      assertCurrent();
+      assertOwnerCurrent();
       if (response) {
         options.respond(...response);
       }

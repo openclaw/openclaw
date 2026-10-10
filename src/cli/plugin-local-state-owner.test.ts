@@ -297,8 +297,8 @@ describe("plugin commands respect the local state owner", () => {
   it.each(["memory", "memory-backfill", "memory-search", "matrix"] as const)(
     "retains offline %s ownership until the command settles",
     async (family) => {
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
+      const entered = createDeferred();
+      const finish = createDeferred();
       const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
       const action = async () => {
         entered.resolve();
@@ -364,7 +364,7 @@ describe("plugin commands respect the local state owner", () => {
       );
       expect(fixture[mock]).toHaveBeenCalledTimes(1);
       const domainArgs = fixture[mock].mock.calls[0];
-      expect(domainArgs.at(-1)).toMatchObject({ cfg: gatewayConfig, accountId: "ops" });
+      expect(domainArgs?.at(-1)).toMatchObject({ cfg: gatewayConfig, accountId: "ops" });
       expect(fixture.config).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(mock === "bootstrap" ? 1 : 0);
     },
@@ -488,8 +488,8 @@ describe("plugin commands respect the local state owner", () => {
     "does not disclose a completed %s result after owner revocation",
     async (family) => {
       await occupyState();
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
+      const entered = createDeferred();
+      const finish = createDeferred();
       if (family === "memory") {
         fixture.executeBatch.mockImplementationOnce(async () => {
           entered.resolve();
