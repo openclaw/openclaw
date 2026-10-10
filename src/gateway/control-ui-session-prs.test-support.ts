@@ -20,7 +20,7 @@ import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
-type GitContext = { owner: string; repo: string; branch: string };
+type GitContext = { owner: string; repo: string; branch: string; defaultBranch?: string };
 
 export function githubJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -70,12 +70,14 @@ export const testGitContext: GitContext = {
   owner: "openclaw",
   repo: "openclaw",
   branch: "claude/browser-tabs-tighter-header",
+  defaultBranch: "main",
 };
 
 /** Direct loader tests supply real target facts; registered callers use the row projection. */
 export async function loadTestSessionPullRequests(
   params: Parameters<typeof loadControlUiSessionPullRequests>[0],
   deps: Omit<Parameters<typeof loadControlUiSessionPullRequests>[1], "read"> = {},
+  options?: { allowsRepositoryShorthand?: boolean },
 ): ReturnType<typeof loadControlUiSessionPullRequests> {
   const requested = resolveRequestedSessionAgentId(
     getRuntimeConfig(),
@@ -94,7 +96,14 @@ export async function loadTestSessionPullRequests(
     loadControlUiSessionPullRequests(params, {
       ...deps,
       read: {
-        target,
+        // Direct loader tests inject their own repository context and therefore
+        // own the shorthand repository instead of exercising workspace-source selection.
+        target:
+          options?.allowsRepositoryShorthand !== undefined
+            ? { ...target, allowsRepositoryShorthand: options.allowsRepositoryShorthand }
+            : deps.resolveGitContext || deps.resolveGitRoot
+              ? { ...target, allowsRepositoryShorthand: true }
+              : target,
         sourceIdentity,
         assertCurrent: () => {
           assertSourceCurrent();
@@ -173,9 +182,9 @@ export function createSessionPullRequestsFixture() {
     }
     return { sessionKey, agentId: requested.agentId };
   };
-  const load: typeof loadTestSessionPullRequests = (params, deps) => {
+  const load: typeof loadTestSessionPullRequests = (params, deps, options) => {
     seed(params);
-    return loadTestSessionPullRequests(params, deps);
+    return loadTestSessionPullRequests(params, deps, options);
   };
   return {
     load,

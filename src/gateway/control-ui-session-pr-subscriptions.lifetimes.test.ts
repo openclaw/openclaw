@@ -38,6 +38,7 @@ describe("recipient publication lifetimes", () => {
     identity: "shared",
     readSource: { agentId: "main", path: "unused" },
     source: null,
+    allowsRepositoryShorthand: true,
   };
   const changed: ControlUiSessionPullRequests = { ...READY, rateLimited: true };
   function publication(
@@ -642,6 +643,7 @@ describe("one-shot session PR reads", () => {
     identity: "original-session",
     readSource: { agentId: "main", path: "unused" },
     source: null,
+    allowsRepositoryShorthand: true,
   };
 
   it("keeps a forced watcher snapshot when an older prepared read settles later", async ({

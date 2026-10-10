@@ -10,7 +10,8 @@ import {
 } from "./control-ui-session-prs.test-support.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-const { load: loadControlUiSessionPullRequests } = createSessionPullRequestsFixture();
+const { load: loadControlUiSessionPullRequests, prepareRead: prepareControlUiSessionPrRead } =
+  createSessionPullRequestsFixture();
 
 vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
@@ -87,6 +88,21 @@ describe("loadControlUiSessionPullRequests", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.useRealTimers();
+  });
+
+  it("does not authorize bare GitHub references from the fallback agent workspace", async () => {
+    const read = await prepareControlUiSessionPrRead("test", {
+      sessionKey: "agent:main:main",
+    });
+
+    expect((await read())?.allowsRepositoryShorthand).toBe(false);
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { resolveGitContext: async () => ({ ...context, branch: "main" }) },
+      { allowsRepositoryShorthand: false },
+    );
+    expect(result).toEqual({ pullRequests: [], rateLimited: false });
   });
 
   it("returns chips with diff counts and check rollup for open PRs", async () => {

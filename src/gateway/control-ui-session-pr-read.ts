@@ -33,6 +33,8 @@ export type ControlUiSessionPrTarget = {
   identity: string;
   readSource: { agentId: string; path: string };
   source: string | GitCheckoutContext | null;
+  /** Whether repository-only facts may resolve bare PR/issue shorthand in chat. */
+  allowsRepositoryShorthand: boolean;
   githubHost?: string;
   refreshIndex?: boolean;
   assertCurrent?: () => void;
@@ -56,6 +58,7 @@ export function resolveControlUiSessionPrTarget(
     return undefined;
   }
   let source: ControlUiSessionPrTarget["source"];
+  let allowsRepositoryShorthand: boolean;
   const githubHost = resolveConfiguredGitHubHost(cfg);
   if (entry.repositoryWorkspaceId) {
     const repository = preparedRepository;
@@ -66,13 +69,20 @@ export function resolveControlUiSessionPrTarget(
       remote && repository
         ? { ...remote, ...(!publicRemote ? { host: githubHost } : {}), branch: repository.branch }
         : null;
+    allowsRepositoryShorthand = true;
   } else {
-    source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
+    const roots = resolveSessionWorkspaceRoots(cfg, agentId, entry);
+    source = roots.diffCwd ?? null;
+    // A general-purpose direct session inherits the agent workspace only as a
+    // filesystem fallback. That checkout must not silently become the target
+    // for unrelated bare references such as `PR #58`.
+    allowsRepositoryShorthand = Boolean(roots.spawnedCwd || roots.spawnedWorkspaceDir);
   }
   return {
     params: { sessionKey: canonicalKey, agentId },
     githubHost,
     readSource,
+    allowsRepositoryShorthand,
     identity: JSON.stringify([
       agentId,
       canonicalKey,
@@ -84,6 +94,7 @@ export function resolveControlUiSessionPrTarget(
       entry.repositoryWorkspaceId,
       entry.worktree?.id,
       source,
+      allowsRepositoryShorthand,
       githubHost,
     ]),
     source,

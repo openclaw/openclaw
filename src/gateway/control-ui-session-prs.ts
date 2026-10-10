@@ -475,13 +475,16 @@ export async function loadControlUiSessionPullRequests(
       branchCache.release(deps.cacheSignal);
       return { pullRequests: [], rateLimited: false };
     }
+    const repository = target.allowsRepositoryShorthand
+      ? { owner: context.owner, repo: context.repo }
+      : undefined;
     // Conversation text is not evidence of session work. Only the checkout
     // selects PRs; publication receipts remain owned by the publication flow.
     if (!context.branch || context.branch === context.defaultBranch) {
       branchCache.release(deps.cacheSignal);
       return {
         pullRequests: [],
-        repository: { owner: context.owner, repo: context.repo },
+        ...(repository ? { repository } : {}),
         rateLimited: false,
       };
     }
@@ -497,13 +500,18 @@ export async function loadControlUiSessionPullRequests(
       // unknown PR list must not enable a Create PR row.
       return {
         pullRequests: [],
-        repository: { owner: context.owner, repo: context.repo },
+        ...(repository ? { repository } : {}),
         rateLimited: false,
         status: "unavailable",
       };
     }
-    const { publicationCandidates, mergedHeads, workingBranchHasLivePullRequest, ...snapshot } =
-      result;
+    const {
+      publicationCandidates,
+      mergedHeads,
+      workingBranchHasLivePullRequest,
+      repository: resultRepository,
+      ...snapshot
+    } = result;
     const branch =
       projection === "publication" || workingBranchHasLivePullRequest
         ? undefined
@@ -516,6 +524,9 @@ export async function loadControlUiSessionPullRequests(
     assertCurrent();
     return {
       ...snapshot,
+      ...(target.allowsRepositoryShorthand && resultRepository
+        ? { repository: resultRepository }
+        : {}),
       pullRequests: projection === "publication" ? publicationCandidates : snapshot.pullRequests,
       ...(branch ? { branch } : {}),
     };
