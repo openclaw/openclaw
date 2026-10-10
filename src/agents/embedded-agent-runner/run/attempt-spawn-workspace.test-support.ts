@@ -452,6 +452,7 @@ vi.mock("../../docs-path.js", () => ({
   resolveOpenClawReferencePaths: async () => ({ docsPath: undefined, sourcePath: undefined }),
 }));
 
+// mock-isolation: Attempt fixtures use in-memory settings without reading project or user settings.
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},

@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 
+// mock-isolation: Session fixtures keep compaction policy deterministic without loading runtime settings.
 vi.mock("../../agent-settings.js", () => ({
   applyAgentAutoCompactionGuard: () => {},
   applyAgentCompactionSettingsFromConfig: () => ({
