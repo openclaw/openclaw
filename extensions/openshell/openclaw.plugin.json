@@ -1,6 +1,8 @@
 {
   "id": "openshell",
-  "categories": ["security"],
+  "categories": [
+    "security"
+  ],
   "activation": {
     "onStartup": true
   },
@@ -11,19 +13,43 @@
       "id": "openshell-connection",
       "title": "OpenShell connection",
       "order": 10,
-      "properties": ["command", "gateway", "gatewayEndpoint", "workspace", "timeoutSeconds"]
+      "properties": [
+        "command",
+        "gateway",
+        "gatewayEndpoint",
+        "workspace",
+        "timeoutSeconds"
+      ]
     },
     {
       "id": "sandbox-creation",
       "title": "Sandbox creation",
       "order": 20,
-      "properties": ["from", "policy", "providers", "gpu", "autoProviders"]
+      "properties": [
+        "from",
+        "policy",
+        "providers",
+        "gpu",
+        "autoProviders"
+      ]
     },
     {
       "id": "workspace-files",
       "title": "Workspace files",
       "order": 30,
-      "properties": ["mode", "remoteWorkspaceDir", "remoteAgentWorkspaceDir"]
+      "properties": [
+        "mode",
+        "remoteWorkspaceDir",
+        "remoteAgentWorkspaceDir"
+      ]
+    },
+    {
+      "id": "worker-inference",
+      "title": "Worker inference",
+      "order": 40,
+      "properties": [
+        "worker"
+      ]
     }
   ],
   "configSchema": {
@@ -32,7 +58,10 @@
     "properties": {
       "mode": {
         "type": "string",
-        "enum": ["mirror", "remote"]
+        "enum": [
+          "mirror",
+          "remote"
+        ]
       },
       "command": {
         "type": "string",
@@ -87,6 +116,99 @@
         "type": "number",
         "minimum": 1,
         "maximum": 2147000
+      },
+      "worker": {
+        "type": "object",
+        "properties": {
+          "nodeCommand": {
+            "default": "openclaw",
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeExecutable": {
+            "default": "node",
+            "type": "string",
+            "minLength": 1
+          },
+          "stateDir": {
+            "default": "/sandbox/.openclaw-node",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9_-]*$"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "api": {
+                "type": "string",
+                "enum": [
+                  "openai-completions",
+                  "openai-responses",
+                  "anthropic-messages"
+                ]
+              },
+              "baseUrl": {
+                "type": "string",
+                "format": "uri"
+              },
+              "credentialEnv": {
+                "type": "string",
+                "pattern": "^(?!NODE_|OPENCLAW_|OPENSHELL_|PATH$|HOME$|TMPDIR$|TMP$|TEMP$|LANG$|TZ$)[A-Z][A-Z0-9_]*$"
+              },
+              "contextWindow": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxTokens": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "reasoning": {
+                "default": false,
+                "type": "boolean"
+              },
+              "input": {
+                "default": [
+                  "text"
+                ],
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "image"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "provider",
+              "id",
+              "api",
+              "baseUrl",
+              "credentialEnv",
+              "contextWindow",
+              "maxTokens"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -147,6 +269,24 @@
       "label": "Command Timeout Seconds",
       "help": "Timeout for openshell CLI operations such as create/upload/download.",
       "advanced": true
+    },
+    "worker": {
+      "label": "Brokered worker",
+      "help": "Optional standalone worker setup. Uses existing OpenShell providers; no OCE or Kubernetes dependency. Only the openshell worker CLI acts on this configuration.",
+      "advanced": true
     }
-  }
+  },
+  "cliCommands": [
+    {
+      "name": "openshell",
+      "description": "Manage OpenShell brokered workers",
+      "hasSubcommands": true
+    }
+  ],
+  "commandAliases": [
+    {
+      "name": "openshell",
+      "kind": "cli"
+    }
+  ]
 }

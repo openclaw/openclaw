@@ -12,6 +12,21 @@ export default definePluginEntry({
   description: "OpenShell-backed sandbox runtime for agent exec and file tools.",
   configSchema: createOpenShellPluginConfigSchema(),
   register(api) {
+    api.registerCli(
+      async ({ program, config }) => {
+        const { registerOpenShellWorkerCli } = await import("./src/worker-cli.js");
+        registerOpenShellWorkerCli(program, config);
+      },
+      {
+        descriptors: [
+          {
+            name: "openshell",
+            description: "Manage OpenShell brokered workers",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
     if (api.registrationMode !== "full") {
       return;
     }

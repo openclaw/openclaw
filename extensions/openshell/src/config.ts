@@ -48,7 +48,46 @@ const openShellWorkspaceName = z
       "workspace must contain lowercase alphanumeric characters or single hyphens and must not start or end with a hyphen",
   });
 
+const OpenShellWorkerConfigSchema = z.strictObject({
+  nodeCommand: nonEmptyTrimmedString("worker.nodeCommand must be a non-empty string").default(
+    "openclaw",
+  ),
+  nodeExecutable: nonEmptyTrimmedString("worker.nodeExecutable must be a non-empty string").default(
+    "node",
+  ),
+  stateDir: openShellManagedRemotePath("worker.stateDir").default("/sandbox/.openclaw-node"),
+  model: z.strictObject({
+    provider: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/),
+    id: z.string().trim().min(1),
+    api: z.enum(["openai-completions", "openai-responses", "anthropic-messages"]),
+    baseUrl: z.url().refine((value) => {
+      const url = new URL(value);
+      return (
+        url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash
+      );
+    }, "worker.model.baseUrl must be an HTTPS endpoint without credentials, query, or fragment"),
+    credentialEnv: z
+      .string()
+      .regex(
+        /^(?!NODE_|OPENCLAW_|OPENSHELL_|PATH$|HOME$|TMPDIR$|TMP$|TEMP$|LANG$|TZ$)[A-Z][A-Z0-9_]*$/,
+        "Use a dedicated model credential environment variable, not a runtime control variable",
+      ),
+    contextWindow: z.number().int().positive(),
+    maxTokens: z.number().int().positive(),
+    reasoning: z.boolean().default(false),
+    input: z
+      .array(z.enum(["text", "image"]))
+      .min(1)
+      .default(["text"]),
+  }),
+});
+
 const OpenShellPluginConfigSchema = z.strictObject({
+  worker: OpenShellWorkerConfigSchema.optional(),
   mode: z.enum(["mirror", "remote"], { error: "mode must be one of mirror, remote" }).optional(),
   command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
   gateway: nonEmptyTrimmedString("gateway must be a non-empty string").optional(),
@@ -117,6 +156,7 @@ export function resolveOpenShellPluginConfig(value: unknown) {
   }
   const cfg = parsed.data;
   return {
+    ...(cfg.worker ? { worker: cfg.worker } : {}),
     mode: cfg.mode ?? DEFAULT_MODE,
     command: cfg.command ?? DEFAULT_COMMAND,
     gateway: cfg.gateway,
