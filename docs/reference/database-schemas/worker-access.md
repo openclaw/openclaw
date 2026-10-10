@@ -291,9 +291,11 @@ Cancellation without a matching pending request returns after a read in the same
 worker FIFO, without a write transaction or publication. Matching requests are
 still reread inside the mutation transaction. GitHub role checks prepare only the
 canonical profile ID, role, and verified GitHub login through the existing profile
-authority fence. One joined query on the shared-state worker resolves those facts
-without opening a separate reader or read transaction; display and alias consumers
-retain the full profile projection.
+authority fence. The Gateway reuses its retained profile catalog without another
+worker request. Standalone authority preparation without a retained catalog uses
+one joined query on the shared-state worker, without creating absent storage or
+opening a separate reader or read transaction. Both paths retain the same profile
+revocation binding; display and alias consumers retain the full profile projection.
 Personal connection reads and maintenance listings use that same shared-state
 worker without creating absent databases; received credentials are registered
 with the host's secret redaction owner.
