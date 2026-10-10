@@ -223,21 +223,20 @@ export async function maybeHandleModelDirectiveInfo(params: {
       modelKey(entry.provider, entry.id),
     ),
   );
-  const wrapperKeys = new Set<string>();
-  for (const entry of pickerCatalog) {
-    const id = normalizeOptionalString(entry.id) ?? "";
-    const slash = id.indexOf("/");
-    if (slash <= 0) {
-      continue;
-    }
-    const nestedProvider = normalizeProviderId(id.slice(0, slash));
-    const nestedModel = normalizeOptionalString(id.slice(slash + 1)) ?? "";
-    const wrapperProvider = normalizeProviderId(entry.provider);
-    if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
-      continue;
-    }
-    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
-  }
+  const wrapperKeys = new Set(
+    pickerCatalog.flatMap((entry) => {
+      const id = normalizeOptionalString(entry.id) ?? "";
+      const slash = id.indexOf("/");
+      if (slash <= 0) {
+        return [];
+      }
+      const nestedProvider = normalizeProviderId(id.slice(0, slash));
+      const nestedModel = normalizeOptionalString(id.slice(slash + 1));
+      return nestedProvider && nestedModel && nestedProvider !== normalizeProviderId(entry.provider)
+        ? [modelKey(nestedProvider, nestedModel)]
+        : [];
+    }),
+  );
   const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   for (const entry of pickerCatalog) {
     const provider = normalizeProviderId(entry.provider);

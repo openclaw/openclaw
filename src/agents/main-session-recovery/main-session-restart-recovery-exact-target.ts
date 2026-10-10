@@ -29,7 +29,7 @@ function matchesExpectedRecoveryTarget(
   expected: ExpectedRestartRecoveryTarget,
   hasClaim: boolean,
 ): boolean {
-  return Boolean(
+  return (
     entry?.sessionId === expected.sessionId &&
     hasClaim &&
     entry.abortedLastRun === true &&
@@ -37,7 +37,7 @@ function matchesExpectedRecoveryTarget(
       ? normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === expected.claim.runId &&
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
           expected.claim.sourceRunId
-      : isMainRestartRecoveryCandidate(entry, expected.sessionKey)),
+      : isMainRestartRecoveryCandidate(entry, expected.sessionKey))
   );
 }
 

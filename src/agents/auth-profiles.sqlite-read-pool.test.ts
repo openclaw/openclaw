@@ -1,15 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
+import { acquireAuthProfileReadDatabase } from "./auth-profiles/sqlite-read-pool.js";
 import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabasePath,
@@ -51,6 +55,39 @@ function withReaders(
 }
 
 describe("auth profile sqlite reader lifecycle", () => {
+  it("reuses format admission across pool reopen and validates a replacement file", async () => {
+    await withReaders((agentDir) => {
+      const pathname = resolveAuthProfileDatabasePath(agentDir);
+      const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+      const formatQueries = () =>
+        observed.queries.filter((sql) =>
+          /sqlite_(?:schema|master)|\bPRAGMA\s+(?:user_version|schema_version|table_info|table_xinfo|index_list|index_info|index_xinfo)\b/iu.test(
+            sql,
+          ),
+        );
+      try {
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        expect(formatQueries()).toEqual([]);
+        closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        const replacement = `${pathname}.replacement`;
+        copyFileSync(pathname, replacement);
+        {
+          using database = new DatabaseSync(replacement);
+          database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+        }
+        renameSync(replacement, pathname);
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("unreadable");
+        expect(formatQueries().length).toBeGreaterThan(0);
+      } finally {
+        observed.restore();
+      }
+    });
+  });
+
   it("observes foreign commits through cached readers and closes them on snapshot replacement", async () => {
     await withReaders((agentDir, open) => {
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));

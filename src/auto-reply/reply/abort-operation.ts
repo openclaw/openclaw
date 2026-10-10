@@ -321,11 +321,7 @@ export async function executeFastAbortRequest(
               lifecycleRevision: resolvedAbortTarget.entry.lifecycleRevision ?? null,
             }
           : undefined,
-        assertCurrent: () => {
-          if (params.isCommandTargetCurrent?.() === false) {
-            throw new Error("The selected session changed before it could be stopped.");
-          }
-        },
+        assertCurrent,
         beforeKill: async (sealRootSelection) => {
           assertCurrent();
           const bindingContext = commandSessionKey

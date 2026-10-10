@@ -29,6 +29,11 @@ import {
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
+let voiceKernel: typeof import("../../talk/client-voice-session-write.kernel.js") | undefined;
+export async function prepareVoiceTranscriptCommit() {
+  voiceKernel ??= await import("../../talk/client-voice-session-write.kernel.js");
+}
+
 function inCustody<T>(
   input: SessionTurnPlan,
   context: AgentWorkerOperationContext,
@@ -271,6 +276,16 @@ export function applySessionTurn<T>(
           projectionNeedsReconcile = true;
         },
       });
+      if (input.options.voiceTranscript && committed.result.appendedMessages.length === 1) {
+        if (!voiceKernel) {
+          throw new Error("Voice transcript commit was not prepared");
+        }
+        committed.result.voiceSession = voiceKernel.mutateVoiceSessionInDatabase(database, {
+          ...input.options.voiceTranscript,
+          kind: "confirm",
+          now: Date.now(),
+        });
+      }
       const revision = getSqliteReadScopeRevision(database.db);
       const publication = committed.identity
         ? prepareSessionEntryReplacementPublication(

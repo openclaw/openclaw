@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  type SessionTranscriptTurnExpectedState,
-  type SessionTranscriptTurnLifecyclePatch,
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";

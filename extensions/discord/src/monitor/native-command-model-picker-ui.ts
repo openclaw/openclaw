@@ -104,7 +104,7 @@ export async function resolveDiscordModelPickerRoute(params: {
   const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
     await resolveDiscordNativeInteractionChannelContext(interaction, "unknown");
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
 
   const threadBinding = isThreadChannel

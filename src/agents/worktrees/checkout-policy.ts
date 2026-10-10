@@ -36,8 +36,11 @@ export async function usesSourceOnlyWorktreeGit(
   const agentId = resolveSessionAgentId({ config: cfg, sessionKey: record.ownerId });
   source?.admissionSignal?.throwIfAborted();
   if (source) {
-    if ("kind" in source) source.assertCurrent();
-    else source.actor.assertReadable();
+    if ("kind" in source) {
+      source.assertCurrent();
+    } else {
+      source.actor.assertReadable();
+    }
   }
   const entry = await readSessionEntryReadOnlyInWorker({
     agentId,

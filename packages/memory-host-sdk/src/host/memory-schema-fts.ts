@@ -109,38 +109,30 @@ function buildMemoryFtsTriggers<
   Insert extends string,
   Delete extends string,
 >(name: Name, table: Table, columns: Columns, insert: Insert, remove: Delete) {
+  const trigger = <Event extends string, Clause extends string, Body extends string>(
+    event: Event,
+    clause: Clause,
+    body: Body,
+  ) =>
+    ({
+      name: `${name}_after_${event}`,
+      sql: `
+      CREATE TRIGGER IF NOT EXISTS main.${name}_after_${event}
+      AFTER ${clause} ON ${table}
+      BEGIN
+${body}
+      END;
+    `,
+    }) as const;
   return [
-    {
-      name: `${name}_after_insert`,
-      sql: `
-      CREATE TRIGGER IF NOT EXISTS main.${name}_after_insert
-      AFTER INSERT ON ${table}
-      BEGIN
-${insert}
-      END;
-    `,
-    },
-    {
-      name: `${name}_after_update`,
-      sql: `
-      CREATE TRIGGER IF NOT EXISTS main.${name}_after_update
-      AFTER UPDATE OF ${columns} ON ${table}
-      BEGIN
-${remove}
-${insert}
-      END;
-    `,
-    },
-    {
-      name: `${name}_after_delete`,
-      sql: `
-      CREATE TRIGGER IF NOT EXISTS main.${name}_after_delete
-      AFTER DELETE ON ${table}
-      BEGIN
-${remove}
-      END;
-    `,
-    },
+    trigger("insert", "INSERT", insert),
+    trigger(
+      "update",
+      `UPDATE OF ${columns}`,
+      `${remove}
+${insert}`,
+    ),
+    trigger("delete", "DELETE", remove),
   ] as const;
 }
 
@@ -188,6 +180,33 @@ export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void 
   `);
 }
 
+export function reconcileMemoryChunkFtsRows(
+  db: DatabaseSync,
+  ftsTable: string,
+  force = false,
+): void {
+  const rowCounts = db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM ${MEMORY_INDEX_CHUNKS_TABLE}) AS canonical_count,
+         (SELECT COUNT(*) FROM ${ftsTable}) AS derived_count`,
+    )
+    // SAFETY: both scalar aggregate subqueries always return their named numeric columns.
+    .get() as { canonical_count: number; derived_count: number };
+  if (force || rowCounts.canonical_count !== rowCounts.derived_count) {
+    rebuildMemoryChunkFts(db, ftsTable);
+  }
+}
+
+export function backfillMemoryPathFtsRows(db: DatabaseSync): void {
+  db.exec(`
+    INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+    SELECT id, path, source
+    FROM ${MEMORY_INDEX_SOURCES_TABLE}
+    WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
+  `);
+}
+
 /** Reconcile and backfill the derived body index in one atomic savepoint. */
 export function ensureMemoryChunkFtsSchema(params: {
   db: DatabaseSync;
@@ -219,14 +238,6 @@ export function ensureMemoryChunkFtsSchema(params: {
         `  end_line UNINDEXED\n` +
         `${params.tokenizeClause});`,
     );
-    const rowCounts = params.db
-      .prepare(
-        `SELECT
-           (SELECT COUNT(*) FROM ${MEMORY_INDEX_CHUNKS_TABLE}) AS canonical_count,
-           (SELECT COUNT(*) FROM ${params.ftsTable}) AS derived_count`,
-      )
-      // SAFETY: both scalar aggregate subqueries always return their named numeric columns.
-      .get() as { canonical_count: number; derived_count: number };
     // FTS is fully derived. A cardinality mismatch proves that an ordinary
     // schema ensure cannot leave the populated index untouched.
     const canonical = params.ftsTable === MEMORY_INDEX_FTS_TABLE;
@@ -239,9 +250,7 @@ export function ensureMemoryChunkFtsSchema(params: {
       );
     // Pre-rowid indexes can have matching counts but unrelated FTS identities.
     // Installing their maintenance contract owns the one-time identity rebuild.
-    if (!hasRowidMaintenance || rowCounts.canonical_count !== rowCounts.derived_count) {
-      rebuildMemoryChunkFts(params.db, params.ftsTable);
-    }
+    reconcileMemoryChunkFtsRows(params.db, params.ftsTable, !hasRowidMaintenance);
     if (canonical) {
       ensureMemoryChunkFtsTriggers(params.db);
     }
@@ -303,13 +312,10 @@ export function ensureMemoryPathFtsSchema(params: {
         source UNINDEXED
         ${params.tokenizeClause}
       );
-      -- The initial copy and trigger installation share this savepoint. Once
-      -- populated, the triggers own completeness; per-row FTS probes are too costly.
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      SELECT id, path, source
-      FROM ${MEMORY_INDEX_SOURCES_TABLE}
-      WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
     `);
+    // The initial copy and trigger installation share this savepoint. Once
+    // populated, the triggers own completeness; per-row FTS probes are too costly.
+    backfillMemoryPathFtsRows(params.db);
     ensureMemoryPathFtsTriggers(params.db);
     params.db.exec("RELEASE ensure_memory_index_paths_fts");
   } catch (err) {

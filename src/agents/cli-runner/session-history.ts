@@ -9,7 +9,10 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionHistoryBinding } from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "../../config/sessions/session-incognito-binding.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
@@ -330,9 +333,16 @@ async function loadCliSessionEntries({
 export async function hasCliSessionTranscript({
   sessionManager,
   sessionTarget,
+  abortSignal,
 }: CliSessionHistoryParams): Promise<boolean> {
   if (sessionManager) {
     return sessionManager.getEntries().length > 0;
+  }
+  const source = sessionTarget && captureIncognitoSessionSource(sessionTarget);
+  if (source && "kind" in source) {
+    abortSignal?.throwIfAborted();
+    source.assertCurrent();
+    return false;
   }
   return (
     sessionTarget !== undefined &&
@@ -353,6 +363,11 @@ export async function loadCliSessionHistoryMessages({
     );
   }
   if (!sessionTarget) {
+    return [];
+  }
+  const source = captureIncognitoSessionSource(sessionTarget);
+  if (source && "kind" in source) {
+    source.assertCurrent();
     return [];
   }
   const incognito = captureIncognitoSessionHistoryBinding(sessionTarget);

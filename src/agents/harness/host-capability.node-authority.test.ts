@@ -237,8 +237,11 @@ it.each(["durable", "incognito"])(
           admission.close();
         }
       };
-      if (actor) await withIncognitoSessionActor(actor, run);
-      else await run();
+      if (actor) {
+        await withIncognitoSessionActor(actor, run);
+      } else {
+        await run();
+      }
     } finally {
       await actor?.close();
       if (previousRegistry) {

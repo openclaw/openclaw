@@ -89,7 +89,7 @@ configurations and cached custom models remain supported.
 
 The chat download also includes your configured local embedding model, or
 EmbeddingGemma by default (about 0.3 GB). Leave additional disk space for the
-runtime and download staging. Setup checks this before offering a new model.
+runtime and download staging. Setup checks this before offering a recommended model.
 When the cache and runtime use independent volumes, setup checks each volume's
 free space separately. Shared storage pools and volumes whose independence cannot
 be established use a combined reserve.
@@ -134,6 +134,21 @@ remove model sections outside that inventory. Chat and embedding preparation
 update their owned settings while preserving the header, `[*]` defaults,
 comments, and additional options on retained models. Embedding-only setup uses
 a fresh preset.
+
+Managed embeddings default to one server slot (`parallel = 1`), a 2,048-token
+context, and a 2,048-token physical batch (`ubatch-size`). Memory indexing reserves
+four positions for tokenizer overhead and the server's context boundary. These defaults also apply to custom
+GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
+embedding output buffer to one input; the context bound avoids reserving a custom
+model's full training context for short memory chunks.
+
+Existing context, batch, and slot settings in the embedding section, `[*]`, or
+the managed service's arguments or environment remain authoritative. OpenClaw adds
+the context bound only when no slot count or per-slot context is configured,
+because llama.cpp can divide total context across slots. If you choose a different
+slot count, size its context too. Long queries or direct embedding requests may
+need larger native capacity settings on models that support them.
+Missing defaults are added on the next managed preset preparation.
 
 ### Set up only local embeddings
 
@@ -185,6 +200,13 @@ Add a model under `models.providers.llama-cpp.models`, select its
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
+
+Setup keeps the selected authored model even when it is not cached. It shows
+the download size from the pinned recipe or source metadata when available and
+asks before downloading. Invalid sources produce a model-specific error instead
+of a different recommendation. Declining leaves the configured routes unchanged.
+The hardware recommendation applies when no managed chat models are configured;
+custom models remain subject to the source's checksum and runtime verification.
 
 ## Existing llama-server
 
@@ -320,9 +342,12 @@ Local memory embeddings require managed mode:
 }
 ```
 
-The plugin preserves the historical `local` embedding provider and index
-identity. Run `openclaw memory status --index` after intentionally changing the
-embedding model.
+The default EmbeddingGemma model automatically receives different task prefixes
+for search queries and indexed documents. Existing indexes built without these
+prefixes rebuild once on the next search or sync, without `--force`. Cached raw
+embeddings are not reused, and keyword search remains available during recovery.
+Run `openclaw memory status --index` after intentionally changing the embedding
+model.
 
 ## Troubleshooting
 

@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   AgentDatabaseRegistryChangedError,
   AgentDatabaseRegistryPendingError,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-  type AgentDatabaseRegistryChange,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import {

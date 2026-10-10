@@ -9,9 +9,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type {
-  AgentDatabaseExecutionScope,
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-admission-contract.js";
+import type {
+  AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";

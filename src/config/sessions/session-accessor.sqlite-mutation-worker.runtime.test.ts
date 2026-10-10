@@ -72,10 +72,11 @@ vi.mock("./session-accessor.sqlite-worker-coordination.js", () => ({
     run: (options: ReclamationDatabaseOptions) => Promise<T>,
   ) => run(options),
 }));
+// mock-isolation: Exercise worker settlement without opening a reclamation database.
 vi.mock("./session-accessor.sqlite-reclamation.js", () => ({
   reclaimSqliteSessionInTransaction: () => ({
     kind: "maintenance-finalize",
-    value: { archivedTranscripts: [], changedEntries: [], committedEntries: [] },
+    value: { archivedTranscripts: [], committedEntryIndices: [] },
   }),
 }));
 

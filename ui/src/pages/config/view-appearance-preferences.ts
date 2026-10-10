@@ -327,8 +327,12 @@ export function renderLobsterPetSection(props: ConfigProps) {
   const activeTheme =
     BUILTIN_THEMES.find((theme) => theme.id === props.theme) ??
     props.themeCatalog?.themes.find((theme) => theme.id === props.theme);
+  const branding = resolveThemeBranding(activeTheme);
+  if (!branding.lobsterdex) {
+    return nothing;
+  }
   const themeHiddenDescription =
-    resolveThemeBranding(activeTheme).mascot === "none"
+    branding.mascot === "none"
       ? html`<br />${t("quickSettings.appearance.lobsterVisitsThemeHidden", {
             theme:
               activeTheme?.source === "builtin"

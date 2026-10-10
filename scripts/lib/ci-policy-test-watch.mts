@@ -1590,7 +1590,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/gateway/control-ui-session-prs-branch.test.ts",
     watchGlobs: [
       "src/gateway/control-ui-session-prs-git.runtime.ts",
-      "src/infra/git-read-operations.runtime.ts",
+      "src/infra/git-operation.worker.ts",
     ],
   },
   {

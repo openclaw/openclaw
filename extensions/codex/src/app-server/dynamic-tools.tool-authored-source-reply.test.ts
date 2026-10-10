@@ -78,25 +78,41 @@ afterEach(() => {
 });
 
 describe("Codex tool-authored source replies", () => {
-  it("records the reply payload and terminates the turn for a capable tool", async () => {
+  it("holds the reply candidate until batch settlement for a capable tool", async () => {
     const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
 
     const result = await callOrderStatus(bridge);
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBe(true);
-    expect(result.toolAuthoredFinalReply).toBe(true);
-    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
-      {
-        text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
-        mediaUrls: ["/tmp/a.pdf"],
-        idempotencyKey: "turn-1:tool-source-reply:call-1",
-        sourceReplyFinal: true,
-        toolAuthored: true,
-      },
-    ]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
+    expect(result.toolAuthoredSourceReply).toEqual({
+      text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
+      mediaUrls: ["/tmp/a.pdf"],
+      idempotencyKey: "turn-1:tool-source-reply:call-1",
+      sourceReplyFinal: true,
+      toolAuthored: true,
+      toolAuthoredForToolCallId: "call-1",
+      toolAuthoredForTurnId: "turn-1",
+    });
     // No message tool ran, so messaging delivery evidence stays untouched.
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+  });
+
+  it("holds the candidate as rewritten by result middleware", async () => {
+    installResultMiddleware((event) => ({
+      result: {
+        content: event.result.content,
+        details: { sourceReply: { text: "Pedido SO1 creado." } },
+      },
+    }));
+    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
+
+    const result = await callOrderStatus(bridge);
+
+    expect(result.terminate).toBe(true);
+    expect(result.toolAuthoredSourceReply).toMatchObject({ text: "Pedido SO1 creado." });
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
 
   it("delivers nothing when result middleware withdraws the reply", async () => {
@@ -128,7 +144,7 @@ describe("Codex tool-authored source replies", () => {
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBeUndefined();
-    expect(result.toolAuthoredFinalReply).toBeUndefined();
+    expect(result.toolAuthoredSourceReply).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
 });

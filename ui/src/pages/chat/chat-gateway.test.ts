@@ -38,6 +38,8 @@ import {
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
+const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
+
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.clearAllTimers();
@@ -936,7 +938,7 @@ describe("handleChatGatewayEvent", () => {
     expectTextMessage(state.chatMessages[3], "assistant", "Final answer.");
   });
 
-  it("keeps the complete terminal reply above a steer when no later delta arrived", () => {
+  it("keeps the complete terminal reply after an accepted steer when no later delta arrived", () => {
     const state = createState({
       chatRunId: "run-1",
       chatStream: "Before steer.",
@@ -964,7 +966,7 @@ describe("handleChatGatewayEvent", () => {
     expectTextMessage(state.chatMessages[1], "user", "Steer");
     expectTextMessage(state.chatMessages[2], "assistant", "Before steer. Final unseen suffix.");
     const rendered = buildChatItems({
-      paneId: "terminal-above-steer",
+      paneId: "terminal-after-steer",
       sessionKey: state.sessionKey,
       runId: state.chatRunId,
       messages: state.chatMessages,
@@ -976,7 +978,7 @@ describe("handleChatGatewayEvent", () => {
     }).flatMap((item) =>
       item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
     );
-    expect(rendered).toEqual(["Ask", "Before steer. Final unseen suffix.", "Steer"]);
+    expect(rendered).toEqual(["Ask", "Steer", "Before steer. Final unseen suffix."]);
   });
 
   it("clears keyed commentary when chatPersistCommentary is false", () => {
@@ -1663,8 +1665,7 @@ describe("loadChatHistory filtering", () => {
       "chat.startup",
       {
         sessionKey: "agent:main:first",
-        limit: 80,
-        maxBytes: 256 * 1024,
+        ...historyBudget,
       },
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
@@ -1672,8 +1673,7 @@ describe("loadChatHistory filtering", () => {
       "chat.startup",
       {
         sessionKey: "agent:main:second",
-        limit: 80,
-        maxBytes: 256 * 1024,
+        ...historyBudget,
       },
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
@@ -2182,20 +2182,19 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", limit: 80, maxBytes: 256 * 1024 }],
+      ["chat.history", { sessionKey: "main", ...historyBudget }],
     ]);
     expect(state.chatMessages).toEqual([pending]);
 
     staleHistory.resolve(createAssistantHistory("stale history"));
     await firstLoad;
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", limit: 80, maxBytes: 256 * 1024 }],
+      ["chat.history", { sessionKey: "main", ...historyBudget }],
       [
         "chat.history",
         {
           sessionKey: "main",
-          limit: 80,
-          maxBytes: 256 * 1024,
+          ...historyBudget,
           inputRunIds: ["same-session-pending-run"],
         },
       ],

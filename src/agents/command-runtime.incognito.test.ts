@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
@@ -33,7 +33,6 @@ import { createAgentPatchedSessionModelRunGuard } from "./session-model-auto-rev
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
 let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
-let other: Awaited<ReturnType<typeof openIncognitoTestActor>>;
 useIncognitoNoHostSql();
 
 beforeAll(async () => {
@@ -41,13 +40,8 @@ beforeAll(async () => {
     { OPENCLAW_STATE_DIR: tempDirs.make("command-runtime-incognito-") },
     authority,
   );
-  other = await openIncognitoTestActor(
-    { OPENCLAW_STATE_DIR: tempDirs.make("command-runtime-other-root-") },
-    authority,
-  );
 });
 afterAll(async () => {
-  await other.close();
   await actor.close();
 });
 
@@ -75,51 +69,6 @@ async function messages(target: Awaited<ReturnType<typeof create>>["target"], ow
   );
 }
 
-it("settles queued CLI records on their captured actor after abort and outside the binding", async () => {
-  const { target } = await create("cli-records", { activeWriterRunId: "cli-run" });
-  const foreign = await create("cli-records", { activeWriterRunId: "cli-run" }, other);
-  const controller = new AbortController();
-  const recorder = withIncognitoSessionBinding({ actor, admissionSignal: controller.signal }, () =>
-    createCliDispatchTranscriptRecorder({
-      ...target,
-      runId: "cli-run",
-      prompt: "private prompt",
-      provider: "openai",
-      model: "gpt-4.1",
-      expectedLifecycleRevision: "original",
-      expectedWriterRunId: "cli-run",
-    }),
-  );
-  withIncognitoSessionBinding({ actor: other }, () => {
-    recorder.noteToolEvent({ phase: "start", toolName: "read", toolCallId: "tool-1" });
-    recorder.noteToolEvent({
-      phase: "result",
-      toolName: "read",
-      toolCallId: "tool-1",
-      result: "private result",
-    });
-    recorder.noteAssistantText("partial private reply");
-  });
-  // Abort before the recorder's Promise FIFO can start its first append.
-  controller.abort(new Error("run stopped"));
-  recorder.flushAssistantSnapshot();
-  await recorder.finalize();
-
-  expect(await messages(target)).toMatchObject([
-    { message: { role: "user", content: [{ text: "private prompt" }] } },
-    { message: { role: "assistant", content: [{ type: "toolCall", id: "tool-1" }] } },
-    { message: { role: "toolResult", content: [{ text: "private result" }] } },
-    {
-      message: {
-        role: "assistant",
-        content: [{ text: "partial private reply" }],
-        stopReason: "aborted",
-      },
-    },
-  ]);
-  expect(await messages(foreign.target, other)).toEqual([]);
-});
-
 const patchedModel = {
   model: "gpt-4.1",
   modelProvider: "openai",
@@ -137,40 +86,102 @@ const patchedModel = {
   },
 } satisfies Partial<SessionEntry>;
 
-it("rolls back a failed model and appends its visible note to the original actor after cancellation", async () => {
-  const { target } = await create("rollback", patchedModel);
-  const foreign = await create("rollback", patchedModel, other);
-  const controller = new AbortController();
-  const onError = vi.fn();
-  const guard = await withIncognitoSessionActor(
-    actor,
-    () => createAgentPatchedSessionModelRunGuard({ ...target, cfg: {}, onError }),
-    controller.signal,
-  );
-  controller.abort(new Error("run finished"));
-  await withIncognitoSessionBinding({ actor: other }, () =>
-    guard.fail(new Error("model unavailable"), "model_not_found"),
-  );
-
-  expect(onError).not.toHaveBeenCalled();
-  const reverted = (await actor.sessions.read(authority, target)).entry;
-  expect(reverted).toMatchObject({
-    model: "gpt-4o",
-    modelOverride: "gpt-4o",
+describe("captured actor isolation", () => {
+  let other: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+  beforeAll(async () => {
+    other = await openIncognitoTestActor(
+      { OPENCLAW_STATE_DIR: tempDirs.make("command-runtime-other-root-") },
+      authority,
+    );
   });
-  expect(reverted?.modelFallback).toBeUndefined();
-  expect(await messages(target)).toContainEqual(
-    expect.objectContaining({
-      message: expect.objectContaining({
-        role: "custom",
-        customType: "openclaw.system-note",
-        display: true,
-        content: "System note: model openai/gpt-4.1 failed; reverted to openai/gpt-4o.",
+  afterAll(async () => {
+    await other.close();
+  });
+
+  it("settles queued CLI records on their captured actor after abort and outside the binding", async () => {
+    const { target } = await create("cli-records", { activeWriterRunId: "cli-run" });
+    const foreign = await create("cli-records", { activeWriterRunId: "cli-run" }, other);
+    const controller = new AbortController();
+    const recorder = withIncognitoSessionBinding(
+      { actor, admissionSignal: controller.signal },
+      () =>
+        createCliDispatchTranscriptRecorder({
+          ...target,
+          runId: "cli-run",
+          prompt: "private prompt",
+          provider: "openai",
+          model: "gpt-4.1",
+          expectedLifecycleRevision: "original",
+          expectedWriterRunId: "cli-run",
+        }),
+    );
+    withIncognitoSessionBinding({ actor: other }, () => {
+      recorder.noteToolEvent({ phase: "start", toolName: "read", toolCallId: "tool-1" });
+      recorder.noteToolEvent({
+        phase: "result",
+        toolName: "read",
+        toolCallId: "tool-1",
+        result: "private result",
+      });
+      recorder.noteAssistantText("partial private reply");
+    });
+    // Abort before the recorder's Promise FIFO can start its first append.
+    controller.abort(new Error("run stopped"));
+    recorder.flushAssistantSnapshot();
+    await recorder.finalize();
+
+    expect(await messages(target)).toMatchObject([
+      { message: { role: "user", content: [{ text: "private prompt" }] } },
+      { message: { role: "assistant", content: [{ type: "toolCall", id: "tool-1" }] } },
+      { message: { role: "toolResult", content: [{ text: "private result" }] } },
+      {
+        message: {
+          role: "assistant",
+          content: [{ text: "partial private reply" }],
+          stopReason: "aborted",
+        },
+      },
+    ]);
+    expect(await messages(foreign.target, other)).toEqual([]);
+  });
+
+  it("rolls back a failed model and appends its visible note to the original actor after cancellation", async () => {
+    const { target } = await create("rollback", patchedModel);
+    const foreign = await create("rollback", patchedModel, other);
+    const controller = new AbortController();
+    const onError = vi.fn();
+    const guard = await withIncognitoSessionActor(
+      actor,
+      () => createAgentPatchedSessionModelRunGuard({ ...target, cfg: {}, onError }),
+      controller.signal,
+    );
+    controller.abort(new Error("run finished"));
+    await withIncognitoSessionBinding({ actor: other }, () =>
+      guard.fail(new Error("model unavailable"), "model_not_found"),
+    );
+
+    expect(onError).not.toHaveBeenCalled();
+    const reverted = (await actor.sessions.read(authority, target)).entry;
+    expect(reverted).toMatchObject({
+      model: "gpt-4o",
+      modelOverride: "gpt-4o",
+    });
+    expect(reverted?.modelFallback).toBeUndefined();
+    expect(await messages(target)).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "custom",
+          customType: "openclaw.system-note",
+          display: true,
+          content: "System note: model openai/gpt-4.1 failed; reverted to openai/gpt-4o.",
+        }),
       }),
-    }),
-  );
-  expect((await other.sessions.read(authority, foreign.target)).entry).toMatchObject(patchedModel);
-  expect(await messages(foreign.target, other)).toEqual([]);
+    );
+    expect((await other.sessions.read(authority, foreign.target)).entry).toMatchObject(
+      patchedModel,
+    );
+    expect(await messages(foreign.target, other)).toEqual([]);
+  });
 });
 
 it("does not roll a replacement session back using a previous incarnation's model guard", async () => {
@@ -216,16 +227,16 @@ it("settles hidden cleanup on its original actor after the run is canceled", asy
   const { hidden, cleanup } = await withIncognitoSessionActor(
     actor,
     async () => {
-      const hidden = await prepareInternalSessionEffectsSession(params);
-      const cleanup = createInternalSessionEffectsCleanup({
+      const created = await prepareInternalSessionEffectsSession(params);
+      const retainedCleanup = createInternalSessionEffectsCleanup({
         ...params,
         enabled: true,
         onError: (error) => {
           throw error;
         },
       });
-      cleanup.track(hidden);
-      return { hidden, cleanup };
+      retainedCleanup.track(created);
+      return { hidden: created, cleanup: retainedCleanup };
     },
     controller.signal,
   );

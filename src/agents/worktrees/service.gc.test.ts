@@ -557,6 +557,33 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, live.id)?.removedAt).toBeUndefined();
   });
 
+  it("preserves expired recovery refs when the removal pin is locked", async () => {
+    const created = await materializeDownstreamFixture("locked-expiry-pin");
+    const removed = await service.remove({ id: created.id, reason: "retention" });
+    const snapshotRef = removed.snapshotRef!;
+    const snapshot = await git(repo, "rev-parse", snapshotRef);
+    const pendingRef = `refs/openclaw/removals/${created.id}`;
+    await git(repo, "update-ref", pendingRef, snapshot);
+    await git(repo, "pack-refs", "--all");
+    const lock = path.join(repo, ".git", `${pendingRef}.lock`);
+    await fs.mkdir(path.dirname(lock), { recursive: true });
+    await fs.writeFile(lock, "", { flag: "wx" });
+    now += SNAPSHOT_RETENTION_MS + 1;
+    try {
+      expect((await service.gc()).snapshotsPruned).toBe(0);
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBe(snapshotRef);
+      expect(await git(repo, "rev-parse", "--verify", snapshotRef)).toBe(snapshot);
+      expect(await git(repo, "rev-parse", "--verify", pendingRef)).toBe(snapshot);
+    } finally {
+      await fs.unlink(lock);
+    }
+    expect((await service.gc()).snapshotsPruned).toBe(1);
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "for-each-ref", "--format=%(refname)", snapshotRef, pendingRef)).toBe(
+      "",
+    );
+  });
+
   it("does not restore a snapshot while garbage collection is expiring it", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
@@ -585,7 +612,10 @@ describe("ManagedWorktreeService garbage collection", () => {
     const blockedDeletion = vi
       .spyOn(worktreeGit, "requireGit")
       .mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "update-ref" && args[1] === "-d" && args[2] === removed.snapshotRef) {
+        if (
+          args[0] === "update-ref" &&
+          options?.input?.toString().includes(`delete ${removed.snapshotRef}\0`)
+        ) {
           deleting.resolve();
           await resume.promise;
         }

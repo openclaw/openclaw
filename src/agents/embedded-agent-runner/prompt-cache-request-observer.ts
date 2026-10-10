@@ -64,6 +64,7 @@ export function createPromptCacheRequestObserver(
         return;
       }
       const cacheBreak = completePromptCacheObservation({ ...params, usage, providerPrompt });
+      const hasCacheTelemetry = usage?.cacheTelemetry?.state !== "unavailable";
       observation = {
         requestIndex,
         broke: Boolean(cacheBreak),
@@ -73,8 +74,8 @@ export function createPromptCacheRequestObserver(
         promptTokens:
           usage?.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
         input: usage?.input,
-        cacheRead: usage?.cacheRead,
-        cacheWrite: usage?.cacheWrite,
+        cacheRead: hasCacheTelemetry ? usage?.cacheRead : undefined,
+        cacheWrite: hasCacheTelemetry ? usage?.cacheWrite : undefined,
         changes: cacheBreak?.changes ?? request.changes,
       };
       const { snapshot } = request;

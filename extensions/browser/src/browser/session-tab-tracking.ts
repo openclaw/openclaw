@@ -70,6 +70,13 @@ export type DurableTab = BrowserSessionTabRecord & {
 
 type DurableOwnership = Extract<BrowserTabOwnership, { status: "durable" }>;
 
+function captureSessionTabParams<T extends SessionTabParams>(input: T) {
+  return {
+    ...input,
+    authority: captureBrowserSessionTabAuthority(input.authority),
+  };
+}
+
 function normalizeProfileAliases(values?: Array<string | undefined>): string[] {
   return [
     ...new Set(
@@ -347,10 +354,7 @@ export function withBrowserDashboardRegistration<T, Authority extends BrowserSes
 export async function trackSessionBrowserTab(
   input: SessionTabParams & { now?: number },
 ): Promise<DurableTab | undefined> {
-  const params = {
-    ...input,
-    authority: captureBrowserSessionTabAuthority(input.authority),
-  };
+  const params = captureSessionTabParams(input);
   const identity = resolveInteractionIdentity(params);
   if (!identity) {
     return undefined;
@@ -456,10 +460,7 @@ function canonicalStorageKey(
 export async function touchSessionBrowserTab(
   input: SessionTabParams & { now?: number },
 ): Promise<void> {
-  const params = {
-    ...input,
-    authority: captureBrowserSessionTabAuthority(input.authority),
-  };
+  const params = captureSessionTabParams(input);
   const identity = resolveInteractionIdentity(params);
   if (!identity) {
     return;
@@ -529,10 +530,7 @@ export async function touchSessionBrowserTab(
 }
 
 export async function untrackSessionBrowserTab(input: SessionTabParams): Promise<void> {
-  const params = {
-    ...input,
-    authority: captureBrowserSessionTabAuthority(input.authority),
-  };
+  const params = captureSessionTabParams(input);
   const identity = resolveInteractionIdentity(params);
   if (!identity) {
     return;

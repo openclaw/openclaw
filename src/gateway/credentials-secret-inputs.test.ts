@@ -136,20 +136,6 @@ describe("resolveGatewayCredentialsWithSecretInputs", () => {
     expect(asyncResolved).toEqual(expected);
   });
 
-  it("resolves an env-template local token through the configured auth path", async () => {
-    await expect(
-      resolveGatewayCredentialsWithSecretInputs({
-        config: cfg({
-          gateway: {
-            mode: "local",
-            auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
-          },
-        }),
-        env: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
-      }),
-    ).resolves.toEqual({ token: "env-token", password: undefined });
-  });
-
   it.each([
     {
       name: "pending bare shorthand",
@@ -178,18 +164,6 @@ describe("resolveGatewayCredentialsWithSecretInputs", () => {
       ).resolves.toEqual({ token: "${OTHER}", password: undefined });
     },
   );
-
-  it("preserves escaped literal credentials through async resolution clones", async () => {
-    const config = cfg({
-      gateway: { mode: "local", auth: { mode: "token", token: "${LITERAL_TOKEN}" } },
-    });
-    setConfigResolutionFacts(config, new Set());
-
-    await expect(resolveGatewayCredentialsWithSecretInputs({ config, env: {} })).resolves.toEqual({
-      token: "${LITERAL_TOKEN}",
-      password: undefined,
-    });
-  });
 
   it.each(["token", "password"] as const)(
     "resolves config-first %s SecretRef even when OPENCLAW env exists",

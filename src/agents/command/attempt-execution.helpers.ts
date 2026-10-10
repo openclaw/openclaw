@@ -22,7 +22,10 @@ import {
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionHistoryBinding } from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -139,13 +142,19 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
+  abortSignal?.throwIfAborted();
+  const source = captureIncognitoSessionSource(target);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return false;
+  }
   const incognito = captureIncognitoSessionHistoryBinding(target);
-  target = { ...target, ...(incognito ? { storePath: incognito.actor.path } : {}) };
-  await waitForSessionTranscriptProjection(target, abortSignal);
+  const capturedTarget = { ...target, ...(incognito ? { storePath: incognito.actor.path } : {}) };
+  await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
   const { readSessionTranscriptBoundedMessageTailPageAsync } =
     await import("../../gateway/session-transcript-readers.js");
   const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
-    target,
+    capturedTarget,
     { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
     abortSignal,
     incognito,

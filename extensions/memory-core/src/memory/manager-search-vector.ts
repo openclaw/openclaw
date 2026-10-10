@@ -105,19 +105,12 @@ export async function searchChunksByEmbedding(params: {
   const topResults: SearchRowResult[] = [];
   let lastRowid: bigint | undefined;
   while (true) {
-    const rows =
-      lastRowid === undefined
-        ? firstStmt.iterate(
-            ...providerModels,
-            ...params.sourceFilter.params,
-            FALLBACK_VECTOR_BATCH_SIZE,
-          )
-        : stmt.iterate(
-            ...providerModels,
-            lastRowid,
-            ...params.sourceFilter.params,
-            FALLBACK_VECTOR_BATCH_SIZE,
-          );
+    const rows = (lastRowid === undefined ? firstStmt : stmt).iterate(
+      ...providerModels,
+      ...(lastRowid === undefined ? [] : [lastRowid]),
+      ...params.sourceFilter.params,
+      FALLBACK_VECTOR_BATCH_SIZE,
+    );
     // SAFETY: Both scans read INTEGER rowids as bigint and embeddings from a STRICT BLOB column.
     const batch = rows as IterableIterator<ChunkEmbeddingRow>;
     let batchSize = 0;

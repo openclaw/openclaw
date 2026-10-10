@@ -16,6 +16,7 @@ import {
   useIncognitoActorProbe,
   useIncognitoNoHostSql,
 } from "../../state/openclaw-agent-execution-incognito.test-support.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { resolveSession } from "../command/session.js";
@@ -188,19 +189,27 @@ it("does not accept command preparation after cancellation during an actor read"
 it("keeps selected absence distinct from a released command actor", async () => {
   const missingEnv = { OPENCLAW_STATE_DIR: dirs.make("cli-absent-actor-") };
   const sessionKey = "agent:main:dashboard:incognito-missing";
+  const missingTarget = {
+    agentId: "main",
+    sessionKey,
+    sessionId: "missing",
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: missingEnv }),
+  };
   await withIncognitoSessionBinding(
     { kind: "absent", agentId: "main", env: missingEnv, authority },
     async () => {
       const resolved = await resolveSession({
         cfg: {
           agents: { defaults: {} },
-          session: {
-            store: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: missingEnv }),
-          },
+          session: { store: missingTarget.storePath },
         },
         sessionKey,
       });
       expect(resolved.sessionEntry).toBeUndefined();
+      expect(await hasCliSessionTranscript({ sessionTarget: missingTarget })).toBe(false);
+      expect(await loadCliSessionHistoryMessages({ sessionTarget: missingTarget })).toEqual([]);
+      expect(await sessionTranscriptHasContent(missingTarget)).toBe(false);
+      expect(captureOpenClawAgentDatabaseExecution.listIncognito(missingEnv)).toEqual([]);
     },
   );
   const target = await create("rebound-command");

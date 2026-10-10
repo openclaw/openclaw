@@ -77,9 +77,9 @@ function expectAdmittedSchemaObjects(database: DatabaseSync) {
   const facts = getAdmittedSqliteSchemaFacts(database);
   expect(facts?.tables.has("session_nodes")).toBe(true);
   expect(facts?.indexes).toContain("idx_agent_session_nodes_updated_at");
-  expect(facts?.triggers?.get("session_nodes_canonical_pending_after_update")).toEqual({
-    table: "session_nodes",
-    sql: expect.stringContaining("INSERT INTO session_canonical_validation_pending"),
+  expect(facts?.triggers?.get("session_entry_snapshots_after_update")).toEqual({
+    table: "session_entry_snapshots",
+    sql: expect.stringContaining("UPDATE session_nodes SET snapshot_revision"),
   });
   return facts;
 }
@@ -236,6 +236,7 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
   openOpenClawStateDatabase({ env: options.env })
     .db.prepare("UPDATE agent_database_leases SET owner_start_time=-1 WHERE lease_id=?")
     .run(staleLease);
+  canonical.db.exec("CREATE TABLE coldadmit_alias_fixture(value TEXT)");
   const observed = observeCallerSchemaInspections(canonical.path, aliasPath);
   try {
     await expect(
@@ -245,7 +246,6 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
           database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count,
       ),
     ).resolves.toBe(0);
-    canonical.db.exec("CREATE TABLE coldadmit_alias_fixture(value TEXT)");
     await withOpenClawAgentDatabaseWrite({ ...options, path: aliasPath }, (database) => {
       expect(getAdmittedSqliteSchemaFacts(database.db)?.tables.has("coldadmit_alias_fixture")).toBe(
         true,
@@ -406,13 +406,13 @@ it.each([
   { change: "metadata-missing", retainWorker: true },
   { change: "warm-schema", retainWorker: true },
 ] as const)(
-  "refuses $change drift after worker admission with retained worker=$retainWorker",
+  "refuses $change drift at worker admission with retained worker=$retainWorker",
   async ({ change, retainWorker }) => {
     const options = {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-admit-drift-") },
     };
-    const retainedExecution = retainWorker
+    let retainedExecution = retainWorker
       ? captureOpenClawAgentDatabaseExecution(options)
       : undefined;
     try {
@@ -427,6 +427,15 @@ it.each([
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }
+      const metadataChange = change === "owner" || change.startsWith("metadata-");
+      if (metadataChange) {
+        await retainedExecution?.release();
+        retainedExecution = undefined;
+        await closeOpenClawAgentDatabasesAsync();
+        // Immutable ownership is checked on the replacement's first admission.
+        fs.copyFileSync(pathname, `${pathname}.replacement`);
+        fs.renameSync(`${pathname}.replacement`, pathname);
+      }
       if (change === "replacement") {
         fs.copyFileSync(pathname, `${pathname}.replacement`);
         fs.renameSync(`${pathname}.replacement`, pathname);
@@ -437,7 +446,6 @@ it.each([
       } else if (change !== "warm-schema") {
         const editor = openNodeSqliteDatabase(pathname);
         try {
-          const metadataChange = change === "owner" || change.startsWith("metadata-");
           const schemaBefore = metadataChange
             ? editor.prepare("PRAGMA schema_version").get()
             : undefined;
@@ -456,6 +464,9 @@ it.each([
         } finally {
           editor.close();
         }
+      }
+      if (metadataChange && retainWorker) {
+        retainedExecution = captureOpenClawAgentDatabaseExecution(options);
       }
       const operation = vi.fn();
       const observed = retainWorker ? observeCallerSchemaInspections(pathname) : undefined;
