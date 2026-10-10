@@ -142,7 +142,6 @@ async function projectModels(params: {
   cache: Map<string, number>;
   modelCatalog: ContextWindowCatalog;
   processed: number;
-  assertCurrent?: () => void;
 }): Promise<void> {
   let processed = params.processed;
   for (const models of [params.modelCatalog.entries, params.modelCatalog.staticEntries ?? []]) {
@@ -151,7 +150,6 @@ async function projectModels(params: {
       processed += 1;
       if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
         await yieldToGateway();
-        params.assertCurrent?.();
       }
     }
   }
@@ -160,7 +158,6 @@ async function projectModels(params: {
 export async function prepareContextWindowCaches(params: {
   config: OpenClawConfig;
   modelCatalog: ContextWindowCatalog;
-  assertCurrent?: () => void;
 }): Promise<ContextWindowCacheState> {
   const caches: ContextWindowCacheState = {
     configuredTokenCache: new Map(),
@@ -184,7 +181,6 @@ export async function prepareContextWindowCaches(params: {
         processed += 1;
         if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
           await yieldToGateway();
-          params.assertCurrent?.();
         }
       }
     }
@@ -193,23 +189,18 @@ export async function prepareContextWindowCaches(params: {
     cache: caches.discoveredTokenCache,
     modelCatalog: params.modelCatalog,
     processed,
-    assertCurrent: params.assertCurrent,
   });
-  params.assertCurrent?.();
   return caches;
 }
 
 export async function prepareDiscoveredContextTokenCache(params: {
   modelCatalog: ContextWindowCatalog;
-  assertCurrent?: () => void;
 }): Promise<Map<string, number>> {
   const cache = new Map<string, number>();
   await projectModels({
     cache,
     modelCatalog: params.modelCatalog,
     processed: 0,
-    assertCurrent: params.assertCurrent,
   });
-  params.assertCurrent?.();
   return cache;
 }
