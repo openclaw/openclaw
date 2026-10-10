@@ -1989,6 +1989,34 @@ their native owner and allocate no actor; native selector removal remains P12.
 This prerequisite claims no incognito T1 retirement and changes no schema, stored
 bytes, durability, retention, permissions, content limits, or update behavior.
 
+### Incognito Gateway controls and HTTP authority (P05, inactive)
+
+Explicit actor bindings compose Goals, Side chat source reads, skill selections,
+suggestions, execution controls, Board approval, and HTTP disclosure through the
+existing session owners. Side chat keeps its separate durable execution destination.
+Current policy and sharing decisions consume the actor's committed finite facts;
+they do not query host SQLite or retain a second full-row authority cache.
+
+Board puts retain their source through automatic review and grant settlement.
+Review failure does not replay an already committed put. Explicit missing Board,
+progress-card, and delete sources return their existing absence or refusal before
+durable discovery. Retained ended actors remain ended. Provider continuations,
+mention delivery, activity recaps, and persistent environments keep their existing
+incognito exclusions before unsupported storage work.
+
+JSON and SSE history recheck disclosure authority after asynchronous preparation
+and before bytes leave the Gateway. Tool invocation, including nested session sends,
+retains the configured caller role and the original source through execution.
+Kill, avatar, managed image, and session pull-request reads retain their captured
+generation and reject replacement during waits. Accepted work settles before the
+consumer releases its source.
+
+Production acquisition remains host-owned until P12. Ordinary unbound incognito
+calls allocate no actor and retain their native owner. This prerequisite adds no
+schema, retention, permission, content limit, worker service, feature flag, or
+update migration and claims no incognito T1 retirement. P12 owns production
+selection and removal of the remaining native incognito selectors.
+
 ### Existing worker flows
 
 Remote model catalog refreshes capture the shared store before downloading and

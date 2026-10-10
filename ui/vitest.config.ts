@@ -7,7 +7,7 @@ import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import type { Vitest } from "vitest/node";
+import { experimental_getRunnerTask, type Reporter, type Vitest } from "vitest/node";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
@@ -35,6 +35,7 @@ import {
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
+import { webkitExpectedFailures } from "./test/webkit-expected-failures.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -111,9 +112,69 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
-export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
+// Re-add modal-dialog.browser (CDP media emulation) and web-awesome-accessibility.node
+// (CDP accessibility tree) after their browser-neutral replacements land.
+const webkitTestFiles = [
+  "src/components/web-awesome-dropdown.browser.test.ts",
+  "src/components/web-awesome-dropdown-owner.browser.test.ts",
+  "src/components/web-awesome-select-controls.browser.test.ts",
+  "src/components/web-awesome-select.browser.test.ts",
+  "src/components/web-awesome.test.ts",
+  "src/components/web-awesome-theme.browser.test.ts",
+  "src/components/menu-surface.browser.test.ts",
+  "src/components/modal-dialog.test.ts",
+  "src/components/tooltip.test.ts",
+  "src/components/tooltip.browser.test.ts",
+  "src/components/panel-tab-strip.test.ts",
+  "src/components/panel-tab-strip.browser.test.ts",
+  "src/components/tooltip-title.browser.test.ts",
+  "src/pages/chat/chat-composer-context.browser.test.ts",
+  "src/pages/chat/chat-composer-context.palette.browser.test.ts",
+  "src/pages/chat/chat-composer-overflow.browser.test.ts",
+  "src/pages/chat/components/chat-effort-picker.browser.test.ts",
+  "src/pages/chat/components/chat-model-picker.browser.test.ts",
+];
+
+const webkitExpectedFailureReporter: Reporter = {
+  onTestModuleCollected(module) {
+    if (module.project.name !== "webkit") {
+      return;
+    }
+    const entries = webkitExpectedFailures.filter((entry) =>
+      module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`),
+    );
+    for (const test of module.children.allTests()) {
+      if (entries.some((entry) => entry.name === test.fullName)) {
+        // Mirror the browser-side flag for native expected-failure reporting.
+        experimental_getRunnerTask(test).fails = true;
+      }
+    }
+  },
+  onTestRunEnd(modules) {
+    const webkitModules = modules.filter((module) => module.project.name === "webkit");
+    if (webkitModules.length === 0) {
+      return;
+    }
+    for (const entry of webkitExpectedFailures) {
+      const tests = webkitModules
+        .filter((module) => module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`))
+        .flatMap((module) => Array.from(module.children.allTests()))
+        .filter((test) => test.fullName === entry.name);
+      if (tests.length !== 1 || tests[0]?.result().state !== "passed") {
+        throw new Error(`WebKit expected failure did not execute as expected: ${entry.name}`);
+      }
+    }
+  },
+};
+
+export function createUiBrowserVitestConfig(
+  env = process.env,
+  browser: "chromium" | "webkit" = "chromium",
+): ViteUserConfig {
   const include = includeUiTests(
-    ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+    browser === "webkit"
+      ? webkitTestFiles
+      : ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -125,15 +186,18 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       nodeDrivenBrowserLayoutTests,
       matchesVitestGlob,
     ).length === 0;
-  if (!excludesBrowserFiles && chromiumLaunchOptions === null) {
+  if (browser === "chromium" && !excludesBrowserFiles && chromiumLaunchOptions === null) {
     chromiumLaunchOptions = resolveChromiumLaunchOptions();
   }
   const provider = playwright({
-    launchOptions: {
-      ...chromiumLaunchOptions,
-      // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
-      args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
-    },
+    launchOptions:
+      browser === "chromium"
+        ? {
+            ...chromiumLaunchOptions,
+            // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
+            args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
+          }
+        : undefined,
   });
   if (excludesBrowserFiles) {
     // Keep browser discovery for native sharding; only skip its speculative launch.
@@ -224,16 +288,19 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       // File-project loading overrides Vite's root with the config directory.
       // Keep discovery and setup paths rooted in the UI in every entrypoint.
       root: here,
-      name: "browser",
+      name: browser === "webkit" ? "webkit" : "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+      setupFiles: [
+        "./src/test-helpers/lit-warnings.setup.ts",
+        ...(browser === "webkit" ? ["./test/webkit-expected-failures.setup.ts"] : []),
+      ],
       browser: {
         enabled: true,
         provider,
-        instances: [{ browser: "chromium", name: "chromium" }],
+        instances: [{ browser, name: browser }],
         headless: true,
         ui: false,
       },
@@ -293,7 +360,10 @@ export default defineConfig({
   test: {
     ...sharedUiTestConfig,
     maxWorkers: sharedVitestConfig.test.maxWorkers,
-    reporters: sharedVitestConfig.test.reporters,
+    reporters: [
+      ...sharedVitestConfig.test.reporters,
+      ...(process.env.OPENCLAW_UI_WEBKIT === "1" ? [webkitExpectedFailureReporter] : []),
+    ],
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
       {
@@ -368,6 +438,9 @@ export default defineConfig({
         },
       },
       { ...createUiBrowserVitestConfig(), extends: false },
+      ...(process.env.OPENCLAW_UI_WEBKIT === "1"
+        ? [{ ...createUiBrowserVitestConfig(process.env, "webkit"), extends: false }]
+        : []),
       {
         extends: false,
         plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
