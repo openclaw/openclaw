@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -9,9 +10,18 @@ import {
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
-import type { SqliteWorkerOperationContext } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
+
+export type SqliteWorkerOperationContext = {
+  port: MessagePort;
+  attachment?: { value: unknown };
+  refusal?: SqliteWorkerError;
+  committed?: { facts: unknown };
+  settled?: true;
+  sourceReservations?: true;
+  pendingReceipts?: Map<DatabaseSync, number>;
+};
 
 export type SqliteWorkerAdmissionRequest = {
   stage: "open" | "prepare" | "transaction" | "commit";
