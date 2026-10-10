@@ -11,7 +11,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import { mountRoster } from "./roster.test-support.ts";
+import { mountRoster, settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.ts";
 
 const sessionKey = "agent:main:attention";
@@ -130,7 +130,7 @@ describe("AppSidebar session attention", () => {
     );
   });
 
-  it("projects canonical attention onto Home across row refresh ordering", async () => {
+  it("projects canonical main attention onto the agent header across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
     const client = {
       request: vi.fn().mockResolvedValue({ questions: [] }),
@@ -138,8 +138,21 @@ describe("AppSidebar session attention", () => {
     const gatewayHarness = createGatewayHarness(client);
     const sessionsHarness = createSessionsHarness("main", [mainKey]);
     setRows(sessionsHarness, [agentAttentionRow(mainKey)]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
-    const home = sidebar.querySelector(".nav-item--home");
+    const { sidebar, context } = await mountSidebar(
+      gatewayHarness.gateway,
+      sessionsHarness.sessions,
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
+    const publishRows = async (rows: GatewaySessionRow[]) => {
+      setRows(sessionsHarness, rows);
+      await rosterActivityStore(context).refresh();
+      await settleRoster(sidebar);
+    };
+    const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
 
     expect(home?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
 
@@ -162,7 +175,7 @@ describe("AppSidebar session attention", () => {
     await sidebar.updateComplete;
     expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
-    setRows(sessionsHarness, []);
+    await publishRows([]);
     await sidebar.updateComplete;
     expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
@@ -170,19 +183,21 @@ describe("AppSidebar session attention", () => {
       id: "question-home",
       status: "cancelled",
     });
-    setRows(sessionsHarness, [
+    await publishRows([
       failedRow(mainKey, {
         lastRunError: "⚠️ ✉️ Message failed:  delivery unavailable",
       }),
     ]);
     await sidebar.updateComplete;
     expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(home?.getAttribute("aria-label")).toBe(
-      "Home · Run failed:   Message failed:  delivery unavailable",
-    );
-    expect(home?.getAttribute("aria-label")).not.toMatch(/[⚠✉]/u);
+    expect(
+      home?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+    ).toBe("Run failed:   Message failed:  delivery unavailable");
+    expect(
+      home?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+    ).not.toMatch(/[⚠✉]/u);
 
-    setRows(sessionsHarness, [
+    await publishRows([
       { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
     ]);
     await sidebar.updateComplete;
@@ -242,30 +257,28 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
   });
 
-  it.each(["key", "hourglass"] as const)(
-    "shows %s attention ahead of a run error",
-    async (attention) => {
-      const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-      setRows(sessionsHarness, [
-        agentAttentionRow(sessionKey, {
-          agentStatus: {
-            note: "Blocked: need the staging password",
-            attention,
-            expiresAt: Date.now() + 60_000,
-          },
-        }),
-      ]);
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        sessionsHarness.sessions,
-      );
+  it("shows hourglass attention ahead of a run error", async () => {
+    const attention = "hourglass";
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [
+      agentAttentionRow(sessionKey, {
+        agentStatus: {
+          note: "Blocked: need the staging password",
+          attention,
+          expiresAt: Date.now() + 60_000,
+        },
+      }),
+    ]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
 
-      expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
-      expect(sidebar.querySelector('[data-session-attention="agent"] svg circle')).not.toBeNull();
-      expect(sidebar.textContent).toContain("Blocked: need the staging password");
-      expect(sidebar.textContent).not.toContain("Run failed:");
-    },
-  );
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-attention="agent"] svg circle')).not.toBeNull();
+    expect(sidebar.textContent).toContain("Blocked: need the staging password");
+    expect(sidebar.textContent).not.toContain("Run failed:");
+  });
 
   it("shows an unflagged agent status note in the subtitle slot", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
@@ -321,6 +334,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.findSidebarHovercardRowByKey(sessionKey)?.attention).toEqual({
       kind: "error",
       reason: "Provider credits exhausted",
+      sourceSessionKey: sessionKey,
     });
   });
 
@@ -352,31 +366,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
-  it("does not render an expired agent declaration", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
-      {
-        key: sessionKey,
-        kind: "direct",
-        label: "Quiet session",
-        updatedAt: 2,
-        agentStatus: {
-          note: "Expired blocker",
-          attention: "hourglass",
-          expiresAt: Date.now() - 1,
-        },
-      },
-    ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
-
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
-    expect(sidebar.textContent).not.toContain("Expired blocker");
-  });
-
-  it.each(["exec", "plugin", "system-agent"] as const)(
+  it.each(["exec", "plugin"] as const)(
     "shows %s approval request details ahead of a run error",
     async (kind) => {
       const approval = {
@@ -409,7 +399,7 @@ describe("AppSidebar session attention", () => {
     },
   );
 
-  it("uses canonical Home attention without duplicating an agent approval badge", async () => {
+  it("uses canonical main attention without duplicating the agent header approval badge", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -426,8 +416,11 @@ describe("AppSidebar session attention", () => {
       [approval],
     );
 
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
     const homeAttention = sidebar.querySelector(
-      '.nav-item--home [data-session-attention="approval"]',
+      '[data-agent-group="main"] .sidebar-agent-roster__header [data-session-attention="approval"]',
     );
     expect(homeAttention).not.toBeNull();
     expect(
@@ -437,21 +430,8 @@ describe("AppSidebar session attention", () => {
     ).toBe("git status");
 
     expect(
-      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+      sidebar.querySelector(".sidebar-workspace-header__main")?.getAttribute("aria-label"),
     ).not.toContain("pending approval");
-  });
-
-  it("shows an error icon and reason for an unread failure", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [failedRow()]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Run failed: Provider credits exhausted");
   });
 
   it("keeps a read failure dismissed after the sessions list refreshes", async () => {

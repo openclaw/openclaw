@@ -1,198 +1,89 @@
-import { randomUUID } from "node:crypto";
-import { deserialize } from "node:v8";
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import type {
-  SqliteWorkerNativeSettlementOwner,
-  SqliteWorkerOperationSettlement,
-} from "../../infra/sqlite-worker-operation-settlement.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  type SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { withCronReceiptAuthorityMutation } from "../store/receipt-authority-owner.js";
 import type { CronRunReceipt } from "../store/run-receipt.types.js";
-import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type {
+  CronRuntimeMutationContracts,
   CronReceiptRevisionRefusal,
   CronJobMutationRefusal,
   CronRuntimeMutationType,
   CronRuntimeWorkerOperations,
 } from "../store/runtime-worker.types.js";
 
-/** One settlement owner serves typed cron mutations; callbacks and database handles stay local. */
-export async function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(params: {
+type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
   context: OpenClawStateWorkerContext;
   type: Type;
   input: CronRuntimeMutationContracts[Type]["input"];
+  snapshot: CronRuntimeMutationContracts[Type]["snapshot"];
   assertCurrent: () => void;
-  prepare: (facts: CronRuntimeMutationContracts[Type]["facts"]) => {
-    value: CronRuntimeMutationContracts[Type]["preparation"];
-    assertCurrent: () => void;
-  };
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
   onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
   onRolledBackConflict?: (receipt: CronRunReceipt) => void;
   onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
   onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
-}): Promise<void> {
-  const nonce = randomUUID();
-  let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
-  let native: SqliteWorkerNativeSettlementOwner | undefined;
-  let bytes: Uint8Array | undefined;
-  let published = false;
-  let conflict: CronRunReceipt | undefined;
-  let receiptRevision: CronReceiptRevisionRefusal | undefined;
-  let mutationRefusal: CronJobMutationRefusal | undefined;
-  const assertCurrent = () => {
-    params.context.admission.assertCurrent();
-    params.assertCurrent();
-  };
-  const publishCommitted = () => {
-    const committed = native?.committed?.facts;
-    if (published || !isRecord(committed) || committed.nonce !== nonce) {
-      return;
-    }
-    if (!bytes) {
-      throw new Error("Committed cron mutation lost its retained outcome");
-    }
-    // SAFETY: this command's private worker retained these bytes before its matching native commit.
-    const outcome = deserialize(bytes) as CronRuntimeMutationContracts[Type]["outcome"];
-    published = true;
-    bytes = undefined;
-    params.publish(outcome);
-  };
-  try {
-    await runOpenClawStateWorkerOperation(
-      params.context,
-      async (scope) => {
-        try {
-          const command = {
-            type: params.type,
-            input: { ...params.input, nonce },
-            // SAFETY: Type selects both the command and its input from the same contract map.
-          } as SqliteWorkerCommand<CronRuntimeWorkerOperations>;
-          const result = await scope.execute(command);
-          if (result.nonce !== nonce) {
-            throw new Error("Cron mutation returned a different operation nonce");
-          }
-          if ("conflict" in result) {
-            if (params.type !== "cron.reserveRuns" || !params.onRolledBackConflict) {
-              throw new Error("Cron mutation returned an unexpected reservation conflict");
-            }
-            conflict = result.conflict;
-          }
-          if ("receiptRevision" in result) {
-            if (params.type !== "cron.finalizeRuns" || !params.onRolledBackReceiptRevision) {
-              throw new Error("Cron mutation returned an unexpected receipt revision refusal");
-            }
-            receiptRevision = result.receiptRevision;
-          }
-          if ("mutationRefusal" in result) {
-            if (params.type !== "cron.mutateJobs" || !params.onRolledBackMutation) {
-              throw new Error("Cron mutation returned an unexpected job mutation refusal");
-            }
-            mutationRefusal = result.mutationRefusal;
-          }
-        } finally {
-          await settlement;
-          publishCommitted();
-        }
-      },
-      {
-        assertCurrent,
-        createAdmission(retained) {
-          settlement = retained.settled;
-          let phase: "transaction" | "commit" | "settling" = "transaction";
-          let preparation: ReturnType<typeof params.prepare> | undefined;
-          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            const facts = request.facts;
-            const port =
-              isRecord(facts) && facts.preparationPort instanceof MessagePort
-                ? facts.preparationPort
-                : undefined;
-            try {
-              assertCurrent();
-              if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
-                throw new Error("Cron mutation differs from its retained transaction owner");
+};
+
+/** Push policy before dispatch; all current-row decisions remain in the worker. */
+export function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(
+  params: CronRuntimeMutationParams<Type>,
+): Promise<void> {
+  const snapshot = structuredClone(params.snapshot);
+  return withCronReceiptAuthorityMutation(
+    params.context,
+    async (authority) => {
+      let settled: "committed" | "not-committed" | "unknown" = "not-committed";
+      const assertCurrent = () => {
+        authority.assertCurrent();
+        params.context.admission.assertCurrent();
+        params.assertCurrent();
+      };
+      try {
+        await runOpenClawStateWorkerOperation(
+          authority.context,
+          async (scope) => {
+            // Config or caller authority may change after dispatch; cron accepts that race.
+            assertCurrent();
+            const command = {
+              type: params.type,
+              input: { ...params.input, snapshot },
+              // SAFETY: Type selects this private command's input, snapshot, and outcome together.
+            } as SqliteWorkerCommand<CronRuntimeWorkerOperations>;
+            settled = "unknown";
+            const result = await scope.execute(command).catch((error: unknown) => {
+              if (!hasSqliteWorkerOutcomeUnknown(error)) {
+                settled = "not-committed";
               }
-              if (request.stage === "transaction") {
-                if (!port) {
-                  throw new Error("Cron mutation has no policy preparation port");
-                }
-                preparation = params.prepare(
-                  // SAFETY: this private worker supplies the selected command's typed transaction facts.
-                  facts.preparation as CronRuntimeMutationContracts[Type]["facts"],
-                );
-                port.postMessage(preparation.value, []);
-                phase = "commit";
-              } else {
-                if (!(facts.bytes instanceof Uint8Array) || !preparation) {
-                  throw new Error("Cron mutation has no prepared outcome");
-                }
-                preparation.assertCurrent();
-                bytes = facts.bytes;
-                phase = "settling";
-              }
-            } finally {
-              port?.close();
+              throw error;
+            });
+            if ("outcome" in result) {
+              settled = "committed";
+              params.publish(result.outcome);
+              return;
             }
-            if (!grant()) {
-              throw new Error("Cron mutation admission expired");
+            settled = "not-committed";
+            if ("conflict" in result && params.onRolledBackConflict) {
+              params.onRolledBackConflict(result.conflict);
+            } else if ("receiptRevision" in result && params.onRolledBackReceiptRevision) {
+              params.onRolledBackReceiptRevision(result.receiptRevision);
+            } else if ("mutationRefusal" in result && params.onRolledBackMutation) {
+              params.onRolledBackMutation(result.mutationRefusal);
+            } else {
+              throw new Error("Cron mutation returned an unexpected refusal");
             }
-          });
-          native = admission;
-          return { nativeLocations: [params.context.admission.databasePath], admission };
-        },
-      },
-    );
-    if (conflict) {
-      const settled = await settlement;
-      if (
-        native?.committed ||
-        native?.settlement?.kind !== "completed" ||
-        settled?.kind !== "completed"
-      ) {
-        throw new Error("Cron reservation conflict has no confirmed native rollback");
+          },
+          { assertCurrent },
+        );
+      } finally {
+        params.onSettled?.(settled);
       }
-      params.onRolledBackConflict!(conflict);
-    } else if (receiptRevision) {
-      const settled = await settlement;
-      if (
-        native?.committed ||
-        native?.settlement?.kind !== "completed" ||
-        settled?.kind !== "completed"
-      ) {
-        throw new Error("Cron receipt revision refusal has no confirmed native rollback");
-      }
-      params.onRolledBackReceiptRevision!(receiptRevision);
-    } else if (mutationRefusal) {
-      const settled = await settlement;
-      if (
-        native?.committed ||
-        native?.settlement?.kind !== "completed" ||
-        settled?.kind !== "completed"
-      ) {
-        throw new Error("Cron job mutation refusal has no confirmed native rollback");
-      }
-      params.onRolledBackMutation!(mutationRefusal);
-    } else if (!published) {
-      throw new Error("Cron mutation did not publish a committed outcome");
-    }
-  } finally {
-    const settled = await settlement;
-    try {
-      publishCommitted();
-    } finally {
-      params.onSettled?.(
-        native?.committed
-          ? "committed"
-          : settled === undefined ||
-              settled.kind === "not-entered" ||
-              native?.settlement?.kind === "completed"
-            ? "not-committed"
-            : "unknown",
-      );
-      bytes = undefined;
-    }
-  }
+    },
+    {
+      settlement:
+        params.type === "cron.finishReceipt" || params.type === "cron.releaseReservations",
+    },
+  );
 }

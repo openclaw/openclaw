@@ -18,11 +18,13 @@ type AnnounceTestDeps = Pick<typeof announceRuntime, "getRuntimeConfig"> & {
 type OutputTestDeps = Pick<
   typeof announceRuntime,
   | "getRuntimeConfig"
-  | "readSubagentSessionEntry"
   | "readSessionMessagesAsync"
   | "resolveAgentIdFromSessionKey"
   | "resolveSessionStorePathCore"
 > & {
+  readSubagentSessionEntry: (
+    ...args: Parameters<typeof announceRuntime.readSubagentSessionEntry>
+  ) => Awaited<ReturnType<typeof announceRuntime.readSubagentSessionEntry>>;
   callGateway: AnnounceTestDeps["callGateway"];
   findTranscriptEvent: typeof sessionAccessor.findTranscriptEvent;
   findSessionTranscriptArchiveEventReadOnly: typeof sessionHistory.findSessionTranscriptArchiveEventReadOnly;
@@ -31,10 +33,12 @@ type OutputTestDeps = Pick<
 export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   getRequesterSessionActivity: typeof deliveryRuntime.getSubagentRequesterSessionActivity;
   isEmbeddedAgentRunActive: typeof embeddedRuns.isEmbeddedAgentRunActive;
-  resolveRequesterSessionAbandonment: typeof deliveryRuntime.resolveSubagentRequesterSessionAbandonment;
+  resolveRequesterSessionAbandonment: typeof embeddedRuns.resolveEmbeddedRunAbandonment;
   loadSessionEntry: typeof sessionAccessor.loadSessionEntryReadOnly;
   loadSessionEntryByKey: typeof deliveryRuntime.loadSessionEntryByKey;
-  loadRequesterSessionEntry: typeof deliveryRuntime.loadRequesterSessionEntry;
+  loadRequesterSessionEntry: (
+    ...args: Parameters<typeof deliveryRuntime.loadRequesterSessionEntry>
+  ) => Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>>;
   queueEmbeddedAgentMessageWithOutcome: (
     ...args: Parameters<typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync>
   ) =>
@@ -44,13 +48,7 @@ export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   sendMessage: typeof deliveryRuntime.sendSubagentAnnounceMessage;
 };
 
-// An exported reader spy does not replace activity's same-module lookup.
-// Fixtures replacing that reader must also provide their activity observation.
-type DeliveryTestOverrides = Partial<SubagentAnnounceDeliveryTestDeps> &
-  (
-    | { loadRequesterSessionEntry?: undefined }
-    | Pick<SubagentAnnounceDeliveryTestDeps, "getRequesterSessionActivity">
-  );
+type DeliveryTestOverrides = Partial<SubagentAnnounceDeliveryTestDeps>;
 
 type Overrides = Partial<AnnounceTestDeps & OutputTestDeps & SubagentAnnounceDeliveryTestDeps>;
 type Scope = "announce" | "output" | "delivery";
@@ -139,7 +137,7 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
     install(
       announceRuntime.readSubagentSessionEntry,
       () => vi.spyOn(announceRuntime, "readSubagentSessionEntry"),
-      current.readSubagentSessionEntry,
+      async (...args) => current.readSubagentSessionEntry!(...args),
     );
   }
   if (current.readSessionMessagesAsync) {
@@ -188,7 +186,14 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
     install(
       deliveryRuntime.loadRequesterSessionEntry,
       () => vi.spyOn(deliveryRuntime, "loadRequesterSessionEntry"),
-      current.loadRequesterSessionEntry,
+      async (...args) => current.loadRequesterSessionEntry!(...args),
+    );
+    install(
+      deliveryRuntime.captureRequesterSessionEntryCurrent,
+      () => vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent"),
+      (...args) =>
+        () =>
+          current.loadRequesterSessionEntry!(...args).entry,
     );
   }
   if (current.loadSessionEntryByKey) {
@@ -214,8 +219,8 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
   }
   if (current.resolveRequesterSessionAbandonment) {
     install(
-      deliveryRuntime.resolveSubagentRequesterSessionAbandonment,
-      () => vi.spyOn(deliveryRuntime, "resolveSubagentRequesterSessionAbandonment"),
+      embeddedRuns.resolveEmbeddedRunAbandonment,
+      () => vi.spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment"),
       current.resolveRequesterSessionAbandonment,
     );
   }

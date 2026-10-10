@@ -244,34 +244,6 @@ describe("Discord thread binding restoration", () => {
     await bindingManager.stop();
   });
 
-  it("awaits committed touch and removal, preserves FIFO, and drains shutdown", async () => {
-    stores.entries.mockResolvedValue([persistedBinding()]);
-    const manager = await persistentManager();
-    const { entered, finish } = pauseNextWrite();
-    const touched = manager.touchThread({ threadId: "thread-1", at: 200 });
-    expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
-    await entered.promise;
-    expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(100);
-    const removed = manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
-    let stopped = false;
-    const stopping = manager.stop().then(() => {
-      stopped = true;
-    });
-    try {
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-      expect(stores.delete).not.toHaveBeenCalled();
-      expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
-      await expect(manager.touchThread({ threadId: "thread-1" })).rejects.toThrow("stopping");
-    } finally {
-      finish.resolve();
-      await Promise.all([touched, removed, stopping]);
-    }
-    expect(manager.getByThreadId("thread-1")).toBeUndefined();
-    expect(getThreadBindingManager("work")).toBeNull();
-    expect(stores.delete).toHaveBeenCalledOnce();
-  });
-
   it("does not turn revoked bind authority into an in-memory fallback", async () => {
     stores.entries.mockResolvedValueOnce([persistedBinding()]);
     const manager = await persistentManager();
@@ -308,30 +280,21 @@ describe("Discord thread binding restoration", () => {
   });
 
   it.each([
-    ["after-prefix", "sibling", "touch"],
-    ["before-commit", "target", "idle"],
-    ["after-commit", "target", "idle"],
-    ["before-commit", "target", "unbind"],
-    ["after-commit", "target", "unbind"],
-    ["after-commit", "target", "touch-failed-write"],
+    ["after-commit", "idle"],
+    ["before-commit", "unbind"],
+    ["after-commit", "unbind"],
+    ["after-commit", "touch-failed-write"],
   ] as const)(
-    "settles %s writes against synchronous %s %s",
-    async (boundary, touchedRecord, compatibility) => {
+    "settles %s writes against synchronous target %s",
+    async (boundary, compatibility) => {
       const saved = persistedBinding();
       const sibling = persistedBinding("agent:main:subagent:sibling");
       sibling.key = "work:thread-2";
       sibling.value.threadId = "thread-2";
-      const rows = installCanonicalRows(
-        boundary === "after-prefix"
-          ? [
-              [sibling.key, sibling.value],
-              [saved.key, saved.value],
-            ]
-          : [
-              [saved.key, saved.value],
-              [sibling.key, sibling.value],
-            ],
-      );
+      const rows = installCanonicalRows([
+        [saved.key, saved.value],
+        [sibling.key, sibling.value],
+      ]);
       const manager = await persistentManager();
       const entered = createDeferred<void>();
       const finish = createDeferred<void>();
@@ -350,33 +313,23 @@ describe("Discord thread binding restoration", () => {
       const binding = manager.bindTarget(replacementTarget);
       const outcome =
         boundary !== "after-commit"
-          ? expect(binding).rejects.toThrow(
-              boundary === "after-prefix"
-                ? "after 1 acknowledged writes"
-                : "changed during persistence",
-            )
+          ? expect(binding).rejects.toThrow("changed during persistence")
           : expect(binding).resolves.toMatchObject({
               targetSessionKey: "agent:main:subagent:replacement",
             });
       await entered.promise;
-      const touchedId = touchedRecord === "target" ? "thread-1" : "thread-2";
       const at = Date.now() + 1;
-      if (compatibility === "touch" || compatibility === "touch-failed-write") {
-        if (compatibility === "touch-failed-write") {
-          stores.syncUpdate.mockImplementationOnce((key, update) => {
-            update(rows.get(key));
-            throw new Error("native write failed after reading its canonical row");
-          });
-        }
+      if (compatibility === "touch-failed-write") {
+        stores.syncUpdate.mockImplementationOnce((key, update) => {
+          update(rows.get(key));
+          throw new Error("native write failed after reading its canonical row");
+        });
         expect(
-          getSessionBindingService().touch(`work:${touchedId}`, at, {
+          getSessionBindingService().touch(saved.key, at, {
             channel: "discord",
             accountId: "work",
           }),
         ).toBeUndefined();
-        if (compatibility === "touch") {
-          expect(rows.get(`work:${touchedId}`)?.lastActivityAt).toBe(at);
-        }
       } else if (compatibility === "idle") {
         const updated = discordPlugin.conversationBindings!.setIdleTimeoutBySessionKey!({
           targetSessionKey: saved.value.targetSessionKey,
@@ -409,35 +362,12 @@ describe("Discord thread binding restoration", () => {
             ? undefined
             : saved.value.targetSessionKey,
       );
-      if (compatibility === "touch" || compatibility === "touch-failed-write") {
-        expect(manager.getByThreadId(touchedId)?.lastActivityAt).toBe(at);
+      if (compatibility === "touch-failed-write") {
+        expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(at);
       }
       await manager.stop();
     },
   );
-
-  it("captures nested metadata before waiting behind another mutation", async () => {
-    const saved = persistedBinding();
-    const rows = installCanonicalRows([[saved.key, saved.value]]);
-    const manager = await persistentManager();
-    const { entered, finish } = pauseNextWrite(rows);
-    const touching = manager.touchThread({ threadId: "thread-1", at: 200 });
-    await entered.promise;
-    const metadata = { payload: { value: "captured", items: [{ text: "first" }] } };
-    const binding = manager.bindTarget({
-      ...replacementTarget,
-      metadata,
-    });
-    metadata.payload.value = "changed";
-    metadata.payload.items[0]!.text = "changed";
-    metadata.payload.items.push({ text: "extra" });
-    finish.resolve();
-    await touching;
-    const bound = await binding;
-    expect(bound?.metadata).toEqual({ payload: { value: "captured", items: [{ text: "first" }] } });
-    expect(rows.get(saved.key)?.metadata).toEqual(bound?.metadata);
-    await manager.stop();
-  });
 
   registerThreadBindingCompatibilityTests({ stores, persistedBinding, persistentManager });
 

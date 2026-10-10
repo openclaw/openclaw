@@ -66,9 +66,10 @@ devtunnel host my-openclaw-bot
 
 Alternatives: `ngrok http 18789` or `tailscale funnel 18789` (URLs may change each session). Use your configured Gateway port if it differs. When configuring a reverse proxy, expose only the required webhook path.
 
-The previous port `3978` remains available by default through the Gateway-owned
-compatibility listener. After verifying delivery through the Gateway port, set
-`channels.msteams.legacyWebhook: false` to close the old port.
+New installations use only the Gateway port. Doctor preserves port `3978` on
+existing installations with a one-shot `channels.msteams.legacyWebhook` pin.
+After moving the callback and verifying delivery through the Gateway port,
+remove that pin to close the old port.
 
 **3. Create the app**
 
@@ -84,19 +85,27 @@ This creates an Entra ID (Azure AD) application, generates a client secret, buil
 
 ```json5
 {
+  bindings: [{ agentId: "main", match: { channel: "msteams", accountId: "default" } }],
   channels: {
     msteams: {
       enabled: true,
-      appId: "<CLIENT_ID>",
-      appPassword: "<CLIENT_SECRET>",
       tenantId: "<TENANT_ID>",
       webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<CLIENT_ID>",
+          appPassword: "<CLIENT_SECRET>",
+        },
+      },
     },
   },
 }
 ```
 
-Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+This account-based shape works for one bot or many. Environment variables
+(`MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`) apply only to
+the `default` account. Each named account has its own bot credentials and
+webhook path on the same Gateway port. See [Multiple bot accounts](/channels/msteams/configuration#multiple-bot-accounts) for endpoint examples.
 
 **5. Install the app in Teams**
 
@@ -190,19 +199,26 @@ Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single 
 
 ```json5
 {
+  bindings: [{ agentId: "main", match: { channel: "msteams", accountId: "default" } }],
   channels: {
     msteams: {
       enabled: true,
-      appId: "<APP_ID>",
-      appPassword: "<APP_PASSWORD>",
       tenantId: "<TENANT_ID>",
       webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<APP_ID>",
+          appPassword: "<APP_PASSWORD>",
+        },
+      },
     },
   },
 }
 ```
 
-Environment variables: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+Environment variables configure only the default account. See [Multiple bot
+accounts](/channels/msteams/configuration#multiple-bot-accounts) for additional
+bot registrations and routing.
 
 ### Step 7: Run the gateway
 

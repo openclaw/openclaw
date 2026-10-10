@@ -377,7 +377,7 @@ describe("registered maintenance commands", () => {
       },
     },
     { args: ["--run"], options: { json: false, noExport: false, run: true } },
-    ..."claude codex cursor grok kimi muse opencode pi qwen".split(" ").map((agent) => ({
+    ..."agy claude codex cursor grok kimi muse opencode pi qwen".split(" ").map((agent) => ({
       args: ["--agent", agent],
       options: { json: false, noExport: false, run: false, agent },
     })),
@@ -393,7 +393,7 @@ describe("registered maintenance commands", () => {
     [
       "--agent unknown-agent",
       false,
-      "Invalid --agent. Use claude, codex, cursor, grok, kimi, muse, opencode, pi, or qwen.",
+      "Invalid --agent. Use agy, claude, codex, cursor, grok, kimi, muse, opencode, pi, qwen.",
     ],
   ] as const)("rejects incompatible triage options %s", async (args, json, message) => {
     await runCli(["triage", ...args.split(" ")]);

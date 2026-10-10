@@ -7,9 +7,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import { folderDisplayName } from "../pages/new-session/path.ts";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
@@ -17,6 +18,8 @@ import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
+
+registerSessionOrganizationEnglish();
 
 registerNewSessionSetupEnglish();
 
@@ -158,13 +161,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const showBrowser = () => {
       browserVisible = true;
-      void browser.navigate(cwd || undefined);
+      void browser.navigate(cwd || undefined, "initial");
     };
 
     function paint() {
       const trimmedCwd = cwd.trim();
       const folderLabel = trimmedCwd
-        ? folderDisplayName(trimmedCwd)
+        ? pathDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
       const environmentState =
         repositoryStatus === "checking"

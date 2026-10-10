@@ -1,6 +1,27 @@
 import Foundation
 
 extension OnboardingView {
+    func setKeepGatewayRunning(_ enabled: Bool) {
+        guard !self.installingCLI, !self.updatingGatewayHosting,
+              GatewayProcessManager.shared.keepGatewayRunningAvailable else { return }
+        self.updatingGatewayHosting = true
+        self.gatewayHostingError = nil
+        OnboardingController.shared.setWindowCloseEnabled(false)
+        OnboardingController.shared.busyReason = "OpenClaw is updating how the Gateway runs."
+        Task { @MainActor in
+            defer {
+                self.updatingGatewayHosting = false
+                OnboardingController.shared.setWindowCloseEnabled(true)
+                OnboardingController.shared.busyReason = nil
+            }
+            do {
+                try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled)
+            } catch {
+                self.gatewayHostingError = error.localizedDescription
+            }
+        }
+    }
+
     func updateDiscoveryMonitoring(for pageIndex: Int) {
         let shouldMonitor = pageIndex == connectionPageIndex
         if shouldMonitor, !monitoringDiscovery {
@@ -11,9 +32,8 @@ extension OnboardingView {
                 self.gatewayDiscovery.start()
                 await self.refreshLocalGatewayProbe()
             }
-        } else if !shouldMonitor, monitoringDiscovery {
-            monitoringDiscovery = false
-            gatewayDiscovery.stop()
+        } else if !shouldMonitor {
+            self.stopDiscovery()
         }
     }
 
@@ -124,12 +144,7 @@ extension OnboardingView {
     }
 
     func finishExistingCLIActivation() async {
-        defer {
-            installingCLI = false
-            cliInstallPhase = .idle
-            OnboardingController.shared.setWindowCloseEnabled(true)
-            OnboardingController.shared.busyReason = nil
-        }
+        defer { self.finishCLIInstallProgress() }
 
         if BundledRuntime.isBundledApp {
             await self.prepareBundledGateway(afterFreshInstall: false)
@@ -173,12 +188,7 @@ extension OnboardingView {
 
     func runCLIInstall() async {
         await GatewayProcessManager.shared.waitForStartupAttempt()
-        defer {
-            self.installingCLI = false
-            self.cliInstallPhase = .idle
-            OnboardingController.shared.setWindowCloseEnabled(true)
-            OnboardingController.shared.busyReason = nil
-        }
+        defer { self.finishCLIInstallProgress() }
         guard self.requiresLocalCLI else { return }
         guard GatewayProcessManager.shared.installation == .managed else {
             self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
@@ -217,6 +227,13 @@ extension OnboardingView {
         (cliInstalled, cliStatus) = await Self.localGatewayActivationOutcome(
             CLIInstaller.activateLocalGateway(),
             afterFreshInstall: true)
+    }
+
+    private func finishCLIInstallProgress() {
+        self.installingCLI = false
+        self.cliInstallPhase = .idle
+        OnboardingController.shared.setWindowCloseEnabled(true)
+        OnboardingController.shared.busyReason = nil
     }
 
     private func prepareBundledGateway(afterFreshInstall: Bool = true) async {
@@ -271,16 +288,11 @@ extension OnboardingView {
         } else {
             nil
         }
-        await MainActor.run {
-            guard let desc else {
-                self.localGatewayProbe = nil
-                return
-            }
-            let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.localGatewayProbe = LocalGatewayProbe(
+        self.localGatewayProbe = desc.map { desc in
+            LocalGatewayProbe(
                 port: port,
                 pid: desc.pid,
-                command: command,
+                command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
                 profile: .current,
                 managedServicePID: managedServicePID)
         }

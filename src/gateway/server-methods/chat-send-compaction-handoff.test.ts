@@ -101,7 +101,6 @@ it.each([
       const releasePreparation = createDeferred();
       const capturedSuccessor = createDeferred();
       const releaseRuntimePlugins = createDeferred();
-      const sharedDispatchSettled = createDeferred();
       const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
       const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
       const holdRuntimePlugins =
@@ -147,11 +146,7 @@ it.each([
         .mockImplementation(async (options) => {
           prepared.resolve(options);
           await releasePreparation.promise;
-          try {
-            return await originalDispatch({ ...options, replyResolver: resolver });
-          } finally {
-            sharedDispatchSettled.resolve();
-          }
+          return await originalDispatch({ ...options, replyResolver: resolver });
         });
       try {
         const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
@@ -231,8 +226,9 @@ it.each([
           expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
           releaseRuntimePlugins.resolve();
         }
-        await sharedDispatchSettled.promise;
-        await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
+        // Admission release follows the chat owner's post-dispatch persistence and cleanup.
+        await owned.admission.gatewayWorkAdmission.released;
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
 
         if (
           scenario === "compaction" ||
@@ -270,9 +266,7 @@ it.each([
         releasePreparation.resolve();
         releaseRuntimePlugins.resolve();
         if (owned) {
-          await sharedDispatchSettled.promise;
-          await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
-          owned.admission.cleanupAdmittedRun();
+          await owned.admission.gatewayWorkAdmission.released;
         }
         holdPreparation.mockRestore();
         holdRuntimePlugins?.mockRestore();

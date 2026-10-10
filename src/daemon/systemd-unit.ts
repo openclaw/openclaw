@@ -1,4 +1,3 @@
-/** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { escape as escapeGlob } from "minimatch";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
@@ -202,11 +201,7 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, {
-    escapeMode: "backslash",
-    quoteChars: ['"', "'"],
-    quoteStart: "item-start",
-  });
+  return splitSystemdEnvironmentWords(value);
 }
 
 export function splitSystemdEnvironmentWords(value: string): string[] {

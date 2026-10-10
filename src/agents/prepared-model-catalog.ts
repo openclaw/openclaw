@@ -25,7 +25,10 @@ import {
   getPreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime-generation-scope.js";
 import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  isPreparedModelRuntimeMissingOwnerError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -268,7 +271,7 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
         throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
       }
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!isPreparedModelRuntimeMissingOwnerError(error)) {
         throw error;
       }
     }
@@ -305,7 +308,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
     }
     await preparedExact.release?.();
   } catch (error) {
-    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+    if (!isPreparedModelRuntimeMissingOwnerError(error)) {
       throw error;
     }
   }
@@ -574,7 +577,11 @@ export async function loadPreparedModelCatalogSnapshot(
   if (readOnly && params.providerDiscoveryProviderIds) {
     return loadScopedReadOnlyModelCatalog({ ...params, readOnly });
   }
-  return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
+  return await withPreparedModelCatalogOwnerPolicy(
+    params,
+    "exact",
+    async (owner) => (await owner.loadNativeModelCatalog?.()) ?? owner.modelCatalog,
+  );
 }
 
 export async function readPreparedModelCatalog(

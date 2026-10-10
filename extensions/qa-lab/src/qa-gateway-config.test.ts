@@ -474,6 +474,20 @@ describe("buildQaGatewayConfig", () => {
     });
   });
 
+  it("pins configured Codex cells through normal model runtime policy", () => {
+    const cfg = buildConfig({
+      providerMode: "live-frontier",
+      forcedRuntime: "codex",
+      runtimeSelection: "configured",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
+    });
+
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
+      agentRuntime: { id: "codex" },
+    });
+  });
+
   it("keeps forced Codex mock catalogs static and routes through the app server", () => {
     const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",

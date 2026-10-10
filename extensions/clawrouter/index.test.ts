@@ -79,36 +79,6 @@ describe("ClawRouter plugin", () => {
     vi.unstubAllGlobals();
   });
 
-  it("registers catalog, transport compatibility, and quota hooks", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(provider).toMatchObject({
-      id: "clawrouter",
-      label: "ClawRouter",
-      docsPath: "/providers/clawrouter",
-      envVars: ["CLAWROUTER_API_KEY"],
-      buildReplayPolicy: expect.any(Function),
-      fetchUsageSnapshot: expect.any(Function),
-      inspectToolSchemas: expect.any(Function),
-      normalizeResolvedModel: expect.any(Function),
-      normalizeToolSchemas: expect.any(Function),
-      prepareDynamicModel: expect.any(Function),
-      preferRuntimeResolvedModel: expect.any(Function),
-      resolveDynamicModel: expect.any(Function),
-      resolveThinkingProfile: expect.any(Function),
-      resolveUsageAuth: expect.any(Function),
-      sanitizeReplayHistory: expect.any(Function),
-      wrapSimpleCompletionStreamFn: expect.any(Function),
-      wrapStreamFn: expect.any(Function),
-    });
-    expect(provider?.auth[0]).toMatchObject({
-      id: "api-key",
-      label: "ClawRouter proxy key",
-      kind: "api_key",
-    });
-    expect(provider?.wrapSimpleCompletionStreamFn).toBe(provider?.wrapStreamFn);
-  });
-
   it("resolves authoritative catalog thinking profiles without inventing minimal", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const compat = {

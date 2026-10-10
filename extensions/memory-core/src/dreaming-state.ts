@@ -1,4 +1,3 @@
-// Memory Core dreaming state lives in SQLite-backed plugin state.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -6,6 +5,8 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
@@ -49,19 +50,25 @@ type WriteMemoryCoreWorkspaceEntriesParams<T> = MemoryCoreWorkspaceParams & {
 type WriteMemoryCoreWorkspaceEntryParams<T> = MemoryCoreWorkspaceParams &
   MemoryCoreWorkspaceEntry<T>;
 
-let configuredOpenKeyedStore: MemoryCoreOpenKeyedStore | undefined;
+const dreamingState = createPluginRuntimeStore<MemoryCoreOpenKeyedStore>({
+  key: "memory-core:dreaming-state",
+  errorMessage: "memory-core dreaming SQLite state store is not configured",
+});
 
-export function configureMemoryCoreDreamingState(openKeyedStore: MemoryCoreOpenKeyedStore): void {
-  configuredOpenKeyedStore = openKeyedStore;
-}
+export const configureMemoryCoreDreamingState = dreamingState.setRuntime;
 
 export function openMemoryCoreStateStore<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateKeyedStore<T> {
-  if (!configuredOpenKeyedStore) {
-    throw new Error("memory-core dreaming SQLite state store is not configured");
+  const store = dreamingState.getRuntime()<T>(options);
+  const assertCurrent = captureMemoryMutationAuthority();
+  if (!assertCurrent) {
+    return store;
   }
-  return configuredOpenKeyedStore<T>(options);
+  if (!store.withCurrent) {
+    throw new Error("Memory mutations require a host with action-bound SQLite stores");
+  }
+  return store.withCurrent({ assertCurrent });
 }
 
 export function normalizeMemoryCoreWorkspaceKey(workspaceDir: string): string {
@@ -108,15 +115,12 @@ async function readWorkspaceStoreEntries<T>(store: PluginStateKeyedStore<T>, wor
 }
 
 // Caller owns typed decoding for values read from plugin state.
-export function readMemoryCoreWorkspaceEntries<T>(
+export async function readMemoryCoreWorkspaceEntries<T>(
   params: MemoryCoreWorkspaceParams,
-): Promise<Array<MemoryCoreWorkspaceEntry<T>>>;
-export async function readMemoryCoreWorkspaceEntries(
-  params: MemoryCoreWorkspaceParams,
-): Promise<Array<MemoryCoreWorkspaceEntry<unknown>>> {
+): Promise<Array<MemoryCoreWorkspaceEntry<T>>> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
   const entries = await readWorkspaceStoreEntries(
-    openWorkspaceStore<unknown>(params.namespace),
+    openWorkspaceStore<T>(params.namespace),
     workspaceKey,
   );
   return entries
@@ -125,13 +129,10 @@ export async function readMemoryCoreWorkspaceEntries(
 }
 
 // Caller owns typed encoding for values written to plugin state.
-export function writeMemoryCoreWorkspaceEntries<T>(
+export async function writeMemoryCoreWorkspaceEntries<T>(
   params: WriteMemoryCoreWorkspaceEntriesParams<T>,
-): Promise<void>;
-export async function writeMemoryCoreWorkspaceEntries(
-  params: WriteMemoryCoreWorkspaceEntriesParams<unknown>,
 ): Promise<void> {
-  const store = openWorkspaceStore<unknown>(params.namespace);
+  const store = openWorkspaceStore<T>(params.namespace);
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
   const replacementKeys = new Set<string>();
   // Scalar store calls can finish synchronously; await alone does not service I/O.
@@ -161,14 +162,11 @@ export async function writeMemoryCoreWorkspaceEntries(
 }
 
 // Caller owns typed encoding for values written to plugin state.
-export function writeMemoryCoreWorkspaceEntry<T>(
+export async function writeMemoryCoreWorkspaceEntry<T>(
   params: WriteMemoryCoreWorkspaceEntryParams<T>,
-): Promise<void>;
-export async function writeMemoryCoreWorkspaceEntry(
-  params: WriteMemoryCoreWorkspaceEntryParams<unknown>,
 ): Promise<void> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  await openWorkspaceStore<unknown>(params.namespace).register(
+  await openWorkspaceStore<T>(params.namespace).register(
     memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
     {
       version: 1,
@@ -180,19 +178,10 @@ export async function writeMemoryCoreWorkspaceEntry(
   );
 }
 
-export async function clearMemoryCoreWorkspaceNamespace(params: {
-  namespace: string;
-  workspaceDir: string;
-}): Promise<void> {
-  const store = openWorkspaceStore(params.namespace);
-  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  let completed = 0;
-  for (const entry of await readWorkspaceStoreEntries(store, workspaceKey)) {
-    await store.delete(entry.key);
-    if (++completed % WORKSPACE_STATE_YIELD_EVERY === 0) {
-      await yieldToEventLoop();
-    }
-  }
+export async function clearMemoryCoreWorkspaceNamespace(
+  params: MemoryCoreWorkspaceParams,
+): Promise<void> {
+  await writeMemoryCoreWorkspaceEntries({ ...params, entries: [] });
 }
 
 export async function deleteMemoryCoreWorkspaceEntry(params: {

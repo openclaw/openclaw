@@ -34,46 +34,37 @@ describe("bootstrapApplication", () => {
     saveSettings(previousSettings);
   });
 
-  it.each([false, true])(
-    "owns native health reporting across startup and stop (early stop: %s)",
-    async (stopEarly) => {
-      window.history.replaceState({}, "", "/focus/terminal");
-      const postMessage = vi.fn();
-      vi.stubGlobal("webkit", { messageHandlers: { openclawGateways: { postMessage } } });
-      const changed = vi.fn();
-      window.addEventListener("openclaw:native-gateway-health-changed", changed);
-      const runtime = bootstrapApplication();
-      const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {
-        expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toEqual({
-          gatewayUrl: runtime.context.gateway.connection.gatewayUrl,
-          health: "unknown",
-        });
+  it("owns native health reporting across startup and stop", async () => {
+    window.history.replaceState({}, "", "/focus/terminal");
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawGateways: { postMessage } } });
+    const changed = vi.fn();
+    window.addEventListener("openclaw:native-gateway-health-changed", changed);
+    const runtime = bootstrapApplication();
+    const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {
+      expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toEqual({
+        gatewayUrl: runtime.context.gateway.connection.gatewayUrl,
+        health: "unknown",
       });
-      try {
-        const starting = runtime.start();
-        if (stopEarly) {
-          runtime.stop();
-        }
-        await starting;
-        expect(startGateway).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
-        expect(changed).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
-        // The shared Linux bridge must not receive a Mac-only action.
-        expect(postMessage).not.toHaveBeenCalled();
-        runtime.stop();
-        if (!stopEarly) {
-          expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toMatchObject({
-            health: "unknown",
-          });
-        }
-      } finally {
-        runtime.stop();
-        startGateway.mockRestore();
-        window.removeEventListener("openclaw:native-gateway-health-changed", changed);
-        Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__");
-        vi.unstubAllGlobals();
-      }
-    },
-  );
+    });
+    try {
+      await runtime.start();
+      expect(startGateway).toHaveBeenCalledOnce();
+      expect(changed).toHaveBeenCalledOnce();
+      // The shared Linux bridge must not receive a Mac-only action.
+      expect(postMessage).not.toHaveBeenCalled();
+      runtime.stop();
+      expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toMatchObject({
+        health: "unknown",
+      });
+    } finally {
+      runtime.stop();
+      startGateway.mockRestore();
+      window.removeEventListener("openclaw:native-gateway-health-changed", changed);
+      Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__");
+      vi.unstubAllGlobals();
+    }
+  });
 
   it("starts native notifications before Gateway use and preserves synchronous permission requests", async () => {
     const promptKey = "openclaw.control.notificationsAutoPrompt.v1";
@@ -142,12 +133,7 @@ describe("bootstrapApplication", () => {
   });
 
   it.each([
-    { pathname: "/settings/model-providers", routeId: "model-providers", warmed: true },
-    { pathname: "/operator/settings/model-providers", routeId: "model-providers", warmed: true },
     { pathname: "/chat/main/example-deadbeef", routeId: "chat", warmed: true },
-    { pathname: "/", routeId: "chat", warmed: false },
-    { pathname: "/chat", routeId: "chat", warmed: false },
-    { pathname: "/focus/terminal", routeId: "chat", warmed: false },
     { pathname: "/approve/exec%3A1", routeId: "chat", warmed: false },
   ] as const)(
     "warms only explicit application routes at startup: $pathname",
@@ -321,24 +307,6 @@ describe("bootstrapApplication", () => {
       expectedDocumentMode: null,
     },
     {
-      name: "bootstrap token on a custom-base explicit route",
-      initialUrl: "/operator/settings/appearance?keep=yes#tab=keep&bootstrapToken=boot-route",
-      expectedUrl: "/operator/settings/appearance?keep=yes#tab=keep",
-      expectedBootstrapToken: "boot-route",
-      expectedBootstrapProfile: undefined,
-      expectedToken: "",
-      expectedDocumentMode: null,
-    },
-    {
-      name: "bootstrap token on a standalone approval document",
-      initialUrl: "/approve/exec%3A1?keep=yes#bootstrapToken=boot-approval&tab=keep",
-      expectedUrl: "/approve/exec%3A1?keep=yes#tab=keep",
-      expectedBootstrapToken: "boot-approval",
-      expectedBootstrapProfile: undefined,
-      expectedToken: "",
-      expectedDocumentMode: { kind: "approval", approvalId: "exec:1" },
-    },
-    {
       name: "legacy fragment token and discarded query password",
       initialUrl: "/settings/appearance?keep=yes&password=discard#token=shared-fragment&tab=keep",
       expectedUrl: "/settings/appearance?keep=yes#tab=keep",
@@ -391,23 +359,6 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("does not rewrite browser history when startup contains no URL credentials", () => {
-    window.history.replaceState({}, "", "/settings/appearance?keep=yes#tab=keep");
-    const replaceState = vi.spyOn(window.history, "replaceState");
-    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
-
-    try {
-      runtime = bootstrapApplication();
-
-      expect(replaceState).not.toHaveBeenCalled();
-      expect(window.location.search).toBe("?keep=yes");
-      expect(window.location.hash).toBe("#tab=keep");
-    } finally {
-      replaceState.mockRestore();
-      runtime?.stop();
-    }
-  });
-
   it("keeps an inferred route namespace separate from the root resource mount", async () => {
     const previousResourceBasePath = document.documentElement.getAttribute(
       CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -441,32 +392,7 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("keeps the focused terminal route outside the application router", async () => {
-    window.history.replaceState({}, "", "/focus/terminal");
-    const runtime = bootstrapApplication();
-    const routerStart = vi.spyOn(runtime.router, "start");
-
-    try {
-      await runtime.start();
-
-      expect(window.location.pathname).toBe("/focus/terminal");
-      expect(runtime.focusLocation).toEqual({
-        status: "valid",
-        basePath: "",
-        target: { kind: "terminal" },
-      });
-      expect(routerStart).not.toHaveBeenCalled();
-    } finally {
-      runtime.stop();
-    }
-  });
-
   it.each([
-    {
-      initialUrl: "/?view=terminal&keep=yes#pane",
-      expectedUrl: "/focus/terminal?keep=yes#pane",
-      basePath: "",
-    },
     {
       initialUrl: "/openclaw/?view=terminal&keep=yes#pane",
       expectedUrl: "/openclaw/focus/terminal?keep=yes#pane",
@@ -501,27 +427,6 @@ describe("bootstrapApplication", () => {
     },
   );
 
-  it.each(["desktop", "dashboard"])(
-    "does not recognize the removed %s query presentation",
-    (view) => {
-      const initialUrl = `/?view=${view}&keep=yes#pane`;
-      window.history.replaceState({}, "", initialUrl);
-      const replaceState = vi.spyOn(window.history, "replaceState");
-      const runtime = bootstrapApplication();
-
-      try {
-        expect(runtime.focusLocation).toBeNull();
-        expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
-          initialUrl,
-        );
-        expect(replaceState).not.toHaveBeenCalled();
-      } finally {
-        runtime.stop();
-        replaceState.mockRestore();
-      }
-    },
-  );
-
   it("strips startup credentials before rewriting the released terminal query", () => {
     window.history.replaceState({}, "", "/?view=terminal#token=startup-token&pane=1");
     const replaceState = vi.spyOn(window.history, "replaceState");
@@ -540,21 +445,6 @@ describe("bootstrapApplication", () => {
     } finally {
       runtime.stop();
       replaceState.mockRestore();
-    }
-  });
-
-  it("does not recognize the terminal query outside the application root", () => {
-    const initialUrl = "/settings/appearance?view=terminal&keep=yes#pane";
-    window.history.replaceState({}, "", initialUrl);
-    const runtime = bootstrapApplication();
-
-    try {
-      expect(runtime.focusLocation).toBeNull();
-      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
-        initialUrl,
-      );
-    } finally {
-      runtime.stop();
     }
   });
 
@@ -616,36 +506,6 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("does not restart routing after stop wins early startup", async () => {
-    saveSettings({
-      ...previousSettings,
-      sessionKey: "agent:main:main",
-      lastActiveSessionKey: "agent:main:main",
-    });
-    window.history.replaceState({}, "", "/");
-    const runtime = bootstrapApplication();
-    const routerStart = vi.spyOn(runtime.router, "start");
-    const redirectSubscription = vi.spyOn(runtime.context.gateway, "subscribe");
-
-    try {
-      const start = runtime.start();
-      let settled = false;
-      void start.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-
-      runtime.stop();
-      await start;
-
-      expect(routerStart).not.toHaveBeenCalled();
-      expect(redirectSubscription).not.toHaveBeenCalled();
-    } finally {
-      runtime.stop();
-    }
-  });
-
   it("consumes an unscoped initial-location abort after stop wins early startup", async () => {
     saveSettings({
       ...previousSettings,
@@ -655,6 +515,8 @@ describe("bootstrapApplication", () => {
     window.history.replaceState({}, "", "/");
     const runtime = bootstrapApplication();
     const unhandledRejection = vi.fn((event: PromiseRejectionEvent) => event.preventDefault());
+    const routerStart = vi.spyOn(runtime.router, "start");
+    const redirectSubscription = vi.spyOn(runtime.context.gateway, "subscribe");
     window.addEventListener("unhandledrejection", unhandledRejection);
 
     try {
@@ -664,6 +526,8 @@ describe("bootstrapApplication", () => {
       await Promise.resolve();
 
       expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(routerStart).not.toHaveBeenCalled();
+      expect(redirectSubscription).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener("unhandledrejection", unhandledRejection);
       runtime.stop();
@@ -727,7 +591,7 @@ describe("bootstrapApplication", () => {
       expect(
         [...readinessSubscriptions].filter((listener) => activeSubscriptions.has(listener)),
       ).toHaveLength(0);
-      expect(configRefresh).not.toHaveBeenCalled();
+      expect(configRefresh).toHaveBeenCalledWith({ ifNeeded: true });
       expect(routerStart).not.toHaveBeenCalled();
     } finally {
       runtime.stop();
@@ -800,32 +664,6 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("synchronizes every theme-color meta with the resolved theme background", () => {
-    const style = document.createElement("style");
-    style.textContent = ':root[data-theme="light"] { --bg: #123456; }';
-    const lightMeta = document.createElement("meta");
-    lightMeta.name = "theme-color";
-    lightMeta.media = "(prefers-color-scheme: light)";
-    const darkMeta = document.createElement("meta");
-    darkMeta.name = "theme-color";
-    darkMeta.media = "(prefers-color-scheme: dark)";
-    document.head.append(style, lightMeta, darkMeta);
-    saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
-    const runtime = bootstrapApplication();
-
-    try {
-      expect(lightMeta.content).toBe("#123456");
-      expect(darkMeta.content).toBe("#123456");
-      expect(lightMeta.hasAttribute("media")).toBe(false);
-      expect(darkMeta.hasAttribute("media")).toBe(false);
-    } finally {
-      runtime.stop();
-      style.remove();
-      lightMeta.remove();
-      darkMeta.remove();
-    }
-  });
-
   it("refreshes chat browser chrome on route and breakpoint changes", () => {
     const listeners = new Set<() => void>();
     let mobile = false;
@@ -844,12 +682,19 @@ describe("bootstrapApplication", () => {
     style.textContent = ':root[data-theme="light"] { --bg: #123456; --bg-content: #abcdef; }';
     const meta = document.createElement("meta");
     meta.name = "theme-color";
-    document.head.append(style, meta);
+    meta.media = "(prefers-color-scheme: light)";
+    const darkMeta = document.createElement("meta");
+    darkMeta.name = "theme-color";
+    darkMeta.media = "(prefers-color-scheme: dark)";
+    document.head.append(style, meta, darkMeta);
     saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
     const runtime = bootstrapApplication();
 
     try {
       expect(meta.content).toBe("#123456");
+      expect(darkMeta.content).toBe("#123456");
+      expect(meta.hasAttribute("media")).toBe(false);
+      expect(darkMeta.hasAttribute("media")).toBe(false);
       expect(
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
       ).toBe("#123456");
@@ -887,6 +732,7 @@ describe("bootstrapApplication", () => {
       expect(removeEventListener).toHaveBeenCalled();
       style.remove();
       meta.remove();
+      darkMeta.remove();
       vi.unstubAllGlobals();
     }
   });

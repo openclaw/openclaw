@@ -1,37 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { groupToolCalls, type ToolCallIdentity } from "./tool-call-grouping.js";
+import { groupToolCalls, type ToolCallGroup, type ToolCallIdentity } from "./tool-call-grouping.js";
 
 function toolCard(callId: string, overrides: Partial<ToolCallIdentity> = {}): ToolCallIdentity {
   return { callId, runId: "run", ...overrides };
 }
 
 describe("groupToolCalls", () => {
-  it("groups nested and interleaved operations in sibling order even when children arrive first", () => {
-    const child = toolCard("child", { parentToolCallId: "outer" });
-    const parallel = toolCard("parallel");
-    const grandchild = toolCard("grandchild", { parentToolCallId: "child" });
-    const outer = toolCard("outer");
-    const secondChild = toolCard("second-child", { parentToolCallId: "outer" });
-    const parallelChild = toolCard("parallel-child", { parentToolCallId: "parallel" });
-    const cards = Object.freeze(
-      [child, parallel, grandchild, outer, secondChild, parallelChild].map((card) =>
-        Object.freeze(card),
-      ),
-    );
+  const child = toolCard("child", { parentToolCallId: "outer" });
+  const parallel = toolCard("parallel");
+  const grandchild = toolCard("grandchild", { parentToolCallId: "child" });
+  const outer = toolCard("outer");
+  const secondChild = toolCard("second-child", { parentToolCallId: "outer" });
+  const parallelChild = toolCard("parallel-child", { parentToolCallId: "parallel" });
+  const descendant = toolCard("child", { parentToolCallId: "a" });
+  const a = toolCard("a", { parentToolCallId: "b" });
+  const b = toolCard("b", { parentToolCallId: "a" });
 
-    expect(groupToolCalls(cards)).toEqual([
-      { card: parallel, children: [{ card: parallelChild, children: [] }] },
-      {
-        card: outer,
-        children: [
-          { card: child, children: [{ card: grandchild, children: [] }] },
-          { card: secondChild, children: [] },
-        ],
-      },
-    ]);
-  });
-
-  it.each<[string, ToolCallIdentity[]]>([
+  it.each<[string, ToolCallIdentity[], ToolCallGroup[]?]>([
+    [
+      "nested and interleaved operations arriving before their parents",
+      [child, parallel, grandchild, outer, secondChild, parallelChild],
+      [
+        { card: parallel, children: [{ card: parallelChild, children: [] }] },
+        {
+          card: outer,
+          children: [
+            { card: child, children: [{ card: grandchild, children: [] }] },
+            { card: secondChild, children: [] },
+          ],
+        },
+      ],
+    ],
     [
       "a child with no recorded run",
       [toolCard("outer"), toolCard("child", { runId: undefined, parentToolCallId: "outer" })],
@@ -58,28 +57,26 @@ describe("groupToolCalls", () => {
         toolCard("child", { parentToolCallId: "duplicate" }),
       ],
     ],
-  ])("keeps %s accessible at the top level", (_label, cards) => {
-    expect(groupToolCalls(cards)).toEqual(cards.map((card) => ({ card, children: [] })));
-  });
-
-  it("keeps valid descendants reachable when their ancestors have cyclic parent records", () => {
-    const child = toolCard("child", { parentToolCallId: "a" });
-    const a = toolCard("a", { parentToolCallId: "b" });
-    const b = toolCard("b", { parentToolCallId: "a" });
-
-    expect(groupToolCalls([child, a, b])).toEqual([
-      { card: a, children: [{ card: child, children: [] }] },
-      { card: b, children: [] },
-    ]);
-  });
-
-  it("keeps every operation accessible in a long cycle without recursive traversal", () => {
-    const cards = Array.from({ length: 20_000 }, (_, index) =>
-      toolCard(String(index), { parentToolCallId: String((index + 1) % 20_000) }),
-    );
-    const groups = groupToolCalls(cards);
-
-    expect(groups.map((group) => group.card)).toEqual(cards);
-    expect(groups.every((group) => group.children.length === 0)).toBe(true);
+    [
+      "valid descendants of cyclic ancestors",
+      [descendant, a, b],
+      [
+        { card: a, children: [{ card: descendant, children: [] }] },
+        { card: b, children: [] },
+      ],
+    ],
+    [
+      "a stack-safe long cycle",
+      Array.from({ length: 20_000 }, (_, index) =>
+        toolCard(String(index), { parentToolCallId: String((index + 1) % 20_000) }),
+      ),
+    ],
+  ])("preserves grouping and reachability for %s", (_label, cards, expected) => {
+    const groups = groupToolCalls(Object.freeze(cards.map((card) => Object.freeze(card))));
+    expect(groups).toEqual(expected ?? cards.map((card) => ({ card, children: [] })));
+    if (!expected) {
+      expect(groups.map((group) => group.card)).toEqual(cards);
+      expect(groups.every((group) => group.children.length === 0)).toBe(true);
+    }
   });
 });

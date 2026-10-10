@@ -1,3 +1,7 @@
+import type { ManagedMediaKind } from "./managed-image-attachments.media-kind.js";
+
+const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
+
 export const MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX = "artifact_managed_image_";
 export const MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX = "artifact_managed_media_";
 export const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
@@ -20,4 +24,19 @@ export function parseManagedOutgoingArtifactId(
       : MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX;
   const attachmentId = value.slice(prefix.length);
   return MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId) ? { attachmentId, family } : null;
+}
+
+export function buildManagedOutgoingArtifactId(
+  attachmentId: string,
+  kind: ManagedMediaKind,
+): string {
+  const prefix =
+    kind === "image"
+      ? MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX
+      : MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX;
+  return `${prefix}${attachmentId}`;
+}
+
+export function buildOutgoingVariantUrl(sessionKey: string, attachmentId: string, variant: "full") {
+  return `${OUTGOING_IMAGE_ROUTE_PREFIX}/${encodeURIComponent(sessionKey)}/${attachmentId}/${variant}`;
 }

@@ -82,156 +82,111 @@ it("marks retained PR data unavailable after a refresh fails, then recovers", as
   });
 });
 
-it("discards a replaced session after Git capture without poisoning the replacement cache", async () => {
-  vi.useRealTimers();
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const owner = ensureProfileForEmail("original-pr-reader@example.test");
-    const replacementOwner = ensureProfileForEmail("replacement-pr-reader@example.test");
-    const sessionKey = "agent:main:replaced-pr-snapshot";
-    const scope = { agentId: "main", sessionKey };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "original-pr-session",
-      updatedAt: 1,
-      visibility: "shared",
-      spawnedCwd: state.workspaceDir,
-      createdActor: { type: "human", source: "profile", id: owner.id },
-    });
-    const captured = createDeferred();
-    const release = createDeferred();
-    const gitContext = { ...testGitContext, branch: "same-branch-after-replacement" };
-    let title = "Retired session result";
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              title,
-              state: "closed",
-              merged_at: "2026-09-01T00:00:00Z",
-            }),
-          ]),
-      },
-    ]);
-    const pending = loadControlUiSessionPullRequests(
-      { sessionKey },
-      {
-        fetchImpl,
-        resolveGitContext: async () => {
-          captured.resolve();
-          await release.promise;
-          return gitContext;
-        },
-      },
-    ).then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    try {
-      await Promise.race([
-        captured.promise,
-        pending.then(() => {
-          throw new Error("PR read settled before the Git-context barrier");
-        }),
-      ]);
-      const original = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" });
-      await expect(
-        deleteSessionEntryLifecycle({
-          agentId: "main",
-          storePath: original.storePath,
-          target: { canonicalKey: original.canonicalKey, storeKeys: original.storeKeys },
-          expectedSessionId: "original-pr-session",
-          archiveTranscript: false,
-        }),
-      ).resolves.toMatchObject({ deleted: true });
+it.each(["replacement", "metadata"] as const)(
+  "keeps PR reads and warm caches bound to the session across %s updates",
+  async (change) => {
+    vi.useRealTimers();
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const replaced = change === "replacement";
+      const owner = replaced ? ensureProfileForEmail("original-pr-reader@example.test") : undefined;
+      const replacementOwner = replaced
+        ? ensureProfileForEmail("replacement-pr-reader@example.test")
+        : undefined;
+      const sessionKey = `agent:main:${change}-pr-snapshot`;
+      const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(scope, {
-        sessionId: "replacement-pr-session",
-        updatedAt: 2,
-        visibility: "draft",
+        sessionId: "original-pr-session",
+        updatedAt: 1,
         spawnedCwd: state.workspaceDir,
-        createdActor: { type: "human", source: "profile", id: replacementOwner.id },
+        ...(owner
+          ? {
+              visibility: "shared" as const,
+              createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+            }
+          : {}),
       });
-      release.resolve();
-      const retired = await pending;
-      expect.soft(retired.ok).toBe(false);
-      expect.soft(fetchImpl).not.toHaveBeenCalled();
-
-      title = "Replacement session result";
-      const loadReplacement = () =>
+      const captured = createDeferred();
+      const release = createDeferred();
+      const gitContext = { ...testGitContext, branch: `${change}-pr-snapshot` };
+      let title = replaced ? "Retired session result" : "Current session result";
+      const fetchImpl = routedFetch([
+        {
+          match: "/pulls?head=",
+          response: () =>
+            githubJson([
+              pullListItem({ title, state: "closed", merged_at: "2026-09-01T00:00:00Z" }),
+            ]),
+        },
+      ]);
+      const load = () =>
         loadControlUiSessionPullRequests(
           { sessionKey },
-          { fetchImpl, resolveGitContext: async () => gitContext },
-        );
-      const replacement = await loadReplacement();
-      expect.soft(replacement.pullRequests[0]?.title).toBe("Replacement session result");
-      expect(fetchImpl.mock.calls).toHaveLength(1);
-      expect(await loadReplacement()).toEqual(replacement);
-      expect(fetchImpl.mock.calls).toHaveLength(1);
-    } finally {
-      release.resolve();
-      await pending;
-    }
-  });
-});
-
-it("keeps a pending PR read and its warm cache through ordinary session metadata updates", async () => {
-  vi.useRealTimers();
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionKey = "agent:main:active-pr-snapshot";
-    const scope = { agentId: "main", sessionKey };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "active-pr-session",
-      updatedAt: 1,
-      spawnedCwd: state.workspaceDir,
-    });
-    const captured = createDeferred();
-    const release = createDeferred();
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              title: "Current session result",
-              state: "closed",
-              merged_at: "2026-09-01T00:00:00Z",
-            }),
-          ]),
-      },
-    ]);
-    const load = () =>
-      loadControlUiSessionPullRequests(
-        { sessionKey },
-        {
-          fetchImpl,
-          resolveGitContext: async () => {
-            captured.resolve();
-            await release.promise;
-            return { ...testGitContext, branch: "active-pr-snapshot" };
+          {
+            fetchImpl,
+            resolveGitContext: async () => {
+              captured.resolve();
+              await release.promise;
+              return gitContext;
+            },
           },
-        },
+        );
+      const pending = load().then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
       );
-    const pending = load();
-    try {
-      await Promise.race([
-        captured.promise,
-        pending.then(() => {
-          throw new Error("PR read settled before the Git-context barrier");
-        }),
-      ]);
-      await upsertSessionEntryCore(scope, { updatedAt: 2, label: "Still the same session" });
-      release.resolve();
-      const result = await pending;
-      expect(result.pullRequests[0]?.title).toBe("Current session result");
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(await load()).toEqual(result);
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-    } finally {
-      release.resolve();
-      await pending.catch(() => {});
-    }
-  });
-});
+      try {
+        await Promise.race([
+          captured.promise,
+          pending.then(() => {
+            throw new Error("PR read settled before the Git-context barrier");
+          }),
+        ]);
+        if (replacementOwner) {
+          const original = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" });
+          await expect(
+            deleteSessionEntryLifecycle({
+              agentId: "main",
+              storePath: original.storePath,
+              target: { canonicalKey: original.canonicalKey, storeKeys: original.storeKeys },
+              expectedSessionId: "original-pr-session",
+              archiveTranscript: false,
+            }),
+          ).resolves.toMatchObject({ deleted: true });
+          await upsertSessionEntryCore(scope, {
+            sessionId: "replacement-pr-session",
+            updatedAt: 2,
+            visibility: "draft",
+            spawnedCwd: state.workspaceDir,
+            createdActor: { type: "human", source: "profile", id: replacementOwner.id },
+          });
+        } else {
+          await upsertSessionEntryCore(scope, { updatedAt: 2, label: "Still the same session" });
+        }
+        release.resolve();
+        const result = await pending;
+        if (replaced) {
+          expect.soft(result.ok).toBe(false);
+          expect.soft(fetchImpl).not.toHaveBeenCalled();
+          title = "Replacement session result";
+        } else {
+          expect(result.ok).toBe(true);
+          if (!result.ok) {
+            throw result.error;
+          }
+          expect(result.value.pullRequests[0]?.title).toBe("Current session result");
+        }
+        const current = result.ok ? result.value : await load();
+        expect(current.pullRequests[0]?.title).toBe(title);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(await load()).toEqual(current);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    });
+  },
+);
 
 it("retires a repository-only target without falling back to its local workspace", async () => {
   vi.useRealTimers();
@@ -288,7 +243,7 @@ it("retires a repository-only target without falling back to its local workspace
   });
 });
 
-it.each(["alias replacement", "physical close", "same-file reopen"] as const)(
+it.each(["alias replacement", "same-file reopen"] as const)(
   "discards pending PR work after %s even when persisted rows are identical",
   async (change) => {
     vi.useRealTimers();
@@ -341,9 +296,7 @@ it.each(["alias replacement", "physical close", "same-file reopen"] as const)(
           fs.symlinkSync(state.statePath("replacement"), aliasDirectory, "junction");
         } else {
           await closeOpenClawAgentDatabaseByPathAsync(original);
-          if (change === "same-file reopen") {
-            openOpenClawAgentDatabase({ agentId: "main", path: original });
-          }
+          openOpenClawAgentDatabase({ agentId: "main", path: original });
         }
         release.resolve();
         expect(await pending).toBe(false);

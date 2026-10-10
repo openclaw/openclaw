@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { Argument, Command, Option } from "commander";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import {
+  getPluginServiceSchedulerBinding,
+  withPluginServiceSchedulerBinding,
+} from "./service-scheduler-binding.js";
 
 // These mark native objects whose public registration methods have been adapted,
 // not runtime owners. Each callback resolves its owner from the existing invocation.
@@ -12,8 +16,11 @@ function bindCallback<T>(value: T): T {
   if (typeof value !== "function" || !instance) {
     return value;
   }
+  const scheduler = getPluginServiceSchedulerBinding();
   const bound = function (this: unknown, ...args: unknown[]) {
-    return instance.run(() => Reflect.apply(value, this, args));
+    return withPluginServiceSchedulerBinding(scheduler, () =>
+      instance.run(() => Reflect.apply(value, this, args)),
+    );
   };
   // CLI callbacks receive native Commander objects and parser-produced data, not plugin views.
   // SAFETY: The wrapper forwards the same receiver, arguments, and return value.
@@ -121,7 +128,11 @@ function bindPluginCliEvents(program: EventEmitter, adoptPrepared: boolean): voi
   // EventEmitter's once/prependOnceListener use these public listener methods.
   // Preserve listener/removal identity, including once's own removal callback.
   const listenerOrigins = new WeakMap<Function, Function>();
-  const wrapListener = (listener: Function, managed: Function) => {
+  const wrapListener = <T extends Function>(listener: T) => {
+    const managed = bindCallback(listener);
+    if (managed === listener) {
+      return listener;
+    }
     const bound = function (this: EventEmitter, ...args: unknown[]) {
       return Reflect.apply(managed, this, args);
     };
@@ -134,22 +145,14 @@ function bindPluginCliEvents(program: EventEmitter, adoptPrepared: boolean): voi
   if (adoptPrepared) {
     // Preserve Node's native listener order/once wrappers without invoking
     // newListener/removeListener callbacks during ownership adoption.
-    bindStoredCallbackCollection(program, "_events", (listener) => {
-      if (typeof listener !== "function") {
-        return listener;
-      }
-      const managed = bindCallback(listener);
-      return managed === listener ? listener : wrapListener(listener, managed);
-    });
+    bindStoredCallbackCollection(program, "_events", (listener) =>
+      typeof listener === "function" ? wrapListener(listener) : listener,
+    );
   }
   for (const name of ["on", "addListener", "prependListener"] as const) {
     const method = program[name];
     program[name] = function (event, listener) {
-      const managed = bindCallback(listener);
-      if (managed === listener) {
-        return method.call(this, event, listener);
-      }
-      return method.call(this, event, wrapListener(listener, managed));
+      return method.call(this, event, wrapListener(listener));
     };
   }
   for (const name of ["removeListener", "off"] as const) {
@@ -192,6 +195,8 @@ export function bindPluginCliProgram(program: Command, adoptPrepared = false): v
     ["hook", 1],
     ["exitOverride", 0],
     ["addHelpText", 1],
+    ["configureHelp", undefined],
+    ["configureOutput", undefined],
   ] as const) {
     const method = program[name];
     Object.defineProperty(program, name, {
@@ -201,18 +206,14 @@ export function bindPluginCliProgram(program: Command, adoptPrepared = false): v
         return Reflect.apply(
           method,
           this,
-          args.map((arg, index) => (index === callbackIndex ? bindCallback(arg) : arg)),
+          args.map((arg, index) =>
+            callbackIndex === undefined
+              ? bindConfiguration(arg)
+              : index === callbackIndex
+                ? bindCallback(arg)
+                : arg,
+          ),
         );
-      },
-    });
-  }
-  for (const name of ["configureHelp", "configureOutput"] as const) {
-    const method = program[name];
-    Object.defineProperty(program, name, {
-      configurable: true,
-      writable: true,
-      value(this: Command, ...args: unknown[]) {
-        return Reflect.apply(method, this, args.map(bindConfiguration));
       },
     });
   }

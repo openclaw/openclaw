@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
@@ -8,9 +8,14 @@ import type {
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
-import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import type {
+  SessionRefreshOptions,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import type { SessionsPageArchive } from "./archive-actions.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
@@ -53,7 +58,7 @@ export type TestSessionsPage = HTMLElement & {
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
-  archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
+  archiveActions: Pick<SessionsPageArchive, "archive" | "archiveTree">;
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
@@ -61,6 +66,7 @@ export type TestSessionsPage = HTMLElement & {
 type MutableGateway = {
   gateway: ApplicationContext["gateway"];
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  emitEvent: (event: GatewayEventFrame) => void;
   setSessionKey: ReturnType<typeof vi.fn>;
 };
 
@@ -77,6 +83,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const setSessionKey = vi.fn();
   const gateway = {
     get snapshot() {
@@ -88,12 +95,16 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     subscribeEventLog: () => () => undefined,
   } as unknown as ApplicationContext["gateway"];
   return {
     gateway,
     setSessionKey,
+    emitEvent: (event) => eventListeners.forEach((listener) => listener(event)),
     emit(patch) {
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {
@@ -174,10 +185,20 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
       groupSettings: [],
       sectionOrder: [],
     },
+    captureConnectionScope: () => null,
+    isConnectionScopeCurrent: () => false,
     list: vi.fn(async () => null),
     listSnapshot,
     subscribeList,
     refreshList,
+    observeRow: vi.fn((): SessionRowObservation => ({
+      row: null,
+      sessionId: null,
+      hasObserved: false,
+      isCurrent: () => true,
+      captureReconcile: () => () => ({ status: "current", row: null }),
+      dispose: () => {},
+    })),
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     deletionState: () => undefined,
     patch: vi.fn(async () => null),
@@ -199,6 +220,7 @@ export function createContext(
   return {
     basePath: "",
     gateway,
+    navigation: createNavigationPreferencesFixture(),
     sessions,
     placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },

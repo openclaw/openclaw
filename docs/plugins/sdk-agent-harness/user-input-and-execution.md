@@ -24,7 +24,7 @@ are a separate case. They register a Gateway question and then wait, and the
 prompt that lets a person answer it is published by whatever runs the tool. A
 harness whose tools go through the embedded tool lifecycle gets that publication
 from its tool-start handler. A harness that dispatches tools itself passes
-`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+`questionPrompt` to `hostCapabilities.createToolSurfaceAsync` instead, on every path where it
 builds a tool surface — a side thread is its own such path: `send` is the run's
 `onToolResult`, and `messageChannel` is the conversation the prompt would appear
 in. Leave it out and the question is registered but never shown, so the turn
@@ -228,6 +228,15 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+Pass the host-supplied attempt's `trigger` to this factory. This optional field
+uses the existing run trigger (`cron`, `event`, `heartbeat`, `manual`, `memory`,
+`overflow`, or `user`); omitting it preserves ordinary tool presentation. A
+`memory` turn keeps the host-selected persistence tools directly available and
+disables Tool Search and Code Mode, including when prepared presentation facts
+are supplied. File-backed saving retains `read` and its restricted append-only
+writer; provider-backed saving retains `read` and the selected plugin's declared
+persistence and lookup tools. See [pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
 Native tool adapters may use `runWithAsyncWorkResources(...)` from the same
 subpath to retain operation cleanup through host-owned admitted work without

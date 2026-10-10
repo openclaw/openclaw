@@ -1,10 +1,8 @@
-import type { SessionFreshness } from "../../config/sessions/reset.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   createSessionResetBoundaryId,
   type SessionResetBoundaryRequest,
 } from "../../config/sessions/session-reset-boundary-event.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { createResetBoundaryTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import type {
   PluginHookSessionEndEvent,
@@ -16,7 +14,8 @@ import {
   attachSessionEndTranscriptSource,
   type SessionEndTranscriptSource,
 } from "../../plugins/session-end-transcript.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
@@ -29,13 +28,6 @@ export function resolveExplicitSessionEndReason(
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
-export function resolveStaleSessionEndReason(params: {
-  entry: SessionEntry | undefined;
-  freshness?: SessionFreshness;
-}): ReplySessionEndReason | undefined {
-  return params.entry ? params.freshness?.staleReason : undefined;
-}
-
 export function createReplySessionResetBoundary(params: {
   cwd: string;
   explicitReason: Extract<SessionResetBoundaryRequest["reason"], "new" | "reset">;
@@ -46,19 +38,14 @@ export function createReplySessionResetBoundary(params: {
     params.previousReason === "idle" || params.previousReason === "daily"
       ? params.previousReason
       : "reset";
-  return params.resetTriggered
-    ? {
-        boundaryId: createSessionResetBoundaryId(),
-        context: "clear",
-        cwd: params.cwd,
-        reason: params.explicitReason,
-      }
-    : {
-        boundaryId: createSessionResetBoundaryId(),
-        context: "preserve-tail",
-        cwd: params.cwd,
-        reason: continuityReason,
-      };
+  const request: SessionResetBoundaryRequest = params.resetTriggered
+    ? { context: "clear", reason: params.explicitReason }
+    : { context: "preserve-tail", reason: continuityReason };
+  return {
+    boundaryId: createSessionResetBoundaryId(),
+    cwd: params.cwd,
+    ...request,
+  };
 }
 
 type SessionHookContext = {
@@ -76,9 +63,7 @@ function buildSessionHookContext(params: SessionHookContext): SessionHookContext
 }
 
 export function buildSessionStartHookPayload(
-  params: SessionHookContext & {
-    resumedFrom?: string;
-  },
+  params: SessionHookContext & PluginHookSessionStartEvent,
 ): {
   event: PluginHookSessionStartEvent;
   context: SessionHookContext;
@@ -93,17 +78,25 @@ export function buildSessionStartHookPayload(
   };
 }
 
+export function emitReplySessionStartHook(
+  hookRunner: HookRunner,
+  params: Parameters<typeof buildSessionStartHookPayload>[0],
+): void {
+  const payload = buildSessionStartHookPayload(params);
+  // Lifecycle hooks outlive their requester; deferred plugin work must belong
+  // to the detached scope that keeps the Gateway drain alive until completion.
+  void runWithGatewayDetachedWorkContinuation(async () => {
+    await runOutsideStoreWriterContext(() =>
+      hookRunner.runSessionStart(payload.event, payload.context),
+    );
+  }, "hooks:session-start").catch(() => {});
+}
+
 export function buildSessionEndHookPayload(
-  params: SessionHookContext & {
-    messageCount?: number;
-    durationMs?: number;
-    reason?: PluginHookSessionEndReason;
-    sessionFile?: string;
-    transcriptArchived?: boolean;
-    nextSessionId?: string;
-    nextSessionKey?: string;
-    endedTranscript?: SessionEndTranscriptSource;
-  },
+  params: SessionHookContext &
+    Partial<PluginHookSessionEndEvent> & {
+      endedTranscript?: SessionEndTranscriptSource;
+    },
 ): {
   event: PluginHookSessionEndEvent;
   context: SessionHookContext;
@@ -136,8 +129,6 @@ export function emitReplySessionEndHook(params: {
   agentId: string;
   storePath: string;
   reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
-  transcriptArchived?: boolean;
   nextSessionId?: string;
   resetBoundaryId?: string;
 }): void {
@@ -153,7 +144,9 @@ export function emitReplySessionEndHook(params: {
       )
     : { available: false as const, reason: "unsupported-source" as const };
   const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
-    await params.hookRunner.runSessionEnd(payload.event, payload.context);
+  void runWithGatewayDetachedWorkContinuation(async () => {
+    await runOutsideStoreWriterContext(() =>
+      params.hookRunner.runSessionEnd(payload.event, payload.context),
+    );
   }, "hooks:session-end").catch(() => {});
 }

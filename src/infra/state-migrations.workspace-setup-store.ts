@@ -37,10 +37,7 @@ const MIGRATION_KIND = WORKSPACE_LEGACY_STATE_MIGRATION_KIND;
 
 type WorkspaceMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  | "workspace_setup_state"
-  | "workspace_path_aliases"
-  | "workspace_generated_bootstrap_hashes"
-  | "migration_sources"
+  "workspace_setup_state" | "workspace_generated_bootstrap_hashes" | "migration_sources"
 >;
 
 type ParsedSetup = {
@@ -213,29 +210,21 @@ function findMigrationAuthority(params: {
   ).rows;
   let bestPriority: number | null = null;
   for (const row of rows) {
-    if (!row.report_json) {
+    const report = safeParseJsonRecord(row.report_json);
+    if (
+      !report ||
+      report.workspaceKey !== params.source.workspaceKey ||
+      report.sourceKind !== params.source.kind ||
+      report.canonicalFingerprint !== params.fingerprint ||
+      report.authoritative !== true ||
+      typeof report.sourcePriority !== "number" ||
+      !Number.isSafeInteger(report.sourcePriority) ||
+      report.sourcePriority < 0
+    ) {
       continue;
     }
-    try {
-      const report = JSON.parse(row.report_json) as Record<string, unknown>;
-      if (
-        report.workspaceKey !== params.source.workspaceKey ||
-        report.sourceKind !== params.source.kind ||
-        report.canonicalFingerprint !== params.fingerprint ||
-        report.authoritative !== true ||
-        typeof report.sourcePriority !== "number" ||
-        !Number.isSafeInteger(report.sourcePriority) ||
-        report.sourcePriority < 0
-      ) {
-        continue;
-      }
-      bestPriority =
-        bestPriority === null
-          ? report.sourcePriority
-          : Math.min(bestPriority, report.sourcePriority);
-    } catch {
-      // Ignore unrelated or older migration reports without authority metadata.
-    }
+    bestPriority =
+      bestPriority === null ? report.sourcePriority : Math.min(bestPriority, report.sourcePriority);
   }
   return bestPriority === null ? null : { priority: bestPriority };
 }
@@ -246,52 +235,56 @@ export function canonicalCoversParsedSource(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  return runSqliteDeferredTransactionSync(db, () => {
-    const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
-    if (params.source.kind === "setup" && params.parsed.kind === "setup") {
+  return runSqliteDeferredTransactionSync(
+    db,
+    () => {
+      const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
+      if (params.source.kind === "setup" && params.parsed.kind === "setup") {
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("workspace_setup_state")
+            .selectAll()
+            .where("workspace_key", "=", params.source.workspaceKey),
+        );
+        // SQLite owns initialized milestones; a matching receipt permits cleanup only.
+        return (
+          row?.version === WORKSPACE_SETUP_STATE_VERSION &&
+          row.workspace_path === params.source.workspaceDir
+        );
+      }
+      if (params.source.kind !== "attestation" || params.parsed.kind !== "attestation") {
+        return false;
+      }
       const row = executeSqliteQueryTakeFirstSync(
         db,
         kysely
           .selectFrom("workspace_setup_state")
-          .selectAll()
+          .select("attested_at_ms")
           .where("workspace_key", "=", params.source.workspaceKey),
       );
-      // SQLite owns initialized milestones; a matching receipt permits cleanup only.
-      return (
-        row?.version === WORKSPACE_SETUP_STATE_VERSION &&
-        row.workspace_path === params.source.workspaceDir
-      );
-    }
-    if (params.source.kind !== "attestation" || params.parsed.kind !== "attestation") {
-      return false;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("workspace_setup_state")
-        .select("attested_at_ms")
-        .where("workspace_key", "=", params.source.workspaceKey),
-    );
-    if (!row || row.attested_at_ms == null) {
-      return false;
-    }
-    if (row.attested_at_ms > params.parsed.value.attestedAtMs) {
-      return true;
-    }
-    if (row.attested_at_ms < params.parsed.value.attestedAtMs) {
-      return false;
-    }
-    const hashes = readGeneratedHashes(db, params.source.workspaceKey);
-    if (isDeepStrictEqual(hashes, params.parsed.value.generatedHashes)) {
-      return true;
-    }
-    const fingerprint = attestationFingerprint({
-      attestedAtMs: row.attested_at_ms,
-      generatedHashes: hashes,
-    });
-    const authority = findMigrationAuthority({ db, kysely, source: params.source, fingerprint });
-    return Boolean(authority && authority.priority <= params.source.priority);
-  });
+      if (!row || row.attested_at_ms == null) {
+        return false;
+      }
+      if (row.attested_at_ms > params.parsed.value.attestedAtMs) {
+        return true;
+      }
+      if (row.attested_at_ms < params.parsed.value.attestedAtMs) {
+        return false;
+      }
+      const hashes = readGeneratedHashes(db, params.source.workspaceKey);
+      if (isDeepStrictEqual(hashes, params.parsed.value.generatedHashes)) {
+        return true;
+      }
+      const fingerprint = attestationFingerprint({
+        attestedAtMs: row.attested_at_ms,
+        generatedHashes: hashes,
+      });
+      const authority = findMigrationAuthority({ db, kysely, source: params.source, fingerprint });
+      return Boolean(authority && authority.priority <= params.source.priority);
+    },
+    { operationLabel: "state.migration.workspace.verify" },
+  );
 }
 
 export function importAndRecordReceipt(params: {
@@ -309,6 +302,14 @@ export function importAndRecordReceipt(params: {
     (database) => {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
+      const readWorkspace = () =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("workspace_setup_state")
+            .selectAll()
+            .where("workspace_key", "=", params.source.workspaceKey),
+        );
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
       // Revalidate the observed receipt before publishing a new backup or generation.
       if (
@@ -327,13 +328,7 @@ export function importAndRecordReceipt(params: {
         if (!params.source.workspaceDir) {
           throw new Error("legacy workspace setup has no workspace path");
         }
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const existing = readWorkspace();
         if (existing && existing.version != null) {
           if (
             existing.workspace_path !== params.source.workspaceDir ||
@@ -384,20 +379,14 @@ export function importAndRecordReceipt(params: {
           resolution = existing ? "merged" : "inserted";
           verifiedFingerprint = createWorkspaceSetupFingerprint(setupColumns);
         }
-        const verified = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const verified = readWorkspace();
         // Every setup import branch writes the source path, so a NULL path
         // here is a verification failure, not an attestation-only row.
         const actualFingerprint =
           verified && verified.workspace_path != null
             ? createWorkspaceSetupFingerprint(verified)
             : null;
-        if (!verified || actualFingerprint !== verifiedFingerprint) {
+        if (actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace setup state");
         }
       } else {
@@ -423,48 +412,22 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
-        const existingRow = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const attestationColumns = {
+          attested_at_ms: parsedAttestation.attestedAtMs,
+          attestation_updated_at_ms: now,
+        };
+        const existingRow = readWorkspace();
         if (existingRow?.attested_at_ms != null) {
           const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
           const existingFingerprint = attestationFingerprint({
             attestedAtMs: existingRow.attested_at_ms,
             generatedHashes: existingHashes,
           });
-          const replaceExistingAttestation = () => {
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .updateTable("workspace_setup_state")
-                .set({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                })
-                .where("workspace_key", "=", params.source.workspaceKey),
-            );
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .deleteFrom("workspace_generated_bootstrap_hashes")
-                .where("workspace_key", "=", params.source.workspaceKey),
-            );
-            insertGeneratedHashes();
-          };
           const equivalent =
             existingRow.attested_at_ms === parsedAttestation.attestedAtMs &&
             isDeepStrictEqual(existingHashes, parsedAttestation.generatedHashes);
-          if (equivalent) {
-            resolution = "verified";
-            verifiedFingerprint = existingFingerprint;
-          } else if (existingRow.attested_at_ms > parsedAttestation.attestedAtMs) {
-            resolution = "superseded";
-            verifiedFingerprint = existingFingerprint;
-          } else if (existingRow.attested_at_ms === parsedAttestation.attestedAtMs) {
+          let preserve = equivalent || existingRow.attested_at_ms > parsedAttestation.attestedAtMs;
+          if (!equivalent && existingRow.attested_at_ms === parsedAttestation.attestedAtMs) {
             const authority = findMigrationAuthority({
               db,
               kysely,
@@ -474,19 +437,28 @@ export function importAndRecordReceipt(params: {
             if (!authority) {
               throw new Error("legacy workspace attestation conflicts with canonical SQLite state");
             }
-            if (params.source.priority < authority.priority) {
-              // Equal-time markers use source priority only when migration receipts
-              // prove which whole snapshot won; hashes are never merged.
-              replaceExistingAttestation();
-              imported = true;
-              resolution = "replaced";
-              verifiedFingerprint = incomingFingerprint;
-            } else {
-              resolution = "superseded";
-              verifiedFingerprint = existingFingerprint;
-            }
+            // Equal-time markers use source priority only when migration receipts
+            // prove which whole snapshot won; hashes are never merged.
+            preserve = !(params.source.priority < authority.priority);
+          }
+          if (preserve) {
+            resolution = equivalent ? "verified" : "superseded";
+            verifiedFingerprint = existingFingerprint;
           } else {
-            replaceExistingAttestation();
+            executeSqliteQuerySync(
+              db,
+              kysely
+                .updateTable("workspace_setup_state")
+                .set(attestationColumns)
+                .where("workspace_key", "=", params.source.workspaceKey),
+            );
+            executeSqliteQuerySync(
+              db,
+              kysely
+                .deleteFrom("workspace_generated_bootstrap_hashes")
+                .where("workspace_key", "=", params.source.workspaceKey),
+            );
+            insertGeneratedHashes();
             imported = true;
             resolution = "replaced";
             verifiedFingerprint = incomingFingerprint;
@@ -501,14 +473,10 @@ export function importAndRecordReceipt(params: {
                 // Orphan hashed-key attestation files carry no path; the row
                 // heals its NULL path when the workspace next appears live.
                 workspace_path: params.source.workspaceDir ?? null,
-                attested_at_ms: parsedAttestation.attestedAtMs,
-                attestation_updated_at_ms: now,
+                ...attestationColumns,
               })
               .onConflict((conflict) =>
-                conflict.column("workspace_key").doUpdateSet({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                }),
+                conflict.column("workspace_key").doUpdateSet(attestationColumns),
               ),
           );
           insertGeneratedHashes();

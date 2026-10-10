@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 

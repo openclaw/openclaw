@@ -65,13 +65,6 @@ type ApprovalResponse = {
   id?: string;
 };
 
-/**
- * Parse an owner's response to an approval request.
- * Supports formats:
- *   - "approve" / "deny" / "block" (applies to most recent pending)
- *   - "approve dm-1234567890-abc" / "deny dm-1234567890-abc" (specific ID)
- *   - "block" permanently blocks the ship via Tlon's native blocking
- */
 export function parseApprovalResponse(text: string): ApprovalResponse | null {
   const trimmed = normalizeLowercaseStringOrEmpty(text);
 
@@ -137,13 +130,6 @@ export function formatApprovalConfirmation(
 
 type AdminCommand = { type: "unblock"; ship: string } | { type: "blocked" } | { type: "pending" };
 
-/**
- * Parse an admin command from owner message.
- * Supports:
- *   - "unblock ~ship" - unblock a specific ship
- *   - "blocked" - list all blocked ships
- *   - "pending" - list all pending approvals
- */
 export function parseAdminCommand(text: string): AdminCommand | null {
   const trimmed = normalizeLowercaseStringOrEmpty(text);
 

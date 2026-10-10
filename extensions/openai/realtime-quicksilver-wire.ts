@@ -7,6 +7,7 @@ import {
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAILiveCall, OPENAI_LIVE_SESSIONS_URL } from "./realtime-live-api.js";
+import { resolveOpenAIRealtimeRequestHeaders } from "./realtime-provider-shared.js";
 import {
   buildOpenAIQuicksilverBackgroundContext,
   OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS,
@@ -152,13 +153,9 @@ export function buildOpenAIQuicksilverSession(params: {
 }
 
 /** Builds the initial WebSocket frame for the selected Live protocol. */
-export function buildOpenAIQuicksilverSessionUpdate(params: {
-  model: string;
-  hostControlsInput?: boolean;
-  instructions?: string;
-  voice?: string;
-  initialItems?: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
-}): OpenAIQuicksilverSessionUpdate {
+export function buildOpenAIQuicksilverSessionUpdate(
+  params: Parameters<typeof buildOpenAIQuicksilverSession>[0],
+): OpenAIQuicksilverSessionUpdate {
   const configured = buildOpenAIQuicksilverSession(params);
   if (isOpenAIGptLiveApiModel(params.model)) {
     return { type: "session.start", session: configured };
@@ -245,19 +242,11 @@ function openAIRealtimeAuthHeaders(
     baseUrl: string;
     includeQuicksilverAlpha: boolean;
   },
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  runtime: OpenAIRealtimeHost,
 ): Record<string, string> {
-  const attributionHeaders =
-    resolveProviderRequestHeaders({
-      provider: "openai",
-      baseUrl: params.baseUrl,
-      capability: "audio",
-      transport: "http",
-      defaultHeaders: {},
-    }) ?? {};
   // x-oai-attestation is optional and intentionally omitted on unsupported clients.
   return {
-    ...attributionHeaders,
+    ...resolveOpenAIRealtimeRequestHeaders(runtime, params.baseUrl),
     Authorization: `Bearer ${params.auth.token}`,
     ...(params.includeQuicksilverAlpha ? { "OpenAI-Alpha": "quicksilver=v2" } : {}),
     "session-id": params.requestIds.sessionId,
@@ -343,33 +332,26 @@ function decodeOpenAIQuicksilverCallId(params: {
   callUrl: string;
 }): string {
   const sessionId = params.openAiSessionId?.trim() ?? "";
-  if (!params.location) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
+  let errorMessage = sessionId
+    ? "GPT-Live call response returned an invalid openai-session-id"
+    : "GPT-Live call response missing Location and openai-session-id headers";
+  if (params.location) {
+    try {
+      const callId = new URL(params.location, params.callUrl).pathname
+        .split("/")
+        .find(isOpenAIQuicksilverCallId);
+      if (callId) {
+        return callId;
+      }
+      errorMessage = "GPT-Live call response Location has no valid call id";
+    } catch {
+      errorMessage = "GPT-Live call response returned an invalid Location";
     }
-    throw new OpenAIQuicksilverCallError(
-      sessionId
-        ? "GPT-Live call response returned an invalid openai-session-id"
-        : "GPT-Live call response missing Location and openai-session-id headers",
-    );
   }
-  let pathname: string;
-  try {
-    pathname = new URL(params.location, params.callUrl).pathname;
-  } catch {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError("GPT-Live call response returned an invalid Location");
+  if (isOpenAIQuicksilverCallId(sessionId)) {
+    return sessionId;
   }
-  const callId = pathname.split("/").filter(Boolean).find(isOpenAIQuicksilverCallId);
-  if (!callId) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError("GPT-Live call response Location has no valid call id");
-  }
-  return callId;
+  throw new OpenAIQuicksilverCallError(errorMessage);
 }
 
 function describeOpenAIQuicksilverCallError(
@@ -410,23 +392,7 @@ export async function createOpenAIQuicksilverCall(
     onCallAllocated?: (callId: string) => void;
   } & ({ gaSideband: true; onCallAllocated: (callId: string) => void } | { gaSideband?: false }),
   runtime: OpenAIRealtimeHost,
-): Promise<
-  | {
-      kind: "gpt-live";
-      status: number;
-      answerSdp: string;
-      callId: string;
-      sidebandUrl: string;
-    }
-  | { kind: "ga-realtime"; status: number; answerSdp: string }
-  | {
-      kind: "ga-sideband";
-      status: number;
-      answerSdp: string;
-      callId: string;
-      sidebandUrl: string;
-    }
-> {
+) {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
   if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
     throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
@@ -529,7 +495,7 @@ export async function createOpenAIQuicksilverCall(
   }
   if (gaCallId) {
     return {
-      kind: "ga-sideband",
+      kind: "ga-sideband" as const,
       status: response.status,
       answerSdp,
       callId: gaCallId,
@@ -537,7 +503,7 @@ export async function createOpenAIQuicksilverCall(
     };
   }
   if (!isGptLive) {
-    return { kind: "ga-realtime", status: response.status, answerSdp };
+    return { kind: "ga-realtime" as const, status: response.status, answerSdp };
   }
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
@@ -545,7 +511,7 @@ export async function createOpenAIQuicksilverCall(
     callUrl,
   });
   return {
-    kind: "gpt-live",
+    kind: "gpt-live" as const,
     status: response.status,
     answerSdp,
     callId,
@@ -560,19 +526,15 @@ export async function hangupOpenAIRealtimeCall(
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
   },
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  runtime: OpenAIRealtimeHost,
 ): Promise<void> {
   if (!OPENAI_REALTIME_CALL_ID_RE.test(params.callId)) {
     throw new Error("OpenAI Realtime call id is invalid");
   }
   const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;
-  const headers = resolveProviderRequestHeaders({
-    provider: "openai",
-    baseUrl: url,
-    capability: "audio",
-    transport: "http",
-    defaultHeaders: { Authorization: `Bearer ${params.apiKey}` },
-  }) ?? { Authorization: `Bearer ${params.apiKey}` };
+  const headers = resolveOpenAIRealtimeRequestHeaders(runtime, url, {
+    Authorization: `Bearer ${params.apiKey}`,
+  });
   const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers,

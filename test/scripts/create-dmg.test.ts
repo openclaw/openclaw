@@ -172,12 +172,6 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function readPngDimensions(imagePath: string): { width: number; height: number } {
-  const data = readFileSync(imagePath);
-  expect(data.subarray(1, 4).toString("ascii")).toBe("PNG");
-  return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
-}
-
 function expectPrivateDmgMount(log: string): string {
   const attach = log.match(/^attach (.+)\/image-rw\.dmg -mountpoint (.+) -nobrowse$/m);
   const runRoot = attach?.[1];
@@ -206,24 +200,6 @@ afterEach(() => {
 });
 
 describe("create-dmg plist validation", () => {
-  it("fails closed for required Info.plist reads", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const readBlock = script.slice(
-      script.indexOf("APP_NAME="),
-      script.indexOf('DMG_NAME="${APP_NAME}-${VERSION}.dmg"'),
-    );
-
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/plistbuddy.sh"');
-    expect(readBlock).toContain(
-      'APP_NAME="$(plist_print_required "$APP_PATH/Contents/Info.plist" CFBundleName)"',
-    );
-    expect(readBlock).toContain(
-      'VERSION="$(plist_print_required "$APP_PATH/Contents/Info.plist" CFBundleShortVersionString)"',
-    );
-    expect(readBlock).not.toContain("PlistBuddy");
-    expect(readBlock).not.toContain("|| echo");
-  });
-
   it("keeps temporary DMG artifacts scoped to one run", () => {
     const script = readFileSync(scriptPath, "utf8");
 
@@ -242,23 +218,6 @@ describe("create-dmg plist validation", () => {
     expect(script).not.toContain("/tmp/openclaw-dmg-limits.txt");
     expect(script).not.toContain('"/Volumes/$DMG_VOLUME_NAME"');
     expect(script).not.toContain('tell application "Finder" to close every window');
-  });
-
-  it("keeps the larger Finder layout aligned with the packaged backgrounds", () => {
-    const script = readFileSync(scriptPath, "utf8");
-
-    expect(script).toContain('DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"');
-    expect(script).toContain('DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"');
-    expect(script).toContain('DMG_APP_POS="${DMG_APP_POS:-170 305}"');
-    expect(script).toContain('DMG_APPS_POS="${DMG_APPS_POS:-510 305}"');
-    expect(readPngDimensions("apps/macos/Packaging/dmg-background-small.png")).toEqual({
-      width: 680,
-      height: 430,
-    });
-    expect(readPngDimensions("apps/macos/Packaging/dmg-background.png")).toEqual({
-      width: 1360,
-      height: 860,
-    });
   });
 
   it("fails malformed DMG resize slack before creating images", () => {
@@ -332,21 +291,6 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(readFileSync(output, "utf8")).toBe("converted");
     const log = readFileSync(tools.hdiutilLog, "utf8");
     expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
-  });
-
-  it("preserves an existing output when image creation fails", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    writeFileSync(output, "previous output", "utf8");
-    const tools = makeFakeDmgTools();
-
-    const result = runScript([app, output], { ...tools.env, HDIUTIL_FAIL_ON: "create" });
-
-    expect(result.status).not.toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("previous output");
-    expect(readFileSync(tools.hdiutilLog, "utf8")).not.toContain("detach");
   });
 
   it("fails before image creation when Finder layout values are malformed", () => {

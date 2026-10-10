@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
@@ -20,7 +19,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("serves describe during a 2,048-session drain without transcript reads in row materialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const count = seedSessionRowProjectionTranscriptFixture();
     for (const index of [0, count - 1]) {
@@ -35,7 +34,6 @@ it("serves describe during a 2,048-session drain without transcript reads in row
         ),
       ).toMatchObject({ totalMessages: 2, events: [expect.anything(), expect.anything()] });
     }
-    console.log("Prepared 2,048 legacy rows and transcript graphs");
     let inMaterialization = false;
     let materializationTranscriptReads = 0;
     let describeInFlight = false;
@@ -81,13 +79,10 @@ it("serves describe during a 2,048-session drain without transcript reads in row
     );
     const context = requestContext(cfg);
     const indexBuilds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
-    const cpu = process.threadCpuUsage();
-    const started = performance.now();
     const initializing = createSessionRowProjection({ cfg });
     await nextTurn();
     const projection = await initializing;
     bindSessionRowProjection(context, () => projection);
-    const startupMs = performance.now() - started;
     /** Resolves with the dirty rows left at the reply and the rows materialized meanwhile. */
     const describe = async (id: string, includeDerivedTitles?: boolean) => {
       let remainingAtResponse = 0;
@@ -116,34 +111,11 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       return { remainingAtResponse, materializedRows: describeMaterializations };
     };
     try {
-      const requestStarted = performance.now();
       const underDrain = await describe("under-drain", true);
-      const describeMs = performance.now() - requestStarted;
       await projection.ensureMaterialized();
-      const initialDrainMs = performance.now() - started;
-      const initialDrainCpu = process.threadCpuUsage(cpu);
       expect(indexBuilds).toHaveBeenCalledTimes(1);
       sessionChanges.emit({ all: true, scope: "config" });
-      const dirtyRequestStarted = performance.now();
       const dirtyDrain = await describe("dirty-drain");
-      const dirtyDescribeMs = performance.now() - dirtyRequestStarted;
-      console.log(
-        JSON.stringify({
-          count,
-          startupMs,
-          initialDrainMs,
-          initialDrainThreadCpuMs: (initialDrainCpu.user + initialDrainCpu.system) / 1000,
-          describeMs,
-          dirtyDescribeMs,
-          underDrainRows: underDrain.materializedRows,
-          dirtyDrainRows: dirtyDrain.materializedRows,
-          remainingAfterDirtyResponse: dirtyDrain.remainingAtResponse,
-          remainingAtResponse: underDrain.remainingAtResponse,
-          materializationTranscriptReads,
-          materializationUsageReads,
-          materializationBoundedReads,
-        }),
-      );
       expect(materializationTranscriptReads).toBe(0);
       expect(materializationUsageReads).toBe(0);
       expect(materializationBoundedReads).toBe(0);

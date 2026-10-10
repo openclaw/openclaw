@@ -1,6 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliSessionBinding, InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { appendAgentRunFailure } from "./agent-run-result.js";
@@ -27,7 +32,7 @@ async function patchCliSessionBindingInStore(
     fallbackEntry?: SessionEntry;
     preserveActivity?: boolean;
     skipMaintenance?: boolean;
-    assertCommitAllowed?: () => void;
+    assertCommitAllowed?: SessionSourceAssertion;
     update: (entry: SessionEntry) => boolean;
     onCommitted?: () => void;
   },
@@ -61,7 +66,7 @@ async function patchCliSessionBindingInStore(
     },
     {
       fallbackEntry: params.fallbackEntry,
-      assertCommitAllowed: params.assertCommitAllowed,
+      ...sessionEntryCommitGuardOptions(params.assertCommitAllowed),
       preserveActivity: params.preserveActivity,
       skipMaintenance: params.skipMaintenance,
       onCommitted: (entry) => {
@@ -78,7 +83,7 @@ async function patchCliSessionBindingInStore(
 
 type CliSessionForkStoreParams = Required<CliSessionStoreTarget> & {
   expectedCliSessionId: string;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
 };
 
 async function patchCliSessionForkBinding(
@@ -109,7 +114,7 @@ async function patchCliSessionForkBinding(
 }
 
 /** Clears the one-shot fork marker before the resumed CLI process starts. */
-export async function consumeCliSessionForkInStore(
+async function consumeCliSessionForkInStore(
   params: CliSessionForkStoreParams,
 ): Promise<SessionEntry | undefined> {
   return await patchCliSessionForkBinding(params, (binding) => {
@@ -130,8 +135,55 @@ export async function restoreCliSessionForkInStore(
   );
 }
 
-/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
-export async function persistCliSessionForkSuccessorInStore(
+/** Share fork publication and cancellation rules across command and live reply callers. */
+export function buildCliSessionForkRunParams(
+  params: CliSessionForkStoreParams & { abortSignal?: AbortSignal },
+  onEntryPatched: (entry: SessionEntry) => void,
+): {
+  claimCliSessionFork: () => Promise<boolean>;
+  restoreCliSessionFork: () => Promise<void>;
+  persistCliSessionForkSuccessor: (successorCliSessionId: string) => Promise<void>;
+} {
+  const activeParams = {
+    ...params,
+    assertCommitAllowed: composeSessionSourceAssertion(
+      [params.assertCommitAllowed],
+      (assertSource) => {
+        assertSource();
+        params.abortSignal?.throwIfAborted();
+      },
+    ),
+  };
+  return {
+    claimCliSessionFork: async () => {
+      const claimed = await consumeCliSessionForkInStore(activeParams);
+      if (claimed) {
+        onEntryPatched(claimed);
+      }
+      return Boolean(claimed);
+    },
+    restoreCliSessionFork: async () => {
+      // Cancellation can restore an unspent marker, but a released owner cannot.
+      const restored = await restoreCliSessionForkInStore(params);
+      if (restored) {
+        onEntryPatched(restored);
+      }
+    },
+    persistCliSessionForkSuccessor: async (successorCliSessionId) => {
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        ...activeParams,
+        successorCliSessionId,
+      });
+      if (!persisted) {
+        throw new Error("CLI session fork successor could not be persisted");
+      }
+      onEntryPatched(persisted);
+    },
+  };
+}
+
+/** Rebinds a claimed fork without bypassing its retained account/environment checks. */
+async function persistCliSessionForkSuccessorInStore(
   params: CliSessionForkStoreParams & {
     successorCliSessionId: string;
   },
@@ -142,7 +194,7 @@ export async function persistCliSessionForkSuccessorInStore(
   return await patchCliSessionForkBinding(params, (binding) =>
     binding.forkNextResume === true
       ? undefined
-      : { ...binding, sessionId: params.successorCliSessionId, forceReuse: true },
+      : { ...binding, sessionId: params.successorCliSessionId },
   );
 }
 
@@ -169,7 +221,7 @@ export async function persistCliSessionBindingResult(
   params: CliSessionStoreTarget & {
     result: EmbeddedAgentRunResult;
     expectedSession?: InternalSessionEntry;
-    assertSettlementCurrent: () => void;
+    assertSettlementCurrent: SessionSourceAssertion;
     abortSignal?: AbortSignal;
   },
 ): Promise<EmbeddedAgentRunResult> {
@@ -185,12 +237,15 @@ export async function persistCliSessionBindingResult(
       skipMaintenance: true,
       update: (entry) =>
         applyCliSessionBindingResult(entry, params.provider, params.result.meta.agentMeta),
-      assertCommitAllowed: () =>
-        assertCliSessionBindingResultCommitAllowed(
-          params.result.meta.agentMeta,
-          params.assertSettlementCurrent,
-          params.abortSignal,
-        ),
+      assertCommitAllowed: composeSessionSourceAssertion(
+        [params.assertSettlementCurrent],
+        (assertSource) =>
+          assertCliSessionBindingResultCommitAllowed(
+            params.result.meta.agentMeta,
+            assertSource,
+            params.abortSignal,
+          ),
+      ),
     });
   });
 }
@@ -201,7 +256,7 @@ export async function clearCliSessionInStore(
     expectedSessionId?: string;
     expectedCliSessionId?: string;
     activeSessionEntry?: SessionEntry;
-    assertCommitAllowed?: () => void;
+    assertCommitAllowed?: SessionSourceAssertion;
   },
 ): Promise<SessionEntry | undefined> {
   const entry =

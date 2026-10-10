@@ -4,7 +4,9 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
+import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stall.ts";
 
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
@@ -326,57 +328,22 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           return String(value);
         }
       };
-      type Runtime = {
-        context?: {
-          agents?: {
-            state?: {
-              agentsError?: unknown;
-              agentsList?: unknown;
-              agentsLoading?: unknown;
-              connected?: unknown;
-            };
-          };
-          agentSelection?: { state?: unknown };
-          gateway?: {
-            snapshot?: { assistantAgentId?: unknown; hello?: unknown; phase?: unknown };
-          };
-          router?: { getState?: () => unknown };
-        };
-        router?: { getState?: () => unknown };
-      };
       type MockGateway = {
         requests?: unknown[];
         socketStates?: () => Array<{ readyState: number; state: string; url: string }>;
         socketUrls?: () => string[];
       };
       const windowState = window as Window & {
+        __OPENCLAW_CONTROL_UI_E2E_LONG_FRAMES__?: () => unknown[];
         __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: unknown[];
         openclawControlUiE2eGateway?: MockGateway;
       };
-      const app = document.querySelector("openclaw-app") as
-        | (HTMLElement & { runtime?: Runtime })
-        | null;
-      const shell = document.querySelector("openclaw-app-shell") as
-        | (HTMLElement & { runtime?: Runtime })
-        | null;
-      const runtime = app?.runtime ?? shell?.runtime;
-      const context = runtime?.context;
-      const agentsState = context?.agents?.state;
-      const gatewaySnapshot = context?.gateway?.snapshot;
-      const routerState = runtime?.router?.getState?.() ?? context?.router?.getState?.();
-      const summarizeMatches = (matches: unknown): unknown =>
-        Array.isArray(matches)
-          ? matches.map((match) => {
-              if (!match || typeof match !== "object") {
-                return copy(match);
-              }
-              const record = match as Record<string, unknown>;
-              return {
-                pathname: copy(record.pathname ?? record.path ?? null),
-                routeId: copy(record.routeId ?? record.id ?? null),
-              };
-            })
-          : copy(matches ?? []);
+      const app = document.querySelector("openclaw-app");
+      const shell = document.querySelector("openclaw-app-shell");
+      const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
+        window.openclawControlUi?.diagnostics();
+      const agentsState = diagnostics?.roster;
+      const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
       for (const element of document.querySelectorAll("*")) {
         const name = element.localName;
@@ -508,6 +475,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             count: Array.isArray(roster?.agents) ? roster.agents.length : null,
             errorPresent: Boolean(agentsState?.agentsError),
           },
+          longFrames: copy(windowState["__OPENCLAW_CONTROL_UI_E2E_LONG_FRAMES__"]?.() ?? null),
           documentReadyState: safeValue(document.readyState, [
             "loading",
             "interactive",
@@ -545,33 +513,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
               }
             : null,
         },
-        app: {
-          agentSelection: copy(context?.agentSelection?.state ?? null),
-          gateway: {
-            assistantAgentId: copy(gatewaySnapshot?.assistantAgentId ?? null),
-            hello: copy(gatewaySnapshot?.hello ?? null),
-            phase: copy(gatewaySnapshot?.phase ?? null),
-          },
-          roster: {
-            agentsError: copy(agentsState?.agentsError ?? null),
-            agentsList: copy(agentsState?.agentsList ?? null),
-            agentsLoading: copy(agentsState?.agentsLoading ?? null),
-            connected: copy(agentsState?.connected ?? null),
-          },
-          router:
-            routerState && typeof routerState === "object"
-              ? {
-                  matches: summarizeMatches((routerState as { matches?: unknown }).matches),
-                  pendingMatches: summarizeMatches(
-                    (routerState as { pendingMatches?: unknown }).pendingMatches,
-                  ),
-                  resolvedLocation: copy(
-                    (routerState as { resolvedLocation?: unknown }).resolvedLocation ?? null,
-                  ),
-                  status: copy((routerState as { status?: unknown }).status ?? null),
-                }
-              : copy(routerState ?? null),
-        },
+        app: copy(diagnostics ?? null),
         document: {
           customElementCounts,
           hasApp: Boolean(app),
@@ -648,6 +590,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     hostBeforeRead,
     lifecycle: controlUiE2ePageLifecycles.get(page) ?? null,
     rendererRead,
+    rendererStall: await captureControlUiE2eRendererStall(page, rendererRead),
     models,
     gatewayRpc: controlUiRpcDiagnostics.get(page) ?? [],
     frameDepthCounts,

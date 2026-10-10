@@ -104,7 +104,10 @@ async function dispatch(
     contextWindowTokens,
   });
   const activeSession = {
-    [agentSessionQueuePromptContext]: () => () => undefined,
+    isCompacting: false,
+    [agentSessionQueuePromptContext]: () => {
+      throw new Error("Unexpected prompt context in the result-budget probe");
+    },
     agent,
     get messages() {
       return agent.state.messages;
@@ -121,7 +124,6 @@ async function dispatch(
       transcriptPrompt: "",
       systemPrompt: "",
       runtimeOnly: true,
-      sessionPromptState,
       toolResultMaxChars: resolveLiveToolResultMaxChars({
         contextWindowTokens,
       }),
@@ -168,7 +170,6 @@ describe("fresh producer results through persistence and model guards", () => {
       last: "é".repeat(6000),
       context: 8000,
     },
-    { name: "ordinary incremental", first: "first", last: "second", value: { text: "small" } },
   ])(
     "keeps $name Code Mode output complete after yield and provider dispatch",
     async (scenario) => {
@@ -215,9 +216,7 @@ describe("fresh producer results through persistence and model guards", () => {
         ];
         const details = resultDetails(final);
         const output = details.output as unknown[];
-        if (scenario.name === "ordinary incremental") {
-          expect(output).toEqual([original[1]]);
-        } else if (output.length > 0) {
+        if (output.length > 0) {
           expectOriginalCodeModeMarker(output[0], original);
         } else {
           expect(lastText).toBe("");
@@ -233,7 +232,7 @@ describe("fresh producer results through persistence and model guards", () => {
             bridgeDispatchStarted: true,
             error: expect.stringMatching(/^Error: DIAGNOSTIC.*\[error truncated\]$/s),
           });
-        } else if (value === true || scenario.name === "ordinary incremental") {
+        } else if (value === true) {
           expect(details.value).toEqual(value);
         } else {
           expect(details.value).toMatchObject({
@@ -332,47 +331,42 @@ describe("fresh producer results through persistence and model guards", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves wrapped network result structure and terminal batches (failed=%s)",
-    async (fail) => {
-      const network = fakeTool("network_fixture", "Read a network fixture");
-      network.resultContentSource = "network";
-      network.execute = async () => ({
-        content: [{ type: "text", text: "received" }],
-        details: "received",
-        terminate: true,
+  it("preserves wrapped network result structure and terminal batches", async () => {
+    const network = fakeTool("network_fixture", "Read a network fixture");
+    network.resultContentSource = "network";
+    network.execute = async () => ({
+      content: [{ type: "text", text: "received" }],
+      details: "received",
+      terminate: true,
+    });
+    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+      config: { tools: { codeMode: true } },
+      model,
+      modelToolsEnabled: true,
+      sessionId,
+      executeTool: async ({ toolCallId, input }) => network.execute(toolCallId, input),
+    });
+    try {
+      const [exec, wait] = runtime.compactTools([network]).tools;
+      const first = await exec!.execute("network", {
+        code: `await network_fixture({}); text('<s>'.repeat(20000)); await yield_control(); return "é".repeat(20000);`,
       });
-      const runtime = createAgentHarnessToolSurfaceRuntimeCore({
-        config: { tools: { codeMode: true } },
-        model,
-        modelToolsEnabled: true,
-        sessionId,
-        executeTool: async ({ toolCallId, input }) => network.execute(toolCallId, input),
-      });
-      try {
-        const [exec, wait] = runtime.compactTools([network]).tools;
-        const first = await exec!.execute("network", {
-          code: `await network_fixture({}); text('<s>'.repeat(20000)); await yield_control(); ${fail ? 'throw new Error("network diagnostic".repeat(5000));' : 'return "é".repeat(20000);'}`,
-        });
-        expect(first.terminate).not.toBe(true);
-        const final = await wait!.execute("network-wait", { runId: resultDetails(first).runId });
-        expect(final.terminate).toBe(true);
-        for (const result of [first, final]) {
-          const rendered = text(result);
-          expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-          expect(rendered).not.toContain("\n[truncated]");
-          const body = rendered
-            .split("\n---\n")[1]
-            ?.split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0];
-          expect(body!.length).toBeLessThanOrEqual(20_000);
-          expect(JSON.parse(body!)).toMatchObject({ status: resultDetails(result).status });
-          expect(text(toolResult(await dispatch([message(result, "exec")]), 0))).toBe(rendered);
-        }
-      } finally {
-        runtime.cleanup();
+      expect(first.terminate).not.toBe(true);
+      const final = await wait!.execute("network-wait", { runId: resultDetails(first).runId });
+      expect(final.terminate).toBe(true);
+      for (const result of [first, final]) {
+        const rendered = text(result);
+        expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+        expect(rendered).not.toContain("\n[truncated]");
+        const body = rendered.split("\n---\n")[1]?.split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0];
+        expect(body!.length).toBeLessThanOrEqual(20_000);
+        expect(JSON.parse(body!)).toMatchObject({ status: resultDetails(result).status });
+        expect(text(toolResult(await dispatch([message(result, "exec")]), 0))).toBe(rendered);
       }
-    },
-  );
+    } finally {
+      runtime.cleanup();
+    }
+  });
 
   it("preserves conventional plain text and mixed MCP content without inferring JSON", async () => {
     const plain = message(

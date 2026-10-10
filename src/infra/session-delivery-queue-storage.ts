@@ -148,24 +148,30 @@ function prepareEntry(
   });
 }
 
+function publishSessionDelivery<
+  Key extends "sessionDelivery.enqueue" | "sessionDelivery.enqueueClaimed",
+>(
+  entry: QueuedSessionDelivery,
+  type: Key,
+  context: OpenClawStateWorkerContext,
+): Promise<SessionDeliveryWorkerOperations[Key]["output"]> {
+  const input = prepareEntry(entry, "insert");
+  return withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
+    runOpenClawStateWorkerOperation(context, (scope) => scope.execute<Key>({ type, input }), {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    }),
+  );
+}
+
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   context: OpenClawStateWorkerContext,
 ): Promise<string> {
   const entry = prepareSessionDelivery(params);
-  const input = prepareEntry(entry, "insert");
-  await withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
-    runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "sessionDelivery.enqueue", input }),
-      {
-        assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
-      },
-    ),
-  );
+  await publishSessionDelivery(entry, "sessionDelivery.enqueue", context);
   return entry.id;
 }
 
@@ -174,19 +180,10 @@ export async function enqueueClaimedSessionDelivery(
   initialAttemptLeaseMs: number,
   context: OpenClawStateWorkerContext,
 ): Promise<SessionDeliveryWorkerOperations["sessionDelivery.enqueueClaimed"]["output"]> {
-  const entry = prepareClaimedSessionDelivery(params, initialAttemptLeaseMs);
-  const input = prepareEntry(entry, "insert");
-  return withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
-    runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "sessionDelivery.enqueueClaimed", input }),
-      {
-        assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
-      },
-    ),
+  return publishSessionDelivery(
+    prepareClaimedSessionDelivery(params, initialAttemptLeaseMs),
+    "sessionDelivery.enqueueClaimed",
+    context,
   );
 }
 

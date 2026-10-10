@@ -1,3 +1,4 @@
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type {
   SqliteWorkerCommand,
   SqliteWorkerOperations,
@@ -10,12 +11,30 @@ export type WorkerOperationContext = {
   stateOptions: () => { path: string; env: NodeJS.ProcessEnv };
 };
 
-export type WorkerOperationHandlers = Record<
+export type WorkerWriteOperationContext = WorkerOperationContext & {
+  write: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    transactionOptions?: Pick<
+      SqliteTransactionOptions,
+      "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+    >,
+  ) => T;
+  writeAdmitted: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      receipt?: "result";
+      /** Preserve worker-process ownership checks for native-default callers. */
+      transactionEnvironment?: "process";
+    },
+  ) => T;
+};
+
+export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
   string,
-  (input: never, context: WorkerOperationContext) => unknown
+  (input: never, context: Context) => unknown
 >;
 
-export type WorkerOperations<Handlers extends WorkerOperationHandlers> = {
+export type WorkerOperations<Handlers extends WorkerOperationHandlers<never>> = {
   [Key in keyof Handlers]: {
     input: Parameters<Handlers[Key]>[0];
     output: ReturnType<Handlers[Key]>;
@@ -23,29 +42,36 @@ export type WorkerOperations<Handlers extends WorkerOperationHandlers> = {
 };
 
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
-type DomainLoaders<Operations extends SqliteWorkerOperations> = {
-  [Domain in Namespace<keyof Operations>]: () => Promise<{
-    [Key in keyof Operations as Key extends `${Domain}.${string}` ? Key : never]: (
+type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {
+  [Domain in Domains]: () => Promise<{
+    [Key in keyof Operations as Key extends Domain | `${Domain}.${string}` ? Key : never]: (
       input: Operations[Key]["input"],
-      context: WorkerOperationContext,
+      context: Context,
     ) => Operations[Key]["output"];
   }>;
 };
 
-export function createWorkerOperationRegistry<Operations extends SqliteWorkerOperations>(
-  loaders: DomainLoaders<Operations>,
-) {
+export function createWorkerOperationRegistry<
+  Operations extends SqliteWorkerOperations,
+  Context = WorkerOperationContext,
+  Domains extends string = Namespace<keyof Operations>,
+>(loaders: DomainLoaders<Operations, Context, Domains>) {
   const domains = new Map<
     string,
-    { load: () => Promise<WorkerOperationHandlers>; handlers?: WorkerOperationHandlers }
+    {
+      load: () => Promise<WorkerOperationHandlers<Context>>;
+      handlers?: WorkerOperationHandlers<Context>;
+    }
   >(
-    Object.entries<() => Promise<WorkerOperationHandlers>>(loaders).map(([name, load]) => [
+    Object.entries<() => Promise<WorkerOperationHandlers<Context>>>(loaders).map(([name, load]) => [
       name,
       { load: createLazyRuntimeModule(load) },
     ]),
   );
   const domainFor = (type: PropertyKey) =>
-    typeof type === "string" ? domains.get(type.slice(0, type.indexOf("."))) : undefined;
+    typeof type === "string"
+      ? (domains.get(type) ?? domains.get(type.slice(0, type.indexOf("."))))
+      : undefined;
   const handlerFor = (type: PropertyKey) => {
     const handlers = domainFor(type)?.handlers;
     return handlers && Object.hasOwn(handlers, type) ? handlers[String(type)] : undefined;
@@ -66,7 +92,7 @@ export function createWorkerOperationRegistry<Operations extends SqliteWorkerOpe
     }): command is SqliteWorkerCommand<Operations> {
       return handlerFor(command.type) !== undefined;
     },
-    execute(command: SqliteWorkerCommand<Operations>, context: WorkerOperationContext) {
+    execute(command: SqliteWorkerCommand<Operations>, context: Context) {
       const handler = handlerFor(command.type);
       if (!handler) {
         throw new Error(`Worker operation is not prepared: ${String(command.type)}`);
@@ -74,7 +100,7 @@ export function createWorkerOperationRegistry<Operations extends SqliteWorkerOpe
       // SAFETY: The typed loader binds each key to its input/output; lookup erases that correlation.
       const execute = handler as (
         input: Operations[keyof Operations]["input"],
-        context: WorkerOperationContext,
+        context: Context,
       ) => Operations[keyof Operations]["output"];
       return execute(command.input, context);
     },

@@ -106,7 +106,7 @@ before finalizing video.
 The chat-loading performance real-Gateway suite records browser timestamps in
 `loading-evidence.json` for the history request, data publication, committed row
 model, and visual quiescence. A pane update can still display the old row model
-while scrolling, so the probe verifies that a retained row's index advances
+while scrolling, so the check verifies that a retained row's index advances
 before checking for 50 ms without transcript mutations, resizing, or scrolling.
 It records the start and confirmation of that quiet interval separately; the
 confirmation delay is not application latency. A nonzero `lateChanges` count
@@ -142,6 +142,15 @@ five-second budget. If the renderer stalls, it records incomplete diagnostics an
 returns so the caller can rethrow the original failure. A late browser response
 cannot publish a screenshot after that budget expires; test action deadlines and
 caller-owned browser cleanup remain unchanged.
+
+Pages from the shared suite's `withPage` also arm a renderer stall check before the
+test runs. When the renderer misses that read deadline, the public summary's
+`rendererStall` records main-thread busy time by kind and the paused JavaScript
+stack, then resumes the page, within a further three-second budget. A stall that
+ended before a responsive read appears in `browser.longFrames` as frames of at
+least one second with their script attribution. Both keep only bundle paths,
+positions, function names, and listener tag and event names; map positions with
+the same commit's bundled build sourcemaps.
 
 The private JSON report's `ci.shardIndex` and `ci.vitestShardCount` fields record
 `VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal CI.
@@ -200,6 +209,7 @@ corrupted video is not continuous-flow proof.
 
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
 - `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
+- `pnpm test:e2e:agent-plugin-gateway`: synthetic provider and MCP fixtures exercise plugin installation and a real Gateway. `OPENCLAW_VITEST_RUNTIME=bun` selects Bun for the OpenClaw product processes; fixture services and build orchestration keep their existing Node commands.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
   Broad runs prepare the shared runtime once, then use four sequential Vitest shards in fresh processes to bound worker memory. The worker limit applies within each process; ordinary test failures are retained while remaining shards finish. Explicit filters, watch mode, caller-supplied shards, coverage, and report-output options keep one direct invocation.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.

@@ -9,7 +9,6 @@ import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolveInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { isOptionalPluginManifestFile } from "../plugins/installed-plugin-index-manifest.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
-import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
 import {
@@ -29,57 +28,20 @@ function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
   return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
 }
 
-function isSourceCheckoutPluginRecord(record: InstalledPluginIndexRecord): boolean {
-  if (record.origin === "workspace" || record.origin === "config") {
-    return true;
-  }
-  return record.origin === "bundled" && isBundledSourceCheckoutPluginRoot(record.rootDir);
-}
-
 function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
   let current = path.resolve(pluginRootDir);
   while (true) {
     const extensionsDir = path.dirname(current);
     if (path.basename(extensionsDir) === "extensions") {
       const packageRoot = path.dirname(extensionsDir);
-      return (
-        fsSync.existsSync(path.join(packageRoot, ".git")) &&
-        fsSync.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
-        fsSync.existsSync(path.join(packageRoot, "src"))
+      return [".git", "pnpm-workspace.yaml", "src"].every((entry) =>
+        fsSync.existsSync(path.join(packageRoot, entry)),
       );
     }
-    const next = path.dirname(current);
-    if (next === current) {
+    if (extensionsDir === current) {
       return false;
     }
-    current = next;
-  }
-}
-
-async function readInstalledPackageJson(
-  rootDir: string,
-  packageJsonRelPath: string,
-): Promise<PackageManifest> {
-  const absPath = path.join(rootDir, packageJsonRelPath);
-  const raw = await fs.readFile(absPath, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) {
-    throw new Error("package.json must contain a JSON object");
-  }
-  return parsed as PackageManifest;
-}
-
-async function resolvePackageJsonRelPath(
-  record: InstalledPluginIndexRecord,
-): Promise<string | undefined> {
-  if (record.packageJson) {
-    return record.packageJson.path;
-  }
-  try {
-    await fs.access(path.join(record.rootDir, "package.json"));
-    return "package.json";
-  } catch {
-    return undefined;
+    current = extensionsDir;
   }
 }
 
@@ -135,35 +97,50 @@ export async function runPostUpgradeProbes(params: {
   }
 
   for (const record of enabledPlugins) {
-    const pkgRelPath = await resolvePackageJsonRelPath(record);
+    const addError = (code: string, message: string, entry?: string) =>
+      findings.push({
+        level: "error",
+        code,
+        message: `Plugin ${record.pluginId}: ${message}`,
+        plugin: record.pluginId,
+        ...(entry ? { entry } : {}),
+      });
+    const pkgRelPath =
+      record.packageJson?.path ??
+      (await fs.access(path.join(record.rootDir, "package.json")).then(
+        () => "package.json",
+        () => undefined,
+      ));
     if (pkgRelPath) {
       let pkg: PackageManifest;
       try {
-        pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
+        const parsed: unknown = JSON.parse(
+          await fs.readFile(path.join(record.rootDir, pkgRelPath), "utf-8"),
+        );
+        if (!isRecord(parsed)) {
+          throw new Error("package.json must contain a JSON object");
+        }
+        pkg = parsed as PackageManifest;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         const message = `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${reason}`;
         process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
         // A declared package is required to validate its runtime entry; logging
         // alone otherwise makes a broken enabled plugin exit as healthy.
-        findings.push({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          message: `Plugin ${record.pluginId}: could not read package.json (${pkgRelPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
-          plugin: record.pluginId,
-          entry: pkgRelPath,
-        });
+        addError(
+          "plugin.entry_unresolved",
+          `could not read package.json (${pkgRelPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          pkgRelPath,
+        );
         continue;
       }
       const resolvedEntries = resolvePackageExtensionEntries(pkg);
       if (resolvedEntries.status === "invalid") {
-        findings.push({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          message: `Plugin ${record.pluginId}: ${resolvedEntries.error}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
-          plugin: record.pluginId,
-          entry: pkgRelPath,
-        });
+        addError(
+          "plugin.entry_unresolved",
+          `${resolvedEntries.error}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          pkgRelPath,
+        );
       } else if (resolvedEntries.status === "ok") {
         const entries = resolvedEntries.entries;
         // Delegate to the install-time resolver so the probe enforces the same
@@ -173,17 +150,14 @@ export async function runPostUpgradeProbes(params: {
           packageDir: record.rootDir,
           extensions: [...entries],
           manifest: pkg,
-          allowSourceTypeScriptEntries: isSourceCheckoutPluginRecord(record),
+          allowSourceTypeScriptEntries:
+            record.origin === "workspace" ||
+            record.origin === "config" ||
+            (record.origin === "bundled" && isBundledSourceCheckoutPluginRoot(record.rootDir)),
         });
         if (!validation.ok) {
           const offendingEntry = entries.find((entry) => validation.error.includes(entry));
-          findings.push({
-            level: "error",
-            code: "plugin.entry_unresolved",
-            message: `Plugin ${record.pluginId}: ${validation.error}`,
-            plugin: record.pluginId,
-            ...(offendingEntry ? { entry: offendingEntry } : {}),
-          });
+          addError("plugin.entry_unresolved", validation.error, offendingEntry);
         }
       }
     }
@@ -199,19 +173,17 @@ export async function runPostUpgradeProbes(params: {
           continue;
         }
         const reason = err instanceof Error ? err.message : String(err);
-        findings.push({
-          level: "error",
-          code: "plugin.manifest_unavailable",
-          message: `Plugin ${record.pluginId}: could not read indexed manifest (${record.manifestPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
-          plugin: record.pluginId,
-        });
+        addError(
+          "plugin.manifest_unavailable",
+          `could not read indexed manifest (${record.manifestPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+        );
         continue;
       }
       if (record.manifestHash && currentHash !== record.manifestHash) {
         findings.push({
           level: "warn",
           code: "plugin.manifest_drift",
-          message: `Plugin ${record.pluginId} manifest hash drifted from installs.json snapshot. Run \`openclaw plugins registry --refresh\` to re-sync.`,
+          message: `Plugin ${record.pluginId} manifest hash drifted from the installed plugin index. Run \`openclaw plugins registry --refresh\` to re-sync.`,
           plugin: record.pluginId,
         });
       }

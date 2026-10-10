@@ -17,16 +17,15 @@ const SESSION_RUN_STATUS_LABELS = {
 export function renderSessionStatusBadge(row: GatewaySessionRow) {
   const active = isSessionRunActive(row);
   const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label =
+  const label = t(
     row.status === "queued"
-      ? t("sessionsView.statusQueued")
+      ? "sessionsView.statusQueued"
       : active
-        ? t("sessionsView.statusLive")
+        ? "sessionsView.statusLive"
         : idle
-          ? t("sessionsView.statusIdle")
-          : row.status
-            ? t(SESSION_RUN_STATUS_LABELS[row.status] ?? "sessionsView.statusUnknown")
-            : t("sessionsView.statusUnknown");
+          ? "sessionsView.statusIdle"
+          : (row.status && SESSION_RUN_STATUS_LABELS[row.status]) || "sessionsView.statusUnknown",
+  );
   const kind =
     row.status === "queued"
       ? "warn"

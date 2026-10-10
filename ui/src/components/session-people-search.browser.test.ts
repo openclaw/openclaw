@@ -2,7 +2,7 @@ import { html, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
-import { mountMenu } from "../test-helpers/session-menu.ts";
+import { menuItem, mountMenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
@@ -15,10 +15,10 @@ afterEach(() => roots.splice(0).forEach((root) => root.remove()));
 
 it.each(
   (["assignment", "compact assignment", "members"] as const).flatMap((surface) =>
-    [21, 1000].map((count) => ({ surface, count })),
+    [60, 101].map((count) => ({ surface, count })),
   ),
 )(
-  "keeps $surface search editable, pages bounded, and keyboard selection intact ($count entries)",
+  "shows every $surface entry with editable search and keyboard selection ($count entries)",
   async ({ surface, count }) => {
     await page.viewport(surface === "compact assignment" ? 414 : 1280, 900);
     const shown = new Promise<void>((resolve) => {
@@ -34,19 +34,11 @@ it.each(
       );
       root = await mountMenu({ context, onAction, compact: surface === "compact assignment" });
       await shown;
-      const groups = [
-        ...root.querySelectorAll<HTMLElement>(
-          ":scope > wa-dropdown > wa-dropdown-item:not([disabled])",
-        ),
-      ];
-      const assignment = groups.findIndex(
-        (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
-      );
-      expect(assignment).toBeGreaterThanOrEqual(0);
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
-      await userEvent.hover(groups[assignment]!);
-      groups[assignment]!.focus();
+      await userEvent.hover(assignment);
+      assignment.focus();
       await userEvent.keyboard("{Enter}");
     } else {
       root = document.createElement("div");
@@ -94,7 +86,15 @@ it.each(
       expect(style?.overflowY).toBe("auto");
     }
     const selector = surface !== "members" ? '[value^="assign-owner:"]' : '[value^="member:"]';
-    await expect.poll(() => root.querySelectorAll(selector).length).toBe(20);
+    await expect
+      .poll(() => root.querySelectorAll(selector).length)
+      .toBe(count + (surface === "members" ? 0 : 2));
+    await expect
+      .element(page.getByRole("button", { name: "Next", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Previous", exact: true }))
+      .not.toBeInTheDocument();
     if (surface === "compact assignment") {
       await expect.poll(() => document.activeElement?.getAttribute("value")).toBe("compact:back");
     }
@@ -105,26 +105,8 @@ it.each(
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(input.element());
     await userEvent.keyboard("{Tab}");
-    expect(document.activeElement).toBe(
-      page.getByRole("button", { name: "Next", exact: true }).element(),
-    );
-    await userEvent.keyboard("{Enter}");
-    await expect
-      .poll(() => root.querySelectorAll(selector).length)
-      .toBe(Math.min(20, count + (surface === "members" ? 0 : 2) - 20));
-    expect(root.querySelector(selector)?.textContent).toContain(
-      surface !== "members" ? "Person 0018" : "Person 0020",
-    );
-    const next = page.getByRole("button", { name: "Next", exact: true }).element();
-    if (!next.hasAttribute("disabled")) {
-      await userEvent.keyboard("{Tab}{Tab}");
-    }
-    expect(document.activeElement).toBe(input.element());
-    await userEvent.keyboard("{Tab}");
-    expect(document.activeElement).toBe(
-      page.getByRole("button", { name: "Previous", exact: true }).element(),
-    );
-    await userEvent.keyboard("{Enter}");
+    expect(document.activeElement).toBe(root.querySelector(selector));
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
     expect(document.activeElement).toBe(input.element());
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();

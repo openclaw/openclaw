@@ -71,7 +71,8 @@ function fixture(
     auditKey: base64url(new Uint8Array(32).fill(1)),
     replayKey: base64url(replayKey),
   };
-  const open = () => openStores(runtime, keys, { replayMaxEntries: maxEntries }).replay;
+  const open = async () =>
+    (await openStores(runtime, keys, { replayMaxEntries: maxEntries })).replay;
   const openWithRng = (rng: (length: number) => Uint8Array) =>
     new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
   const receipt = signReceipt(
@@ -93,7 +94,7 @@ describe("Reef replay worker ownership", () => {
 
   it("claims, refreshes, completes and reopens encrypted replay without host SQLite calls", async () => {
     const f = fixture();
-    const replay = f.open();
+    const replay = await f.open();
     const observation = observeHostDataSql();
     const sql = observation.calls;
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
@@ -109,7 +110,7 @@ describe("Reef replay worker ownership", () => {
       expect(spy).not.toHaveBeenCalled();
     }
     vi.restoreAllMocks();
-    await expect(f.open().completed("alice", id)).resolves.toEqual({
+    await expect((await f.open()).completed("alice", id)).resolves.toEqual({
       receipt: f.receipt,
       body: { text: "synthetic private body" },
     });
@@ -121,13 +122,13 @@ describe("Reef replay worker ownership", () => {
     async (host) => {
       const f = fixture(host);
       const comparisons = vi.spyOn(f.store, "compareAndApply");
-      const replay = f.open();
+      const replay = await f.open();
       const claim = replay.claim("alice", id, hash);
       expect(f.raw.lookup(key)?.state).toBe("in_flight");
-      const consume = replay.consume("alice", id);
-      expect(f.raw.lookup(key)?.state).toBe("consumed");
+      const complete = replay.complete("alice", id, f.receipt, { text: "body" });
+      expect(f.raw.lookup(key)?.state).toBe("completed");
       await expect(claim).resolves.toBe("new");
-      await consume;
+      await complete;
       expect(comparisons).not.toHaveBeenCalled();
     },
   );
@@ -145,7 +146,7 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    const replay = f.open();
+    const replay = await f.open();
     const first = replay.claim("alice", id, hash);
     await started.promise;
     const release = replay.release("alice", id);
@@ -158,15 +159,15 @@ describe("Reef replay worker ownership", () => {
     await release;
     await expect(next).resolves.toBe("new");
     await refresh;
-    await replay.consume("alice", id);
-    expect(f.raw.lookup(key)?.state).toBe("consumed");
+    await replay.complete("alice", id, f.receipt, { text: "body" });
+    expect(f.raw.lookup(key)?.state).toBe("completed");
   });
 
-  it.each(["refresh", "complete", "consume", "release"] as const)(
+  it.each(["refresh", "complete", "release"] as const)(
     "retains a matching owner after lease expiry for %s",
     async (operation) => {
       const f = fixture();
-      const replay = f.open();
+      const replay = await f.open();
       await replay.claim("alice", id, hash);
       await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
       if (operation === "complete") {
@@ -175,18 +176,16 @@ describe("Reef replay worker ownership", () => {
         await replay[operation]!("alice", id);
       }
       expect(f.raw.lookup(key)?.state).toBe(
-        { refresh: "in_flight", complete: "completed", consume: "consumed", release: "available" }[
-          operation
-        ],
+        { refresh: "in_flight", complete: "completed", release: "available" }[operation],
       );
     },
   );
 
   it("rejects stale completion and cleanup after a conflicting successor takes ownership", async () => {
     const f = fixture();
-    const original = f.open();
+    const original = await f.open();
     await original.claim("alice", id, hash);
-    const successor = f.open();
+    const successor = await f.open();
     const compare = f.store.compareAndApply!;
     let takeover = true;
     f.store.compareAndApply = async (...args) => {
@@ -198,7 +197,7 @@ describe("Reef replay worker ownership", () => {
       return compare(...args);
     };
     // A fresh handle captures the instrumented worker method but owns its own claim.
-    const stale = f.open();
+    const stale = await f.open();
     await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
     takeover = false;
     await stale.claim("alice", id, hash);
@@ -207,7 +206,6 @@ describe("Reef replay worker ownership", () => {
       "replay claim is not in flight",
     );
     const owner = f.raw.lookup(key)?.claimOwner;
-    await expect(stale.consume("alice", id)).rejects.toThrow("replay claim is not in flight");
     await expect(stale.refresh!("alice", id)).rejects.toThrow("replay claim is not in flight");
     await stale.release("alice", id);
     expect(f.raw.lookup(key)?.claimOwner).toBe(owner);
@@ -242,10 +240,10 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    const replay = f.open();
+    const replay = await f.open();
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     expect(f.raw.lookup(key)?.claimExpiresAt).toBe(now + 5 * 60_000);
-    await replay.consume("alice", id);
+    await replay.complete("alice", id, f.receipt, { text: "body" });
   });
 
   it("revalidates a repaired row before exposing a prepared validation error", async () => {
@@ -269,7 +267,7 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    await expect(f.open().claim("alice", id, hash)).resolves.toBe("in_flight");
+    await expect((await f.open()).claim("alice", id, hash)).resolves.toBe("in_flight");
     expect(f.raw.lookup(key)).toEqual(valid);
   });
 
@@ -294,7 +292,7 @@ describe("Reef replay worker ownership", () => {
     await expect(replay.complete("alice", id, f.receipt, { text: "body" })).rejects.toBe(failure);
     expect(rng.mock.calls).toEqual([[12]]);
     expect(f.raw.lookup(key)?.state).toBe("in_flight");
-    await replay.consume("alice", id);
+    await replay.release("alice", id);
   });
 
   it("freezes caller input and encrypted bytes across a renewal conflict", async () => {
@@ -332,42 +330,37 @@ describe("Reef replay worker ownership", () => {
     });
   });
 
-  it.each([
-    "mismatch",
-    "duplicate",
-    "in_flight",
-    "refresh",
-    "complete",
-    "consume",
-    "release",
-  ] as const)("renews existing-row retention on %s refusal", async (operation) => {
-    const f = fixture();
-    const replay = f.open();
-    await replay.claim("alice", id, hash);
-    const state = operation === "duplicate" ? "consumed" : "in_flight";
-    await f.store.register(
-      key,
-      { ...f.raw.lookup(key)!, state, claimOwner: "successor" },
-      { ttlMs: 1_000 },
-    );
-    const before = f.raw.entries()[0]!.expiresAt!;
-    if (operation === "mismatch" || operation === "duplicate" || operation === "in_flight") {
-      await expect(
-        replay.claim("alice", id, operation === "mismatch" ? "other" : hash),
-      ).resolves.toBe(operation);
-    } else if (operation === "release") {
-      await replay.release("alice", id);
-    } else {
-      await expect(
-        operation === "complete"
-          ? replay.complete("alice", id, f.receipt, { text: "body" })
-          : replay[operation]!("alice", id),
-      ).rejects.toThrow("replay claim is not in flight");
-    }
-    const after = f.raw.entries()[0]!;
-    expect(after.expiresAt! - before).toBeGreaterThan(REEF_REPLAY_TTL_MS - 2_000);
-    expect(after.value.claimOwner).toBe("successor");
-  });
+  it.each(["mismatch", "duplicate", "in_flight", "refresh", "complete", "release"] as const)(
+    "renews existing-row retention on %s refusal",
+    async (operation) => {
+      const f = fixture();
+      const replay = await f.open();
+      await replay.claim("alice", id, hash);
+      const state = operation === "duplicate" ? "consumed" : "in_flight";
+      await f.store.register(
+        key,
+        { ...f.raw.lookup(key)!, state, claimOwner: "successor" },
+        { ttlMs: 1_000 },
+      );
+      const before = f.raw.entries()[0]!.expiresAt!;
+      if (operation === "mismatch" || operation === "duplicate" || operation === "in_flight") {
+        await expect(
+          replay.claim("alice", id, operation === "mismatch" ? "other" : hash),
+        ).resolves.toBe(operation);
+      } else if (operation === "release") {
+        await replay.release("alice", id);
+      } else {
+        await expect(
+          operation === "complete"
+            ? replay.complete("alice", id, f.receipt, { text: "body" })
+            : replay[operation]!("alice", id),
+        ).rejects.toThrow("replay claim is not in flight");
+      }
+      const after = f.raw.entries()[0]!;
+      expect(after.expiresAt! - before).toBeGreaterThan(REEF_REPLAY_TTL_MS - 2_000);
+      expect(after.value.claimOwner).toBe("successor");
+    },
+  );
 
   it.each(["worker", "no-compare"] as const)(
     "preserves validation placement and native diagnostics on %s",
@@ -402,7 +395,7 @@ describe("Reef replay worker ownership", () => {
       const failure = new Error("synthetic worker refusal");
       vi.spyOn(f.store, method).mockRejectedValue(failure);
       const native = vi.spyOn(f.runtime.state, "openSyncKeyedStore");
-      const replay = f.open();
+      const replay = await f.open();
       native.mockClear();
       await expect(replay.claim("alice", id, hash)).rejects.toBe(failure);
       expect(native).not.toHaveBeenCalled();
@@ -412,9 +405,9 @@ describe("Reef replay worker ownership", () => {
 
   it("does not evict retained bindings at capacity and admits queued work after a failure", async () => {
     const f = fixture("worker", 1);
-    const replay = f.open();
+    const replay = await f.open();
     await replay.claim("alice", id, hash);
-    await replay.consume("alice", id);
+    await replay.complete("alice", id, f.receipt, { text: "body" });
     await expect(replay.claim("alice", "second", hash)).rejects.toMatchObject({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
     });

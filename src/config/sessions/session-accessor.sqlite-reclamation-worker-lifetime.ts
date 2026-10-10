@@ -23,7 +23,10 @@ import {
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import {
@@ -35,7 +38,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type {
-  SqliteSessionReclamationPlan,
+  SqliteArchiveReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
@@ -73,11 +76,7 @@ import {
   type SqliteMutationWorkerTransport,
 } from "./session-accessor.sqlite-worker-transport.js";
 
-type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
-type SqliteMutationWorkerRequest =
-  | SqliteReclamationWorkerRequest
-  | SqliteReclamationPrepareRequest
-  | SqliteCanonicalValidationWorkerRequest;
+type DatabaseOptions = SqliteArchiveReclamationPlan["databaseOptions"];
 type MutationRunParams<Result> = {
   claim: SqliteReclamationClaim;
   validationOwner?: SqliteMutationWorkerValidationOwner;
@@ -239,7 +238,7 @@ export class SqliteReclamationWorker {
   async prepare(
     params: Omit<MutationRunParams<SqliteReclamationPreparation>, "claim"> & {
       expectedSource: SqliteReclamationExistingSource;
-      plan: SqliteSessionReclamationPlan;
+      plan: SqliteArchiveReclamationPlan | { kind: "canonical-validation" };
       assertCurrent: () => void;
     },
   ): Promise<
@@ -261,7 +260,8 @@ export class SqliteReclamationWorker {
       assertCurrent,
       databaseOptions: this.options,
       kind: params.plan.kind,
-      sessionId: reclamationSessionId(params.plan),
+      sessionId:
+        params.plan.kind === "canonical-validation" ? undefined : reclamationSessionId(params.plan),
       readOpeningValidation: () => {
         assertCurrent();
         const openingValidation = getOpenClawAgentDatabaseValidationForTransfer(this.options);
@@ -297,7 +297,7 @@ export class SqliteReclamationWorker {
         params.expectedSource.key,
         params.expectedSource.birthtime,
       );
-      this.preparedSource = source;
+      const preparedSource = (this.preparedSource ??= source);
       return {
         source,
         validation,
@@ -306,7 +306,7 @@ export class SqliteReclamationWorker {
           incarnation: source.incarnation,
           assertCurrent: () => {
             assertCurrent();
-            if (this.preparedSource !== source) {
+            if (this.preparedSource !== preparedSource) {
               throw new Error("SQLite reclamation native source changed");
             }
           },
@@ -320,7 +320,7 @@ export class SqliteReclamationWorker {
 
   run(
     params: MutationRunParams<SqliteSessionReclamationResult> & {
-      plan: SqliteSessionReclamationPlan;
+      plan: SqliteArchiveReclamationPlan;
       transferList: ArrayBuffer[];
     },
   ): Promise<SqliteSessionReclamationResult> {
@@ -376,7 +376,10 @@ export class SqliteReclamationWorker {
       request: (
         operationId: number,
         coordination: SqliteMutationWorkerCoordination,
-      ) => SqliteMutationWorkerRequest;
+      ) =>
+        | SqliteReclamationWorkerRequest
+        | SqliteReclamationPrepareRequest
+        | SqliteCanonicalValidationWorkerRequest;
       transferList: ArrayBuffer[];
     },
   ): Promise<Result> {
@@ -385,7 +388,6 @@ export class SqliteReclamationWorker {
     params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
-    const worker = transport.channel;
     if (params.diagnostics) {
       params.diagnostics.workerThreadId = this.workerThreadId;
     }
@@ -402,6 +404,16 @@ export class SqliteReclamationWorker {
           transport,
           operationId,
           completion: "result",
+          databaseAuthority: {
+            databasePath: this.stateContext.admission.databasePath,
+            maintenanceScope: this.stateContext.maintenanceScope,
+            creationPaths: [
+              this.options.path,
+              this.stateContext.admission.databasePath,
+              resolveQuarantineStorePath(this.stateContext.environment),
+            ],
+            assertCurrent: params.assertCurrent,
+          },
           getFailure: () => this.failure,
           onExit: (code) => {
             exitCode = code;
@@ -411,7 +423,10 @@ export class SqliteReclamationWorker {
           validationOwner: params.validationOwner,
           readOpeningValidation: params.readOpeningValidation,
           dispatch: () =>
-            worker.postMessage(params.request(operationId, coordination), [...params.transferList]),
+            transport.channel.postMessage(params.request(operationId, coordination), [
+              ...params.transferList,
+              ...(coordination.databaseAdmission ? [coordination.databaseAdmission] : []),
+            ]),
         }).then(
           (value) => ({ value }),
           (error: unknown) => {
@@ -421,6 +436,7 @@ export class SqliteReclamationWorker {
             throw error;
           },
         ),
+      params.assertCurrent,
     )
       .catch((error: unknown) => {
         this.failure ??= toStringifiedError(error);
@@ -458,11 +474,14 @@ export class SqliteReclamationWorker {
       ? await startCanonicalValidationTask(this.execution, this.options)
       : {
           kind: "dedicated",
-          channel: createSqliteTranscriptArchiveWorker({
-            type: "sqlite-transcript-archive-v2",
-            operation: "reclaim",
-            databaseOptions: this.options,
-          }),
+          channel: createSqliteTranscriptArchiveWorker(
+            {
+              type: "sqlite-transcript-archive-v2",
+              operation: "reclaim",
+              databaseOptions: this.options,
+            },
+            [this.options.path, this.stateContext.admission.databasePath],
+          ),
         };
     const worker = transport.channel;
     this.workerThreadId = sqliteMutationWorkerThreadId(transport);
@@ -706,7 +725,7 @@ export class SqliteReclamationWorker {
   }
 }
 
-function reclamationSessionId(plan: SqliteSessionReclamationPlan): string | undefined {
+function reclamationSessionId(plan: SqliteArchiveReclamationPlan): string | undefined {
   return plan.kind === "entry"
     ? plan.preparedTargetSnapshot[0]?.entry.sessionId
     : plan.kind === "historical-generation" || plan.kind === "history-eviction"

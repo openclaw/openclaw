@@ -5,7 +5,7 @@ import { withInProcessGatewayRead } from "./server-plugin-in-process-dispatch.js
 import { canTrustedOfficialPluginRequestScopes } from "./server-plugin-subagent-runtime.js";
 
 export async function withTrustedPluginUserProfileIdentity<T>(
-  params: { profileId: string; emails: readonly string[] },
+  params: { profileId: string; emails: readonly string[]; githubAccountIds?: readonly number[] },
   run: (assertCurrent: () => void) => Promise<T>,
   resolveGatewayContext?: GatewayContextResolver,
 ): Promise<T> {
@@ -15,9 +15,17 @@ export async function withTrustedPluginUserProfileIdentity<T>(
     params.profileId.length > 128 ||
     !Array.isArray(params.emails) ||
     params.emails.length > 500 ||
-    params.emails.some((email) => typeof email !== "string" || !email || email.length > 254)
+    params.emails.some((email) => typeof email !== "string" || !email || email.length > 254) ||
+    (params.githubAccountIds !== undefined &&
+      (!Array.isArray(params.githubAccountIds) ||
+        params.githubAccountIds.length > 500 ||
+        params.githubAccountIds.some(
+          (accountId) => !Number.isSafeInteger(accountId) || accountId <= 0,
+        )))
   ) {
-    throw new Error("Profile identity requires a profileId and at most 500 canonical emails");
+    throw new Error(
+      "Profile identity requires a profileId and at most 500 canonical emails or verified GitHub account IDs",
+    );
   }
   const scope = getPluginRuntimeGatewayRequestScope();
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
@@ -25,6 +33,7 @@ export async function withTrustedPluginUserProfileIdentity<T>(
   }
   const profileId = params.profileId;
   const emails = [...new Set(params.emails)];
+  const githubAccountIds = params.githubAccountIds && [...new Set(params.githubAccountIds)];
   return await withInProcessGatewayRead(
     {
       method: "users.list",
@@ -39,7 +48,7 @@ export async function withTrustedPluginUserProfileIdentity<T>(
         const bindings = profile.emailBindingIds;
         const assertCurrent = () => {
           assertCaller();
-          profile.readCurrentProfile(bindings);
+          profile.readCurrentProfile(bindings, githubAccountIds);
         };
         assertCurrent();
         return await run(assertCurrent);

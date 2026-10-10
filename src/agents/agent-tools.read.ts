@@ -1,13 +1,13 @@
-// Read/write/edit tool wrappers for host and sandbox workspaces.
-// Adds workspace-root guards, adaptive read paging, image validation, memory
-// append-only writes, and parameter cleanup around the session file tools.
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { detectMime } from "@openclaw/media-core/mime";
+import {
+  asPositiveFiniteNumber,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
@@ -40,6 +40,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { assertNewMemoryFlushContent } from "./memory-flush-content.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -138,12 +139,8 @@ const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing (?:lines|part of line) [^\]]*|Read output capped [^\]]*|\d+ more lines? in file\. [^\]]*)\]\s*$/;
 
 export function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
-  const contextWindowTokens = options?.modelContextWindowTokens;
-  if (
-    typeof contextWindowTokens !== "number" ||
-    !Number.isFinite(contextWindowTokens) ||
-    contextWindowTokens <= 0
-  ) {
+  const contextWindowTokens = asPositiveFiniteNumber(options?.modelContextWindowTokens);
+  if (contextWindowTokens === undefined) {
     return DEFAULT_READ_PAGE_MAX_BYTES;
   }
   const fromContext = Math.floor(
@@ -178,10 +175,9 @@ function withToolResultText(
   text: string,
   fileContent?: string,
 ): AgentToolResult<unknown> {
-  const content = Array.isArray(result.content) ? result.content : [];
   let replaced = false;
-  const nextContent: ToolContentBlock[] = content.map((block) => {
-    if (!replaced && block && typeof block === "object" && block.type === "text") {
+  const nextContent: ToolContentBlock[] = result.content.map((block) => {
+    if (!replaced && block.type === "text") {
       replaced = true;
       return Object.assign({}, block, { text });
     }
@@ -212,20 +208,10 @@ function extractReadTruncationDetails(
   if (record.truncated !== true) {
     return null;
   }
-  const outputLinesRaw = record.outputLines;
-  const outputLines =
-    typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
-      ? Math.max(0, Math.floor(outputLinesRaw))
-      : 0;
-  const totalLinesRaw = record.totalLines;
-  const totalLines =
-    typeof totalLinesRaw === "number" && Number.isFinite(totalLinesRaw)
-      ? Math.max(0, Math.floor(totalLinesRaw))
-      : 0;
   return {
     truncated: true,
-    outputLines,
-    totalLines,
+    outputLines: resolveNonNegativeIntegerOption(record.outputLines, 0),
+    totalLines: resolveNonNegativeIntegerOption(record.totalLines, 0),
     continuation: extractReadContinuation(details),
   };
 }
@@ -308,11 +294,7 @@ async function executeReadWithAdaptivePaging(params: {
   // Presence owns the slice: the native reader clamps non-positive limits to
   // one line, which must not become permission to follow additional pages.
   const hasExplicitLimit = typeof userLimit === "number";
-  const offsetRaw = params.args.offset;
-  const initialOffset =
-    typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw > 0
-      ? Math.floor(offsetRaw)
-      : 1;
+  const initialOffset = Math.floor(asPositiveFiniteNumber(params.args.offset) ?? 1);
   const initialLimit = hasExplicitLimit
     ? { limit: normalizePositiveLimit(userLimit, DEFAULT_MAX_LINES) }
     : {};
@@ -453,16 +435,8 @@ async function normalizeReadImageResult(
   result: AgentToolResult<unknown>,
   filePath: string,
 ): Promise<AgentToolResult<unknown>> {
-  const content = Array.isArray(result.content) ? result.content : [];
-
-  const image = content.find(
-    (b): b is ImageContentBlock =>
-      Boolean(b) &&
-      typeof b === "object" &&
-      b.type === "image" &&
-      typeof b.data === "string" &&
-      typeof b.mimeType === "string",
-  );
+  const content = result.content;
+  const image = content.find((block): block is ImageContentBlock => block.type === "image");
   if (!image) {
     return result;
   }
@@ -487,15 +461,10 @@ async function normalizeReadImageResult(
   }
 
   const nextContent = content.map((block) => {
-    if (block && typeof block === "object" && block.type === "image") {
+    if (block.type === "image") {
       return Object.assign({}, block, { mimeType: sniffed });
     }
-    if (
-      block &&
-      typeof block === "object" &&
-      block.type === "text" &&
-      typeof block.text === "string"
-    ) {
+    if (block.type === "text") {
       return Object.assign({}, block, { text: rewriteReadImageHeader(block.text, sniffed) });
     }
     return block;
@@ -527,15 +496,8 @@ function normalizeReadResultDetails(
     };
   }
 
-  const content = Array.isArray(result.content) ? result.content : [];
   const displayText = getToolResultText(result) ?? "";
-  const image = content.find(
-    (block): block is ImageContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      block.type === "image" &&
-      typeof block.mimeType === "string",
-  );
+  const image = result.content.find((block): block is ImageContentBlock => block.type === "image");
   if (image) {
     return {
       ...result,
@@ -563,7 +525,7 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: text } };
 }
 
-function resolveContainerPathCandidate(filePath: string): string | null {
+function resolveContainerPathCandidate(filePath: string): string {
   let candidate = normalizeFileReferencePrefix(filePath);
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
@@ -606,17 +568,15 @@ function mapContainerPathToWorkspaceRoot(params: {
   containerWorkdir?: string;
 }): string {
   const candidate = resolveContainerPathCandidate(params.filePath);
-  const mapped =
-    params.containerWorkdir && candidate !== null
-      ? resolveSandboxPathMapping(
-          [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
-          candidate,
-        )
-      : null;
-  return mapped?.hostPath ?? candidate ?? params.filePath;
+  const mapped = params.containerWorkdir
+    ? resolveSandboxPathMapping(
+        [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
+        candidate,
+      )
+    : null;
+  return mapped?.hostPath ?? candidate;
 }
 
-/** Resolve a model-supplied file path against the host workspace root. */
 function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
@@ -705,15 +665,6 @@ async function appendMemoryFlushContent(params: {
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
-  const parent = path.posix.dirname(params.relativePath);
-  params.assertCurrent();
-  if (parent && parent !== ".") {
-    await params.sandbox.bridge.mkdirp({
-      filePath: parent,
-      cwd: params.sandbox.root,
-      signal: params.signal,
-    });
-  }
   params.assertCurrent();
   await params.sandbox.bridge.writeFile({
     filePath: params.relativePath,
@@ -732,7 +683,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
   return {
     ...tool,
-    description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    description: `Append new memory notes to ${options.relativePath}; creates parent directories. The content is appended verbatim. Send only new text, never existing entries or a rewritten file.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
       const record = getToolParamsRecord(args);
@@ -771,6 +722,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      assertNewMemoryFlushContent(contentBefore, content);
       const separator =
         contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
           ? "\n"
@@ -915,11 +867,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         const guardPath =
           options?.bridge && !legacyBridge
             ? options.bridge.resolvePath({
-                filePath: resolveContainerPathCandidate(filePath) ?? filePath,
+                filePath: resolveContainerPathCandidate(filePath),
                 cwd: options.resolutionCwd ?? root,
               }).containerPath
             : filePath;
-        const candidate = resolveContainerPathCandidate(guardPath) ?? guardPath;
+        const candidate = resolveContainerPathCandidate(guardPath);
         const workspaceMapping = resolveSandboxPathMapping(mounts, candidate);
         const guardedRoot = workspaceMapping?.mapping.hostRoot ?? root;
         const sandboxPath = workspaceMapping?.hostPath ?? candidate;
@@ -981,7 +933,7 @@ export function wrapSandboxFileToolPath(
         throw malformedXmlArgValuePathError("path");
       }
       const resolved = params.bridge.resolvePath({
-        filePath: resolveContainerPathCandidate(normalized) ?? normalized,
+        filePath: resolveContainerPathCandidate(normalized),
         cwd: params.root,
       });
       // Session write/edit/list resolve relative inputs with host path APIs.
@@ -996,7 +948,6 @@ export function wrapSandboxFileToolPath(
   };
 }
 
-/** Create a sandbox-backed read tool with OpenClaw result normalization. */
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createReadTool(params.root, {
@@ -1014,7 +965,6 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   });
 }
 
-/** Create a sandbox-backed write tool with required-parameter validation. */
 export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createWriteTool(params.root, {
@@ -1027,7 +977,6 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   );
 }
 
-/** Create a sandbox-backed edit tool with required-parameter validation. */
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createEditTool(params.root, {
@@ -1037,7 +986,6 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit);
 }
 
-/** Create a host workspace write tool using guarded filesystem operations. */
 export function createHostWorkspaceWriteTool(
   root: string,
   options?: {
@@ -1055,7 +1003,6 @@ export function createHostWorkspaceWriteTool(
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
 }
 
-/** Create a host workspace edit tool using guarded filesystem operations. */
 export function createHostWorkspaceEditTool(
   root: string,
   options?: {
@@ -1073,7 +1020,6 @@ export function createHostWorkspaceEditTool(
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
 }
 
-/** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -1283,12 +1229,12 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
         return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
       }
-      return resolveContainerPathCandidate(filePath) ?? filePath;
+      return resolveContainerPathCandidate(filePath);
     },
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
         ? decodeWindowsTextFileBuffer({ buffer })
-        : buffer.toString("utf8"),
+        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

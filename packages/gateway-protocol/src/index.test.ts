@@ -12,7 +12,6 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
-import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 
 const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   keyword: "type",
@@ -41,21 +40,6 @@ const expectRejected = (validate: ProtocolValidator, values: readonly unknown[])
   expectValidationCases(validate, false, values);
 
 describe("lazy protocol validators", () => {
-  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
-    expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
-      protocol.SkillsProposalEvaluateParamsSchema,
-    );
-    expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
-      protocol.SkillsProposalEvaluateResultSchema,
-    );
-    expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
-      protocol.SkillsProposalEventsListParamsSchema,
-    );
-    expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
-      protocol.SkillsProposalEventsListResultSchema,
-    );
-  });
-
   it("validates through exported lazy validators", () => {
     expectAccepted(validateCommandsListParams, [{}, { includeArgs: true }]);
     expectRejected(validateCommandsListParams, [{ includeArgs: "yes" }]);
@@ -76,6 +60,11 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it("accepts bounded session-list attribution without requiring it from other clients", () => {
+    expectAccepted(validateSessionsListParams, [{}, { source: "dashboard", rowMode: "compact" }]);
+    expectRejected(validateSessionsListParams, [{ source: "arbitrary-private-caller" }]);
+  });
+
   it("keeps validation errors readable and clears them after success", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
@@ -89,22 +78,31 @@ describe("lazy protocol validators", () => {
     expect(validateConnectParams.errors).toBeNull();
   });
 
-  it("rejects caller-provided hidden prompts in Skill Workshop revisions", () => {
-    const request = {
-      proposalId: "proposal-1",
-      expectedRevisionHash: "a".repeat(64),
-      targetAgentId: "writer",
-      instructions: "Revise the support files",
-      sessionKey: "agent:main:session:skill-workshop",
-      idempotencyKey: "revision-run-1",
-    };
-    expect(protocol.validateSkillsProposalRequestRevisionParams(request)).toBe(true);
-    expect(
-      protocol.validateSkillsProposalRequestRevisionParams({
-        ...request,
-        hiddenPrompt: "do not accept caller-provided hidden prompts",
-      }),
-    ).toBe(false);
+  it("validates Skill Workshop request params", () => {
+    expectAccepted(protocol.validateSkillsWorkshopChangesParams, [
+      {},
+      { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 },
+    ]);
+    expectRejected(protocol.validateSkillsWorkshopChangesParams, [{ limit: 0 }, { limit: 501 }]);
+    expectAccepted(protocol.validateSkillsWorkshopReadParams, [
+      { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
+    ]);
+    expectRejected(protocol.validateSkillsWorkshopReadParams, [{}, { name: "" }]);
+    expectAccepted(protocol.validateSkillsWorkshopArchiveParams, [
+      { name: "deploy-notes", reason: "superseded" },
+    ]);
+    expectRejected(protocol.validateSkillsWorkshopArchiveParams, [
+      { name: "deploy-notes", reason: "" },
+      { name: "deploy-notes", absorbedInto: "other" },
+    ]);
+    expectAccepted(protocol.validateSkillsWorkshopRestoreParams, [{ name: "deploy-notes" }]);
+    expectRejected(protocol.validateSkillsWorkshopRestoreParams, [
+      { name: "deploy-notes", expectedRevisionHash: "a".repeat(64) },
+    ]);
+    expectAccepted(protocol.validateSkillsWorkshopUndoParams, [
+      { agentId: "main", runId: "skill-workshop-review:1" },
+    ]);
+    expectRejected(protocol.validateSkillsWorkshopUndoParams, [{}, { runId: "" }, { name: "x" }]);
   });
 
   it("can still compile every exported protocol validator", () => {

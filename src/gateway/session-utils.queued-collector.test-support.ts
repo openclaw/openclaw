@@ -47,12 +47,15 @@ vi.mock("../agents/runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
 });
-vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/subagents/registry/subagent-registry-state.js")
-  >()),
-  restoreSubagentRunsFromDisk: () => 0,
-}));
+vi.mock(
+  "../agents/subagents/registry/subagent-registry-persistence.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/registry/subagent-registry-persistence.js")
+    >()),
+    restoreSubagentRunsFromDisk: async () => 0,
+  }),
+);
 
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
@@ -73,7 +76,7 @@ export function useQueuedCollectorFixture() {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     schedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
     state.applyEnv();
@@ -97,26 +100,28 @@ export function useQueuedCollectorFixture() {
         const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
         await upsertSessionEntryCore(
           { storePath, sessionKey },
-          buildAgentSessionPatch({
-            freshEntry: entry,
-            initialEntry: entry,
-            cfg: getRuntimeConfig(),
-            sessionAgentId: "main",
-            canonicalSessionKey: sessionKey,
-            storePath,
-            requestLabel: typeof params.label === "string" ? params.label : undefined,
-            normalizedSpawned: {},
-            requestDeliveryHint: undefined,
-            expectedExistingSessionId: entry?.sessionId,
-            hasRestoredCronContinuation: false,
-            resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-            now: Date.now(),
-            isSystemGatewayRun: true,
-            visibleRequest: false,
-            fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
-            touchInteraction: false,
-            failedSessionTranscriptMissing: () => false,
-          }).patch,
+          (
+            await buildAgentSessionPatch({
+              freshEntry: entry,
+              initialEntry: entry,
+              cfg: getRuntimeConfig(),
+              sessionAgentId: "main",
+              canonicalSessionKey: sessionKey,
+              storePath,
+              requestLabel: typeof params.label === "string" ? params.label : undefined,
+              normalizedSpawned: {},
+              requestDeliveryHint: undefined,
+              expectedExistingSessionId: entry?.sessionId,
+              hasRestoredCronContinuation: false,
+              resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
+              now: Date.now(),
+              isSystemGatewayRun: true,
+              visibleRequest: false,
+              fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
+              touchInteraction: false,
+              failedSessionTranscriptMissing: () => false,
+            })
+          ).patch,
         );
         launchedRunIds.push(runId);
         registerAgentRunContext(runId, { sessionKey, projectSessionActive: true });
@@ -144,7 +149,7 @@ export function useQueuedCollectorFixture() {
       clearAgentRunContext(runId);
     }
     launchSignals.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetGatewayWorkAdmission();
@@ -254,6 +259,7 @@ export function useQueuedCollectorFixture() {
     expect(
       await createInitialSubagentSession({
         cfg: getRuntimeConfig(),
+        requesterAgentId: "main",
         targetAgentId: "main",
         childSessionKey,
         label: "Reserved collector",

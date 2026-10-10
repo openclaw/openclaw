@@ -13,6 +13,7 @@ import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
+  groupBuildCandidates,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -281,6 +282,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     inheritedAuthDir: input.inheritedAuthDir,
     readOnly: input.readOnly === true,
     loadRuntimePlugins: input.loadRuntimePlugins === true,
+    runtimePluginPurpose: input.runtimePluginPurpose,
     skipCredentials: input.skipCredentials === true,
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
@@ -357,6 +359,7 @@ export function resolvePublishedOwner(
       owner.input.inheritedAuthDir === input.inheritedAuthDir &&
       owner.input.readOnly === input.readOnly &&
       owner.input.loadRuntimePlugins === input.loadRuntimePlugins &&
+      owner.input.runtimePluginPurpose === input.runtimePluginPurpose &&
       owner.input.skipCredentials === input.skipCredentials &&
       // Binding is a publication-time build capability readers cannot know;
       // absent (= undefined after normalization) is a wildcard like the
@@ -406,6 +409,7 @@ export function hasSameLifecycleInput(
     left.inheritedAuthDir === right.inheritedAuthDir &&
     left.readOnly === right.readOnly &&
     left.loadRuntimePlugins === right.loadRuntimePlugins &&
+    left.runtimePluginPurpose === right.runtimePluginPurpose &&
     left.skipCredentials === right.skipCredentials &&
     left.workspaceDir === right.workspaceDir &&
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&
@@ -494,15 +498,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner,
     };
   });
-  const groups = new Map<PreparedModelRuntimeOwner["catalogMode"], typeof candidates>();
-  for (const candidate of candidates) {
-    const group = groups.get(candidate.catalogMode);
-    if (group) {
-      group.push(candidate);
-    } else {
-      groups.set(candidate.catalogMode, [candidate]);
-    }
-  }
+  const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {

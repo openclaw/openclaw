@@ -53,7 +53,6 @@ import {
   loadTranscriptEvents,
   patchSessionEntryCore,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
 import {
@@ -63,6 +62,7 @@ import {
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = createTempDirTracker();
@@ -417,7 +417,12 @@ describe("session deletion and native owner state", () => {
               deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
             );
           }
-          expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          if (deleteWindows) {
+            // Admitted schema facts already own the node artifact inventory.
+            expect.soft(counter.counts.inventory).toBe(0);
+          } else {
+            expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          }
           // Successful public deletion also inventories board cleanup after the node artifacts.
           const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
           expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);
@@ -692,7 +697,7 @@ describe("session deletion and native owner state", () => {
     },
   );
 
-  it("does not restore a binding after the session committed but publication failed", async () => {
+  it("keeps deletion successful and the binding absent when a publication observer fails", async () => {
     await seed();
     const owner = nativeOwner();
 
@@ -711,7 +716,7 @@ describe("session deletion and native owner state", () => {
           },
         }),
       ),
-    ).rejects.toThrow("injected publication failure");
+    ).resolves.toMatchObject({ removedSessionKeys: [sessionKey] });
 
     expect(read()).toBeUndefined();
     expect(bindings.has(sessionKey)).toBe(false);

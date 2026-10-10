@@ -1,14 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as personalCatalogReads from "../../agents/auth-profiles/sqlite-read.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
+  setUserProfileAuthLink,
 } from "../../state/user-model-accounts.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  readPreparedCatalog,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import {
   catalogEntry,
   createModelsListTestContext,
@@ -25,10 +37,179 @@ describe("models.list configured static entries", () => {
     vi.useRealTimers();
   });
 
+  it("keeps the utility runtime on the prepared catalog's plugin generation", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "utility-runtime-generation-" },
+      async (state) => {
+        const registries = ["Prepared Runtime", "Ambient Runtime"].map((label) => {
+          const registry = createEmptyPluginRegistry();
+          registry.agentHarnesses.push({
+            pluginId: "utility-runtime",
+            source: "runtime",
+            harness: {
+              id: "utility-runtime",
+              label,
+              supports: () => ({ supported: true }),
+              runAttempt: vi.fn(),
+              runIsolatedCompletionV2: vi.fn(),
+            },
+          });
+          return registry;
+        });
+        const [preparedRegistry, ambientRegistry] = registries;
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              custom: {
+                api: "openai-completions",
+                baseUrl: "https://custom.example/v1",
+                apiKey: "synthetic-key",
+                models: [],
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              model: "custom/primary",
+              utilityModel: "custom/small",
+              models: { "custom/small": { agentRuntime: { id: "utility-runtime" } } },
+            },
+          },
+        };
+        const result = await withPluginRuntimeRegistryScope(ambientRegistry, () =>
+          listModels({
+            cfg,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            view: "configured",
+            preparedOnly: true,
+            pluginRegistry: preparedRegistry,
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
+              plugins: [{ id: "custom", providers: ["custom"], syntheticAuthRefs: ["custom"] }],
+            }),
+            catalog: [
+              providerCatalogEntry("custom", "primary"),
+              providerCatalogEntry("custom", "small"),
+            ],
+          }),
+        );
+
+        expect(result.defaultModels?.utilityRuntime).toEqual({
+          id: "utility-runtime",
+          kind: "harness",
+          label: "Prepared Runtime",
+        });
+      },
+    );
+  });
+
+  it("projects utility runtimes for API, subscription, unavailable, and disabled selections", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "utility-runtime-api-key-", env: WITHOUT_OPENAI_ENV_AUTH },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              utilityModel: "openai/gpt-5.5",
+              models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "synthetic-api-key",
+                models: [],
+              },
+            },
+          },
+        };
+        const pluginRegistry = loadOpenClawPlugins({
+          config: cfg,
+          onlyPluginIds: ["codex"],
+          activate: false,
+          cache: false,
+        });
+        const plugin = pluginRegistry.plugins.find((entry) => entry.id === "codex");
+        expect(plugin?.status, plugin?.error).toBe("loaded");
+        const result = await withPluginRuntimeRegistryScope(pluginRegistry, () =>
+          listModels({
+            cfg,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            view: "configured",
+            preparedOnly: true,
+            pluginRegistry,
+            catalog: [catalogEntry("gpt-5.5", "openai-responses")],
+          }),
+        );
+        expect(result.defaultModels).toEqual({
+          automaticUtilityModel: "openai/gpt-5.6-luna",
+          utilityRuntime: { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+        });
+        // The same real registration must also respect native, missing, and exhausted auth.
+        const pinnedConfig: OpenClawConfig = {
+          ...cfg,
+          models: undefined,
+          agents: {
+            defaults: { ...cfg.agents?.defaults, utilityModel: "openai/gpt-5.5@openai:utility" },
+          },
+        };
+        const subscription: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            "openai:utility": {
+              type: "oauth",
+              provider: "openai",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: Date.now() + 3_600_000,
+            },
+          },
+        };
+        for (const [name, authStore, expected] of [
+          ["subscription", subscription, { id: "codex", kind: "harness", label: "OpenAI Codex" }],
+          ["missing", { version: 1, profiles: {} }, undefined],
+          ["disabled", subscription, undefined],
+          [
+            "exhausted",
+            {
+              ...subscription,
+              usageStats: { "openai:utility": { cooldownUntil: Date.now() + 3_600_000 } },
+            },
+            undefined,
+          ],
+        ] as const) {
+          const projected = await listModels({
+            cfg:
+              name === "disabled"
+                ? {
+                    ...pinnedConfig,
+                    agents: { defaults: { ...pinnedConfig.agents?.defaults, utilityModel: "" } },
+                  }
+                : pinnedConfig,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            view: "configured",
+            preparedOnly: true,
+            pluginRegistry,
+            preparedAuthStore: authStore,
+            catalog: [catalogEntry("gpt-5.5", "openai-chatgpt-responses")],
+          });
+          expect(projected.defaultModels, name).toEqual({
+            automaticUtilityModel: "openai/gpt-5.6-luna",
+            ...(expected ? { utilityRuntime: expected } : {}),
+          });
+        }
+      },
+    );
+  });
+
   it.each([
     { name: "automatic", utilityModel: undefined, defaultUtilityModel: "small" },
-    { name: "explicit", utilityModel: "custom/explicit", defaultUtilityModel: "small" },
-    { name: "disabled", utilityModel: "", defaultUtilityModel: "small" },
     { name: "no provider default", utilityModel: undefined, defaultUtilityModel: undefined },
   ])(
     "previews global automatic utility routing with $name configuration",
@@ -113,18 +294,36 @@ describe("models.list configured static entries", () => {
       async (state) => {
         const alice = ensureProfileForEmail("alice@example.test");
         const bob = ensureProfileForEmail("bob@example.test");
+        const discover = vi.fn(async () => {
+          throw new Error("Ordinary model reads must not discover account models");
+        });
+        const pluginRegistry = createEmptyPluginRegistry();
+        pluginRegistry.providers.push({
+          pluginId: "openai",
+          source: "test",
+          provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: discover } },
+        });
         const context = createModelsListTestContext({
           cfg: { agents: { defaults: { model: { primary: "test/default" } } } },
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
           catalog: [],
           staticEntries: [catalogEntry("gpt-5.6-luna", "openai-chatgpt-responses")],
+          pluginRegistry,
         });
-        const read = async (profileId?: string) => {
+        const published = await readPreparedCatalog(context, "main");
+        const owner = {
+          ...published!,
+          accountCatalog: createPreparedAccountCatalogAccess(() => true),
+        };
+        registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+          readPrepared: async () => owner,
+          loadDeferred: async () => owner,
+        });
+        const read = async (profileId?: string, expectedSuccess = true) => {
           const params = {
             agentId: "main",
             view: "configured",
-            preparedOnly: true,
             includeDefaultModels: false,
           };
           const respond = vi.fn<RespondFn>();
@@ -151,7 +350,10 @@ describe("models.list configured static entries", () => {
             respond,
             isWebchatConnect: () => false,
           });
-          expect(respond.mock.calls[0]?.[0]).toBe(true);
+          expect(respond.mock.calls[0]?.[0]).toBe(expectedSuccess);
+          if (!expectedSuccess) {
+            expect(respond.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+          }
           return respond.mock.calls[0]?.[1];
         };
         const shared = await read();
@@ -161,7 +363,7 @@ describe("models.list configured static entries", () => {
           accountSelection: { kind: "automatic", label: "Automatic account selection" },
         };
         expect(await read(alice.id)).toEqual(unconfiguredPersonal);
-        connectUserModelAccount({
+        const { authProfileId } = connectUserModelAccount({
           ownerProfileId: alice.id,
           credential: {
             type: "oauth",
@@ -173,7 +375,14 @@ describe("models.list configured static entries", () => {
           assertCurrent() {},
         });
 
-        const connected = await read(alice.id);
+        const sql = observeHostDataSql();
+        let connected: Awaited<ReturnType<typeof read>>;
+        try {
+          connected = await read(alice.id);
+        } finally {
+          sql.restore();
+        }
+        expect(sql.queries.filter((query) => /\bsecret_store_entries\b/i.test(query))).toEqual([]);
         expect(connected).toMatchObject({
           models: expect.arrayContaining([
             expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
@@ -182,125 +391,80 @@ describe("models.list configured static entries", () => {
         expect(await read(bob.id)).toEqual(unconfiguredPersonal);
         expect(await read()).toEqual(shared);
 
+        const readPersonal = personalCatalogReads.readPersonalCatalogProfiles;
+        const interruptedRead = vi
+          .spyOn(personalCatalogReads, "readPersonalCatalogProfiles")
+          .mockImplementationOnce(async (...args) => {
+            const result = await readPersonal(...args);
+            clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
+            return result;
+          });
+        try {
+          await read(alice.id, false);
+        } finally {
+          interruptedRead.mockRestore();
+        }
+        setUserProfileAuthLink({ profileId: alice.id, provider: "openai", authProfileId });
+
         const merged = ensureProfileForEmail("alice-new@example.test");
         linkEmail("alice@example.test", merged.id);
         expect(await read(alice.id)).toEqual(connected);
         clearUserProfileAuthLink({ profileId: merged.id, provider: "openai" });
         expect(await read(alice.id)).toEqual(unconfiguredPersonal);
+        expect(discover.mock.calls.length).toBe(0);
       },
     );
   });
 
-  it("waits for the complete configured catalog when explicit refresh exceeds the browse deadline", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const catalog = [
-      { ...catalogEntry("gpt-5.6-luna", "openai-responses"), name: "Refreshed Luna" },
-      { ...catalogEntry("gpt-5.6-sol", "openai-responses"), name: "Refreshed Sol" },
-    ];
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
+  it.each([true, false])(
+    "uses the correct configured catalog past the browse deadline (refresh=%s)",
+    async (refresh) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const catalog = [
+        {
+          ...catalogEntry("gpt-5.6-luna", "openai-responses"),
+          name: `${refresh ? "Refreshed" : "Published"} Luna`,
         },
-      },
-    } as OpenClawConfig;
-
-    const result = listModels({
-      catalog,
-      catalogLoadDelayMs: 800,
-      preparedCatalog: catalog.slice(0, 1),
-      publishedCatalog: catalog.slice(0, 1),
-      cfg: config,
-      refresh: true,
-      view: "configured",
-    });
-
-    let settled = false;
-    void result.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(750);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(50);
-
-    expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "gpt-5.6-luna", name: "Refreshed Luna" },
-      { id: "gpt-5.6-sol", name: "Refreshed Sol" },
-    ]);
-  });
-
-  it("keeps the published configured catalog when an implicit load exceeds the browse deadline", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publishedCatalog = [
-      { ...catalogEntry("gpt-5.6-luna", "openai-responses"), name: "Published Luna" },
-      { ...catalogEntry("gpt-5.6-sol", "openai-responses"), name: "Published Sol" },
-    ];
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
+        {
+          ...catalogEntry("gpt-5.6-sol", "openai-responses"),
+          name: `${refresh ? "Refreshed" : "Published"} Sol`,
         },
-      },
-    } as OpenClawConfig;
-
-    const result = listModels({
-      catalog: [],
-      catalogLoadDelayMs: 800,
-      publishedCatalog,
-      cfg: config,
-      view: "configured",
-    });
-
-    await vi.advanceTimersByTimeAsync(750);
-
-    expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "gpt-5.6-luna", name: "Published Luna" },
-      { id: "gpt-5.6-sol", name: "Published Sol" },
-    ]);
-  });
-
-  it("projects a configured runtime model from prepared static facts", async () => {
-    const config = {
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.6-sol" } },
-        list: [
-          {
-            id: "main",
-            default: true,
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+      ];
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
           },
-        ],
-      },
-    } as OpenClawConfig;
+        },
+      } as OpenClawConfig;
 
-    await expect(
-      listModels({
-        catalog: [],
-        staticEntries: [
-          catalogEntry("gpt-5.6-sol", "openai-responses"),
-          catalogEntry("gpt-unconfigured", "openai-responses"),
-        ],
+      const result = listModels({
+        catalog: refresh ? catalog : [],
+        catalogLoadDelayMs: 800,
+        preparedCatalog: refresh ? catalog.slice(0, 1) : undefined,
+        publishedCatalog: refresh ? catalog.slice(0, 1) : catalog,
         cfg: config,
+        refresh,
         view: "configured",
-      }),
-    ).resolves.toEqual({
-      defaultModels: { automaticUtilityModel: "openai/gpt-5.6-luna" },
-      models: [
-        expect.objectContaining({
-          id: "gpt-5.6-sol",
-          provider: "openai",
-          agentRuntime: {
-            id: "codex",
-            cloudPlacementSupported: false,
-            devicePlacementSupported: false,
-            source: "model",
-          },
-        }),
-      ],
-    });
-  });
+      });
+
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(750);
+      if (refresh) {
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(50);
+      }
+
+      expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
+        { id: "gpt-5.6-luna", name: `${refresh ? "Refreshed" : "Published"} Luna` },
+        { id: "gpt-5.6-sol", name: `${refresh ? "Refreshed" : "Published"} Sol` },
+      ]);
+    },
+  );
 
   it("projects agent aliases onto inherited default and fallback catalog rows", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {

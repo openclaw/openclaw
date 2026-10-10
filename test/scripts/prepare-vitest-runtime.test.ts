@@ -185,74 +185,68 @@ it.each([
   }
 });
 
-it("reuses current artifacts without writable checkout or service access", async () => {
-  vi.spyOn(artifactOwnership, "withDistArtifactOwnership").mockRejectedValue(
-    Object.assign(new Error("read-only checkout"), { code: "EROFS" }),
-  );
-  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-    build: false,
-    runtime: false,
-    immutable: false,
-  });
+it.each(["current artifacts", "immutable deployment"])("does not rebuild %s", async (state) => {
   const build = vi.spyOn(buildAll, "runBuildAllSteps");
-  expect(await prepareTestRuntime(root, env)).toBe(0);
-  expect(build).not.toHaveBeenCalled();
-  expect(gatewayService.readGatewayServiceState).not.toHaveBeenCalled();
-});
-
-it("refuses to rebuild an immutable deployment", async () => {
-  await fs.writeFile(
-    path.join(root, "deployment.json"),
-    JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) }),
-  );
-  const build = vi.spyOn(buildAll, "runBuildAllSteps");
-  await expect(prepareTestRuntime(root, env)).rejects.toThrow("immutable deployment");
+  if (state === "current artifacts") {
+    vi.spyOn(artifactOwnership, "withDistArtifactOwnership").mockRejectedValue(
+      Object.assign(new Error("read-only checkout"), { code: "EROFS" }),
+    );
+    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+      build: false,
+      runtime: false,
+      immutable: false,
+    });
+    expect(await prepareTestRuntime(root, env)).toBe(0);
+    expect(gatewayService.readGatewayServiceState).not.toHaveBeenCalled();
+  } else {
+    await fs.writeFile(
+      path.join(root, "deployment.json"),
+      JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) }),
+    );
+    await expect(prepareTestRuntime(root, env)).rejects.toThrow("immutable deployment");
+  }
   expect(build).not.toHaveBeenCalled();
   expect(await fs.readFile(path.join(root, "dist", "entry.js"), "utf8")).toBe("original\n");
 });
 
-it.each([false, true])(
-  "does not compile when only postbuild is stale (fails=%s)",
-  async (fails) => {
+it.each(["success", "failure", "unverified service"])(
+  "does not compile when only postbuild is stale: %s",
+  async (outcome) => {
     vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
       build: false,
       runtime: true,
       immutable: false,
     });
     const build = vi.spyOn(buildAll, "runBuildAllSteps");
-    const sync = vi.spyOn(postbuild, "runRuntimePostBuild").mockImplementation(() => {
-      if (fails) {
-        throw new Error("postbuild failed");
-      }
-    });
-    if (fails) {
+    const sync = vi.spyOn(postbuild, "runRuntimePostBuild");
+    if (outcome === "unverified service") {
+      vi.mocked(gatewayService.readGatewayServiceState).mockRejectedValue(new Error("unavailable"));
+    } else {
+      sync.mockImplementation(() => {
+        if (outcome === "failure") {
+          throw new Error("postbuild failed");
+        }
+      });
+    }
+    if (outcome === "failure") {
       await expect(prepareTestRuntime(root, env)).rejects.toThrow("postbuild failed");
+    } else {
+      expect(await prepareTestRuntime(root, env)).toBe(outcome === "unverified service" ? 1 : 0);
+    }
+    if (outcome !== "success") {
       await expect(
         fs.access(path.join(root, "dist", ".runtime-postbuildstamp")),
       ).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      expect(await prepareTestRuntime(root, env)).toBe(0);
     }
-    expect(sync).toHaveBeenCalledOnce();
+    if (outcome === "unverified service") {
+      expect(sync).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(root, "dist", "entry.js"), "utf8")).toBe("original\n");
+    } else {
+      expect(sync).toHaveBeenCalledOnce();
+    }
     expect(build).not.toHaveBeenCalled();
   },
 );
-
-it("leaves postbuild artifacts untouched when service safety cannot be verified", async () => {
-  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-    build: false,
-    runtime: true,
-    immutable: false,
-  });
-  vi.mocked(gatewayService.readGatewayServiceState).mockRejectedValue(new Error("unavailable"));
-  const sync = vi.spyOn(postbuild, "runRuntimePostBuild");
-  expect(await prepareTestRuntime(root, env)).toBe(1);
-  expect(sync).not.toHaveBeenCalled();
-  expect(await fs.readFile(path.join(root, "dist", "entry.js"), "utf8")).toBe("original\n");
-  await expect(fs.access(path.join(root, "dist", ".runtime-postbuildstamp"))).rejects.toMatchObject(
-    { code: "ENOENT" },
-  );
-});
 
 it("joins a canceled compiler before releasing checkout ownership", async () => {
   const controller = new AbortController();
@@ -288,4 +282,18 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
   expect(finalize).not.toHaveBeenCalled();
   const next = await acquireDistArtifactOwnership(root);
   await next.release();
+});
+
+it("keeps UI preparation current-head even after another runtime group was prepared", async () => {
+  commands.prepare.mockResolvedValueOnce(7);
+  expect(
+    await prepareVitestRuntime([{ configs: ["test/vitest/vitest.ui-e2e.config.ts"] }], env, {
+      runtimePrepared: true,
+    }),
+  ).toBe(7);
+  expect(commands.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({
+      args: ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+    }),
+  );
 });

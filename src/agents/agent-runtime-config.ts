@@ -53,31 +53,30 @@ export async function resolveAgentRuntimeConfig(
         },
         { config: loadedRaw },
       );
-  const cfg = hasRuntimeSecretRefs
-    ? await (async () => {
-        const runtimeSecretTargets = resolveAgentRuntimeSecretTargets({
-          config: loadedRaw,
-          includeChannelTargets,
-          channelSecretScope,
-        });
-        return (
-          await (
-            await import("../cli/command-config-resolution.runtime.js")
-          ).resolveCommandConfigWithSecrets({
-            config: loadedRaw,
-            commandName: "agent",
-            targetIds: runtimeSecretTargets.targetIds,
-            ...(runtimeSecretTargets.allowedPaths
-              ? { allowedPaths: runtimeSecretTargets.allowedPaths }
-              : {}),
-            ...(runtimeSecretTargets.optionalActivePaths.size > 0
-              ? { optionalActivePaths: runtimeSecretTargets.optionalActivePaths }
-              : {}),
-            runtime,
-          })
-        ).resolvedConfig;
-      })()
-    : loadedRaw;
+  let cfg = loadedRaw;
+  if (hasRuntimeSecretRefs) {
+    const runtimeSecretTargets = resolveAgentRuntimeSecretTargets({
+      config: loadedRaw,
+      includeChannelTargets,
+      channelSecretScope,
+    });
+    const { resolveCommandConfigWithSecrets } =
+      await import("../cli/command-config-resolution.runtime.js");
+    cfg = (
+      await resolveCommandConfigWithSecrets({
+        config: loadedRaw,
+        commandName: "agent",
+        targetIds: runtimeSecretTargets.targetIds,
+        ...(runtimeSecretTargets.allowedPaths
+          ? { allowedPaths: runtimeSecretTargets.allowedPaths }
+          : {}),
+        ...(runtimeSecretTargets.optionalActivePaths.size > 0
+          ? { optionalActivePaths: runtimeSecretTargets.optionalActivePaths }
+          : {}),
+        runtime,
+      })
+    ).resolvedConfig;
+  }
   if (activeSecretsConfig && cfg !== loadedRaw) {
     // Gateway activation already published loadedRaw with this source config. Republishing the
     // same object here would advance its lifecycle revision and evict revision-keyed hot caches.

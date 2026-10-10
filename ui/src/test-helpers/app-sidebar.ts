@@ -82,6 +82,7 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
+  readonly sidebarMenus: AppSidebarSessionNavigationElement["sidebarMenus"];
   findSidebarSessionByKey: AppSidebarSessionNavigationElement["findSidebarSessionByKey"];
   findSidebarHovercardRowByKey: AppSidebarSessionNavigationElement["findSidebarHovercardRowByKey"];
   readonly sessionOrganizer: SessionOrganizerController;
@@ -609,7 +610,8 @@ export async function mountSidebarContext(
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
-  sidebar.variant = variant;
+  // General behavioral fixtures model the original all-session query contract.
+  Object.assign(sidebar, { variant, navigationScope: "all" });
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;
   }
@@ -618,12 +620,11 @@ export async function mountSidebarContext(
   await sidebar.updateComplete;
   const sidebarWithPreloads = sidebar as unknown as {
     preloadCatalogRenderer: () => Promise<unknown>;
-    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
-    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+    sidebar.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
   if (sidebar.querySelector("openclaw-channel-avatar")) {
@@ -640,6 +641,7 @@ export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
   const gateway = createGatewayHarness(client);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });

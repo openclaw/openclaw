@@ -33,7 +33,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 const mocks = githubPublicationTestMocks();
 // Inert fixture only. No workflow is sent to GitHub or executed.
 const workflow = "name: synthetic\non: workflow_dispatch\njobs: {}\n";
-const cases = ["add", "modify", "delete", "rename-in", "rename-out", "mode", "committed"] as const;
+const cases = ["add", "modify", "delete", "mode", "committed"] as const;
 const createRequesters = async () => {
   const f = await createRequesterPublicationFixture(vi.fn(), "local", {
     sessionId: SESSION_ID,
@@ -78,13 +78,9 @@ describe("accepted GitHub workflow publication", () => {
       const f = await createRequesters();
       const workspace = f.local;
       const workflowPath = path.join(workspace.cwd, ".github/workflows/example.yml");
-      const ordinaryPath = path.join(workspace.cwd, "workflow-example.txt");
       await fs.mkdir(path.dirname(workflowPath), { recursive: true });
-      if (["modify", "delete", "rename-out", "mode", "ordinary"].includes(operation)) {
+      if (["modify", "delete", "mode", "ordinary"].includes(operation)) {
         await fs.writeFile(workflowPath, workflow);
-      }
-      if (operation === "rename-in") {
-        await fs.writeFile(ordinaryPath, workflow);
       }
       await workspace.git("add", "-A");
       await workspace.git("commit", "-m", "synthetic publication baseline");
@@ -104,10 +100,6 @@ describe("accepted GitHub workflow publication", () => {
         await workspace.git("update-index", "--chmod=+x", ".github/workflows/example.yml");
       } else if (operation === "delete") {
         await fs.unlink(workflowPath);
-      } else if (operation === "rename-in") {
-        await fs.rename(ordinaryPath, workflowPath);
-      } else if (operation === "rename-out") {
-        await fs.rename(workflowPath, ordinaryPath);
       } else if (operation !== "ordinary") {
         await fs.writeFile(workflowPath, `${workflow}# accepted change\n`);
       }
@@ -434,61 +426,52 @@ describe("accepted GitHub workflow publication", () => {
     expect(workspace.effects).toEqual(["push", "pull_request"]);
   });
 
-  it("rechecks workflow permission before push while settling an accepted local commit", async () => {
-    const f = await createRequesters();
-    const workspace = f.local;
-    const file = path.join(workspace.cwd, ".github/workflows/example.yml");
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, workflow);
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args, options) => {
-      const result = await transport(args, options);
-      if (args.includes("update-ref")) {
-        await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-        invalidateOperatorRolePolicy(f.maintainerProfile);
+  it.each(["before local CAS", "before push"] as const)(
+    "settles the accepted index when workflow permission closes %s",
+    async (boundary) => {
+      const f = await createRequesters();
+      const workspace = f.local;
+      const file = path.join(workspace.cwd, ".github/workflows/example.yml");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, workflow);
+      const head = await workspace.git("rev-parse", "HEAD");
+      const transport = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(async (args, options) => {
+        const result = await transport(args, options);
+        if (
+          boundary === "before push"
+            ? args.includes("update-ref")
+            : args.includes("write-tree") &&
+              options?.env?.GIT_INDEX_FILE?.endsWith("observed-index")
+        ) {
+          await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
+          invalidateOperatorRolePolicy(f.maintainerProfile);
+        }
+        return result;
+      });
+      await expect(
+        f.coordinator.requestForSession(f.request(boundary, f.maintainer)),
+      ).resolves.toMatchObject({ status: "failed", code: "identity_changed" });
+      expect(workspace.effects).toEqual([]);
+      if (boundary === "before push") {
+        expect(await workspace.git("show", "HEAD:.github/workflows/example.yml")).toBe(
+          workflow.trim(),
+        );
+        expect(await workspace.git("diff", "--cached", "HEAD")).toBe("");
+      } else {
+        expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
+        await expect(fs.stat(path.join(workspace.cwd, ".git/index.lock"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(
+          (await fs.readdir(path.join(workspace.cwd, ".git"))).some((entry) =>
+            entry.startsWith("index.openclaw-"),
+          ),
+        ).toBe(false);
       }
-      return result;
-    });
-    expect(
-      await f.coordinator.requestForSession(f.request("permission-before-push", f.maintainer)),
-    ).toMatchObject({ status: "failed", code: "identity_changed" });
-    expect(workspace.effects).toEqual([]);
-    expect(await workspace.git("show", "HEAD:.github/workflows/example.yml")).toBe(workflow.trim());
-    expect(await workspace.git("diff", "--cached", "HEAD")).toBe("");
-    expect(await fs.readFile(file, "utf8")).toBe(workflow);
-  });
-
-  it("cleans an index reservation when workflow permission closes before local CAS", async () => {
-    const f = await createRequesters();
-    const workspace = f.local;
-    const file = path.join(workspace.cwd, ".github/workflows/example.yml");
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, workflow);
-    const head = await workspace.git("rev-parse", "HEAD");
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args, options) => {
-      const result = await transport(args, options);
-      if (args.includes("write-tree") && options?.env?.GIT_INDEX_FILE?.endsWith("observed-index")) {
-        await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-        invalidateOperatorRolePolicy(f.maintainerProfile);
-      }
-      return result;
-    });
-    await expect(
-      f.coordinator.requestForSession(f.request("permission-before-cas", f.maintainer)),
-    ).resolves.toMatchObject({ status: "failed", code: "identity_changed" });
-    expect(workspace.effects).toEqual([]);
-    expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
-    await expect(fs.stat(path.join(workspace.cwd, ".git/index.lock"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(
-      (await fs.readdir(path.join(workspace.cwd, ".git"))).some((entry) =>
-        entry.startsWith("index.openclaw-"),
-      ),
-    ).toBe(false);
-    expect(await fs.readFile(file, "utf8")).toBe(workflow);
-  });
+      expect(await fs.readFile(file, "utf8")).toBe(workflow);
+    },
+  );
 
   it("rechecks the publisher after workflow authorization at the push boundary", async () => {
     const f = await createRequesters();

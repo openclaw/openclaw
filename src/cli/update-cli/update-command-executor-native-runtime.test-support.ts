@@ -2,10 +2,40 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
+  gatewayLock: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/gateway-lock",
+    distWorkerPath: "infra/gateway-lock.js",
+  },
+  databaseGenerations: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-database-generations",
+    distWorkerPath: "infra/update-database-generations.js",
+  },
   postUpdate: {
     currentModuleUrl,
     sourceWorkerName: "update-command-post-update",
     distWorkerPath: "cli/update-cli/update-command-post-update.js",
+  },
+  terminal: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-terminal",
+    distWorkerPath: "cli/update-cli/update-command-terminal.js",
+  },
+  packageSwapFixture: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/package-update-swap.test-support",
+    distWorkerPath: "infra/package-update-swap.test-support.js",
+  },
+  packageSwap: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/package-update-swap",
+    distWorkerPath: "infra/package-update-swap.js",
+  },
+  packageDistInventory: {
+    currentModuleUrl,
+    sourceWorkerName: "../../../scripts/lib/package-dist-inventory",
+    distWorkerPath: "scripts/lib/package-dist-inventory.js",
   },
   candidateState: {
     currentModuleUrl,
@@ -101,6 +131,16 @@ export const updateExecutorNativeEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../../infra/update-doctor-result",
     distWorkerPath: "infra/update-doctor-result.js",
+  },
+  doctorCustody: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-doctor-process-custody",
+    distWorkerPath: "infra/update-doctor-process-custody.js",
+  },
+  processSpawn: {
+    currentModuleUrl,
+    sourceWorkerName: "../../process/exec-spawn",
+    distWorkerPath: "process/exec-spawn.js",
   },
   processExec: {
     currentModuleUrl,

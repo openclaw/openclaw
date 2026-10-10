@@ -34,27 +34,35 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   } else {
     onlineFaces.set(host, onlineUsers);
   }
-  if (onlineUsers.length === 0) {
-    return nothing;
-  }
+
   const counts = host.sessionData.ownerCounts.counts;
   const countsFor = (user: PresenceViewer) =>
     counts && user.identity?.type === "profile"
       ? (counts.get(user.identity.id) ?? { open: 0, running: 0 })
       : null;
-  // Presence group, then anyone running (not how many), then name; ties keep the projected order.
+  // The default keeps presence groups and running-first ordering; explicit count sorts span groups.
   const now = Date.now();
   const activityOrder = { active: 0, idle: 1, unknown: 2 };
   const running = (user: PresenceViewer) => Number((countsFor(user)?.running ?? 0) > 0);
-  const listUsers = onlineUsers.toSorted(
-    (a, b) =>
-      activityOrder[presenceViewerActivity(a, now)] -
-        activityOrder[presenceViewerActivity(b, now)] ||
-      running(b) - running(a) ||
-      presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
-        sensitivity: "base",
-      }),
-  );
+  const filtered = host.people.statusFilter === "running";
+  const listUsers = onlineUsers
+    .filter((user) => !filtered || running(user) > 0)
+    .toSorted((a, b) => {
+      const order =
+        host.people.sortMode === "presence"
+          ? activityOrder[presenceViewerActivity(a, now)] -
+              activityOrder[presenceViewerActivity(b, now)] || running(b) - running(a)
+          : host.people.sortMode === "name"
+            ? 0
+            : (countsFor(b)?.[host.people.sortMode] ?? -1) -
+              (countsFor(a)?.[host.people.sortMode] ?? -1);
+      return (
+        order ||
+        presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
+          sensitivity: "base",
+        })
+      );
+    });
   const routing = personActivityRouting(
     { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
     () => host.dismissTransientMenus(),
@@ -97,12 +105,32 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 : nothing
             }
           </button>
+          ${
+            collapsed
+              ? nothing
+              : html`<button
+                  type="button"
+                  class="sidebar-session-toolbar__button sidebar-online__filter-toggle sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+                  aria-label=${t("presence.filters.label")}
+                  title=${t("presence.filters.label")}
+                  aria-haspopup="dialog"
+                  aria-expanded=${String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
+                  @click=${(event: MouseEvent) => {
+                    if (event.currentTarget instanceof HTMLElement) {
+                      host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
+                    }
+                  }}
+                >
+                  ${icons.listFilter}
+                </button>`
+          }
         `,
       })}
       ${
         collapsed
           ? nothing
           : html`<div class="sidebar-online__list">
+                ${listUsers.length === 0 ? html`<span class="sidebar-session-empty-hint">${counts === null ? t("presence.sessions.unavailable") : t("presence.filters.noMatches")}</span>` : nothing}
                 ${repeat(listUsers, presenceUserKey, (user) => {
                   const activityState = presenceViewerActivity(user);
                   const workload = countsFor(user);
@@ -120,6 +148,16 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   const tag = activity ? literal`a` : literal`button`;
                   return staticHtml`<div
                   class="sidebar-online__row"
+                  draggable=${user.identity?.type === "profile" ? "true" : "false"}
+                  @dragstart=${(event: DragEvent) => {
+                    if (user.identity?.type === "profile") {
+                      host.sessionOrganizer.startSidebarEntryDrag(event, {
+                        type: "person",
+                        profileId: user.identity.id,
+                      });
+                    }
+                  }}
+                  @dragend=${() => host.sessionOrganizer.finishSidebarEntryDrag()}
                   data-person-card
                   data-person-card-section="online"
                 >
@@ -151,37 +189,45 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     ${
                       workload && (workload.open > 0 || workload.running > 0)
                         ? html`<span class="sidebar-online__counts" aria-hidden="true">
-                            ${
-                              workload.running > 0
+                            ${(["running", "open"] as const).map((kind) =>
+                              workload[kind] > 0
                                 ? html`<span
-                                    class="sidebar-online__running"
-                                    data-session-count="running"
-                                    title=${t("presence.sessions.runningCount", { count: String(workload.running) })}
-                                    ><span class="session-run-spinner"></span
+                                    class=${`sidebar-online__${kind}`}
+                                    data-session-count=${kind}
+                                    title=${t(`presence.sessions.${kind}Count`, { count: String(workload[kind]) })}
+                                    ><span
+                                      class=${kind === "running" ? "session-run-spinner" : "sidebar-online__open-icon"}
+                                      >${kind === "running" ? nothing : icons.messageCircle}</span
                                     ><span class="sidebar-online__count"
-                                      >${workload.running}</span
+                                      >${workload[kind]}</span
                                     ></span
                                   >`
-                                : nothing
-                            }
-                            ${
-                              workload.open > 0
-                                ? html`<span
-                                    class="sidebar-online__open"
-                                    data-session-count="open"
-                                    title=${t("presence.sessions.openCount", { count: String(workload.open) })}
-                                    ><span class="sidebar-online__open-icon"
-                                      >${icons.messageCircle}</span
-                                    ><span class="sidebar-online__count"
-                                      >${workload.open}</span
-                                    ></span
-                                  >`
-                                : nothing
-                            }
+                                : nothing,
+                            )}
                           </span>`
                         : nothing
                     }
                   </${tag}>
+                  ${
+                    user.identity?.type === "profile"
+                      ? html`<button
+                          type="button"
+                          class="sidebar-pages__pin"
+                          aria-label=${t("nav.pin")}
+                          @click=${() => {
+                            if (user.identity?.type === "profile") {
+                              host.sessionOrganizer.writeSidebarEntryAt(
+                                `person:${user.identity.id}`,
+                                undefined,
+                                undefined,
+                              );
+                            }
+                          }}
+                        >
+                          ${icons.pin}
+                        </button>`
+                      : nothing
+                  }
                 </div>`;
                 })}
               </div>

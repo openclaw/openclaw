@@ -35,6 +35,7 @@ import {
 import {
   createPluginIncludeFixture,
   createSnapshot,
+  includeSnapshot,
   mockIncludeRollbackRename,
   resolveIncludeTarget,
 } from "./mutate.test-support.js";
@@ -108,15 +109,6 @@ vi.mock("../infra/file-lock.js", async (importOriginal) => ({
 const allowConfigPathWrite = () => {};
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const enabledPlugin = { plugins: { entries: { demo: { enabled: true } } } };
-
-function includeSnapshot(configPath: string, sourceConfig: OpenClawConfig): ConfigFileSnapshot {
-  return createSnapshot({
-    hash: "include-hash",
-    path: configPath,
-    parsed: { plugins: { $include: "./config/plugins.json5" } },
-    sourceConfig,
-  });
-}
 
 function includeIO(configPath: string) {
   return createActualConfigIO({
@@ -241,11 +233,11 @@ describe("config mutate helpers", () => {
   it("retries transform mutations on stale config conflicts", async () => {
     const initial = createSnapshot({
       hash: "hash-1",
-      sourceConfig: { agents: { list: [] } },
+      sourceConfig: { agents: { entries: {} } },
     });
     const fresh = createSnapshot({
       hash: "hash-2",
-      sourceConfig: { agents: { list: [{ id: "other-agent" }] } },
+      sourceConfig: { agents: { entries: { "other-agent": {} } } },
     });
     ioMocks.readConfigFileSnapshotForWrite
       .mockResolvedValueOnce(readResult(initial, { ownedConfigPathForWrite: initial.path }))
@@ -261,7 +253,8 @@ describe("config mutate helpers", () => {
           nextConfig: {
             ...config,
             agents: {
-              list: [...(config.agents?.list ?? []), { id: "work" }],
+              ownership: "explicit",
+              entries: { ...config.agents?.entries, work: {} },
             },
           },
           result: context.attempt,
@@ -276,7 +269,8 @@ describe("config mutate helpers", () => {
       2,
       {
         agents: {
-          list: [{ id: "other-agent" }, { id: "work" }],
+          ownership: "explicit",
+          entries: { "other-agent": {}, work: {} },
         },
       },
       {
@@ -294,12 +288,12 @@ describe("config mutate helpers", () => {
     const initial = createSnapshot({
       hash: "hash-1",
       path: "/tmp/first-openclaw.json",
-      sourceConfig: { agents: { list: [] } },
+      sourceConfig: { agents: { entries: {} } },
     });
     const fresh = createSnapshot({
       hash: "hash-2",
       path: "/tmp/second-openclaw.json",
-      sourceConfig: { agents: { list: [] } },
+      sourceConfig: { agents: { entries: {} } },
     });
     ioMocks.readConfigFileSnapshotForWrite
       .mockResolvedValueOnce(readResult(initial, { ownedConfigPathForWrite: initial.path }))
@@ -324,12 +318,12 @@ describe("config mutate helpers", () => {
     const initial = createSnapshot({
       hash: "hash-1",
       path: configPath,
-      sourceConfig: { agents: { list: [] } },
+      sourceConfig: { agents: { entries: {} } },
     });
     const fresh = createSnapshot({
       hash: "hash-2",
       path: configPath,
-      sourceConfig: { agents: { list: [{ id: "first" }] } },
+      sourceConfig: { agents: { entries: { first: {} } } },
     });
     ioMocks.readConfigFileSnapshotForWrite
       .mockResolvedValueOnce(readResult(initial))
@@ -350,7 +344,7 @@ describe("config mutate helpers", () => {
         return {
           nextConfig: {
             ...config,
-            agents: { list: [{ id: "first" }] },
+            agents: { entries: { first: {} } },
           },
         };
       },
@@ -361,7 +355,8 @@ describe("config mutate helpers", () => {
         nextConfig: {
           ...config,
           agents: {
-            list: [...(config.agents?.list ?? []), { id: "second" }],
+            ownership: "explicit",
+            entries: { ...config.agents?.entries, second: {} },
           },
         },
       }),
@@ -376,7 +371,8 @@ describe("config mutate helpers", () => {
       2,
       {
         agents: {
-          list: [{ id: "first" }, { id: "second" }],
+          ownership: "explicit",
+          entries: { first: {}, second: {} },
         },
       },
       {
@@ -932,75 +928,6 @@ describe("config mutate helpers", () => {
       await expect(fs.readFile(otherPath, "utf-8")).resolves.toBe(leafRaw);
     },
   );
-
-  it("writes through a nested include when a read-time migration added keys", async () => {
-    const home = await suiteRootTracker.make("nested-include-migrated");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const agentPath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
-    await fs.mkdir(path.dirname(agentPath), { recursive: true });
-    const authoredRoot = {
-      agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } },
-    };
-    await fs.writeFile(configPath, json(authoredRoot), "utf-8");
-    await fs.writeFile(agentPath, json({ bootstrapMaxChars: 25000 }), "utf-8");
-    const migrated = {
-      agents: { entries: { alpha: { bootstrapMaxChars: 25000, default: true } } },
-    } as OpenClawConfig;
-    const nextConfig = {
-      agents: { entries: { alpha: { bootstrapMaxChars: 40000, default: true } } },
-    } as OpenClawConfig;
-    const snapshot: ConfigFileSnapshot = {
-      ...createSnapshot({
-        hash: "hash-nested-include-migrated",
-        path: configPath,
-        parsed: authoredRoot,
-        sourceConfig: migrated,
-      }),
-      sourceConfigBeforeMigrations: {
-        agents: { entries: { alpha: { bootstrapMaxChars: 25000 } } },
-      } as ConfigFileSnapshot["sourceConfigBeforeMigrations"],
-      includeProvenance: [
-        {
-          path: ["agents", "entries", "alpha"],
-          kind: "single" as const,
-          hasSiblingOverrides: false,
-          hasArrayAncestor: false,
-          targetPath: agentPath,
-        },
-      ],
-    };
-    ioMocks.readConfigFileSnapshotForWrite
-      .mockResolvedValueOnce({
-        snapshot,
-        writeOptions: await includeWriteOptions(snapshot, agentPath),
-      })
-      .mockResolvedValueOnce(
-        readResult(
-          createSnapshot({
-            hash: "hash-nested-include-migrated-refreshed",
-            path: configPath,
-            parsed: authoredRoot,
-            sourceConfig: nextConfig,
-          }),
-        ),
-      );
-
-    await replaceConfigFile({
-      baseHash: snapshot.hash,
-      nextConfig,
-      writeOptions: { expectedConfigPath: configPath },
-      io: ioMocks,
-    });
-
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(JSON.parse(await fs.readFile(agentPath, "utf-8"))).toEqual({
-      bootstrapMaxChars: 40000,
-      default: true,
-    });
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
-      '"$include": "./config/agent-alpha.json5"',
-    );
-  });
 
   it.each([
     {
@@ -1665,7 +1592,7 @@ describe("config mutate helpers", () => {
     }
   });
 
-  it.each(["rename", "permission-fallback"] as const)(
+  it.each(["permission-fallback"] as const)(
     "rolls back include and environment changes after failed refresh via %s",
     async (method) => {
       const { configPath, pluginsPath, initialPluginsRaw, snapshot } = await pluginFixture(

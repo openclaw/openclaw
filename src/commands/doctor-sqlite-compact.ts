@@ -1,19 +1,13 @@
 /** Shared doctor-only SQLite compaction mechanics. */
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
-import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
+import { SqliteWalCheckpointBusyError, truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
-export type DoctorSqliteCompactSnapshot = {
-  autoVacuum: number;
-  dbSizeBytes: number;
-  freelistPages: number;
-  pageSizeBytes: number;
-  walSizeBytes: number;
-};
+type DoctorSqliteCompactSnapshot = ReturnType<typeof readCompactSnapshot>;
 
 type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
@@ -22,13 +16,8 @@ type DoctorSqliteCompactResult = {
   reclaimedBytes: number;
 };
 
-type DoctorSqliteCompactOptions = {
-  afterSuccess?: () => void;
-  busyTimeoutMs?: number;
-  operation?: "import-finalize";
-  sqlitePath: string;
-  validateBeforeMutation?: (database: DatabaseSync) => void;
-};
+/** The initial checkpoint was busy, before conversion, and the connection has closed. */
+export class DoctorSqliteCompactionDeferredError extends Error {}
 
 /**
  * Compact one SQLite file during an explicit offline doctor operation.
@@ -37,11 +26,19 @@ type DoctorSqliteCompactOptions = {
  * the database files. A busy checkpoint is a hard failure, never partial
  * success, so VACUUM cannot race an active reader or writer.
  */
-export function compactDoctorSqliteFile(
-  options: DoctorSqliteCompactOptions,
-): DoctorSqliteCompactResult {
-  const database = openNodeSqliteDatabase(options.sqlitePath);
+export function compactDoctorSqliteFile(options: {
+  afterSuccess?: () => void;
+  busyTimeoutMs?: number;
+  operation?: "import-finalize";
+  requireExisting?: boolean;
+  sqlitePath: string;
+  validateBeforeMutation?: (database: DatabaseSync) => void;
+}): DoctorSqliteCompactResult {
+  const database = openNodeSqliteDatabase(
+    options.requireExisting ? resolveExistingSqliteFileUri(options.sqlitePath) : options.sqlitePath,
+  );
   let operationError: unknown;
+  let initialCheckpointBusy = false;
   let result: DoctorSqliteCompactResult | undefined;
   try {
     database.exec(
@@ -59,7 +56,12 @@ export function compactDoctorSqliteFile(
     // A verified no-op needs neither a file mutation nor a second full-file scan.
     // Explicit compaction still repacks partially filled pages.
     if (!alreadyCompact) {
-      truncateSqliteWal(database, options.sqlitePath);
+      try {
+        truncateSqliteWal(database, options.sqlitePath);
+      } catch (error) {
+        initialCheckpointBusy = error instanceof SqliteWalCheckpointBusyError;
+        throw error;
+      }
       database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
       // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
       // stores can release free pages without repacking; explicit compact still repacks.
@@ -86,7 +88,11 @@ export function compactDoctorSqliteFile(
   try {
     database.close();
   } catch (error) {
-    operationError ??= error;
+    initialCheckpointBusy = false;
+    operationError =
+      operationError !== undefined
+        ? new AggregateError([operationError, error], "SQLite compaction and close failed.")
+        : error;
   }
   if (operationError === undefined && result) {
     try {
@@ -96,6 +102,11 @@ export function compactDoctorSqliteFile(
     }
   }
   if (operationError !== undefined) {
+    if (initialCheckpointBusy && operationError instanceof Error) {
+      throw new DoctorSqliteCompactionDeferredError(operationError.message, {
+        cause: operationError,
+      });
+    }
     throw operationError instanceof Error
       ? operationError
       : new Error("SQLite compaction failed with a non-Error value.");
@@ -106,10 +117,7 @@ export function compactDoctorSqliteFile(
   return result;
 }
 
-function readCompactSnapshot(
-  database: DatabaseSync,
-  sqlitePath: string,
-): DoctorSqliteCompactSnapshot {
+function readCompactSnapshot(database: DatabaseSync, sqlitePath: string) {
   return {
     autoVacuum: readPragmaNumber(database, "auto_vacuum"),
     dbSizeBytes: fileSize(sqlitePath),

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { BootRecord } from "../../app/boot-record.ts";
+import { clearBootRecords, type BootRecord } from "../../app/boot-record.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapability } from "./index.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
@@ -15,6 +15,7 @@ const url = "ws://gateway.example.test";
 const scope = gatewayCredentialScope(url);
 const bootRecord: BootRecord = {
   version: 2,
+  recoveryScope: "test-recovery-scope",
   authMethod: "token",
   credential: "9d17676d",
   savedAt: 1,
@@ -27,7 +28,7 @@ const bootRecord: BootRecord = {
 function roster(): SessionRosterRecord {
   return {
     version: 1,
-    scope,
+    scope: `account:${JSON.stringify([scope, "test-recovery-scope"])}`,
     savedAt: Date.now(),
     profileId: "profile-one",
     agentId: "main",
@@ -69,13 +70,21 @@ function harness(
   options: {
     cached?: Promise<SessionRosterRecord | null>;
     withBootRecord?: boolean;
+    admittedRecord?: BootRecord;
+    retainedHelloScope?: string;
   } = {},
 ) {
   let connectionRevision = 0;
   let snapshot: SessionGateway["snapshot"] = {
     client: null,
     phase: "connecting",
-    hello: null,
+    hello: options.retainedHelloScope
+      ? {
+          type: "hello-ok",
+          protocol: 1,
+          auth: { role: "operator", scopes: [], recoveryScope: options.retainedHelloScope },
+        }
+      : null,
     sessionKey: "agent:main:deleted",
     selfUser: null,
   };
@@ -114,7 +123,9 @@ function harness(
   const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
   const sessions = createSessionCapability(gateway, selection, {
     rosterCache: { read, write },
-    ...(options.withBootRecord !== false ? { bootRecord } : {}),
+    ...(options.withBootRecord !== false
+      ? { bootRecord: options.admittedRecord ?? bootRecord }
+      : {}),
   });
   activeCapabilities.add(sessions);
   const publish = (patch: Partial<typeof snapshot>) => {
@@ -164,6 +175,111 @@ function harness(
 }
 
 describe("session capability warm roster", () => {
+  it.each(["profile", "credentials", "gateway", "stop"])(
+    "retains canonical display identity through transport/client replacement, then retires it on %s",
+    async (retirement) => {
+      const h = harness({ withBootRecord: false });
+      h.connect();
+      const live = sessionsResult([{ key: "agent:main:retained", kind: "direct" }], 2);
+      h.live.resolve(live);
+      await h.sessions.refresh();
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.resultCached).not.toBe(true);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      const requestCount = h.request.mock.calls.length;
+      h.publish({ phase: "reconnecting", selfUser: undefined });
+      expect(h.sessions.state.result).toBeNull();
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      h.publish({ client: createTestGatewayClient(h.request) });
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      expect(h.request).toHaveBeenCalledTimes(requestCount);
+      if (retirement === "profile") {
+        h.connect("profile-two");
+      } else if (retirement === "stop") {
+        h.publish({ client: null, phase: "stopped" });
+      } else {
+        if (retirement === "gateway") {
+          Object.defineProperty(h.gateway, "connection", {
+            value: { gatewayUrl: "ws://other.example.test", token: "test-token" },
+          });
+        } else {
+          h.changeCredentials();
+        }
+        h.publish({ phase: "connecting" });
+      }
+      expect(h.sessions.presentation.result).toBeNull();
+      expect(h.sessions.presentation.profileId).toBeUndefined();
+      h.sessions.dispose();
+    },
+  );
+
+  it.each(["profile", "credentials", "retirement"])(
+    "pairs admitted warm rows with display identity and retires both on %s change",
+    async (change) => {
+      const h = harness();
+      await h.sessions.whenCachedRosterSettled();
+      expect(h.sessions.presentation).toMatchObject({
+        result: roster().result,
+        resultCached: true,
+        profileId: "profile-one",
+      });
+      expect(h.request).not.toHaveBeenCalled();
+      if (change === "profile") {
+        h.connect("profile-two");
+      } else if (change === "credentials") {
+        h.changeCredentials();
+        h.publish({ phase: "connecting" });
+      } else {
+        clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
+      }
+      expect(h.sessions.presentation.result).toBeNull();
+      expect(h.sessions.presentation.profileId).toBeUndefined();
+      h.live.resolve(sessionsResult([], 2));
+    },
+  );
+
+  it("retires the captured legacy roster even with a different live hello identity", async () => {
+    const legacy = { ...bootRecord, recoveryScope: undefined };
+    const h = harness({
+      admittedRecord: legacy,
+      retainedHelloScope: "live-account",
+      cached: Promise.resolve({ ...roster(), scope }),
+    });
+    await h.sessions.whenCachedRosterSettled();
+    expect(h.sessions.state.resultCached).toBe(true);
+    clearBootRecords(scope, { authMethod: legacy.authMethod, credential: "foreign-fingerprint" });
+    expect(h.sessions.state.resultCached).toBe(true);
+    clearBootRecords(scope, { authMethod: legacy.authMethod, credential: legacy.credential });
+    expect(h.sessions.state.resultCached).toBe(false);
+    expect(h.sessions.state.result).toBeNull();
+    expect(h.sessions.state.groups).toEqual([]);
+  });
+
+  it.each(["pending", "published"])(
+    "keeps its %s roster through unrelated owner retirement",
+    async (stage) => {
+      const cached = createDeferred<SessionRosterRecord | null>();
+      const h = harness({ cached: cached.promise });
+      if (stage === "published") {
+        cached.resolve(roster());
+        await h.sessions.whenCachedRosterSettled();
+      }
+      clearBootRecords(scope, { recoveryScope: "different-owner" });
+      cached.resolve(roster());
+      await h.sessions.whenCachedRosterSettled();
+      expect(h.sessions.state.resultCached).toBe(true);
+      expect(h.sessions.state.result).toEqual(roster().result);
+      expect(h.sessions.state.groups).toEqual(["Work"]);
+      expect(h.request).not.toHaveBeenCalled();
+      clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
+      expect(h.sessions.state.result).toBeNull();
+      expect(h.sessions.state.resultCached).toBe(false);
+      expect(h.sessions.state.groups).toEqual([]);
+    },
+  );
+
   it.each([10, 30])(
     "preserves event ordering during cached startup (event updatedAt: %s)",
     async (updatedAt) => {
@@ -204,6 +320,7 @@ describe("session capability warm roster", () => {
   it("publishes groups synchronously, then the cached roster without a connection or canonical revision", async () => {
     const cached = createDeferred<SessionRosterRecord | null>();
     const h = harness({ cached: cached.promise });
+    expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
     expect(h.sessions.state.groups).toEqual(["Work"]);
     expect(h.sessions.state.result).toBeNull();
     let settled = false;
@@ -230,6 +347,7 @@ describe("session capability warm roster", () => {
 
   it("does not read or publish a cached roster without an accepted boot record", async () => {
     const h = harness({ withBootRecord: false });
+    expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
     await h.sessions.whenCachedRosterSettled();
     expect(h.read).not.toHaveBeenCalled();
     expect(h.sessions.state).toMatchObject({
@@ -281,7 +399,7 @@ describe("session capability warm roster", () => {
       expect(h.sessions.canonicalListRevision).toBe(1);
       expect(h.write).toHaveBeenCalledWith(
         expect.objectContaining({
-          scope,
+          scope: `account:${JSON.stringify([scope, "test-recovery-scope"])}`,
           profileId: "profile-one",
           agentId: "main",
           result: expected,
@@ -457,6 +575,7 @@ describe("session capability warm roster", () => {
       const cached = createDeferred<SessionRosterRecord | null>();
       const h = harness({ cached: cached.promise });
       h.changeCredentials();
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       if (transition === "credentials") {
         h.publish({ phase: "connecting" });
         expect(h.sessions.state.groups).toEqual([]);
@@ -479,6 +598,7 @@ describe("session capability warm roster", () => {
       } else {
         h.sessions.dispose();
       }
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       await expect(
         Promise.race([
           settled.then(() => "released"),
@@ -509,6 +629,7 @@ describe("session capability warm roster", () => {
       } else {
         h.changeCredentials();
       }
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       h.publish({ phase: "connecting" });
       expect(h.sessions.state).toMatchObject({
         result: null,
@@ -527,7 +648,9 @@ describe("session capability warm roster", () => {
       h.publish({ sessionKey: "agent:main:other" });
       expect(h.sessions.state.result).toEqual(live);
       expect(h.write).toHaveBeenCalledWith(
-        expect.objectContaining({ scope: gatewayCredentialScope(nextUrl) }),
+        expect.objectContaining({
+          scope: `account:${JSON.stringify([gatewayCredentialScope(nextUrl), "test-recovery-scope"])}`,
+        }),
       );
     },
   );

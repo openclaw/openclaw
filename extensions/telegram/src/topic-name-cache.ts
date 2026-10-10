@@ -22,7 +22,6 @@ type TopicNameStore = Map<string, TopicEntry>;
 type TopicNameStoreState = {
   lastUpdatedAt: number;
   store: TopicNameStore;
-  hydrated: boolean;
   hydratePromise?: Promise<void>;
   persistentStore: PluginStateKeyedStore<TopicEntry>;
 };
@@ -30,22 +29,6 @@ type TopicNameStoreState = {
 type TopicNameCacheState = {
   stores: Map<string, TopicNameStoreState>;
 };
-
-function createTopicNameStoreState(namespace: string): TopicNameStoreState {
-  return {
-    lastUpdatedAt: 0,
-    store: new Map(),
-    hydrated: false,
-    persistentStore: getTelegramRuntime().state.openKeyedStore<TopicEntry>({
-      namespace,
-      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
-    }),
-  };
-}
-
-function getTopicNameCacheState(): TopicNameCacheState {
-  return resolveGlobalSingleton(TOPIC_NAME_CACHE_STATE_KEY, () => ({ stores: new Map() }));
-}
 
 function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
@@ -88,26 +71,29 @@ function isTopicEntry(value: unknown): value is TopicEntry {
 }
 
 function getTopicStoreState(scope?: string): TopicNameStoreState {
-  const state = getTopicNameCacheState();
+  const state = resolveGlobalSingleton<TopicNameCacheState>(TOPIC_NAME_CACHE_STATE_KEY, () => ({
+    stores: new Map(),
+  }));
   const stateKey = scope ?? DEFAULT_TOPIC_NAME_CACHE_SCOPE;
   const existing = state.stores.get(stateKey);
   if (existing) {
     return existing;
   }
-  const next = createTopicNameStoreState(resolveTopicNameCacheNamespace(stateKey));
+  const namespace = resolveTopicNameCacheNamespace(stateKey);
+  const next: TopicNameStoreState = {
+    lastUpdatedAt: 0,
+    store: new Map(),
+    persistentStore: getTelegramRuntime().state.openKeyedStore<TopicEntry>({
+      namespace,
+      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
+    }),
+  };
   state.stores.set(stateKey, next);
   return next;
 }
 
-async function hydrateTopicStoreState(state: TopicNameStoreState): Promise<void> {
-  if (state.hydrated) {
-    return;
-  }
-  if (state.hydratePromise) {
-    await state.hydratePromise;
-    return;
-  }
-  state.hydratePromise = (async () => {
+function hydrateTopicStoreState(state: TopicNameStoreState): Promise<void> {
+  state.hydratePromise ??= (async () => {
     const entries = await state.persistentStore.entries();
     for (const { key, value } of entries) {
       if (isTopicEntry(value)) {
@@ -118,11 +104,11 @@ async function hydrateTopicStoreState(state: TopicNameStoreState): Promise<void>
       0,
       ...Array.from(state.store.values(), (entry) => entry.updatedAt),
     );
-    state.hydrated = true;
-  })().finally(() => {
+  })().catch((error: unknown) => {
     state.hydratePromise = undefined;
+    throw error;
   });
-  await state.hydratePromise;
+  return state.hydratePromise;
 }
 
 function nextUpdatedAt(scope?: string): number {

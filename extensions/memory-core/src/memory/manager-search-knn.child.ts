@@ -44,7 +44,7 @@ function isChildInput(value: unknown): value is VectorKnnChildInput {
   );
 }
 
-async function run(input: VectorKnnChildInput): Promise<VectorKnnChildResult> {
+async function run(input: VectorKnnChildInput): Promise<VectorKnnResponse> {
   validateVectorKnnRequest(input.request);
   ensureSqliteLibrarySelected({ explicitPath: input.sqliteLibraryPath });
   const extensionLoadingSupported = supportsNodeSqliteExtensionLoading();
@@ -54,19 +54,13 @@ async function run(input: VectorKnnChildInput): Promise<VectorKnnChildResult> {
   });
   try {
     db.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000");
-    if (!extensionLoadingSupported) {
-      return { status: "ok", value: { rows: [], fallbackScanRequired: true } };
+    if (extensionLoadingSupported) {
+      const loaded = await loadSqliteVecExtension({ db, extensionPath: input.extensionPath });
+      if (loaded.ok) {
+        return runVectorKnnQuery(db, input.request);
+      }
     }
-    const loaded = await loadSqliteVecExtension({
-      db,
-      extensionPath: input.extensionPath,
-    });
-    if (!loaded.ok) {
-      return { status: "ok", value: { rows: [], fallbackScanRequired: true } };
-    }
-    return { status: "ok", value: runVectorKnnQuery(db, input.request) };
-  } catch (error) {
-    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+    return { rows: [], fallbackScanRequired: true };
   } finally {
     db.close();
   }
@@ -111,7 +105,7 @@ for await (const chunk of process.stdin) {
   }
   try {
     // Reopen for each query so publication and path replacement stay visible.
-    writeResult(input.id, await run(input));
+    writeResult(input.id, { status: "ok", value: await run(input) });
   } catch (error) {
     writeResult(input.id, {
       status: "failed",

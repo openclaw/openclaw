@@ -11,6 +11,7 @@ import {
   runManagedCommand,
   signalExitCode,
 } from "./lib/managed-child-process.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
 
 const LABEL = "agent-plugin-gateway-e2e";
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
@@ -72,6 +73,7 @@ function startCaptured(
 ): CapturedChild {
   const output = { stderr: "", stdout: "" };
   const stop = new AbortController();
+  const signal = AbortSignal.any([options.signal, stop.signal]);
   let outcome: ChildOutcome | undefined;
   const completion = runManagedCommand({
     bin: command,
@@ -80,7 +82,7 @@ function startCaptured(
     env: options.env,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
-    signal: AbortSignal.any([options.signal, stop.signal]),
+    signal,
     onSignal: options.onSignal,
     timeoutMs: options.timeoutMs,
     timeoutKillGraceMs: 2_000,
@@ -98,8 +100,11 @@ function startCaptured(
     },
   }).then(
     (code) =>
-      (outcome =
-        code === 0 ? { code } : { error: childFailure({ label: options.label, output }, code) }),
+      (outcome = signal.aborted
+        ? { error: Object.assign(new Error("Managed command aborted"), { code: "ABORT_ERR" }) }
+        : code === 0
+          ? { code }
+          : { error: childFailure({ label: options.label, output }, code) }),
     (error: unknown) => (outcome = { error }),
   );
   return {
@@ -413,7 +418,7 @@ async function main() {
     await waitForHttp(`http://127.0.0.1:${mockPort}/health`, mock, signal);
 
     const gateway = startCaptured(
-      process.execPath,
+      resolveTestRuntime(childEnv) === "bun" ? "bun" : process.execPath,
       [entryPath, "gateway", "--port", String(gatewayPort), "--bind", "loopback"],
       { cwd: repoRoot, env: childEnv, label: "gateway", signal, onSignal: handleSignal },
     );

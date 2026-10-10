@@ -1,25 +1,29 @@
 import path from "node:path";
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import {
+  loseFirstCronMutationReply,
+  observeCronStoreCommits,
+} from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  beginAgentDeletionJournal,
-  removeAgentDeletionJournal,
-} from "../../state/agent-deletion-journal.js";
-import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { clearCronJobActive } from "../active-jobs.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore, removeStaleCronJobFamilyRows } from "../store.js";
 import * as cronStore from "../store.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -41,6 +45,8 @@ import {
   reserveQueuedCronRun,
   supersedeActivatedCronRun,
 } from "./run-admission.js";
+import * as runtimeMutation from "./runtime-mutation.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 
 async function withReservation(
   run: (fixture: {
@@ -108,28 +114,168 @@ async function withReservation(
   });
 }
 
-function duringPreparation(
-  matches: (value: Record<string, unknown>) => boolean,
-  mutate: () => void,
-) {
-  // oxlint-disable-next-line typescript/unbound-method -- Retain the intercepted port as receiver.
-  const original = MessagePort.prototype.postMessage;
-  let observed = false;
-  const spy = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    value,
-    transferList,
-  ) {
-    if (!observed && isRecord(value) && matches(value)) {
-      observed = true;
-      mutate();
-    }
-    return original.call(this, value, transferList);
-  });
-  return { restore: () => spy.mockRestore(), observed: () => observed };
-}
+it.each(["activation", "cleanup", "family", "worker control"] as const)(
+  "services gateway events while cron %s waits for a writer",
+  async (surface) => {
+    await withReservation(async ({ state, job, identity, readJob }) => {
+      const context = captureOpenClawStateWorkerContext();
+      expect(context.admission.databasePath).toBe(openOpenClawStateDatabase().path);
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
+      let pending: Promise<unknown> | undefined;
+      try {
+        await holder.ready;
+        const heartbeat = nextTurn().then(() => Atomics.load(holder.released, 0));
+        pending =
+          surface === "activation"
+            ? activateQueuedCronRun({ state, job, reservationIdentity: identity })
+            : surface === "cleanup"
+              ? cleanupQueuedCronRunReservations({
+                  state,
+                  reservations: [{ jobId: job.id, reservationIdentity: identity }],
+                })
+              : surface === "family"
+                ? Promise.resolve(
+                    removeStaleCronJobFamilyRows(state.deps.storePath, {
+                      declarationKey: "synthetic",
+                      name: "synthetic",
+                      ownerPluginTag: "synthetic",
+                    }),
+                  )
+                : recomputeUnownedCronSchedules(state);
+        const releasedAtHeartbeat = await heartbeat;
+        holder.release();
+        const result = await pending;
+        if (surface === "activation") {
+          expect(result).toMatchObject({ kind: "activated", job: { id: job.id } });
+        }
+        if (surface === "cleanup") {
+          expect((await readJob())?.state.queuedAtMs).toBeUndefined();
+        }
+        if (surface === "family") {
+          expect(result).toBe(0);
+        }
+        expect(
+          releasedAtHeartbeat,
+          "gateway heartbeat must run before the holder's bounded fallback releases contention",
+        ).toBe(0);
+      } finally {
+        holder.release();
+        await holder.joined;
+        await pending?.catch(() => undefined);
+      }
+    });
+  },
+);
 
-it("fences an activation whose durable receipt was replaced after reservation", async () => {
+it.each([false, true])(
+  "preserves authored rows and SQL ownership when the worker reserves onExit=%s",
+  async (onExit) => {
+    await withOpenClawTestState({ label: "cron-reservation-authored-data" }, async (fixture) => {
+      const now = 1_800_000_000_000;
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const job = createDueIsolatedJob({ id: "legacy-reservation", nowMs: now, nextRunAtMs: now });
+      job.schedule = onExit
+        ? { kind: "on-exit", command: "true" }
+        : { kind: "every", everyMs: 60_000 };
+      const state = createCronRegressionState({
+        storePath,
+        defaultAgentId: "main",
+        nowMs: () => now + 1_000,
+        isAgentAvailable: () => true,
+        runIsolatedAgentJob: async () => {
+          throw new Error("Reservation must not execute the payload");
+        },
+      });
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const db = openOpenClawStateDatabase().db;
+      const storeKey = path.resolve(storePath);
+      db.prepare(
+        "UPDATE cron_jobs SET agent_id = 'main', owner_agent_id = 'main', grant_definition_generation = 17, job_json = json_set(json_remove(job_json, '$.enabled'), '$.notify', json('true'), '$.isolation', json(?), '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id = ?",
+      ).run(JSON.stringify({ legacy: "retained" }), storeKey, job.id);
+      const raw = () =>
+        db
+          .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(storeKey, job.id)?.job_json;
+      const metadata = () =>
+        db
+          .prepare(
+            "SELECT agent_id, owner_agent_id, sort_order, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+          )
+          .get(storeKey, job.id);
+      const before = raw();
+      const metadataBefore = metadata();
+      await list(state);
+      const current = (await loadCronStore(storePath)).jobs[0]!;
+      try {
+        const reservations = await persistQueuedCronRunReservations({
+          state,
+          candidates: [current],
+          reservedAtMs: now + 1_000,
+          ...(onExit
+            ? {
+                manualRun: {
+                  onExit: {
+                    commitGuard: () => {},
+                    onReserved: (reserved, runReceipt, runReceiptContext) => {
+                      reserveQueuedCronRun(state, reserved.id, now + 1_000, {
+                        runReceipt,
+                        runReceiptContext,
+                        onExit: true,
+                      });
+                    },
+                  },
+                },
+              }
+            : {}),
+        });
+        for (const reserved of reservations) {
+          if (!state.queuedRunReservationsByJobId.has(reserved.job.id)) {
+            reserveQueuedCronRun(state, reserved.job.id, now + 1_000, {
+              runReceipt: reserved.runReceipt,
+              runReceiptContext: reserved.runReceiptContext,
+            });
+          }
+        }
+        expect(reservations).toHaveLength(1);
+        expect(metadata()).toEqual(metadataBefore);
+        if (onExit) {
+          expect(JSON.parse(String(raw()))).toEqual({
+            ...JSON.parse(String(before)),
+            enabled: false,
+          });
+        } else {
+          expect(raw()).toBe(before);
+        }
+        expect(
+          db
+            .prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+            .get(storeKey, job.id),
+        ).toEqual({ enabled: onExit ? 0 : 1 });
+        const persisted = (await loadCronStore(storePath)).jobs[0]!;
+        expect(persisted.state.queuedAtMs).toBe(now + 1_000);
+        if (onExit) {
+          expect(persisted.enabled).toBe(false);
+          expect(persisted.state.nextRunAtMs).toBeUndefined();
+        }
+      } finally {
+        try {
+          await cleanupQueuedCronRunReservations({
+            state,
+            reservations: [...state.queuedRunReservationsByJobId].map(([jobId, reservation]) => ({
+              jobId,
+              reservationIdentity: reservation.identity,
+            })),
+          });
+        } finally {
+          stop(state);
+          await state.op;
+        }
+      }
+    });
+  },
+);
+
+it("fences activation after replacement of its durable receipt", async () => {
   await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
     const original = state.queuedRunReservationsByJobId.get(job.id)!.runReceipt;
     await finishCronRunReceiptAsync({
@@ -177,18 +323,12 @@ it("fences an activation whose durable receipt was replaced after reservation", 
   });
 });
 
-it("rejects payload execution when its agent becomes unavailable during worker activation", async () => {
+it("rejects payload execution when its agent becomes unavailable after activation", async () => {
   await withReservation(async ({ state, job, identity }) => {
     let available = true;
     state.deps.isAgentAvailable = () => available;
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     state.deps.runIsolatedAgentJob = runner;
-    const interception = duringPreparation(
-      (value) => "markerAtMs" in value,
-      () => {
-        available = false;
-      },
-    );
     let activeMarker: Parameters<typeof clearCronJobActive>[1];
     try {
       const result = await executeQueuedCronRun({
@@ -196,13 +336,15 @@ it("rejects payload execution when its agent becomes unavailable during worker a
         jobId: job.id,
         reservedAtMs: state.queuedRunReservationsByJobId.get(job.id)!.markerAtMs,
         reservationIdentity: identity,
+        onActivated: () => {
+          available = false;
+        },
         onNotRunnable: async () => {},
         onCompleted: async (outcome) => {
           activeMarker = outcome.activeJobMarker;
           return false;
         },
       });
-      expect(interception.observed()).toBe(true);
       expect(result).toMatchObject({
         kind: "completed",
         outcome: {
@@ -213,7 +355,6 @@ it("rejects payload execution when its agent becomes unavailable during worker a
       });
       expect(runner).not.toHaveBeenCalled();
     } finally {
-      interception.restore();
       if (activeMarker) {
         clearCronJobActive(job.id, activeMarker);
       }
@@ -221,63 +362,62 @@ it("rejects payload execution when its agent becomes unavailable during worker a
   });
 });
 
-it("fences a replacement local owner between worker preparation and activation commit", async () => {
-  await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
-    const before = await readJob();
-    const receiptBefore = readReceipt();
-    const owner = state.queuedRunReservationsByJobId.get(job.id)!;
-    let replacement: object | undefined;
-    const interception = duringPreparation(
-      (value) => "markerAtMs" in value,
-      () => {
-        replacement = reserveQueuedCronRun(state, job.id, owner.markerAtMs, {
-          runReceipt: owner.runReceipt,
-          runReceiptContext: owner.runReceiptContext,
+it.each([false, true])(
+  "cleans up activation stopped after commit unless its agent is deleting: deletion=%s",
+  async (deleting) => {
+    await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
+      if (deleting) {
+        const privateRoot = path.dirname(path.dirname(state.deps.storePath));
+        beginAgentDeletionJournal({
+          agentId: "main",
+          operationId: "private-delete-main",
+          deleteFiles: false,
+          agentDir: path.join(privateRoot, "agents", "main", "agent"),
+          workspaceDir: path.join(privateRoot, "workspace"),
+          sessionsDir: path.join(privateRoot, "agents", "main", "sessions"),
         });
-      },
-    );
-    try {
-      await expect(
-        activateQueuedCronRun({ state, job, reservationIdentity: identity }),
-      ).resolves.toEqual({ kind: "fenced" });
-      expect(interception.observed()).toBe(true);
-      expect(state.queuedRunReservationsByJobId.get(job.id)?.identity).toBe(replacement);
-      expect(await readJob()).toEqual(before);
-      expect(readReceipt()).toEqual(receiptBefore);
-    } finally {
-      interception.restore();
-    }
-  });
-});
-
-it("restores the exact activated marker when the service stops during worker admission", async () => {
-  await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
-    const interception = duringPreparation(
-      (value) => "markerAtMs" in value,
-      () => stop(state),
-    );
-    try {
-      await expect(
-        activateQueuedCronRun({ state, job, reservationIdentity: identity }),
-      ).resolves.toEqual({ kind: "unavailable", reason: "stopped" });
-      expect(interception.observed()).toBe(true);
-      const persisted = await readJob();
-      expect(persisted?.state.lastError).toBe("previous occurrence error");
-      expect(persisted?.state.runningAtMs).toBeUndefined();
-      expect(persisted?.state.queuedAtMs).toBeUndefined();
-      expect(readReceipt()).toMatchObject({
-        status: "skipped",
-        error_text: "cron service stopped",
+      }
+      let stoppedAfterCommit = false;
+      const stopObserving = observeCronStoreCommits(state.deps.storePath, () => {
+        if (!stoppedAfterCommit && readReceipt()?.started_at_ms === state.deps.nowMs()) {
+          stoppedAfterCommit = true;
+          stop(state);
+        }
       });
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-    } finally {
-      interception.restore();
-    }
-  });
-});
+      try {
+        const activation = activateQueuedCronRun({ state, job, reservationIdentity: identity });
+        if (deleting) {
+          await expect(activation).rejects.toThrow("cron job agent is unavailable: main");
+        } else {
+          await expect(activation).resolves.toEqual({ kind: "unavailable", reason: "stopped" });
+        }
+        expect(stoppedAfterCommit).toBe(true);
+        const persisted = await readJob();
+        if (deleting) {
+          expect(persisted?.state.runningAtMs).toBe(1_800_000_001_000);
+          expect(readReceipt()).toMatchObject({ status: "running" });
+        } else {
+          expect(persisted?.state.lastError).toBe("previous occurrence error");
+          expect(persisted?.state.runningAtMs).toBeUndefined();
+          expect(persisted?.state.queuedAtMs).toBeUndefined();
+          expect(readReceipt()).toMatchObject({
+            status: "skipped",
+            error_text: "cron service stopped",
+          });
+          expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+        }
+      } finally {
+        stopObserving();
+        if (deleting) {
+          removeAgentDeletionJournal("main", "private-delete-main");
+        }
+      }
+    });
+  },
+);
 
-it.each(["before commit", "after publication"] as const)(
-  "retains the runner fence when settlement completes %s",
+it.each(["submission", "publication"] as const)(
+  "retains the runner fence when settlement completes at %s",
   async (timing) => {
     await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
       const activated = await activateQueuedCronRun({ state, job, reservationIdentity: identity });
@@ -291,14 +431,25 @@ it.each(["before commit", "after publication"] as const)(
         settlement: runner.promise,
         onFinishError: (error) => finishErrors.push(error),
       });
-      const interception = duringPreparation(
-        (value) => Array.isArray(value.reservations),
-        () => {
-          if (timing === "before commit") {
-            runner.resolve();
-          }
-        },
-      );
+      let observedBoundary = false;
+      const submit = runtimeMutation.runCronRuntimeMutation;
+      const submission =
+        timing === "submission"
+          ? vi.spyOn(runtimeMutation, "runCronRuntimeMutation").mockImplementation((params) => {
+              const pending = submit(params);
+              if (!observedBoundary && params.type === "cron.releaseReservations") {
+                observedBoundary = true;
+                runner.resolve();
+              }
+              return pending;
+            })
+          : undefined;
+      const stopObserving =
+        timing === "publication"
+          ? observeCronStoreCommits(state.deps.storePath, () => {
+              observedBoundary = true;
+            })
+          : undefined;
       try {
         await supersedeActivatedCronRun({
           state,
@@ -308,8 +459,8 @@ it.each(["before commit", "after publication"] as const)(
           runReceiptContext: activated.runReceiptContext,
           reason: "retired occurrence",
         });
-        expect(interception.observed()).toBe(true);
-        if (timing === "after publication") {
+        expect(observedBoundary).toBe(true);
+        if (timing === "publication") {
           expect(readReceipt()).toMatchObject({ status: "running" });
           runner.resolve();
         }
@@ -322,7 +473,8 @@ it.each(["before commit", "after publication"] as const)(
         });
         expect(finishErrors).toEqual([]);
       } finally {
-        interception.restore();
+        submission?.mockRestore();
+        stopObserving?.();
         runner.resolve();
         await runner.promise;
         await readJob();
@@ -354,7 +506,7 @@ it("publishes cleanup once without replay after a committed reply is lost", asyn
 });
 
 it.each(["lost reply", "postcommit conflict error"] as const)(
-  "cleans up a committed reservation after %s without replay",
+  "preserves recoverable reservations after %s without replay",
   async (failure) => {
     await withOpenClawTestState({ label: "cron-reservation-lost-reply" }, async (fixture) => {
       const now = Date.now();
@@ -399,11 +551,25 @@ it.each(["lost reply", "postcommit conflict error"] as const)(
         expect(runner).not.toHaveBeenCalled();
         expect(state.queuedRunReservationsByJobId.size).toBe(0);
         expect(listForeignReceipts(state)).toEqual([]);
-        expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
-        const receipts = openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE job_id = ?")
-          .all(job.id);
-        expect(receipts).toEqual([{ status: "skipped" }]);
+        const persisted = (await loadCronStore(storePath)).jobs[0]!;
+        const receipt = findActiveCronRunReceiptInDatabase({
+          database: openOpenClawStateDatabase().db,
+          storePath,
+          jobId: job.id,
+        });
+        if (failure === "lost reply") {
+          expect(persisted.state.queuedAtMs).toBe(now);
+          expect(receipt).toBeDefined();
+          expect(isCronRunReceiptOwnerStale(receipt!)).toBe(true);
+        } else {
+          expect(persisted.state.queuedAtMs).toBeUndefined();
+          expect(receipt).toBeUndefined();
+          expect(
+            openOpenClawStateDatabase()
+              .db.prepare("SELECT status FROM cron_run_receipts WHERE job_id = ?")
+              .all(job.id),
+          ).toEqual([{ status: "skipped" }]);
+        }
       } finally {
         await reply?.close();
         publication?.mockRestore();
@@ -413,35 +579,6 @@ it.each(["lost reply", "postcommit conflict error"] as const)(
     });
   },
 );
-
-it("preserves durable deletion authority during stopped activation rollback", async () => {
-  await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
-    const privateRoot = path.dirname(path.dirname(state.deps.storePath));
-    beginAgentDeletionJournal({
-      agentId: "main",
-      operationId: "private-delete-main",
-      deleteFiles: false,
-      agentDir: path.join(privateRoot, "agents", "main", "agent"),
-      workspaceDir: path.join(privateRoot, "workspace"),
-      sessionsDir: path.join(privateRoot, "agents", "main", "sessions"),
-    });
-    const interception = duringPreparation(
-      (value) => "markerAtMs" in value,
-      () => stop(state),
-    );
-    try {
-      await expect(
-        activateQueuedCronRun({ state, job, reservationIdentity: identity }),
-      ).rejects.toThrow("cron job agent is unavailable: main");
-      expect(interception.observed()).toBe(true);
-      expect((await readJob())?.state.runningAtMs).toBe(1_800_000_001_000);
-      expect(readReceipt()).toMatchObject({ status: "running" });
-    } finally {
-      interception.restore();
-      removeAgentDeletionJournal("main", "private-delete-main");
-    }
-  });
-});
 
 it("releases a settled receipt for recovery when its captured database admission retires", async () => {
   await withReservation(async ({ state, job, identity }) => {

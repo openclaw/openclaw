@@ -10,8 +10,6 @@ import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-recovery/main-se
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../agents/media-generation-activity.js";
 import {
   mergeSessionEntry,
-  resolveSessionLifecycleTimestamps,
-  resolveSessionWorkStartError,
   type SessionEntry,
   type InternalSessionEntry,
 } from "../../config/sessions.js";
@@ -20,6 +18,7 @@ import {
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -41,12 +40,17 @@ import {
 } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
-import type { TrustedSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayOperatorRoleActor } from "../server-methods/shared-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
+import { createClosedSessionTranscriptSource } from "../session-end-transcript-reader.js";
+import {
+  emitGatewaySessionEndPluginHook,
+  emitGatewaySessionStartPluginHook,
+} from "../session-reset-service.js";
 import {
   cronContinuationHasReusableRuntime,
-  emitAgentSendSessionLifecycleTransition,
+  resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 
@@ -59,7 +63,7 @@ export type CronContinuationClaim = {
   mediaTaskIdsBefore: ReadonlySet<string>;
 };
 
-type AgentSessionPersistResult = {
+export type AgentSessionPersistResult = {
   sessionEntry?: SessionEntry;
   resolvedSessionId?: string;
   sessionPersistedBeforeGatewayAdmission: boolean;
@@ -100,35 +104,26 @@ export async function persistAgentSessionPhase(params: {
     "lifecycleRevision" | "sessionId"
   >;
   initialPatchBuild: AgentSessionPatchBuild;
-  buildSessionPatch: (entry: SessionEntry | undefined) => AgentSessionPatchBuild;
-  initialSessionEntry?: SessionEntry;
-  initialResolvedSessionId?: string;
-  initialSessionPersistedBeforeGatewayAdmission: boolean;
-  initialSupersededSessionId?: string;
+  buildSessionPatch: (entry: SessionEntry | undefined) => Promise<AgentSessionPatchBuild>;
+  state: AgentSessionPersistResult;
   touchInteraction: boolean;
   requestedBestEffortDeliver?: boolean;
-  bestEffortDeliver: boolean;
   expectedSession: Parameters<typeof assertExpectedExistingSession>[0]["constraint"];
   maintenanceConfig: SessionEntryPatchOptions["maintenanceConfig"];
   abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   assertGatewayWorkAdmissionAllowed: () => void;
   respondToGatewayAdmissionOutcome: () => boolean;
-  updateAdmissionState: (state: {
-    resolvedSessionId?: string;
-    admittedSessionId: string;
-    supersededSessionId?: string;
-    sessionPersistedBeforeGatewayAdmission: boolean;
-  }) => void;
-  getAdmittedSessionId: () => string;
   setCronContinuationClaim: (claim: CronContinuationClaim) => void;
   setMainRestartRecoveryOwnerLease: (lease: MainSessionRecoveryOwnerLease) => void;
   respond: GatewayRequestHandlerOptions["respond"];
 }): Promise<AgentSessionPersistResult | undefined> {
   let patchBuild = params.initialPatchBuild;
-  let sessionEntry = params.initialSessionEntry;
-  let resolvedSessionId = params.initialResolvedSessionId;
-  let sessionPersistedBeforeGatewayAdmission = params.initialSessionPersistedBeforeGatewayAdmission;
-  let supersededSessionId = params.initialSupersededSessionId;
+  let {
+    sessionEntry,
+    resolvedSessionId,
+    sessionPersistedBeforeGatewayAdmission,
+    supersededSessionId,
+  } = params.state;
   let restoredCronContinuation: RestoredCronContinuation | undefined;
   let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
@@ -147,30 +142,26 @@ export async function persistAgentSessionPhase(params: {
       channel: sessionDeliveryChannel(entry),
       chatType: entry?.chatType,
     }) === "deny";
-  const recoveredSessionStartedAt =
-    !patchBuild.isNewSession &&
-    params.entry !== undefined &&
-    params.entry.sessionStartedAt === undefined
-      ? resolveSessionLifecycleTimestamps({
-          entry: params.entry,
-          storePath: params.storePath,
-          agentId: params.sessionAgentId,
-          sessionKey: params.canonicalSessionKey,
-        }).sessionStartedAt
-      : undefined;
-
+  const rejectDelivery = (): undefined => {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+    );
+    return undefined;
+  };
   if (params.storePath && !params.suppressVisibleSessionEffects) {
     if (abortForLifecycleRotation()) {
       return undefined;
     }
-    let deniedBySendPolicy = false;
     let deniedSessionEntry: SessionEntry | undefined;
     let persisted: SessionEntry | undefined;
-    let archivedDuringStoreUpdateError: string | undefined;
-    let deletedDuringStoreUpdateError: string | undefined;
-    let restoredCronContinuationError: string | undefined;
-    let restartRecoveryReservationConflict: string | undefined;
+    let mutationError: ReturnType<typeof errorShape> | undefined;
     let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
+    function rejectMutation(code: Parameters<typeof errorShape>[0], message: string): never {
+      mutationError = errorShape(code, message);
+      throw new Error(message);
+    }
     try {
       persisted =
         (await patchSessionEntryTarget(
@@ -182,52 +173,41 @@ export async function persistAgentSessionPhase(params: {
               storeKeys: params.storeKeys ?? [params.canonicalSessionKey],
             },
           },
-          (_currentEntry, patchContext) => {
+          async (_currentEntry, patchContext) => {
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
             const freshEntry = patchContext.existingEntry;
-            if (!freshEntry) {
-              creationAuthorizationError = authorizeGatewaySessionCreation({
-                cfg: params.cfg,
-                agentId: params.sessionAgentId,
-                ...(params.operatorRoleActor
-                  ? { actor: params.operatorRoleActor }
-                  : { profileId: params.requestingOperatorProfileId }),
-              });
-              if (creationAuthorizationError) {
-                throw new Error(creationAuthorizationError.message);
-              }
-            }
             assertExpectedExistingSession({
               constraint: params.expectedSession,
               entry: freshEntry,
               message: `Session "${params.canonicalSessionKey}" changed before expected work could start.`,
             });
             if (params.entry && !freshEntry) {
-              deletedDuringStoreUpdateError = `Session "${params.canonicalSessionKey}" was deleted while starting work. Retry.`;
-              throw new Error(deletedDuringStoreUpdateError);
+              rejectMutation(
+                ErrorCodes.INVALID_REQUEST,
+                `Session "${params.canonicalSessionKey}" was deleted while starting work. Retry.`,
+              );
             }
-            const archivedError = resolveSessionWorkStartError(
+            const archivedError = resolveAgentSessionWorkStartError(
               params.canonicalSessionKey,
               freshEntry,
             );
             if (archivedError) {
-              archivedDuringStoreUpdateError = archivedError;
-              throw new Error(archivedError);
+              rejectMutation(ErrorCodes.INVALID_REQUEST, archivedError);
             }
             const internalFreshEntry = freshEntry as InternalSessionEntry | undefined;
             if (
               !params.isRestartRecoveryResumeRun &&
               internalFreshEntry &&
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
-                (internalFreshEntry.status === "running" &&
-                  internalFreshEntry.abortedLastRun === true &&
+                (internalFreshEntry.abortedLastRun === true &&
                   getMainSessionRecoveryRetryCount(internalFreshEntry.mainRestartRecovery) >=
                     MAX_RECOVERY_RETRIES))
             ) {
-              restartRecoveryReservationConflict =
+              rejectMutation(
+                ErrorCodes.UNAVAILABLE,
                 `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +
-                "exhaustion; use /new or /reset before starting new work.";
-              throw new Error(restartRecoveryReservationConflict);
+                  "exhaustion; use /new or /reset before starting new work.",
+              );
             }
             let entryForPatch = freshEntry;
             if (params.restoredCronContinuationIdentity) {
@@ -241,8 +221,10 @@ export async function persistAgentSessionPhase(params: {
                   params.restoredCronContinuationIdentity.lifecycleRevision &&
                 freshEntry?.sessionId === params.restoredCronContinuationIdentity.sessionId;
               if (!identityMatches || !freshEntry || !provider || !model) {
-                restoredCronContinuationError = "cron run continuation changed before admission";
-                throw new Error(restoredCronContinuationError);
+                rejectMutation(
+                  ErrorCodes.UNAVAILABLE,
+                  "cron run continuation changed before admission",
+                );
               }
               if (
                 !cronContinuationHasReusableRuntime({
@@ -253,16 +235,17 @@ export async function persistAgentSessionPhase(params: {
                   model,
                 })
               ) {
-                restoredCronContinuationError =
-                  "cron run continuation has no reusable native CLI session";
-                throw new Error(restoredCronContinuationError);
+                rejectMutation(
+                  ErrorCodes.UNAVAILABLE,
+                  "cron run continuation has no reusable native CLI session",
+                );
               }
-              restoredCronContinuationError = resolveCronToolsAllowExecTargetRecoveryError({
+              const restoredCronContinuationError = resolveCronToolsAllowExecTargetRecoveryError({
                 requirement: marker.toolsAllowExecTargetRequirement,
                 execTarget: marker.toolsAllowExecTarget,
               });
               if (restoredCronContinuationError) {
-                throw new Error(restoredCronContinuationError);
+                rejectMutation(ErrorCodes.UNAVAILABLE, restoredCronContinuationError);
               }
               const restoredToolsAllow = restoreCronPinnedExecGrant({
                 toolsAllow: marker.toolsAllow,
@@ -316,13 +299,22 @@ export async function persistAgentSessionPhase(params: {
                 ),
               });
             }
-            patchBuild = params.buildSessionPatch(entryForPatch);
-            const lifecyclePatch =
-              recoveredSessionStartedAt !== undefined &&
-              entryForPatch?.sessionStartedAt === undefined &&
-              entryForPatch?.sessionId === params.entry?.sessionId
-                ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                : patchBuild.patch;
+            patchBuild = await params.buildSessionPatch(entryForPatch);
+            params.assertAdmissionCurrent?.();
+            assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+            if (!freshEntry) {
+              creationAuthorizationError = authorizeGatewaySessionCreation({
+                cfg: params.cfg,
+                agentId: params.sessionAgentId,
+                ...(params.operatorRoleActor
+                  ? { actor: params.operatorRoleActor }
+                  : { profileId: params.requestingOperatorProfileId }),
+              });
+              if (creationAuthorizationError) {
+                throw new Error(creationAuthorizationError.message);
+              }
+            }
+            const lifecyclePatch = patchBuild.patch;
             const previousSessionId = normalizeOptionalString(freshEntry?.sessionId);
             const nextSessionId = normalizeOptionalString(lifecyclePatch.sessionId);
             const rotationLineage =
@@ -379,10 +371,11 @@ export async function persistAgentSessionPhase(params: {
               params.isRestartRecoveryResumeRun &&
               recoveryTransition.kind !== "recovery_validated"
             ) {
-              restartRecoveryReservationConflict =
+              rejectMutation(
+                ErrorCodes.UNAVAILABLE,
                 `Session "${params.canonicalSessionKey}" restart recovery reservation is stale; ` +
-                "recovery was skipped.";
-              throw new Error(restartRecoveryReservationConflict);
+                  "recovery was skipped.",
+              );
             }
             if (recoveryTransition.kind === "foreground_claimed") {
               mainRestartRecoveryOwnerLease = {
@@ -392,7 +385,6 @@ export async function persistAgentSessionPhase(params: {
               params.setMainRestartRecoveryOwnerLease(mainRestartRecoveryOwnerLease);
             }
             if (isDeliveryDenied(merged)) {
-              deniedBySendPolicy = true;
               deniedSessionEntry = merged;
               return null;
             }
@@ -404,11 +396,16 @@ export async function persistAgentSessionPhase(params: {
             replaceEntry: true,
             takeCacheOwnership: true,
             maintenanceConfig: params.maintenanceConfig,
-            assertCommitAllowed: () => {
-              params.assertAdmissionCurrent?.();
-              if (createdNewEntry) {
-                assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
-              }
+            workerGuard: {
+              source: composeSessionSourceAssertion(
+                [params.assertAdmissionCurrent],
+                (assertSource) => {
+                  assertSource();
+                  if (createdNewEntry) {
+                    assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
+                  }
+                },
+              ),
             },
           },
         )) ?? undefined;
@@ -420,25 +417,11 @@ export async function persistAgentSessionPhase(params: {
       if (abortForLifecycleRotation()) {
         return undefined;
       }
-      if (archivedDuringStoreUpdateError) {
-        params.respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, archivedDuringStoreUpdateError),
-        );
-        return undefined;
-      }
-      if (deletedDuringStoreUpdateError) {
-        params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
-        return undefined;
-      }
       if (err instanceof ExpectedExistingSessionChangedError) {
-        params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, err.message));
-        return undefined;
+        mutationError = errorShape(ErrorCodes.UNAVAILABLE, err.message);
       }
-      const unavailableError = restoredCronContinuationError || restartRecoveryReservationConflict;
-      if (unavailableError) {
-        params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, unavailableError));
+      if (mutationError) {
+        params.respond(false, undefined, mutationError);
         return undefined;
       }
       throw err;
@@ -446,7 +429,7 @@ export async function persistAgentSessionPhase(params: {
     if (abortForLifecycleRotation()) {
       return undefined;
     }
-    if (deniedBySendPolicy && deniedSessionEntry) {
+    if (deniedSessionEntry) {
       sessionEntry = deniedSessionEntry;
       resolvedSessionId = sessionEntry.sessionId;
     } else if (persisted) {
@@ -462,7 +445,7 @@ export async function persistAgentSessionPhase(params: {
       supersededSessionId = params.entry.sessionId;
     }
     const admittedSessionId = resolvedSessionId ?? params.runId;
-    params.updateAdmissionState({
+    Object.assign(params.state, {
       resolvedSessionId,
       admittedSessionId,
       supersededSessionId,
@@ -478,19 +461,14 @@ export async function persistAgentSessionPhase(params: {
       return undefined;
     }
     skipAgentInitialSessionTouch = params.touchInteraction;
-    if (deniedBySendPolicy) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-      );
-      return undefined;
+    if (deniedSessionEntry) {
+      return rejectDelivery();
     }
   }
 
   const { isNewSession, rotatedSessionId, usableRequestedSessionId, freshness } = patchBuild;
   if (createdNewEntry && sessionEntry) {
-    recordSessionCreated(params.cfg, {
+    await recordSessionCreated(params.cfg, {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,
@@ -507,29 +485,42 @@ export async function persistAgentSessionPhase(params: {
     !patchBuild.freshSessionRotatedSinceLoad
   ) {
     const previousSessionId = rotatedSessionId ? params.entry?.sessionId : undefined;
-    emitAgentSendSessionLifecycleTransition({
+    if (previousSessionId) {
+      emitGatewaySessionEndPluginHook({
+        cfg: params.cfg,
+        sessionKey: params.canonicalSessionKey,
+        sessionId: previousSessionId,
+        storePath: params.storePath,
+        sessionFile: undefined,
+        agentId: params.sessionAgentId,
+        workspaceDir: params.entry?.spawnedWorkspaceDir,
+        reason:
+          freshness?.staleReason ??
+          (usableRequestedSessionId && params.entry?.sessionId !== usableRequestedSessionId
+            ? "new"
+            : "unknown"),
+        nextSessionId: resolvedSessionId,
+        nextSessionKey: params.canonicalSessionKey,
+        endedTranscript: createClosedSessionTranscriptSource({
+          agentId: params.sessionAgentId,
+          sessionId: previousSessionId,
+          sessionKey: params.canonicalSessionKey,
+          storePath: params.storePath,
+        }),
+      });
+    }
+    emitGatewaySessionStartPluginHook({
       cfg: params.cfg,
       sessionKey: params.canonicalSessionKey,
       sessionId: resolvedSessionId,
+      resumedFrom: previousSessionId,
       storePath: params.storePath,
+      sessionFile: undefined,
       agentId: params.sessionAgentId,
-      workspaceDir: params.entry?.spawnedWorkspaceDir,
-      previousSessionId,
-      previousEndReason: previousSessionId
-        ? (freshness?.staleReason ??
-          (usableRequestedSessionId && params.entry?.sessionId !== usableRequestedSessionId
-            ? "new"
-            : "unknown"))
-        : undefined,
     });
   }
   if (isDeliveryDenied(sessionEntry)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-    );
-    return undefined;
+    return rejectDelivery();
   }
   const isMainSession =
     !params.suppressVisibleSessionEffects &&
@@ -541,7 +532,7 @@ export async function persistAgentSessionPhase(params: {
     sessionPersistedBeforeGatewayAdmission,
     supersededSessionId,
     // Admission revalidation can observe a newer session id after persistence.
-    admittedSessionId: params.getAdmittedSessionId(),
+    admittedSessionId: params.state.admittedSessionId,
     skipAgentInitialSessionTouch,
     isNewSession,
     spawnedBy: patchBuild.spawnedBy,
@@ -557,7 +548,7 @@ export async function persistAgentSessionPhase(params: {
     bestEffortDeliver:
       isMainSession && params.requestedBestEffortDeliver === undefined
         ? true
-        : params.bestEffortDeliver,
+        : params.state.bestEffortDeliver,
     restoredCronContinuation,
   };
 }

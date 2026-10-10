@@ -171,13 +171,6 @@ Options:
 `);
 }
 
-function readJsonIfExists(filePath: string): unknown {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
 function parseStartupReport(report: unknown) {
   if (!isRecord(report)) {
     throw new Error("startup report must be a JSON object");
@@ -223,7 +216,7 @@ function readBenchReport<T>(
     return {
       diagnosticFailure: null,
       diagnosticDetail: null,
-      report: parse(readJsonIfExists(output)),
+      report: parse(JSON.parse(fs.readFileSync(output, "utf8"))),
     };
   } catch (error) {
     return {
@@ -286,15 +279,6 @@ function runStep(
     signal: result.signal ?? null,
     ...(error ? { error } : {}),
   };
-}
-
-function pnpmCommand(args: string[], params: Pick<GatewayCpuRunParams, "cwd" | "env"> = {}) {
-  return createPnpmRunnerSpawnSpec({
-    cwd: params.cwd ?? process.cwd(),
-    env: params.env ?? process.env,
-    pnpmArgs: args,
-    stdio: "inherit",
-  });
 }
 
 function toRepoRelativePath(repoRoot: string, absolutePath: string): string {
@@ -461,8 +445,11 @@ async function runGatewayCpuScenarios(
 
   let qaStep = null;
   if (!options.skipQa) {
-    const qaCommand = pnpmCommand(
-      [
+    const qaCommand = createPnpmRunnerSpawnSpec({
+      cwd: repoRoot,
+      env: qaBuildEnv,
+      stdio: "inherit",
+      pnpmArgs: [
         "openclaw",
         "qa",
         "suite",
@@ -474,8 +461,7 @@ async function runGatewayCpuScenarios(
         qaOutputArg,
         ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
       ],
-      { cwd: repoRoot, env: qaBuildEnv },
-    );
+    });
     qaStep = privateQaBuildFailed
       ? { name: "qa suite", signal: null, status: 1 }
       : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params);
@@ -601,9 +587,6 @@ async function main(params: GatewayCpuRunParams = {}) {
   }
 }
 
-/**
- * Test-only access to the gateway CPU scenario parser and runner helpers.
- */
 export const testing = {
   parseArgs,
   runGatewayCpuScenarios,

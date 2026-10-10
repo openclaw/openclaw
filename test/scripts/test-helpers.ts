@@ -6,6 +6,13 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
+export function copyOxlintConfigFixture(root: string): void {
+  fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+  // Oxlint loads configured JS plugins even when the selected files are outside their scope.
+  fs.mkdirSync(path.join(root, "tools"), { recursive: true });
+  fs.symlinkSync(path.resolve("tools/solid-lint"), path.join(root, "tools/solid-lint"), "junction");
+}
+
 export function linkPnpmBootstrapShellTools(binDir: string): void {
   // Omit package managers: absence must not depend on the host's installed tools.
   for (const name of [

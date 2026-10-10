@@ -1,9 +1,12 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import type {
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderPlugin,
 } from "../plugins/types.js";
 import {
+  buildDefaultLiveModelCatalogHeaders,
   fetchLiveProviderModelIds,
   getCachedLiveProviderModelRows,
   getCachedUpstreamProviderCatalog,
@@ -11,16 +14,20 @@ import {
   type FetchLiveProviderModelIdsParams,
   type FetchLiveProviderModelRowsParams,
   type LiveModelCatalogFetchGuard,
+  type LiveModelCatalogHeaderContext,
   type LiveModelRowProjection,
 } from "./provider-catalog-live-acquisition.internal.js";
-import { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
+import {
+  buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogId,
+  type ProjectedUpstreamProviderCatalogModel,
+} from "./provider-catalog-live-normalize.internal.js";
 import {
   LiveModelCatalogHttpError,
   runLiveProviderCatalog,
 } from "./provider-catalog-live-outcome.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
-  getCachedLiveCatalogValue,
   type ManifestProviderCatalogEntry,
 } from "./provider-catalog-shared.js";
 import {
@@ -51,6 +58,7 @@ export type {
 } from "./provider-catalog-live-acquisition.internal.js";
 export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
+  buildOpenAICompatibleLiveModels,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,
@@ -74,7 +82,10 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     models: readonly T[];
     ttlMs?: number;
     cacheKeyParts?: readonly unknown[];
-    /** Provider-owned projection for catalogs that publish richer metadata than model ids. */
+    /**
+     * Provider-owned projection for catalogs that publish richer metadata than model ids.
+     * Defaults to the shared chat classifier, which keeps unfamiliar listed chat models.
+     */
     projectRows?: LiveModelRowProjection<T>;
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
     fallbackToAnonymousOnUnauthorized?: boolean;
@@ -128,15 +139,19 @@ function matchesProviderCatalogScope(
   );
 }
 
-function buildProviderConfig<T extends ModelDefinitionConfig>(
-  params: BuildLiveModelProviderConfigParams<T>,
-  models: readonly T[],
-): ModelProviderConfig {
-  return {
-    ...params.providerConfig,
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-    models: [...models],
-  };
+// The id selector decides which rows are models and what they are called; the
+// shared classifier then drops non-chat rows and enriches catalogued ids.
+function projectSelectedLiveModelRows(
+  readModelId: (row: unknown) => string | undefined,
+): LiveModelRowProjection {
+  return (rows, fallback) =>
+    buildOpenAICompatibleLiveModels(
+      rows.flatMap((row) => {
+        const id = readModelId(row);
+        return id ? [{ ...asOptionalRecord(row), id }] : [];
+      }),
+      fallback,
+    );
 }
 
 async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
@@ -180,12 +195,16 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
 export async function buildLiveModelProviderConfig<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T>,
 ): Promise<ModelProviderConfig> {
-  const fallback = buildProviderConfig(params, params.models);
+  const fallback: ModelProviderConfig = {
+    ...params.providerConfig,
+    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
+    models: [...params.models],
+  };
   const cacheKeyParts =
     params.discoveryMode === "strict"
       ? [
           params.providerId,
-          params.projectRows ? "model-rows" : "models",
+          "model-rows",
           params.endpoint,
           liveModelCatalogAuthCacheKey(params),
           "strict",
@@ -193,34 +212,18 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
         ]
       : params.cacheKeyParts;
   try {
-    if (params.projectRows) {
-      const models = await projectCachedLiveModelRows({
-        ...params,
-        cacheKeyParts,
-        fallback,
-        projectRows: params.projectRows,
-      });
-      if (models.length > 0 || params.discoveryMode === "strict") {
-        return { ...fallback, models: [...models] };
-      }
-      return fallback;
-    }
-    const liveModelIds = await getCachedLiveCatalogValue({
-      keyParts: cacheKeyParts ?? [
-        params.providerId,
-        "models",
-        params.endpoint,
-        liveModelCatalogAuthCacheKey(params),
-      ],
-      ttlMs: params.ttlMs,
-      signal: params.signal,
-      load: async (signal) => await fetchLiveProviderModelIds({ ...params, signal }),
-      shouldCache: (modelIds) => modelIds.length > 0 || params.discoveryMode === "strict",
+    // The authenticated listing owns model existence; static rows only enrich
+    // listed ids, so unfamiliar chat models appear without a release.
+    const models = await projectCachedLiveModelRows<ModelDefinitionConfig>({
+      ...params,
+      cacheKeyParts,
+      fallback,
+      projectRows:
+        params.projectRows ??
+        projectSelectedLiveModelRows(params.readModelId ?? readLiveModelCatalogId),
     });
-    const liveModelIdSet = new Set(liveModelIds);
-    const models = params.models.filter((model) => liveModelIdSet.has(model.id));
     if (models.length > 0 || params.discoveryMode === "strict") {
-      return buildProviderConfig(params, models);
+      return { ...fallback, models: [...models] };
     }
   } catch (error) {
     if (params.discoveryMode === "strict") {
@@ -249,10 +252,29 @@ export function createUpstreamProviderCatalog(params: {
   timeoutMs: number;
   ttlMs: number;
   auditContext: string;
+  starterModelAuditContext: string;
   isStaticEntryActive: (entry: ReturnType<ProviderCatalogSnapshot["get"]>) => boolean;
   decorateModel?: Parameters<typeof projectUpstreamProviderCatalogSnapshot>[0]["decorateModel"];
+  /** Selects listed models from account rows. Defaults to active entries in the snapshot. */
+  projectRows?: (
+    rows: readonly unknown[],
+    snapshot: ProviderCatalogSnapshot,
+  ) => ProjectedUpstreamProviderCatalogModel[];
 }) {
   let snapshot = params.seed;
+  const projectRows = params.projectRows ?? projectProviderCatalogSnapshotRows;
+  // Discovery identifies the client the same way inference does; the attribution
+  // owner decides which providers and endpoints receive those headers.
+  const buildRequestHeaders = (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
+    ...resolveProviderRequestHeaders({
+      provider: params.providerId,
+      api: params.providerConfig.api,
+      baseUrl: params.providerConfig.baseUrl,
+      capability: "llm",
+      transport: "http",
+    }),
+    ...buildDefaultLiveModelCatalogHeaders(ctx),
+  });
   const buildStaticProvider = (apiKey?: string): ModelProviderConfig => ({
     ...params.providerConfig,
     ...(apiKey ? { apiKey } : {}),
@@ -286,7 +308,28 @@ export function createUpstreamProviderCatalog(params: {
     getSnapshot: () => snapshot,
     buildStaticProvider,
     refreshMetadata,
+    async resolveStarterModel(
+      this: void,
+      request: Pick<UpstreamProviderCatalogRequest, "fetchGuard" | "signal"> & {
+        apiKey: string;
+        preferredModelRef: string;
+      },
+    ): Promise<string | undefined> {
+      const liveModelIds = await fetchLiveProviderModelIds({
+        providerId: params.providerId,
+        endpoint: params.modelsEndpoint,
+        discoveryApiKey: request.apiKey,
+        fetchGuard: request.fetchGuard,
+        signal: request.signal,
+        timeoutMs: params.timeoutMs,
+        auditContext: params.starterModelAuditContext,
+        buildRequestHeaders,
+      });
+      const preferredModelId = request.preferredModelRef.replace(`${params.providerId}/`, "");
+      return liveModelIds.includes(preferredModelId) ? request.preferredModelRef : undefined;
+    },
     async buildLiveProvider(
+      this: void,
       request: UpstreamProviderCatalogRequest = {},
     ): Promise<ModelProviderConfig> {
       if (!request.apiKey && !request.discoveryApiKey) {
@@ -312,7 +355,8 @@ export function createUpstreamProviderCatalog(params: {
         timeoutMs: params.timeoutMs,
         ttlMs: params.ttlMs,
         auditContext: params.auditContext,
-        projectRows: (rows) => projectProviderCatalogSnapshotRows(rows, snapshot),
+        buildRequestHeaders,
+        projectRows: (rows) => projectRows(rows, snapshot),
       });
     },
   };

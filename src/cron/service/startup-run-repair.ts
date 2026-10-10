@@ -4,11 +4,10 @@ import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -87,6 +86,15 @@ export function markInterruptedStartupRun(params: {
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
+  // Only startup recovery with durable evidence of no delivery handoff may replay
+  // a started one-shot; an operator's distinct replacement stays scheduled.
+  if (
+    job.schedule.kind === "at" &&
+    replacementAtMs === undefined &&
+    !params.recoverInterruptedOneShot
+  ) {
+    job.enabled = false;
+  }
   finalizeCronFailureNotifications(params.state, {
     job,
     alertConfig,
@@ -99,16 +107,6 @@ export function markInterruptedStartupRun(params: {
     autoDisableNotificationOwnsFailure,
     deferredNotifications: params.deferredNotifications,
   });
-
-  // Only startup recovery with durable evidence of no delivery handoff may replay
-  // a started one-shot; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
-    job.enabled = false;
-  }
 
   return {
     jobId: job.id,

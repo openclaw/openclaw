@@ -4,6 +4,7 @@ import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { createSidebarFooterProofSuite } from "./sidebar-footer-proof.test-support.ts";
 
 const suite = createSidebarFooterProofSuite("Sidebar identity name overflow");
@@ -14,12 +15,12 @@ const names: Array<{
   overflow: boolean;
   rtl: boolean;
   workspace?: boolean;
+  keyboard?: boolean;
 }> = [
   { kind: "short", name: "Riley", overflow: false, rtl: false },
   { kind: "long", name: longName, overflow: true, rtl: false },
   { kind: "workspace", name: longName, overflow: true, rtl: false, workspace: true },
-  { kind: "very long", name: `${longName} · ${longName}`, overflow: true, rtl: false },
-  { kind: "emoji", name: `🧑🏽‍🚀 Riley 🔬 ${longName}`, overflow: true, rtl: false },
+  { kind: "keyboard", name: longName, overflow: true, rtl: false, keyboard: true },
   {
     kind: "RTL",
     name: "فريق البحث والتطوير والتعاون في المشاريع العلمية الطويلة",
@@ -77,10 +78,17 @@ async function openNames(page: Page, name: string, workspace = false) {
   });
   await page.goto(`${suite.server.baseUrl}chat`);
   const sidebar = page.locator("openclaw-app-sidebar");
-  const labels = [
-    sidebar.locator(".sidebar-identity-card__name"),
-    sidebar.locator(".sidebar-agent-card__name-text"),
-  ];
+  // The rail account control is icon-only; only the middle-column identity owns visible text.
+  const account = sidebar.locator(".sidebar-identity-card");
+  await expect.poll(() => account.getAttribute("aria-label")).toContain(name);
+  await expect.poll(() => sidebar.locator(".sidebar-identity-card__name").textContent()).toBe(name);
+  expect(
+    await sidebar.locator(".sidebar-identity-card__text").evaluate((element) => ({
+      width: element.getBoundingClientRect().width,
+      clipPath: getComputedStyle(element).clipPath,
+    })),
+  ).toEqual({ width: 1, clipPath: "inset(50%)" });
+  const labels = [sidebar.locator(".sidebar-agent-card__name-text")];
   for (const label of labels) {
     await expect.poll(() => label.textContent()).toBe(name);
   }
@@ -131,8 +139,8 @@ async function seekName(label: Locator, iteration: number) {
 
 suite.define(() => {
   it.each(names)(
-    "reveals the $kind name without moving either identity control",
-    async ({ name, overflow, rtl, workspace }) => {
+    "reveals accessible $kind names with the expected motion",
+    async ({ name, overflow, rtl, workspace, keyboard }) => {
       await suite.withPage(
         { viewport: { width: 1440, height: 900 }, reducedMotion: "no-preference" },
         async ({ page }) => {
@@ -144,6 +152,20 @@ suite.define(() => {
             await expect.poll(async () => (await readName(label)).mask !== "none").toBe(overflow);
             expect((await readName(label)).animating).toBe(false);
             expect(await button.getAttribute("aria-label")).toContain(name);
+            if (keyboard) {
+              await page.keyboard.press("Tab");
+              await button.focus();
+              expect(await button.evaluate((element) => element.matches(":focus-visible"))).toBe(
+                true,
+              );
+              await expect.poll(async () => (await readName(label)).animating).toBe(true);
+              await page.emulateMedia({ reducedMotion: "reduce" });
+              await expect.poll(async () => (await readName(label)).animating).toBe(false);
+              expect((await readName(label)).x).toBe(0);
+              expect(await button.getAttribute("aria-label")).toContain(name);
+              await page.emulateMedia({ reducedMotion: "no-preference" });
+              continue;
+            }
             const bounds = await button.boundingBox();
             await button.hover();
             if (!overflow) {
@@ -171,28 +193,6 @@ suite.define(() => {
     },
   );
 
-  it("reveals names for keyboard focus and keeps reduced-motion names static and accessible", async () => {
-    await suite.withPage(
-      { viewport: { width: 1440, height: 900 }, reducedMotion: "no-preference" },
-      async ({ page }) => {
-        const labels = await openNames(page, longName);
-        await page.mouse.move(1400, 850);
-        for (const label of labels) {
-          const button = label.locator("xpath=ancestor::button[1]");
-          await page.keyboard.press("Tab");
-          await button.focus();
-          expect(await button.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
-          await expect.poll(async () => (await readName(label)).animating).toBe(true);
-          await page.emulateMedia({ reducedMotion: "reduce" });
-          await expect.poll(async () => (await readName(label)).animating).toBe(false);
-          expect((await readName(label)).x).toBe(0);
-          expect(await button.getAttribute("aria-label")).toContain(longName);
-          await page.emulateMedia({ reducedMotion: "no-preference" });
-        }
-      },
-    );
-  });
-
   it("stops touch name animations when the mobile drawer closes and restores them on reopening", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion: "no-preference" },
@@ -208,11 +208,13 @@ suite.define(() => {
             .poll(() => button.evaluate((element) => element.getBoundingClientRect().left >= 0))
             .toBe(true);
           await expect.poll(async () => (await readName(label)).overflow).toBe(true);
+          expect((await readName(label)).animating).toBe(false);
           await button.tap();
           await expect.poll(() => button.getAttribute("aria-expanded")).toBe("true");
           await expect.poll(async () => (await readName(label)).animating).toBe(true);
           await page.keyboard.press("Escape");
           await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
+          await page.keyboard.press("Escape");
           await expect
             .poll(() => button.evaluate((element) => element.getBoundingClientRect().right <= 0))
             .toBe(true);
@@ -221,6 +223,8 @@ suite.define(() => {
           await toggle.tap();
           await button.tap();
           await expect.poll(async () => (await readName(label)).animating).toBe(true);
+          await page.keyboard.press("Escape");
+          await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
           await page.keyboard.press("Escape");
           await expect
             .poll(() => button.evaluate((element) => element.getBoundingClientRect().right <= 0))
@@ -231,16 +235,21 @@ suite.define(() => {
     );
   });
 
-  it("uses the existing account-menu tap to reveal an overflowing name on touch", async () => {
+  it("uses the icon-only account control to reveal the full profile name on touch", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, hasTouch: true, reducedMotion: "no-preference" },
       async ({ page }) => {
-        const [label] = await openNames(page, longName);
-        const button = label!.locator("xpath=ancestor::button[1]");
-        expect((await readName(label!)).animating).toBe(false);
+        await openNames(page, longName);
+        const button = page.locator(".sidebar-identity-card");
+        const bounds = await button.boundingBox();
         await button.tap();
         await expect.poll(() => button.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(async () => (await readName(label!)).animating).toBe(true);
+        const name = page.locator(".sidebar-identity-menu__name");
+        await name.waitFor();
+        expect(await name.textContent()).toBe(longName);
+        expect(await tooltipTitleText(name)).toBe(longName);
+        expect(await button.getAttribute("aria-label")).toContain(longName);
+        expect(await button.boundingBox()).toEqual(bounds);
         await page.keyboard.press("Escape");
         await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
       },

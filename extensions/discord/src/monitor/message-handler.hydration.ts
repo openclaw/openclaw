@@ -61,11 +61,9 @@ function resolveReferencedMessagePayloadState(message: Message): ReferencedMessa
     : "missing";
 }
 
-async function hydrateDiscordReplyReference(params: {
-  client: Pick<Client, "rest" | "fetchUser">;
-  message: Message;
-  messageChannelId: string;
-}): Promise<Message> {
+async function hydrateDiscordReplyReference(
+  params: Parameters<typeof hydrateDiscordMessageIfNeeded>[0],
+): Promise<Message> {
   const payloadState = resolveReferencedMessagePayloadState(params.message);
   if (payloadState === "complete") {
     return params.message;

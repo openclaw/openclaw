@@ -1,6 +1,5 @@
-// Gateway node catalog builder.
-// Merges paired devices, approved node records, and live websocket sessions.
 import {
+  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -26,54 +25,9 @@ function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): s
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
-// Catalog scalars come from blind-cast pairing records, so coerce every formatter-facing optional
-// string scalar to a trimmed string or undefined: a non-string would crash `nodes status`/`nodes
-// list` formatters (.trim(), sanitizeTerminalText/stripAnsi). Scalar analog of uniqueSortedStrings.
+// Persisted pairing metadata may be malformed; let valid lower-priority strings win.
 function firstNormalizedString(...values: unknown[]): string | undefined {
-  // Treat a non-string (or empty) higher-priority value as ABSENT and fall through, instead of
-  // letting `find` pick the first non-null value and normalize it to undefined — which would
-  // suppress a valid lower-priority string. Return the first value that yields a trimmed string.
-  for (const value of values) {
-    const normalized = normalizeOptionalString(value);
-    if (normalized !== undefined) {
-      return normalized;
-    }
-  }
-  return undefined;
-}
-
-// Blind-cast pairing records can carry a non-string id; a node with no addressable string
-// id is unusable and would crash the id-based catalog sort/format, so drop it entirely.
-function hasAddressableId(value: unknown): boolean {
-  return normalizeOptionalString(value) !== undefined;
-}
-
-function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePendingSource {
-  return {
-    ...entry,
-    caps: uniqueSortedStrings(entry.caps),
-    commands: filterPublicNodeCommands(uniqueSortedStrings(entry.commands)),
-  };
-}
-
-function resolveCurrentPendingNodePairing(params: {
-  pending?: KnownNodePendingSource;
-  nodePairing?: PairedDeviceNode;
-  live?: NodeSession;
-}): KnownNodePendingSource | undefined {
-  const { pending, nodePairing, live } = params;
-  if (!pending || !live) {
-    return pending;
-  }
-  const declaredPermissions =
-    !nodePairing && live.declaredPermissions === undefined
-      ? pending.permissions
-      : live.declaredPermissions;
-  return sameNodeApprovalSurfaceSet(pending.caps, live.declaredCaps) &&
-    sameNodeApprovalSurfaceSet(pending.commands, live.declaredCommands) &&
-    sameNodePermissionSurface(pending.permissions, declaredPermissions)
-    ? pending
-    : undefined;
+  return normalizeOptionalString(values.find(hasNonEmptyString));
 }
 
 function maxDefinedTimestamp(...values: Array<number | undefined>): number | undefined {
@@ -81,23 +35,23 @@ function maxDefinedTimestamp(...values: Array<number | undefined>): number | und
   return defined.length > 0 ? Math.max(...defined) : undefined;
 }
 
-function resolveEffectiveLastSeen(params: {
-  live?: NodeSession;
-  devicePairing?: PairedDevice;
-  nodePairing?: PairedDeviceNode;
-}): { lastSeenAtMs?: number; lastSeenReason?: string } {
+function resolveEffectiveLastSeen(
+  live: NodeSession | undefined,
+  devicePairing: PairedDevice | undefined,
+  nodePairing: PairedDeviceNode | undefined,
+): { lastSeenAtMs?: number; lastSeenReason?: string } {
   // Live connected time is the freshest signal; stored last-seen values fill in
   // disconnected rows without letting stale device-pairing data override nodes.
   const candidates: Array<{ atMs: number; reason?: string }> = [
-    params.live?.connectedAtMs ? { atMs: params.live.connectedAtMs, reason: "connect" } : undefined,
-    params.nodePairing?.lastSeenAtMs
-      ? { atMs: params.nodePairing.lastSeenAtMs, reason: params.nodePairing.lastSeenReason }
+    live?.connectedAtMs ? { atMs: live.connectedAtMs, reason: "connect" } : undefined,
+    nodePairing?.lastSeenAtMs
+      ? { atMs: nodePairing.lastSeenAtMs, reason: nodePairing.lastSeenReason }
       : undefined,
-    params.nodePairing?.lastConnectedAtMs
-      ? { atMs: params.nodePairing.lastConnectedAtMs, reason: "connect" }
+    nodePairing?.lastConnectedAtMs
+      ? { atMs: nodePairing.lastConnectedAtMs, reason: "connect" }
       : undefined,
-    params.devicePairing?.lastSeenAtMs
-      ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
+    devicePairing?.lastSeenAtMs
+      ? { atMs: devicePairing.lastSeenAtMs, reason: devicePairing.lastSeenReason }
       : undefined,
   ].filter((entry) => entry !== undefined);
   let newest: { atMs: number; reason?: string } | undefined;
@@ -112,130 +66,6 @@ function resolveEffectiveLastSeen(params: {
   return {
     lastSeenAtMs: newest.atMs,
     lastSeenReason: normalizeOptionalString(newest.reason),
-  };
-}
-
-function buildEffectiveKnownNode(entry: {
-  nodeId: string;
-  devicePairing?: PairedDevice;
-  nodePairing?: PairedDeviceNode;
-  approvedCommands?: string[];
-  pendingNodePairing?: KnownNodePendingSource;
-  live?: NodeSession;
-  sessionHost: boolean;
-  workerSlots?: NodeListNode["workerSlots"];
-  workerBundle?: NodeListNode["workerBundle"];
-  issues?: NodeListNode["issues"];
-}): NodeListNode {
-  const {
-    nodeId,
-    devicePairing,
-    nodePairing,
-    pendingNodePairing,
-    live,
-    sessionHost,
-    workerSlots,
-    workerBundle,
-    issues,
-  } = entry;
-  const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
-  const lastConnectedAtMs = maxDefinedTimestamp(
-    nodePairing?.lastConnectedAtMs,
-    live?.connectedAtMs,
-  );
-  const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
-  const hostStats = live ? live.hostStats : nodePairing?.lastHostStats;
-  return {
-    nodeId,
-    displayName: firstNormalizedString(
-      // The approved surface owns the operator's rename. Live metadata is a
-      // fallback only, or every reconnect would temporarily undo that choice.
-      nodePairing?.displayName,
-      live?.displayName,
-      devicePairing?.displayName,
-      pendingNodePairing?.displayName,
-    ),
-    platform: firstNormalizedString(
-      live?.platform,
-      nodePairing?.platform,
-      devicePairing?.platform,
-      pendingNodePairing?.platform,
-    ),
-    version: firstNormalizedString(
-      live?.version,
-      nodePairing?.version,
-      pendingNodePairing?.version,
-    ),
-    coreVersion: firstNormalizedString(
-      live?.coreVersion,
-      nodePairing?.coreVersion,
-      pendingNodePairing?.coreVersion,
-    ),
-    uiVersion: firstNormalizedString(
-      live?.uiVersion,
-      nodePairing?.uiVersion,
-      pendingNodePairing?.uiVersion,
-    ),
-    clientId: firstNormalizedString(
-      live?.clientId,
-      devicePairing?.clientId,
-      pendingNodePairing?.clientId,
-    ),
-    clientMode: firstNormalizedString(
-      live?.clientMode,
-      devicePairing?.clientMode,
-      pendingNodePairing?.clientMode,
-    ),
-    deviceFamily: firstNormalizedString(
-      live?.deviceFamily,
-      nodePairing?.deviceFamily,
-      pendingNodePairing?.deviceFamily,
-    ),
-    modelIdentifier: firstNormalizedString(
-      live?.modelIdentifier,
-      nodePairing?.modelIdentifier,
-      pendingNodePairing?.modelIdentifier,
-    ),
-    remoteIp: firstNormalizedString(
-      live?.remoteIp,
-      nodePairing?.remoteIp,
-      devicePairing?.remoteIp,
-      pendingNodePairing?.remoteIp,
-    ),
-    caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
-    commands: filterPublicNodeCommands(
-      live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(entry.approvedCommands),
-    ),
-    computerUse: live?.computerUse,
-    sessionHost,
-    ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
-    ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
-    ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
-    ...(issues?.length ? { issues: [...issues] } : {}),
-    nodePluginTools: live?.nodePluginTools,
-    pathEnv: live?.pathEnv,
-    permissions: live?.permissions ?? nodePairing?.permissions,
-    approvalState: pendingNodePairing
-      ? nodePairing
-        ? "pending-reapproval"
-        : "pending-approval"
-      : nodePairing
-        ? "approved"
-        : "unapproved",
-    pendingRequestId: pendingNodePairing?.requestId,
-    pendingDeclaredCaps: pendingNodePairing?.caps,
-    pendingDeclaredCommands: pendingNodePairing?.commands,
-    pendingDeclaredPermissions: pendingNodePairing?.permissions,
-    connectedAtMs: live?.connectedAtMs,
-    lastConnectedAtMs,
-    lastDisconnectedAtMs,
-    lastActiveAtMs: live?.lastActiveAtMs,
-    presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
-    lastSeenAtMs: lastSeen.lastSeenAtMs,
-    lastSeenReason: lastSeen.lastSeenReason,
-    approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
-    paired: Boolean(devicePairing ?? nodePairing),
-    connected: Boolean(live),
   };
 }
 
@@ -254,7 +84,6 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
-/** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly PairedDeviceNode[];
@@ -268,7 +97,7 @@ export function createKnownNodeCatalog(params: {
   const devicePairingById = new Map(
     params.pairedDevices
       .filter(
-        (entry) => hasAddressableId(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
+        (entry) => hasNonEmptyString(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
       )
       .map((entry) => [entry.deviceId, entry]),
   );
@@ -276,7 +105,7 @@ export function createKnownNodeCatalog(params: {
   // session supplies the effective commands. The remaining metadata needs no copy.
   const nodePairingById = new Map(
     (params.pairedNodes ?? [])
-      .filter((entry) => hasAddressableId(entry.nodeId))
+      .filter((entry) => hasNonEmptyString(entry.nodeId))
       .map((entry) => [
         entry.nodeId,
         { node: entry, commands: filterPublicNodeCommands(entry.commands ?? []) },
@@ -285,11 +114,15 @@ export function createKnownNodeCatalog(params: {
   const pendingNodePairingById = new Map<string, KnownNodePendingSource>();
   // listNodePairing returns newest requests first; keep the current approval action per node.
   for (const entry of params.pendingNodes ?? []) {
-    if (!hasAddressableId(entry.nodeId)) {
+    if (!hasNonEmptyString(entry.nodeId)) {
       continue;
     }
     if (!pendingNodePairingById.has(entry.nodeId)) {
-      pendingNodePairingById.set(entry.nodeId, buildPendingNodeSource(entry));
+      pendingNodePairingById.set(entry.nodeId, {
+        ...entry,
+        caps: uniqueSortedStrings(entry.caps),
+        commands: filterPublicNodeCommands(uniqueSortedStrings(entry.commands)),
+      });
     }
   }
   const liveById = new Map(params.connectedNodes.map((entry) => [entry.nodeId, entry]));
@@ -305,30 +138,109 @@ export function createKnownNodeCatalog(params: {
     const approved = nodePairingById.get(nodeId);
     const nodePairing = approved?.node;
     const live = liveById.get(nodeId);
-    const pendingNodePairing = resolveCurrentPendingNodePairing({
-      pending: pendingNodePairingById.get(nodeId),
-      nodePairing,
-      live,
-    });
-    catalog.set(
-      nodeId,
-      buildEffectiveKnownNode({
-        nodeId,
-        devicePairing,
-        nodePairing,
-        approvedCommands: approved?.commands,
-        pendingNodePairing,
-        live,
-        // Live inventory is authoritative while connected; stored consent is
-        // only the offline identity hint and never carries live capacity.
-        sessionHost: live
-          ? params.sessionHostNodeIds?.has(nodeId) === true
-          : nodePairing?.sessionHost === true,
-        workerSlots: params.workerSlotsByNodeId?.get(nodeId),
-        workerBundle: params.workerBundleByNodeId?.get(nodeId),
-        issues: params.issuesByNodeId?.get(nodeId),
-      }),
+    let pendingNodePairing = pendingNodePairingById.get(nodeId);
+    if (pendingNodePairing && live) {
+      const declaredPermissions =
+        !nodePairing && live.declaredPermissions === undefined
+          ? pendingNodePairing.permissions
+          : live.declaredPermissions;
+      if (
+        !sameNodeApprovalSurfaceSet(pendingNodePairing.caps, live.declaredCaps) ||
+        !sameNodeApprovalSurfaceSet(pendingNodePairing.commands, live.declaredCommands) ||
+        !sameNodePermissionSurface(pendingNodePairing.permissions, declaredPermissions)
+      ) {
+        pendingNodePairing = undefined;
+      }
+    }
+    const workerSlots = params.workerSlotsByNodeId?.get(nodeId);
+    const workerBundle = params.workerBundleByNodeId?.get(nodeId);
+    const issues = params.issuesByNodeId?.get(nodeId);
+    const lastSeen = resolveEffectiveLastSeen(live, devicePairing, nodePairing);
+    const lastConnectedAtMs = maxDefinedTimestamp(
+      nodePairing?.lastConnectedAtMs,
+      live?.connectedAtMs,
     );
+    const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
+    const hostStats = live ? live.hostStats : nodePairing?.lastHostStats;
+    const nodeMetadata = (
+      key: "version" | "coreVersion" | "uiVersion" | "deviceFamily" | "modelIdentifier",
+    ) => firstNormalizedString(live?.[key], nodePairing?.[key], pendingNodePairing?.[key]);
+    catalog.set(nodeId, {
+      nodeId,
+      displayName: firstNormalizedString(
+        // The approved surface owns the operator's rename. Live metadata is a
+        // fallback only, or every reconnect would temporarily undo that choice.
+        nodePairing?.displayName,
+        live?.displayName,
+        devicePairing?.displayName,
+        pendingNodePairing?.displayName,
+      ),
+      platform: firstNormalizedString(
+        live?.platform,
+        nodePairing?.platform,
+        devicePairing?.platform,
+        pendingNodePairing?.platform,
+      ),
+      version: nodeMetadata("version"),
+      coreVersion: nodeMetadata("coreVersion"),
+      uiVersion: nodeMetadata("uiVersion"),
+      clientId: firstNormalizedString(
+        live?.clientId,
+        devicePairing?.clientId,
+        pendingNodePairing?.clientId,
+      ),
+      clientMode: firstNormalizedString(
+        live?.clientMode,
+        devicePairing?.clientMode,
+        pendingNodePairing?.clientMode,
+      ),
+      deviceFamily: nodeMetadata("deviceFamily"),
+      modelIdentifier: nodeMetadata("modelIdentifier"),
+      remoteIp: firstNormalizedString(
+        live?.remoteIp,
+        nodePairing?.remoteIp,
+        devicePairing?.remoteIp,
+        pendingNodePairing?.remoteIp,
+      ),
+      caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
+      commands: filterPublicNodeCommands(
+        live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(approved?.commands),
+      ),
+      computerUse: live?.computerUse,
+      // Live inventory is authoritative while connected; stored consent is
+      // only the offline identity hint and never carries live capacity.
+      sessionHost: live
+        ? params.sessionHostNodeIds?.has(nodeId) === true
+        : nodePairing?.sessionHost === true,
+      ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
+      ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
+      ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
+      ...(issues?.length ? { issues: [...issues] } : {}),
+      nodePluginTools: live?.nodePluginTools,
+      pathEnv: live?.pathEnv,
+      permissions: live?.permissions ?? nodePairing?.permissions,
+      approvalState: pendingNodePairing
+        ? nodePairing
+          ? "pending-reapproval"
+          : "pending-approval"
+        : nodePairing
+          ? "approved"
+          : "unapproved",
+      pendingRequestId: pendingNodePairing?.requestId,
+      pendingDeclaredCaps: pendingNodePairing?.caps,
+      pendingDeclaredCommands: pendingNodePairing?.commands,
+      pendingDeclaredPermissions: pendingNodePairing?.permissions,
+      connectedAtMs: live?.connectedAtMs,
+      lastConnectedAtMs,
+      lastDisconnectedAtMs,
+      lastActiveAtMs: live?.lastActiveAtMs,
+      presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
+      lastSeenAtMs: lastSeen.lastSeenAtMs,
+      lastSeenReason: lastSeen.lastSeenReason,
+      approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
+      paired: Boolean(devicePairing ?? nodePairing),
+      connected: Boolean(live),
+    });
   }
   return catalog;
 }
@@ -336,9 +248,4 @@ export function createKnownNodeCatalog(params: {
 /** Lists known nodes with connected nodes first and deterministic display ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.values()].toSorted(compareKnownNodes);
-}
-
-/** Returns the effective node row shown to gateway clients. */
-export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
-  return catalog.get(nodeId) ?? null;
 }

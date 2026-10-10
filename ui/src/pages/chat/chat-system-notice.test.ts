@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
@@ -32,53 +33,20 @@ function render(
   pendingInputs: ChatPendingInputsPage["items"],
   searchQuery = "",
 ) {
-  return buildCachedChatItems({
-    paneId: "notices",
-    sessionKey: "main",
-    messages,
-    pendingInputs,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    searchOpen: Boolean(searchQuery),
-    searchQuery,
-  });
+  return buildCachedChatItems(
+    createProps({
+      paneId: "notices",
+      messages,
+      pendingInputs,
+      searchOpen: Boolean(searchQuery),
+      searchQuery,
+    }),
+  );
 }
 
 afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
-  it.each(["interrupted", "cancelled"] as const)(
-    "shows one accurate recovery notice when the request is %s before starting",
-    (state) => {
-      const message = {
-        ...baseMessage,
-        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-      };
-      expect(render([], pending(message))).toMatchObject([
-        { kind: "notice", label: "System · restart recovery" },
-      ]);
-      expect(render([], pending(message, state))).toMatchObject([
-        {
-          kind: "notice",
-          label: "System · restart recovery",
-          text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
-          startsTurn: true,
-        },
-      ]);
-      expect(render([message], pending(message, state))).toMatchObject([
-        {
-          kind: "notice",
-          label: "System · restart recovery",
-          text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
-          boundaryId: "send:run",
-        },
-      ]);
-    },
-  );
-
   it.each([
     [
       "main_session_restart_recovery",
@@ -104,14 +72,9 @@ describe("system notices through pending-to-history promotion", () => {
       "<task-notification>\n<status>completed</status>\n</task-notification>",
       true,
     ],
-    ...[
-      undefined,
-      "session-companion",
-      "heartbeat",
-      "main-session-restart-recovery",
-      "restart_sentinel",
-      " restart-sentinel ",
-    ].map((sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const),
+    ...[undefined, " restart-sentinel "].map(
+      (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
+    ),
   ] as const)(
     "preserves %s presentation, search and turn boundaries",
     (sourceTool, label, text, midTurn) => {
@@ -133,6 +96,27 @@ describe("system notices through pending-to-history promotion", () => {
             }
           : baseMessage["__openclaw"],
       };
+      if (sourceTool === "main_session_restart_recovery") {
+        expect(render([], pending(message))).toMatchObject([{ kind: "notice", label }]);
+        for (const state of ["interrupted", "cancelled"] as const) {
+          expect(render([], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
+              startsTurn: true,
+            },
+          ]);
+          expect(render([message], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text,
+              boundaryId: "send:run",
+            },
+          ]);
+        }
+      }
       const inputs = pending(message);
       const before = { role: "user", content: "before", timestamp: 999 };
       const after = {
@@ -190,5 +174,56 @@ describe("system notices through pending-to-history promotion", () => {
         },
       ]);
     }
+  });
+});
+
+describe("skill review notices", () => {
+  const notice = (skills: unknown) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "💾 Learned: updated `deploy-staging`." }],
+    provider: "openclaw",
+    model: "delivery-mirror",
+    timestamp: 2000,
+    openclawDeliveryMirror: {
+      kind: "skill-workshop-change",
+      agentId: "main",
+      runId: "skill-workshop-review:r1",
+      skills,
+    },
+    __openclaw: { id: "notice-1", seq: 3 },
+  });
+  const question = { role: "user", content: "deploy it", timestamp: 1000 };
+  const answer = {
+    role: "assistant",
+    content: "Deployed.",
+    timestamp: 1500,
+    __openclaw: { runId: "run" },
+  };
+
+  it("renders a marked review notice natively and keeps malformed markers as text", () => {
+    const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
+    expect(render([question, answer, notice(skills)], [])).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: answer }] },
+      {
+        kind: "notice",
+        text: "",
+        timestamp: 2000,
+        skillChanges: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "skill-workshop-review:r1",
+          skills,
+        },
+      },
+    ]);
+
+    const malformed = notice([{ name: "deploy-staging", action: "renamed" }]);
+    const items = render([question, malformed], []);
+    expect(items.some((item) => item.kind === "notice")).toBe(false);
+    expect(items).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: malformed }] },
+    ]);
   });
 });

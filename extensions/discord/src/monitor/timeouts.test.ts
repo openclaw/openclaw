@@ -11,7 +11,6 @@ import {
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  raceWithTimeout,
   withAbortTimeout,
 } from "./timeouts.js";
 
@@ -85,23 +84,6 @@ describe("discord monitor timeouts", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("caps raceWithTimeout timers before arming the watchdog", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-
-    await expect(
-      raceWithTimeout({
-        promise: Promise.resolve("ok"),
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-        onTimeout: () => "timeout",
-      }),
-    ).resolves.toBe("ok");
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
-
   it("caps withAbortTimeout timers before arming the watchdog", async () => {
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
@@ -118,4 +100,36 @@ describe("discord monitor timeouts", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps the deadline error when aborted work synchronously %ss",
+    async (settlement) => {
+      vi.useFakeTimers();
+      const timeoutError = new Error("Discord request timed out");
+      let receivedSignal: AbortSignal | undefined;
+      const failure = withAbortTimeout({
+        timeoutMs: 100,
+        createTimeoutError: () => timeoutError,
+        run: (signal) => {
+          receivedSignal = signal;
+          return new Promise<string>((resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                settlement === "resolve" ? resolve("closed") : reject(new Error("request aborted")),
+              { once: true },
+            );
+          });
+        },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await failure).toBe(timeoutError);
+      expect(receivedSignal?.aborted).toBe(true);
+    },
+  );
 });

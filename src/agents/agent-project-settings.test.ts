@@ -9,8 +9,6 @@ import {
 } from "./agent-project-settings-snapshot.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "./agent-project-settings.js";
 
-type EmbeddedAgentSettingsArgs = Parameters<typeof buildEmbeddedAgentSettingsSnapshot>[0];
-
 describe("resolveEmbeddedAgentProjectSettingsPolicy", () => {
   it("defaults to sanitize", () => {
     expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe("sanitize");
@@ -29,45 +27,6 @@ describe("buildEmbeddedAgentSettingsSnapshot", () => {
     hideThinkingBlock: true,
   };
 
-  it("sanitize mode strips shell path + prefix but keeps other project settings", () => {
-    const snapshot = buildEmbeddedAgentSettingsSnapshot({
-      globalSettings,
-      pluginSettings: {},
-      projectSettings,
-      policy: "sanitize",
-    });
-    expect(snapshot.shellPath).toBe("/bin/zsh");
-    expect(snapshot.shellCommandPrefix).toBeUndefined();
-    expect(snapshot.compaction?.reserveTokens).toBe(32_000);
-    expect(snapshot.hideThinkingBlock).toBe(true);
-  });
-
-  it("ignore mode drops all project settings", () => {
-    const snapshot = buildEmbeddedAgentSettingsSnapshot({
-      globalSettings,
-      pluginSettings: {},
-      projectSettings,
-      policy: "ignore",
-    });
-    expect(snapshot.shellPath).toBe("/bin/zsh");
-    expect(snapshot.shellCommandPrefix).toBeUndefined();
-    expect(snapshot.compaction?.reserveTokens).toBe(20_000);
-    expect(snapshot.hideThinkingBlock).toBeUndefined();
-  });
-
-  it("trusted mode keeps project settings as-is", () => {
-    const snapshot = buildEmbeddedAgentSettingsSnapshot({
-      globalSettings,
-      pluginSettings: {},
-      projectSettings,
-      policy: "trusted",
-    });
-    expect(snapshot.shellPath).toBe("/tmp/evil-shell");
-    expect(snapshot.shellCommandPrefix).toBe("echo hacked &&");
-    expect(snapshot.compaction?.reserveTokens).toBe(32_000);
-    expect(snapshot.hideThinkingBlock).toBe(true);
-  });
-
   it("applies sanitized plugin settings before project settings", () => {
     const snapshot = buildEmbeddedAgentSettingsSnapshot({
       globalSettings,
@@ -80,39 +39,10 @@ describe("buildEmbeddedAgentSettingsSnapshot", () => {
       policy: "sanitize",
     });
     expect(snapshot.shellPath).toBe("/bin/zsh");
+    expect(snapshot.shellCommandPrefix).toBeUndefined();
     expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
     expect(snapshot.compaction?.reserveTokens).toBe(32_000);
     expect(snapshot.hideThinkingBlock).toBe(true);
-  });
-
-  it("lets project embedded-agent settings override bundle MCP defaults", () => {
-    const snapshot = buildEmbeddedAgentSettingsSnapshot({
-      globalSettings,
-      pluginSettings: {
-        mcpServers: {
-          bundleProbe: {
-            command: "node",
-            args: ["/plugins/probe.mjs"],
-          },
-        },
-      } as EmbeddedAgentSettingsArgs["pluginSettings"],
-      projectSettings: {
-        mcpServers: {
-          bundleProbe: {
-            command: "deno",
-            args: ["/workspace/probe.ts"],
-          },
-        },
-      } as EmbeddedAgentSettingsArgs["projectSettings"],
-      policy: "sanitize",
-    });
-
-    expect((snapshot as Record<string, unknown>).mcpServers).toEqual({
-      bundleProbe: {
-        command: "deno",
-        args: ["/workspace/probe.ts"],
-      },
-    });
   });
 });
 

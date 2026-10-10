@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmJsonEntries } from "../../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,9 @@ it("packs the complete source runtime without native binaries or test fixtures",
   });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  const [packed] = JSON.parse(result.stdout) as Array<{ files: Array<{ path: string }> }>;
+  const [packed] = resolveNpmJsonEntries(JSON.parse(result.stdout)) as Array<{
+    files: Array<{ path: string }>;
+  }>;
   const files = packed!.files.map((file) => file.path);
   expect(
     files.filter((file) => /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u.test(file)),
@@ -56,7 +59,7 @@ describe("FaceTime plugin manifest", () => {
     );
     // Release preparation bumps the package version and host contract together.
     const hostVersion = packageManifest.version;
-    expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}$/u);
+    expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
 
     expect(packageManifest.openclaw.extensions).toEqual(["./index.ts"]);
     expect(packageManifest.openclaw.runtimeExtensions).toBeUndefined();

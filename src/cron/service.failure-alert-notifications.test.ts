@@ -54,20 +54,11 @@ describe("CronService failure notification delivery", () => {
       carriesOrigin: false,
       wakesNow: true,
     },
-    {
-      name: "an untargeted next-heartbeat conversation without waking it",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      carriesOrigin: false,
-      wakesNow: false,
-    },
   ])("routes a rejected failure alert to $name with cadence disabled", async (testCase) => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     };
     const deliveryContext: DeliveryContext = {

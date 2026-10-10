@@ -12,6 +12,7 @@ import type {
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { createSolidControlUiBuildPlugin } from "../src/cli/plugins-build-solid.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
@@ -58,6 +59,7 @@ import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
+import { backgroundMockInitScript } from "./control-ui-mock-background.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -74,16 +76,14 @@ import {
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
-import {
-  buildSkillWorkshopMocks,
-  skillWorkshopMockInitScript,
-} from "./control-ui-mock-skill-workshop.js";
+import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
 
 const FIXTURES = [
   "approval",
   "attachments",
   "avatars",
+  "backgrounds",
   "board",
   "code-fences",
   "dashboards",
@@ -91,6 +91,7 @@ const FIXTURES = [
   "plugins-dense",
   "reactions",
   "sidebar-roster",
+  "startup-pending",
   "swarm",
   "update-available",
   "update-blocked",
@@ -2068,7 +2069,6 @@ async function createChatPickerScenario(
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
-  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(Date.now(), {
     richAttention,
@@ -2123,7 +2123,7 @@ async function createChatPickerScenario(
       ? "agent:main:production-export"
       : fixture === "dashboards"
         ? "agent:main:dashboard:release-health"
-        : fixture === "update-available"
+        : fixture === "update-available" || fixture === "startup-pending"
           ? "agent:main:home-server"
           : fixture === "update-blocked"
             ? "agent:main:model-budget"
@@ -2293,15 +2293,11 @@ async function createChatPickerScenario(
       "sessions.search",
       "session.reactions.list",
       "session.reactions.set",
+      "skills.workshop.archive",
+      "skills.workshop.changes",
+      "skills.workshop.list",
       "skills.workshop.read",
-      "skills.proposals.apply",
-      "skills.proposals.evaluate",
-      "skills.proposals.historyScan",
-      "skills.proposals.historyStatus",
-      "skills.proposals.inspect",
-      "skills.proposals.list",
-      "skills.proposals.reject",
-      "skills.proposals.requestRevision",
+      "skills.workshop.restore",
       "skills.library.activate",
       "skills.library.import",
       "skills.library.list",
@@ -2755,7 +2751,6 @@ async function createChatPickerScenario(
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
-      "skills.proposals.requestRevision": skillWorkshop.requestRevision,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelAuthStatus,
@@ -3289,6 +3284,7 @@ async function createChatPickerScenario(
       taxChildRow,
     ],
     sessionKey: fixtureSessionKey,
+    startupPendingResponses: fixture === "startup-pending" ? 4 : 0,
     workspace: "/Users/demo/Projects/openclaw",
     workspaceGit: true,
   };
@@ -3314,6 +3310,16 @@ async function createChatPickerScenario(
     scenario.sessions = rosterSessions;
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
+  }
+  if (fixture === "backgrounds") {
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "users.prefs.get",
+      "users.prefs.set",
+      "users.background.get",
+      "users.background.upload",
+      "users.background.remove",
+    ];
   }
   return scenario;
 }
@@ -3361,6 +3367,7 @@ async function createMockGatewayPlugin(
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
       approvalMockInitScript(fixture === "approval") +
+      (fixture === "backgrounds" ? backgroundMockInitScript() : "") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
         : ""),
@@ -3478,7 +3485,7 @@ async function createMockGatewayPlugin(
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
       const rosterPreferenceScript = `<script data-openclaw-sidebar-roster>
-        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
+        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite:v2", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
         if (new URLSearchParams(location.search).get("sidebarAgents") === "roster") {
           const gatewayUrl = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"].gatewayUrl;
           const key = "openclaw.control.settings.v1:" + gatewayUrl;
@@ -3517,6 +3524,7 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
+      createSolidControlUiBuildPlugin(uiRoot),
       {
         name: "workboard-state-projections",
         setup(builder) {

@@ -11,16 +11,20 @@ import {
 
 const fixture = useTranscriptStatusFixture();
 
+async function startCapture(sessionId: string) {
+  const f = fixture();
+  const started = createDeferred<TranscriptStartRequest>();
+  f.provider.start = async (request) => {
+    started.resolve(request);
+    return { ok: true, session: request.session };
+  };
+  await f.start({ ...room, sessionId });
+  return { f, request: await started.promise };
+}
+
 describe("transcript capture accepted append drainage", () => {
-  it("persists concurrently accepted speech in order before terminal metadata and notes", async () => {
-    const f = fixture();
-    const started = createDeferred<TranscriptStartRequest>();
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      return { ok: true, session: request.session };
-    };
-    await f.start({ ...room, sessionId: "terminal-drain" });
-    const request = await started.promise;
+  it("rejects unserializable speech promptly and drains accepted speech before terminal notes", async () => {
+    const { f, request } = await startCapture("terminal-drain");
     const appendEntered = createDeferred();
     const releaseAppend = createDeferred();
     const events: string[] = [];
@@ -47,19 +51,32 @@ describe("transcript capture accepted append drainage", () => {
     });
 
     const first = Promise.resolve(request.onUtterance({ text: "First accepted speech" }));
+    const failure = new Error("Metadata cannot be serialized");
+    const toJSON = vi.fn(() => {
+      throw failure;
+    });
+    const rejected = Promise.resolve(
+      request.onUtterance({ text: "Unserializable speech", metadata: { toJSON } }),
+    );
     const second = Promise.resolve(request.onUtterance({ text: "Second accepted speech" }));
     let terminal: Promise<void> | undefined;
     try {
       await appendEntered.promise;
+      await expect(rejected).rejects.toBe(failure);
+      expect.soft(await f.store.readUtterancesForSession(request.session)).toEqual([]);
       terminal = Promise.resolve(request.onStatus?.({ active: false }));
       // Allow the terminal callback to reach storage while the accepted append is held.
       await setImmediate();
       expect.soft(events).toEqual([]);
     } finally {
       releaseAppend.resolve();
-      await Promise.allSettled([first, second, terminal]);
+      await Promise.allSettled([first, rejected, second, terminal]);
     }
     await Promise.all([first, second, terminal]);
+    expect(toJSON).toHaveBeenCalledOnce();
+    expect((await f.store.readSession(request.session.sessionId))?.stoppedAt).toEqual(
+      expect.any(String),
+    );
     expect
       .soft(events)
       .toEqual(["First accepted speech", "Second accepted speech", "stopped metadata", "summary"]);
@@ -67,7 +84,10 @@ describe("transcript capture accepted append drainage", () => {
       .soft((await f.store.readUtterancesForSession(request.session)).map((row) => row.text))
       .toEqual(["First accepted speech", "Second accepted speech"]);
     expect.soft(await f.store.readSummary(request.session)).toMatchObject({
-      summary: { transcript: ["First accepted speech", "Second accepted speech"] },
+      summary: {
+        utteranceCount: 2,
+        transcript: ["First accepted speech", "Second accepted speech"],
+      },
     });
     await request.onUtterance({ text: "Retired callback" });
     expect(await f.store.readUtterancesForSession(request.session)).toHaveLength(2);
@@ -185,151 +205,139 @@ describe("transcript capture accepted append drainage", () => {
     expect(stopCalls).toBe(2);
   });
 
-  it("drains accepted startup speech before restoring stop state and issuing retry authority", async () => {
-    const f = fixture();
-    const appendEntered = createDeferred();
-    const releaseAppend = createDeferred();
-    const failStart = createDeferred();
-    const providerFailed = createDeferred();
-    const started = createDeferred<TranscriptStartRequest>();
-    const events: string[] = [];
-    const append = f.store.appendUtteranceForSession.bind(f.store);
-    vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
-      appendEntered.resolve();
-      await releaseAppend.promise;
-      await append(...args);
-      events.push("accepted speech");
-    });
-    const writeSession = f.store.writeSession.bind(f.store);
-    vi.spyOn(f.store, "writeSession").mockImplementation(async (...args) => {
-      if (args[0].stoppedAt) {
-        events.push("restored stop state");
+  it.each([false, true])(
+    "drains startup speech before restoring stop state and retry authority (reopened: %s)",
+    async (reopened) => {
+      const f = fixture();
+      const original: TranscriptSessionDescriptor | undefined = reopened
+        ? {
+            sessionId: "reopened-rejected-append",
+            startedAt: "2026-09-18T09:00:00.000Z",
+            stoppedAt: "2026-09-18T09:05:00.000Z",
+            source: room,
+            title: "Existing meeting",
+            metadata: { agentId: "main", sessionIdOrigin: "supplied" },
+          }
+        : undefined;
+      if (original) {
+        await f.store.writeSession(original);
+        await f.store.appendUtteranceForSession(original, { text: "Previously saved speech" });
       }
-      return writeSession(...args);
-    });
-    const readRevision = f.store.readSummaryInputRevision.bind(f.store);
-    vi.spyOn(f.store, "readSummaryInputRevision").mockImplementation(async (...args) => {
-      events.push("retry revision");
-      return readRevision(...args);
-    });
-    let accepted: Promise<void> | undefined;
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      accepted = Promise.resolve(request.onUtterance({ text: "Speech before startup failed" }));
-      void accepted.catch(() => undefined);
-      await failStart.promise;
-      providerFailed.resolve();
-      throw new Error("Provider startup failed");
-    };
-    const startup = f.start({ ...room, sessionId: "startup-drain" }).then(
-      () => undefined,
-      (error: unknown) => {
-        events.push("start rejected");
-        return error;
-      },
-    );
-    const request = await started.promise;
-    try {
-      await appendEntered.promise;
-      failStart.resolve();
-      await providerFailed.promise;
-      await setImmediate();
-      expect.soft(events).toEqual([]);
-      const reserved = isTranscriptSessionStarting(request.session.sessionId);
-      expect.soft(reserved).toBe(true);
-      if (reserved) {
-        await expect(
-          f.start({ ...room, sessionId: request.session.sessionId }),
-        ).rejects.toMatchObject({
-          code: "id-conflict",
-        });
-      }
-    } finally {
-      failStart.resolve();
-      releaseAppend.resolve();
-      await Promise.allSettled([accepted, startup]);
-    }
-    await accepted;
-    const failure = await startup;
-    expect(failure).toBeInstanceOf(TranscriptStartError);
-    if (!(failure instanceof TranscriptStartError)) {
-      throw new Error("Expected failed startup to retain transcript retry authority");
-    }
-    expect
-      .soft(events)
-      .toEqual(["accepted speech", "restored stop state", "retry revision", "start rejected"]);
-    expect(failure.retry?.revision).toBe(await readRevision(request.session));
-    expect(failure.retry?.session.stoppedAt).toEqual(expect.any(String));
-    expect(isTranscriptSessionStarting(request.session.sessionId)).toBe(false);
-    expect(await f.store.readUtterancesForSession(request.session)).toMatchObject([
-      { text: "Speech before startup failed" },
-    ]);
-  });
-  it("settles metadata rejection promptly while preserving earlier accepted speech ordering", async () => {
-    const f = fixture();
-    const started = createDeferred<TranscriptStartRequest>();
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      return { ok: true, session: request.session };
-    };
-    await f.start({ ...room, sessionId: "serialization-rejection" });
-    const request = await started.promise;
-    const appendEntered = createDeferred();
-    const releaseAppend = createDeferred();
-    const append = f.store.appendUtteranceForSession.bind(f.store);
-    vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
-      if (args[1].text === "First accepted speech") {
+      const revision = original && (await f.store.readSummaryInputRevision(original));
+      const appendEntered = createDeferred();
+      const releaseAppend = createDeferred();
+      const failStart = createDeferred();
+      const providerFailed = createDeferred();
+      const started = createDeferred<TranscriptStartRequest>();
+      const appendFailure = new Error("Accepted append failed before writing");
+      const providerFailure = new Error("Provider startup failed");
+      const events: string[] = [];
+      const append = f.store.appendUtteranceForSession.bind(f.store);
+      vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
         appendEntered.resolve();
         await releaseAppend.promise;
+        if (reopened) {
+          throw appendFailure;
+        }
+        await append(...args);
+        events.push("accepted speech");
+      });
+      const writeSession = f.store.writeSession.bind(f.store);
+      vi.spyOn(f.store, "writeSession").mockImplementation(async (...args) => {
+        if (args[0].stoppedAt) {
+          events.push("restored stop state");
+        }
+        return writeSession(...args);
+      });
+      const readRevision = f.store.readSummaryInputRevision.bind(f.store);
+      vi.spyOn(f.store, "readSummaryInputRevision").mockImplementation(async (...args) => {
+        events.push("retry revision");
+        return readRevision(...args);
+      });
+      let accepted: Promise<void> | undefined;
+      f.provider.start = async (request) => {
+        started.resolve(request);
+        accepted = Promise.resolve(request.onUtterance({ text: "Speech before startup failed" }));
+        void accepted.catch(() => undefined);
+        await failStart.promise;
+        providerFailed.resolve();
+        throw providerFailure;
+      };
+      const startup = (
+        original
+          ? startTranscripts({
+              ctx: { ...f.ctx, caller: { kind: "operator", source: "local" } },
+              store: f.store,
+              rawParams: { ...room, sessionId: original.sessionId },
+              existingSession: original,
+              existingSessionCondition: { expectedInputRevision: revision },
+            })
+          : f.start({ ...room, sessionId: "startup-drain" })
+      ).then(
+        () => undefined,
+        (error: unknown) => {
+          events.push("start rejected");
+          return error;
+        },
+      );
+      const request = await started.promise;
+      try {
+        await appendEntered.promise;
+        failStart.resolve();
+        await providerFailed.promise;
+        await setImmediate();
+        expect.soft(events).toEqual([]);
+        const reserved = isTranscriptSessionStarting(request.session.sessionId);
+        expect.soft(reserved).toBe(true);
+        if (reserved) {
+          await expect(
+            f.start({ ...room, sessionId: request.session.sessionId }),
+          ).rejects.toMatchObject({ code: "id-conflict" });
+        }
+      } finally {
+        failStart.resolve();
+        releaseAppend.resolve();
+        await Promise.allSettled([accepted, startup]);
       }
-      await append(...args);
-    });
-    const failure = new Error("Metadata cannot be serialized");
-    const toJSON = vi.fn(() => {
-      throw failure;
-    });
-    const first = Promise.resolve(request.onUtterance({ text: "First accepted speech" }));
-    const rejected = Promise.resolve(
-      request.onUtterance({ text: "Unserializable speech", metadata: { toJSON } }),
-    );
-    const accepted = Promise.resolve(request.onUtterance({ text: "Later accepted speech" }));
-    try {
-      await appendEntered.promise;
-      // The rejected callback settles without releasing the older accepted append.
-      await expect(rejected).rejects.toBe(failure);
-      await setImmediate();
-      expect.soft(await f.store.readUtterancesForSession(request.session)).toEqual([]);
-    } finally {
-      releaseAppend.resolve();
-      await Promise.allSettled([first, rejected, accepted]);
-    }
-    await Promise.all([first, accepted]);
-    await request.onStatus?.({ active: false });
-
-    expect(toJSON).toHaveBeenCalledOnce();
-    expect
-      .soft(await f.store.readUtterancesForSession(request.session))
-      .toMatchObject([{ text: "First accepted speech" }, { text: "Later accepted speech" }]);
-    expect.soft(await f.store.readSummary(request.session)).toMatchObject({
-      summary: {
-        utteranceCount: 2,
-        transcript: ["First accepted speech", "Later accepted speech"],
-      },
-    });
-    expect((await f.store.readSession(request.session.sessionId))?.stoppedAt).toEqual(
-      expect.any(String),
-    );
-  });
+      if (reopened) {
+        await expect(accepted).rejects.toBe(appendFailure);
+      } else {
+        await accepted;
+      }
+      const failure = await startup;
+      expect(failure).toBeInstanceOf(TranscriptStartError);
+      if (!(failure instanceof TranscriptStartError)) {
+        throw new Error("Expected failed startup to retain transcript retry authority");
+      }
+      expect
+        .soft(events)
+        .toEqual([
+          ...(reopened ? [] : ["accepted speech"]),
+          "restored stop state",
+          "retry revision",
+          "start rejected",
+        ]);
+      expect(failure.retry?.revision).toBe(await readRevision(request.session));
+      expect(failure.retry?.session.stoppedAt).toEqual(expect.any(String));
+      expect(isTranscriptSessionStarting(request.session.sessionId)).toBe(false);
+      expect(await f.store.readUtterancesForSession(request.session)).toMatchObject([
+        { text: reopened ? "Previously saved speech" : "Speech before startup failed" },
+      ]);
+      if (original) {
+        expect(failure.code).toBe("admitted-start-failed");
+        expect(failure.retry).toEqual({
+          session: original,
+          revision: await readRevision(original),
+        });
+        expect(failure.cause).toBeInstanceOf(AggregateError);
+        expect(failure.cause).toMatchObject({ errors: [providerFailure, appendFailure] });
+        expect.soft(await f.store.readSession(original.sessionId)).toEqual(original);
+      }
+    },
+  );
 
   it("drains an accepted append when its metadata serialization ends the capture", async () => {
-    const f = fixture();
-    const started = createDeferred<TranscriptStartRequest>();
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      return { ok: true, session: request.session };
-    };
-    await f.start({ ...room, sessionId: "serialization-terminal" });
-    const request = await started.promise;
+    const { f, request } = await startCapture("serialization-terminal");
     const terminal = createDeferred();
     const toJSON = vi.fn(() => {
       // Provider metadata can synchronously end capture while this speech is being prepared.
@@ -356,69 +364,5 @@ describe("transcript capture accepted append drainage", () => {
     );
     await request.onUtterance({ text: "Retired callback" });
     expect(await f.store.readUtterancesForSession(request.session)).toHaveLength(1);
-  });
-  it("restores a reopened capture after an accepted append rejects during failed startup", async () => {
-    const f = fixture();
-    const original: TranscriptSessionDescriptor = {
-      sessionId: "reopened-rejected-append",
-      startedAt: "2026-09-18T09:00:00.000Z",
-      stoppedAt: "2026-09-18T09:05:00.000Z",
-      source: room,
-      title: "Existing meeting",
-      metadata: { agentId: "main", sessionIdOrigin: "supplied" },
-    };
-    await f.store.writeSession(original);
-    await f.store.appendUtteranceForSession(original, { text: "Previously saved speech" });
-    const revision = await f.store.readSummaryInputRevision(original);
-    const appendEntered = createDeferred();
-    const releaseAppend = createDeferred();
-    const appendFailure = new Error("Accepted append failed before writing");
-    const providerFailure = new Error("Provider startup failed");
-    vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async () => {
-      appendEntered.resolve();
-      await releaseAppend.promise;
-      throw appendFailure;
-    });
-    let accepted: Promise<void> | undefined;
-    f.provider.start = async (request) => {
-      accepted = Promise.resolve(request.onUtterance({ text: "Rejected startup speech" }));
-      void accepted.catch(() => undefined);
-      throw providerFailure;
-    };
-    const startup = startTranscripts({
-      ctx: { ...f.ctx, caller: { kind: "operator", source: "local" } },
-      store: f.store,
-      rawParams: { ...room, sessionId: original.sessionId },
-      existingSession: original,
-      existingSessionCondition: { expectedInputRevision: revision },
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await appendEntered.promise;
-      await setImmediate();
-    } finally {
-      releaseAppend.resolve();
-      await Promise.allSettled([accepted, startup]);
-    }
-    await expect(accepted).rejects.toBe(appendFailure);
-    const failure = await startup;
-    expect(failure).toBeInstanceOf(TranscriptStartError);
-    if (!(failure instanceof TranscriptStartError)) {
-      throw new Error("Expected an admitted transcript startup failure");
-    }
-    expect(failure.code).toBe("admitted-start-failed");
-    expect(failure.retry).toEqual({
-      session: original,
-      revision: await f.store.readSummaryInputRevision(original),
-    });
-    expect(failure.cause).toBeInstanceOf(AggregateError);
-    expect(failure.cause).toMatchObject({ errors: [providerFailure, appendFailure] });
-    expect.soft(await f.store.readSession(original.sessionId)).toEqual(original);
-    expect(isTranscriptSessionStarting(original.sessionId)).toBe(false);
-    expect(await f.store.readUtterancesForSession(original)).toMatchObject([
-      { text: "Previously saved speech" },
-    ]);
   });
 });

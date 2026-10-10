@@ -5,10 +5,8 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import {
-  getSessionMaintenanceActivityAt,
-  shouldPreserveMaintenanceEntry,
-} from "./store-maintenance.js";
+import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
+import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 const maintenanceFields = [
@@ -18,11 +16,16 @@ const maintenanceFields = [
   "lastActivityAt",
   "lastInteractionAt",
   "sessionStartedAt",
-  "status",
   "pinnedAt",
+  "sidebarRoot",
   "spawnedBy",
   "parentSessionKey",
   "modelSelectionLocked",
+  "mainRestartRecovery",
+  "restartRecoveryRuns",
+  "restartRecoveryTerminalRunIds",
+  "restartRecoveryDeliveryRunId",
+  "pendingFinalDelivery",
   "chatType",
   "delivery",
 ];

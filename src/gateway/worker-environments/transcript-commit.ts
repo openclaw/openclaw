@@ -1,5 +1,7 @@
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -8,7 +10,7 @@ import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitStore,
-} from "./transcript-commit-store.js";
+} from "./transcript-commit-ledger.js";
 
 const loadTranscriptCommitRuntime = createLazyRuntimeModule(
   () => import("./transcript-commit.runtime.js"),
@@ -39,11 +41,17 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
     if (params.request.runEpoch !== params.identity.ownerEpoch) {
       return { ok: false, reason: "epoch-mismatch" };
     }
-    return await sessionOperations.enqueue(sessionId, async () => {
-      // Keep loading inside the queue, before authority checks or ledger reservations.
-      const { commitWorkerTranscript } = await loadTranscriptCommitRuntime();
-      return await commitWorkerTranscript(options, store, sessionId, params);
-    });
+    const binding = captureIncognitoSessionBinding(params.sessionTarget);
+    const captured = binding
+      ? { ...params, sessionTarget: captureSessionTranscriptTargetBinding(params.sessionTarget) }
+      : params;
+    const execute = () =>
+      sessionOperations.enqueue(sessionId, async () => {
+        // Keep loading inside the queue, before authority checks or ledger reservations.
+        const { commitWorkerTranscript } = await loadTranscriptCommitRuntime();
+        return await commitWorkerTranscript(options, store, sessionId, captured);
+      });
+    return await (binding ? binding.actor.sessions.withSharedState(execute) : execute());
   };
 
   return { commit };

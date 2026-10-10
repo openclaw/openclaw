@@ -29,6 +29,11 @@ request latency separate from full-turn latency. OpenClaw's OTEL model-call
 metrics also include `openclaw.model_call.observation_unit`; the Prometheus
 model-call metrics expose the equivalent `observation_unit` label.
 
+Request-level telemetry also covers native background completions, including
+session titles, Activity recaps, and plugin `runtime.llm.complete` calls.
+Each request records a start and one completion or error with its duration;
+token and cost accounting remains separate in `model.usage`.
+
 ## Claude Code CLI model-call fidelity
 
 Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`
@@ -116,8 +121,9 @@ malformed request frames, and HTTP routes.
 | `openclaw.gateway.rpc.queue_wait_ms`     | histogram | Operator start-queue or worker frame-queue wait, when applicable  |
 | `openclaw.gateway.rpc.outcomes`          | counter   | Observations by phase and outcome                                 |
 
-Request and timing metrics have only `openclaw.gateway.rpc.method`: a canonical
-core or worker method name, `other` for plugin methods, or `unknown`. Outcome metrics have
+Request and timing metrics have only `openclaw.gateway.rpc.method`: an exact
+core, worker, or registered plugin method name, `other` for unregistered generic
+requests, or `unknown` for unrecognized dedicated worker RPCs. Outcome metrics have
 only `openclaw.gateway.rpc.phase` and `openclaw.gateway.rpc.outcome`, so errors do
 not multiply every method's series. No request, connection, session, or trace IDs
 appear in metric attributes.

@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
-import type { ConfigPageId } from "./config-sections.ts";
+import { CONFIG_PAGE_IDS, type ConfigPageId } from "./config-sections.ts";
 import {
   configRouteData,
   configTargetIdFromHash,
@@ -121,16 +121,5 @@ export const pages = [
     component: async () => ({ render: () => nothing }),
   }),
   removedGeneralRedirectPage,
-  configPage("communications"),
-  configPage("appearance"),
-  configPage("notifications"),
-  configPage("security"),
-  configPage("automation"),
-  configPage("mcp"),
-  configPage("memory"),
-  configPage("talk"),
-  configPage("infrastructure"),
-  configPage("updates"),
-  configPage("ai-agents"),
-  configPage("advanced"),
+  ...CONFIG_PAGE_IDS.map(configPage),
 ] as const;

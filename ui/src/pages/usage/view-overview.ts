@@ -8,29 +8,30 @@ import { renderSettingsSection, renderSettingsSegmented } from "../../components
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatIsoDate } from "./helpers.ts";
 import {
   buildUsageCostWindows,
-  buildUsageCostWindowSummary,
   formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
-  formatIsoDate,
   formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
-import type { UsageAggregates, UsageSessionEntry, UsageTotals, CostDailyEntry } from "./types.ts";
+import type {
+  UsageAggregates,
+  UsageProps,
+  UsageSessionEntry,
+  UsageTotals,
+  CostDailyEntry,
+} from "./types.ts";
 import { renderSessionBarRow } from "./view-session-row.ts";
 
 function renderFilterChips(
-  selectedDays: string[],
-  selectedHours: number[],
-  selectedSessions: string[],
   sessions: UsageSessionEntry[],
-  onClearDays: () => void,
-  onClearHours: () => void,
-  onClearSessions: () => void,
-  onClearFilters: () => void,
+  { filters, callbacks }: Pick<UsageProps, "filters" | "callbacks">,
 ) {
+  const { selectedDays, selectedHours, selectedSessions } = filters;
+  const { onClearDays, onClearHours, onClearSessions, onClearFilters } = callbacks.filters;
   const hasFilters =
     selectedDays.length > 0 || selectedHours.length > 0 || selectedSessions.length > 0;
   if (!hasFilters) {
@@ -120,27 +121,12 @@ function renderCostWindowComparison(
   rangeEndDate: string,
   timeZone: "local" | "utc",
 ) {
-  const range = buildUsageCostWindowSummary(daily, rangeStartDate, rangeEndDate);
-  if (!range || daily.length === 0) {
+  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
+  if (windows.length === 0 || daily.length === 0) {
     return nothing;
   }
 
-  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
   const today = formatIsoDate(new Date(), timeZone);
-  const labelForWindow = (days: number, endDate: string) => {
-    if (days === 1) {
-      return endDate === today ? t("usage.presets.today") : formatDayLabel(endDate);
-    }
-    return t("usage.costWindows.lastDays", { count: String(days) });
-  };
-  const cards = [
-    { label: t("usage.costWindows.selectedRange"), summary: range, range: true },
-    ...windows.map((summary) => ({
-      label: labelForWindow(summary.days, summary.endDate),
-      summary,
-      range: false,
-    })),
-  ];
 
   return html`
     <section class="cost-window-analysis">
@@ -156,7 +142,15 @@ function renderCostWindowComparison(
         </div>
       </div>
       <div class="cost-window-grid">
-        ${cards.map(({ label, summary, range: isRange }) => {
+        ${windows.map((summary, index) => {
+          const isRange = index === 0;
+          const label = isRange
+            ? t("usage.costWindows.selectedRange")
+            : summary.days === 1
+              ? summary.endDate === today
+                ? t("usage.presets.today")
+                : formatDayLabel(summary.endDate)
+              : t("usage.costWindows.lastDays", { count: String(summary.days) });
           const averageDailyCost = summary.totals.totalCost / summary.days;
           return html`
             <div class="cost-window-card ${isRange ? "cost-window-card--range" : ""}">
@@ -239,8 +233,8 @@ function focusSummaryHint(event: MouseEvent) {
 
 function renderSummaryStat(params: {
   hintId: string;
-  title: string;
-  hint: string;
+  metric: string;
+  hint?: string;
   value: string | number;
   sub: string;
   tone?: "good" | "warn" | "bad";
@@ -248,6 +242,7 @@ function renderSummaryStat(params: {
   compactValue?: boolean;
 }) {
   const hintId = `usage-summary-hint-${params.hintId}`;
+  const title = t(`usage.overview.${params.metric}`);
   const classes = [
     "stat",
     "usage-summary-card",
@@ -267,13 +262,13 @@ function renderSummaryStat(params: {
   return html`
     <div class=${classes}>
       <div class="usage-summary-title">
-        ${params.title}
+        ${title}
         <openclaw-tooltip open-on-click>
           <button
             id=${hintId}
             type="button"
             class="usage-summary-hint"
-            aria-label=${params.title}
+            aria-label=${title}
             @click=${focusSummaryHint}
           >
             ?
@@ -282,7 +277,7 @@ function renderSummaryStat(params: {
                strand one open. This hint exists only to be read, so it opts in to
                click-to-open; the click handler still normalizes browsers that do
                not focus buttons on pointer activation. -->
-          <span slot="content">${params.hint}</span>
+          <span slot="content">${params.hint ?? t(`usage.overview.${params.metric}Hint`)}</span>
         </openclaw-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
@@ -328,58 +323,52 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => {
-      const rate = day.errors / day.messages;
-      return {
-        label: formatDayLabel(day.date),
-        value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
-        rate,
-      };
-    })
-    .toSorted((a, b) => b.rate - a.rate)
+    .toSorted((a, b) => b.errors / b.messages - a.errors / a.messages)
     .slice(0, 5)
-    .map(({ rate: _rate, ...rest }) => rest);
+    .map((day) => ({
+      label: formatDayLabel(day.date),
+      value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
+      sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
+    }));
 
-  const costShare = (cost: number) =>
-    showCostShares && totals.totalCost > 0
-      ? t("usage.overview.costShare", { percent: ((cost / totals.totalCost) * 100).toFixed(1) })
-      : null;
-  const costAttributionSub = (cost: number, tokens: number, messageCount?: number) =>
-    [
-      costShare(cost),
-      formatUsageTokens(tokens),
-      messageCount === undefined ? null : `${messageCount} ${t("usage.overview.messagesAbbrev")}`,
+  const costAttribution = (
+    label: string,
+    { totals: entryTotals, count }: { totals: UsageTotals; count?: number },
+    agent = false,
+  ) => ({
+    label,
+    ...(agent ? { agentId: label } : {}),
+    value: formatAnalysisCost(entryTotals.totalCost),
+    sub: [
+      showCostShares && totals.totalCost > 0
+        ? t("usage.overview.costShare", {
+            percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
+          })
+        : null,
+      formatUsageTokens(entryTotals.totalTokens),
+      count === undefined ? null : `${count} ${t("usage.overview.messagesAbbrev")}`,
     ]
       .filter((part): part is string => part !== null)
-      .join(" · ");
+      .join(" · "),
+  });
 
-  const topModels = aggregates.byModel.slice(0, 5).map((entry) => ({
-    label: entry.model ?? t("usage.common.unknown"),
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
-  }));
-  const topProviders = aggregates.byProvider.slice(0, 5).map((entry) => ({
-    label: entry.provider ?? t("usage.common.unknown"),
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
-  }));
+  const topModels = aggregates.byModel
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.model ?? t("usage.common.unknown"), entry));
+  const topProviders = aggregates.byProvider
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.provider ?? t("usage.common.unknown"), entry));
   const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
     label: tool.name,
     value: `${tool.count}`,
     sub: t("usage.overview.calls"),
   }));
-  const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
-    label: entry.agentId,
-    agentId: entry.agentId,
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
-  }));
-  const topChannels = aggregates.byChannel.slice(0, 5).map((entry) => ({
-    label: entry.channel,
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
-  }));
+  const topAgents = aggregates.byAgent
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.agentId, entry, true));
+  const topChannels = aggregates.byChannel
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.channel, entry));
   const insightLists = [
     ["usage.overview.topModels", topModels, "usage.overview.noModelData"],
     ["usage.overview.topProviders", topProviders, "usage.overview.noProviderData"],
@@ -396,16 +385,14 @@ function renderUsageInsights(
           <div class="usage-summary-grid">
             ${renderSummaryStat({
               hintId: "messages",
-              title: t("usage.overview.messages"),
-              hint: t("usage.overview.messagesHint"),
+              metric: "messages",
               value: aggregates.messages.total,
               sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
               className: "usage-summary-card--hero",
             })}
             ${renderSummaryStat({
               hintId: "throughput",
-              title: t("usage.overview.throughput"),
-              hint: t("usage.overview.throughputHint"),
+              metric: "throughput",
               value: throughputLabel,
               sub: throughputCostLabel,
               className: "usage-summary-card--hero usage-summary-card--throughput",
@@ -413,16 +400,14 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "tool-calls",
-              title: t("usage.overview.toolCalls"),
-              hint: t("usage.overview.toolCallsHint"),
+              metric: "toolCalls",
               value: aggregates.tools.totalCalls,
               sub: `${aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`,
               className: "usage-summary-card--half",
             })}
             ${renderSummaryStat({
               hintId: "average-tokens",
-              title: t("usage.overview.avgTokens"),
-              hint: t("usage.overview.avgTokensHint"),
+              metric: "avgTokens",
               value: formatUsageTokens(avgTokens),
               sub: t("usage.overview.acrossMessages", {
                 count: String(aggregates.messages.total || 0),
@@ -431,7 +416,7 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "cache-hit-rate",
-              title: t("usage.overview.cacheHitRate"),
+              metric: "cacheHitRate",
               hint: t("usage.overview.cacheHint"),
               value: cacheHitLabel,
               sub: `${formatUsageTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(cacheBase)} ${t("usage.overview.prompt")}`,
@@ -440,7 +425,7 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "error-rate",
-              title: t("usage.overview.errorRate"),
+              metric: "errorRate",
               hint: t("usage.overview.errorHint"),
               value: `${errorRatePct.toFixed(2)}%`,
               sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
@@ -449,7 +434,7 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "average-cost",
-              title: t("usage.overview.avgCost"),
+              metric: "avgCost",
               hint: t(
                 showCostHint ? "usage.overview.avgCostHintMissing" : "usage.overview.avgCostHint",
               ),
@@ -459,16 +444,14 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "sessions",
-              title: t("usage.overview.sessions"),
-              hint: t("usage.overview.sessionsHint"),
+              metric: "sessions",
               value: sessionCount,
               sub: t("usage.overview.sessionsInRange", { count: String(totalSessions) }),
               className: "usage-summary-card--compact",
             })}
             ${renderSummaryStat({
               hintId: "errors",
-              title: t("usage.overview.errors"),
-              hint: t("usage.overview.errorsHint"),
+              metric: "errors",
               value: aggregates.messages.errors,
               sub: `${aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`,
               className: "usage-summary-card--compact",
@@ -503,28 +486,18 @@ function renderUsageInsights(
 
 function renderSessionsCard(
   sessions: UsageSessionEntry[],
-  selectedSessions: string[],
-  selectedDays: string[],
-  isTokenMode: boolean,
-  sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors",
-  sessionSortDir: "asc" | "desc",
-  recentSessions: string[],
-  sessionsTab: "all" | "recent",
-  onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void,
-  onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
-  onSessionSortDirChange: (dir: "asc" | "desc") => void,
-  onSessionsTabChange: (tab: "all" | "recent") => void,
+  { filters, display, callbacks }: Pick<UsageProps, "filters" | "display" | "callbacks">,
   totalSessions: number,
-  onClearSessions: () => void,
 ) {
-  const formatSessionListLabel = (s: UsageSessionEntry): string => {
-    const raw = s.label || s.key;
-    // Agent session keys often include a token query param; remove it for readability.
-    if (raw.startsWith("agent:") && raw.includes("?token=")) {
-      return raw.slice(0, raw.indexOf("?token="));
-    }
-    return raw;
-  };
+  const { selectedSessions, selectedDays } = filters;
+  const { sessionSort, sessionSortDir, recentSessions, sessionsTab } = display;
+  const { onSelectSession } = callbacks.details;
+  const onDisplayChange = callbacks.display.onChange;
+  const { onClearSessions } = callbacks.filters;
+  const isTokenMode = display.chartMode === "tokens";
+  const sortDirectionLabel = t(
+    sessionSortDir === "desc" ? "usage.sessions.descending" : "usage.sessions.ascending",
+  );
   const buildSessionMeta = (session: UsageSessionEntry): string[] =>
     [
       session.channel && `channel:${session.channel}`,
@@ -555,9 +528,15 @@ function renderSessionsCard(
           }
         }
       }
+      const rawLabel = session.label || session.key;
+      // Agent session keys often include a token query param; remove it for readability.
+      const displayLabel =
+        rawLabel.startsWith("agent:") && rawLabel.includes("?token=")
+          ? rawLabel.slice(0, rawLabel.indexOf("?token="))
+          : rawLabel;
       return {
         session,
-        displayLabel: formatSessionListLabel(session),
+        displayLabel,
         value: isTokenMode ? tokens : cost,
         sortValue: {
           recent: session.updatedAt ?? 0,
@@ -642,8 +621,8 @@ function renderSessionsCard(
             ariaPressed: false,
             className: "small",
             value: sessionsTab,
-            onChange: onSessionsTabChange,
-            onReselect: onSessionsTabChange,
+            onChange: (tab) => onDisplayChange({ sessionsTab: tab }),
+            onReselect: (tab) => onDisplayChange({ sessionsTab: tab }),
             options: [
               { value: "all", label: t("usage.sessions.all") },
               { value: "recent", label: t("usage.sessions.recent") },
@@ -654,7 +633,9 @@ function renderSessionsCard(
             <select
               class="settings-select"
               @change=${(e: Event) =>
-                onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
+                onDisplayChange({
+                  sessionSort: (e.target as HTMLSelectElement).value as typeof sessionSort,
+                })}
             >
               ${Object.entries({
                 cost: "usage.metrics.cost",
@@ -670,21 +651,11 @@ function renderSessionsCard(
               )}
             </select>
           </label>
-          <openclaw-tooltip
-            .content=${
-              sessionSortDir === "desc"
-                ? t("usage.sessions.descending")
-                : t("usage.sessions.ascending")
-            }
-          >
+          <openclaw-tooltip .content=${sortDirectionLabel}>
             <button
               class="btn btn--sm"
-              aria-label=${
-                sessionSortDir === "desc"
-                  ? t("usage.sessions.descending")
-                  : t("usage.sessions.ascending")
-              }
-              @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
+              aria-label=${sortDirectionLabel}
+              @click=${() => onDisplayChange({ sessionSortDir: sessionSortDir === "desc" ? "asc" : "desc" })}
             >
               ${sessionSortDir === "desc" ? "↓" : "↑"}
             </button>
@@ -749,4 +720,3 @@ export {
   renderSessionsCard,
   renderUsageInsights,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

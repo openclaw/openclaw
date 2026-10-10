@@ -5,11 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  loadTranscriptEventsSync,
-  readSessionTranscriptBoundedMessageTailPage,
-  replaceTranscriptEvents,
-} from "../../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -19,6 +15,7 @@ import {
   unregisterInternalHook,
 } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { captureSessionMemoryTranscript } from "./capture.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -26,6 +23,7 @@ vi.mock("../../llm-slug-generator.js", () => ({
 }));
 
 const loggerMocks = vi.hoisted(() => ({
+  trace: vi.fn(),
   debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
@@ -46,15 +44,11 @@ vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
   clearMemoryArtifactProvenance: vi.fn(),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+vi.mock("./capture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./capture.js")>();
   return {
     ...actual,
-    loadTranscriptEventsSync: vi.fn(actual.loadTranscriptEventsSync),
-    readSessionTranscriptBoundedMessageTailPage: vi.fn(
-      actual.readSessionTranscriptBoundedMessageTailPage,
-    ),
+    captureSessionMemoryTranscript: vi.fn(actual.captureSessionMemoryTranscript),
   };
 });
 
@@ -401,12 +395,9 @@ describe("session-memory hook", () => {
     const tempDir = await createCaseWorkspace("workspace");
     const sessionId = "unavailable-transcript";
     const sessionKey = "agent:main:main";
-    const failure = new Error("transcript projection unavailable\nretry later");
-    vi.mocked(readSessionTranscriptBoundedMessageTailPage).mockImplementationOnce(() => {
-      throw new Error("bounded capture unavailable");
-    });
-    vi.mocked(loadTranscriptEventsSync).mockImplementationOnce(() => {
-      throw failure;
+    vi.mocked(captureSessionMemoryTranscript).mockResolvedValueOnce({
+      status: "unavailable",
+      reason: "transcript projection unavailable retry later",
     });
     loggerMocks.warn.mockClear();
 
@@ -640,7 +631,7 @@ describe("session-memory hook", () => {
       cfg: {
         agents: {
           defaults: { workspace: mainWorkspace },
-          list: [{ id: "navi", workspace: naviWorkspace }],
+          entries: { navi: { workspace: naviWorkspace } },
         },
       } satisfies OpenClawConfig,
       sessionKey: "agent:main:main",

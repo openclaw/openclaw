@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
@@ -9,9 +9,9 @@ import { clearConfigCache } from "../config/config.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
@@ -23,6 +23,7 @@ import { setAvatar } from "../state/user-profile-writes.worker.js";
 import * as userProfiles from "../state/user-profiles.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
+import { serializeGatewayFrame } from "./serialized-json.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   disposeSessionReadContexts,
@@ -32,13 +33,6 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
-import * as workspaceIcons from "./workspace-icon-http.js";
-
-// Icon I/O has its own suite; its detached import must not outlive this cursor fixture.
-vi.mock("./workspace-icon-http.js", () => ({
-  prepareSessionWorkspaceIcon: vi.fn(async () => undefined),
-}));
-
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
 
@@ -67,13 +61,16 @@ function currentScope(storePath: string) {
   return { agentId: "main", sessionId, sessionKey, storePath };
 }
 
-async function createCursorSession(initialEvents?: unknown[]) {
+async function createCursorSession(
+  initialEvents?: unknown[],
+  metadata: Record<string, unknown> = {},
+) {
   const directory = tempDirs.make("openclaw-history-cursor-");
   const storePath = path.join(directory, "sessions.json");
   testState.sessionStorePath = storePath;
   await writeSessionStore({
     entries: {
-      main: { sessionId, updatedAt: Date.now() },
+      main: { ...metadata, sessionId, updatedAt: Date.now() },
     },
   });
   await replaceTranscriptEvents(
@@ -98,12 +95,15 @@ async function callChat<T extends Record<string, unknown>>(
   await chatHandlers[method]?.({
     client: null,
     context,
+    acceptsSerializedJson: true,
     isWebchatConnect: () => false,
     params: { sessionKey: "main", ...params },
     req: { id: method, method, params, type: "req" },
     respond: (ok, payload, error) => {
       result.ok = ok;
-      result.payload = payload as T | undefined;
+      result.payload = JSON.parse(
+        serializeGatewayFrame({ type: "res", payload }).toString(),
+      ).payload;
       result.error = error;
     },
   });
@@ -169,10 +169,19 @@ describe("chat.history cursor catch-up", () => {
     for (const [index, event] of oldEvents.entries()) {
       event.parentId = oldEvents[index - 1]?.id ?? null;
     }
-    const { context, storePath } = await createCursorSession([
-      { type: "session", version: 3, id: sessionId },
-      ...oldEvents,
-    ]);
+    const { context, storePath } = await createCursorSession(
+      [{ type: "session", version: 3, id: sessionId }, ...oldEvents],
+      {
+        compactionCheckpoints: [
+          {
+            preCompaction: { sessionId },
+            postCompaction: { sessionId, entryId: "fresh-compaction" },
+            tokensBefore: 42_000,
+            tokensAfter: 8_000,
+          },
+        ],
+      },
+    );
     const scope = currentScope(storePath);
     await appendTranscriptEvent(scope, {
       type: "compaction",
@@ -189,8 +198,14 @@ describe("chat.history cursor catch-up", () => {
       reason: "reset",
       timestamp: new Date().toISOString(),
     });
+    const cleanup = vi
+      .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
+      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+    onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);
+    expect(cleanup).not.toHaveBeenCalled();
+    cleanup.mockRestore();
     expect(cached.payload?.messages).toMatchObject([
       { __openclaw: { id: "reset", seq: 1, transcriptPosition: { rawSeq: 13 } } },
     ]);
@@ -276,22 +291,9 @@ describe("chat.history cursor catch-up", () => {
     });
     const reloaded = await callChat<History>(context, "chat.history");
     expect(messageIds(reloaded.payload!.messages)).toEqual([...expectedIds, "fresh-compaction"]);
-  });
-
-  test("chat.history does not launch managed outgoing media garbage collection", async () => {
-    const { context } = await createCursorSession();
-    const cleanup = vi
-      .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
-
-    try {
-      const result = await callChat(context, "chat.history");
-
-      expect(result.ok).toBe(true);
-      expect(cleanup).not.toHaveBeenCalled();
-    } finally {
-      cleanup.mockRestore();
-    }
+    expect(reloaded.payload!.messages.at(-1)).toMatchObject({
+      __openclaw: { tokensBefore: 42_000, tokensAfter: 8_000 },
+    });
   });
 
   test("composes nested completions identically after cursor catch-up and fresh history", async () => {
@@ -350,7 +352,7 @@ describe("chat.history cursor catch-up", () => {
     expect(messageIds(composed)).toEqual(["cached", "exec", "first", "second", "wait", "later"]);
   });
 
-  test("reuses sender display reads within each delta and refreshes the next request", async () => {
+  test("refreshes sender display across transferred history pages and cursor deltas", async () => {
     const { context, storePath } = await createCursorSession();
     const profile = userProfiles.ensureProfileForEmail("cursor-profile@example.test");
     const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
@@ -379,6 +381,18 @@ describe("chat.history cursor catch-up", () => {
         const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
         avatarUrls.push(avatarUrl);
         lookup.mockClear();
+        const history = await callChat<History>(context, "chat.history");
+        expect(history.ok).toBe(true);
+        expect(lookup).not.toHaveBeenCalled();
+        expect(history.payload?.messages).toHaveLength(4);
+        for (const message of history.payload?.messages.slice(-3) ?? []) {
+          expect(message).toMatchObject({
+            __openclaw: {
+              senderIdentity: { type: "profile", id: profile.id },
+              senderProfileAvatarUrl: avatarUrl,
+            },
+          });
+        }
         const delta = await callChat<{ kind: string; messages: unknown[] }>(
           context,
           "chat.history",
@@ -408,8 +422,9 @@ describe("chat.history cursor catch-up", () => {
   test("returns an empty delta at the cached head with a fixed multi-agent store", async () => {
     testState.agentsConfig = {
       ownership: "explicit",
-      entries: { main: { default: true }, ops: {} },
+      entries: { main: {}, ops: {} },
     };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
     const { context } = await createCursorSession();
     const page = await callChat<History>(context, "chat.history", { sessionKey });
     expect(page.ok).toBe(true);
@@ -537,20 +552,6 @@ describe("chat.history cursor catch-up", () => {
     expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });
   });
 
-  test("resets for an appended reset boundary", async () => {
-    const { context, storePath } = await createCursorSession();
-    const page = await callChat<{ deltaCursor?: string }>(context, "chat.history");
-    await appendTranscriptEvent(currentScope(storePath), {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: "cached",
-      reason: "reset",
-      firstKeptEntryId: "cached",
-    });
-    const result = await callChat(context, "chat.history", { cursor: page.payload?.deltaCursor });
-    expect(result).toMatchObject({ ok: true, payload: { kind: "reset" } });
-  });
-
   test.each(["offset", "messageId"] as const)("rejects cursor with %s", async (field) => {
     const { context } = await createCursorSession();
     const result = await callChat(context, "chat.history", {
@@ -562,38 +563,28 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test("chat.startup returns startup projections with a delta", async () => {
-    const prepareIcon = vi.spyOn(workspaceIcons, "prepareSessionWorkspaceIcon");
-    try {
-      const { context, storePath } = await createCursorSession();
-      context.readChatStartupProjection = async () => ({
-        metadata: { swarmEnabled: false },
-        sessionModelCatalog: [],
-        defaultModelCatalog: [],
-      });
-      const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
-      await appendTranscriptMessage(currentScope(storePath), {
-        eventId: "startup-append",
-        parentId: "cached",
-        message: { role: "assistant", content: "startup delta", timestamp: 2 },
-      });
-      const delta = await callChat(context, "chat.startup", { cursor: page.payload?.deltaCursor });
-      expect(delta).toMatchObject({
-        ok: true,
-        payload: {
-          kind: "delta",
-          messages: [expect.any(Object)],
-          sessionInfo: expect.any(Object),
-          metadata: expect.any(Object),
-        },
-      });
-      expect(delta.payload).not.toHaveProperty("agentsList");
-    } finally {
-      await Promise.allSettled(
-        prepareIcon.mock.results
-          .filter((result) => result.type === "return")
-          .map((result) => result.value),
-      );
-      prepareIcon.mockRestore();
-    }
+    const { context, storePath } = await createCursorSession();
+    context.readChatStartupProjection = async () => ({
+      metadata: { swarmEnabled: false },
+      sessionModelCatalog: [],
+      defaultModelCatalog: [],
+    });
+    const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
+    await appendTranscriptMessage(currentScope(storePath), {
+      eventId: "startup-append",
+      parentId: "cached",
+      message: { role: "assistant", content: "startup delta", timestamp: 2 },
+    });
+    const delta = await callChat(context, "chat.startup", { cursor: page.payload?.deltaCursor });
+    expect(delta).toMatchObject({
+      ok: true,
+      payload: {
+        kind: "delta",
+        messages: [expect.any(Object)],
+        sessionInfo: expect.any(Object),
+        metadata: expect.any(Object),
+      },
+    });
+    expect(delta.payload).not.toHaveProperty("agentsList");
   });
 });

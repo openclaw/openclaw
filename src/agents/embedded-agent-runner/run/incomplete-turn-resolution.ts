@@ -14,7 +14,9 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
@@ -76,7 +78,14 @@ export function resolveIncompleteTurnPayloadText(params: {
 }): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant;
-  const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
+  const completionAttempt = {
+    ...params.attempt,
+    messagingToolSourceReplyPayloads: params.attempt.messagingToolSourceReplyPayloads?.filter(
+      (payload) =>
+        !payload.toolAuthored || isToolAuthoredSourceReplyForAssistant(payload, assistant),
+    ),
+  };
+  const hasTerminalOutput = hasAttemptTerminalState(completionAttempt);
   // Tool-use expects a post-tool continuation, so partial visible text completes
   // nothing. A length stop that did produce visible text is a partial answer and
   // is delivered with a truncation notice instead. (#76477)
@@ -90,7 +99,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
+    params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
+    !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
@@ -102,19 +113,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.hasIntentionalTerminalCompletion
-  ) {
-    return null;
-  }
-
-  if (
+    params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
-    resolveSourceReplyDelivery(params.attempt) !== "missing"
+    resolveSourceReplyDelivery(completionAttempt) !== "missing" ||
+    // Authored replies await host delivery, but only this input can complete here.
+    completionAttempt.messagingToolSourceReplyPayloads?.some(
+      (payload) => payload.toolAuthored === true,
+    ) ||
+    hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)
   ) {
-    return null;
-  }
-
-  if (hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 
@@ -149,22 +156,29 @@ export function resolveIncompleteTurnPayloadText(params: {
   ) {
     return formatUserFacingAssistantErrorText(assistant);
   }
-  const failureFacts = promptError
-    ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
-    : undefined;
+  const preflightFailureText = renderAgentHarnessPreflightUserMessage(promptError);
+  const failureFacts =
+    promptError && preflightFailureText === undefined
+      ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+      : undefined;
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
-  const promptFailureText = failureFacts
-    ? (failureFacts.providerRequestError?.userMessage ??
-      failureFacts.formatFailureText ??
-      renderAssistantRequestFailureCopy({
-        reason: failureFacts.reason,
-        status: failureFacts.status,
-        code: failureFacts.code,
-      }))
-    : undefined;
+  const promptFailureText =
+    preflightFailureText ??
+    (failureFacts
+      ? (failureFacts.providerRequestError?.userMessage ??
+        failureFacts.requestFailureText ??
+        renderAssistantRequestFailureCopy({
+          reason: failureFacts.reason,
+          status: failureFacts.status,
+          code: failureFacts.code,
+        }))
+      : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
     return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
+  }
+  if (preflightFailureText !== undefined) {
+    return preflightFailureText;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
     return formatUserFacingAssistantErrorText(assistant);
@@ -184,7 +198,12 @@ export function resolveIncompleteTurnPayloadText(params: {
       }),
     });
   }
-  return promptFailureText ?? "⚠️ Agent couldn't generate a response. Please try again.";
+  return (
+    promptFailureText ??
+    (stopReason === "length"
+      ? "⚠️ The model reached its output token limit before generating an answer. Please try again."
+      : "⚠️ Agent couldn't generate a response. Please try again.")
+  );
 }
 
 /**

@@ -12,14 +12,8 @@ import { formatTimeMs } from "../../lib/format.ts";
 
 registerNewSessionSetupEnglish();
 
-/**
- * The join setup behind the connect-machine dialog.
- *
- * The request token and the open flag travel together on purpose: a setup that
- * arrives after the dialog closed, after the gateway changed, or after a newer
- * request started must be dropped rather than shown, and closing has to retire
- * whatever is still in flight.
- */
+// Closing, replacing the Gateway, or starting a newer request retires prior setup.
+// Both the request token and open state fence late replies.
 export class ConnectMachineSetupState {
   private openValue = false;
   private loadingValue = false;
@@ -63,7 +57,7 @@ export class ConnectMachineSetupState {
     const { loadingValue: loading, errorValue: error, setupValue: setup } = this;
     const title = t("newSession.connectMachineTitle");
     const joinUrl = setup?.joinUrl?.trim();
-    const command = joinUrl ? `npx openclaw connect ${quoteCliArg(joinUrl)}` : null;
+    const command = joinUrl ? `npx -y openclaw connect ${quoteCliArg(joinUrl)} --service` : null;
     const expiresAt = setup?.expiresAtMs
       ? formatTimeMs(setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
       : "";
@@ -109,10 +103,14 @@ export class ConnectMachineSetupState {
             ${
               command
                 ? html`
-                    ${renderConnectCommand(command)}
+                    ${renderConnectCommand(`${command} --session-host`)}
                     <p class="connect-machine-dialog__hint">
                       ${t("newSession.connectMachineTeamHint")}
                     </p>
+                    <details>
+                      <summary>${t("newSession.connectMachineCommandOnly")}</summary>
+                      ${renderConnectCommand(command)}
+                    </details>
                     <p class="connect-machine-dialog__hint">
                       ${
                         expiresAt

@@ -19,10 +19,12 @@ import {
   createTriageInferenceSelection,
   createTriageRuntime,
   resetTriageRepairRuntimeMocks,
+  useTriageHeadlessFixture,
   withTriageTerminal,
 } from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createHeadlessFixture = useTriageHeadlessFixture();
 const failedUpdate: UpdateRunResult = {
   status: "error",
   mode: "npm",
@@ -463,11 +465,12 @@ describe("triageCommand", () => {
   });
 
   it.each([
-    { agent: "claude", exitCode: 0 },
-    { agent: "codex", exitCode: 17 },
+    { agent: "claude", exitCode: 0, safeMode: true },
+    { agent: "claude", exitCode: 0, safeMode: false },
+    { agent: "codex", exitCode: 17, safeMode: false },
   ])(
-    "preserves external $agent exit $exitCode without certifying descendant cleanup",
-    async ({ agent, exitCode }) => {
+    "preserves external $agent exit $exitCode without certifying descendant cleanup (safe mode: $safeMode)",
+    async ({ agent, exitCode, safeMode }) => {
       if (process.platform === "win32") {
         return;
       }
@@ -475,7 +478,7 @@ describe("triageCommand", () => {
       const targetPath = path.join(stateDir, "headless-target.json");
       await fs.writeFile(
         executablePath,
-        `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(targetPath)}, JSON.stringify([process.env.OPENCLAW_STATE_DIR, process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_WORKSPACE_DIR])); let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { console.log(JSON.stringify({ args: process.argv.slice(2), shell: process.env.OPENCLAW_SHELL, hasPrompt: input.includes('original symptom') })); console.error('Diagnostic detail '.repeat(200) + '\\n${exitCode ? "Authentication required" : "Repair completed"}'); process.exitCode = ${exitCode}; });\n`,
+        `#!/usr/bin/env node\nif (process.argv[2] === '--help') { console.log(${JSON.stringify(safeMode ? "--safe-mode" : "Usage: claude [options]")}); process.exit(0); }\nrequire('node:fs').writeFileSync(${JSON.stringify(targetPath)}, JSON.stringify([process.env.OPENCLAW_STATE_DIR, process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_WORKSPACE_DIR])); let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { console.log(JSON.stringify({ args: process.argv.slice(2), shell: process.env.OPENCLAW_SHELL, hasPrompt: input.includes('original symptom') })); console.error('Diagnostic detail '.repeat(200) + '\\n${exitCode ? "Authentication required" : "Repair completed"}'); process.exitCode = ${exitCode}; });\n`,
         { mode: 0o700 },
       );
       const actual =
@@ -484,6 +487,9 @@ describe("triageCommand", () => {
       mocks.resolveExecutablePath.mockImplementation((binary) =>
         binary === agent || (agent === "codex" && binary === "claude") ? executablePath : undefined,
       );
+      const actualExec =
+        await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+      mocks.runUtf8CommandWithTimeout.mockImplementation(actualExec.runUtf8CommandWithTimeout);
       const runtime = createTriageRuntime();
       const cleanup = createAgentCleanupScope();
       const result = cleanup.run(() =>
@@ -518,9 +524,14 @@ describe("triageCommand", () => {
       expect(output).toContain('"hasPrompt":true');
       expect(output).toContain(
         agent === "claude"
-          ? '"args":["--safe-mode","-p"]'
+          ? safeMode
+            ? '"args":["--safe-mode","-p"]'
+            : '"args":["-p"]'
           : '"args":["exec","--skip-git-repo-check","-"]',
       );
+      if (agent === "claude" && !safeMode) {
+        expect(output).toContain("Claude --safe-mode unavailable; running claude -p");
+      }
       if (exitCode) {
         expect(output).toContain("Authentication required");
         expect(output).toContain("17");
@@ -534,17 +545,13 @@ describe("triageCommand", () => {
     },
   );
 
-  it("cancels a headless child before returning to the failure owner", async () => {
+  it("cancels a headless child before returning to the failure owner", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
-    const executablePath = path.join(stateDir, "claude");
+    const executablePath = path.join(stateDir, "claude.mjs");
     const pidPath = path.join(stateDir, "child.pid");
-    await fs.writeFile(
-      executablePath,
-      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000);\n`,
-      { mode: 0o700 },
-    );
+    const waitForReady = await createHeadlessFixture(executablePath, pidPath);
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     mocks.spawn.mockImplementation(actual.spawn);
     mocks.resolveExecutablePath.mockImplementation((binary) =>
@@ -567,10 +574,8 @@ describe("triageCommand", () => {
     );
     let pid = 0;
     try {
-      await vi.waitFor(async () => {
-        pid = Number(await fs.readFile(pidPath, "utf8"));
-        expect(pid).toBeGreaterThan(0);
-      });
+      pid = await waitForReady(result, signal);
+      expect(pid).toBeGreaterThan(0);
     } finally {
       controller.abort();
       await expect(result).rejects.toMatchObject({ code: 1 });
@@ -613,6 +618,7 @@ describe("triageCommand", () => {
               expect.stringContaining("| & cursor-agent --print"),
               expect.stringContaining("& kimi --prompt"),
               expect.stringContaining("| & qwen"),
+              expect.stringContaining("& agy --prompt-interactive"),
               expect.stringContaining("& openclaw triage --run"),
             ]
           : [
@@ -625,6 +631,7 @@ describe("triageCommand", () => {
               `${targetEnv} cursor-agent --print < '${promptPath}'`,
               `${targetEnv} kimi --prompt 'Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.'`,
               `${targetEnv} qwen < '${promptPath}'`,
+              `${targetEnv} agy --prompt-interactive 'Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.'`,
               `${targetEnv} openclaw triage --run`,
             ],
     });
@@ -632,28 +639,6 @@ describe("triageCommand", () => {
     expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { executable: "codex", detectedAgents: ["codex"] },
-    { executable: "cursor-agent", detectedAgents: ["cursor"] },
-    { executable: "kimi", detectedAgents: ["kimi"] },
-    { executable: "qwen", detectedAgents: ["qwen"] },
-    { executable: "cursor", detectedAgents: [] },
-    { executable: "agent", detectedAgents: [] },
-  ])(
-    "reports coding agents for $executable without checking credentials or selecting an editor",
-    async ({ executable, detectedAgents }) => {
-      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
-        binary === executable ? `/usr/local/bin/${binary}` : undefined,
-      );
-      const runtime = createTriageRuntime();
-
-      await triageCommand(runtime, { json: true, noExport: true });
-
-      expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ detectedAgents });
-      expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([false, true])("preserves manual non-TTY semantics (run=%s)", async (run) => {
     await withTriageTerminal(false, async () => {

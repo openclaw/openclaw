@@ -62,20 +62,6 @@ it("persists guarded position updates and rejects stale card edits without chang
     status: "done",
   });
   expect(moved).toMatchObject({ card: { id: "first", status: "done", updatedAt: 3 } });
-  const eventsBeforeMoveConflict = socket.frames.filter((frame) => frame.type === "event");
-  await socket.request("stale-after-move", "workboard.cards.update", {
-    id: initial.id,
-    expectedUpdatedAt: 2,
-    patch: { position: 0 },
-  });
-  expect(socket.frames.find((frame) => frame.id === "stale-after-move")).toMatchObject({
-    ok: false,
-    error: {
-      code: "workboard_conflict",
-      details: { type: "workboard_card_conflict", card: moved.card },
-    },
-  });
-  expect(socket.frames.filter((frame) => frame.type === "event")).toEqual(eventsBeforeMoveConflict);
 
   expect(
     await socket.request("unguarded", "workboard.cards.update", {

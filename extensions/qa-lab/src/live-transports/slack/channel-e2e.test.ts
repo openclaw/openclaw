@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackChannelE2e } from "./channel-e2e.js";
+import { runSlackScenario } from "./scenario-runtime.js";
 import { readSlackQaNativeWrites, type SlackNativeWrite } from "./slack-live.capture.js";
 import type { SlackMessage } from "./slack-live.contracts.js";
 
@@ -140,48 +140,75 @@ describe("Slack agent E2E ownership", () => {
     ]);
   });
 
-  it("retains a late native receipt after cancellation for post-stop cleanup", async () => {
+  it("cleans standalone scenario progress and final receipts after an assertion fails", async () => {
     const f = fixture();
-    const started = createDeferred<void>();
-    const response = createDeferred<{ channel: string; ts: string }>();
-    f.driverClient.chat.postMessage.mockImplementationOnce(async () => {
-      started.resolve();
-      return await response.promise;
+    const outputs = [
+      { ts: "2.000000", text: "COMMENTARY" },
+      { ts: "3.000000", text: "Ran Exec" },
+      { ts: "4.000000", text: "TOOL OUTPUT" },
+      { ts: "5.000000", text: "FINAL" },
+    ];
+    const unrelated = [
+      { ts: "6.000000", text: "Ran Exec", user: "U_OTHER" },
+      { ts: "7.000000", text: "other channel", user: "U_SUT" },
+      { ts: "8.000000", text: "other thread", user: "U_SUT", thread_ts: "foreign" },
+    ];
+    f.messages.push(...outputs.map((message) => ({ ...message, user: "U_SUT" })), ...unrelated);
+    for (const message of [...outputs, ...unrelated.slice(1)]) {
+      f.writes.push({
+        evidence: "api-accepted",
+        requestEventId: Number(message.ts),
+        method: "chat.postMessage",
+        channelId: message.ts === "7.000000" ? "C_OTHER" : "C_QA",
+        messageId: message.ts,
+        threadId: message.ts === "8.000000" ? "foreign" : undefined,
+      });
+    }
+    f.sutClient.chat.delete.mockImplementation(async ({ ts }) => {
+      const index = f.messages.findIndex((message) => message.ts === ts);
+      if (index >= 0) {
+        f.messages.splice(index, 1);
+      }
+      return { ok: true };
     });
-    const sending = f.session.driver.send({ text: "late receipt" });
-    const rejected = expect(sending).rejects.toThrow("cancel fixture");
-    await started.promise;
-    f.controller.abort(new Error("cancel fixture"));
-    response.resolve({ channel: "C_QA", ts: "7.000000" });
-    await rejected;
-    await expect(f.session.driver.send({ text: "must not dispatch" })).rejects.toThrow(
-      "cancel fixture",
-    );
-    await f.session.cleanup();
-    expect(f.driverClient.chat.postMessage).toHaveBeenCalledTimes(1);
-    expect(f.driverClient.chat.delete).toHaveBeenCalledWith({ channel: "C_QA", ts: "7.000000" });
+    const run = {
+      expectReply: true,
+      input: "owned scenario",
+      matchText: "FINAL",
+      verify: () => {
+        throw new Error("intentional assertion failure");
+      },
+    };
+    try {
+      await expect(
+        runSlackScenario(
+          {
+            channelId: "C_QA",
+            channelE2e: f.session.driver,
+            recordScenarioMessages: f.session.recordScenarioMessages,
+            configureScenario: async () => ({ cfg: {}, primaryModel: "mock-openai/test", run }),
+            context: { driverClient: f.driverClient, sutReadClient: f.sutClient },
+            getMessageWriteCursor: async () => 0,
+            observedMessages: [],
+            readMessageWrites: async () =>
+              f.messages.map((message) => ({ ...message, channelId: "C_QA" })),
+            scenario: { id: "ownership", title: "ownership", timeoutMs: 1000 },
+            sutIdentity: { userId: "U_SUT" },
+          } as never,
+          { buildRun: () => run },
+        ),
+      ).rejects.toThrow("intentional assertion failure");
+    } finally {
+      await f.session.cleanup();
+    }
+    expect(f.messages).toEqual(unrelated);
     const artifact = JSON.parse(await fs.readFile(f.session.artifactPath, "utf8"));
-    expect(artifact.ownedMessages).toEqual([
-      expect.objectContaining({
-        deleted: true,
-        message: expect.objectContaining({ id: "7.000000" }),
-      }),
-    ]);
-  });
-
-  it("retains an ambiguous send as incomplete instead of guessing a deletion target", async () => {
-    const f = fixture();
-    f.driverClient.chat.postMessage.mockRejectedValueOnce(
-      new Error("connection closed after dispatch"),
+    expect(artifact.ownedMessages).toHaveLength(5);
+    expect(artifact.ownedMessages.every((receipt: { deleted: boolean }) => receipt.deleted)).toBe(
+      true,
     );
-    await expect(f.session.driver.send({ text: "unknown outcome" })).rejects.toThrow(
-      "without a definitive Slack receipt",
-    );
-    await expect(f.session.cleanup()).rejects.toThrow("1 uncertain operations");
-    expect(f.driverClient.chat.delete).not.toHaveBeenCalled();
-    const artifact = JSON.parse(await fs.readFile(f.session.artifactPath, "utf8"));
-    expect(artifact.evidence).toContainEqual(
-      expect.objectContaining({ operation: "chat.postMessage", outcome: "uncertain" }),
+    expect(f.sutClient.chat.delete.mock.calls.map(([input]) => input.ts).toSorted()).toEqual(
+      outputs.map((message) => message.ts),
     );
   });
 
@@ -206,7 +233,6 @@ describe("Slack agent E2E ownership", () => {
   });
 
   it.each([
-    { terminal: "unanswered", outcome: "uncertain", reason: "response-not-captured" },
     { terminal: "server-error", outcome: "uncertain", reason: "response-indeterminate" },
     { terminal: "partial-failure", outcome: "uncertain", reason: "response-indeterminate" },
     { terminal: "rejected", outcome: undefined, reason: undefined },
@@ -240,21 +266,19 @@ describe("Slack agent E2E ownership", () => {
           errorText: "Authorization: private-token",
         });
       }
-      if (terminal !== "unanswered") {
-        events.push({
-          id: 3,
-          flowId: "gateway-write",
-          kind: "response",
-          status: terminal === "server-error" ? 503 : 200,
-          dataText: JSON.stringify({
-            ok: terminal === "accepted-after-error",
-            channel: "C_QA",
-            ts: "2.000000",
-            error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
-            detail: "private-error",
-          }),
-        });
-      }
+      events.push({
+        id: 3,
+        flowId: "gateway-write",
+        kind: "response",
+        status: terminal === "server-error" ? 503 : 200,
+        dataText: JSON.stringify({
+          ok: terminal === "accepted-after-error",
+          channel: "C_QA",
+          ts: "2.000000",
+          error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
+          detail: "private-error",
+        }),
+      });
 
       if (outcome === "uncertain") {
         await expect(f.session.cleanup()).rejects.toThrow("1 uncertain operations");

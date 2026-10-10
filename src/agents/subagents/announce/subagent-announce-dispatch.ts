@@ -1,9 +1,3 @@
-/**
- * Subagent announcement dispatch strategy.
- *
- * Completion handoff and requester-visible replies use this to choose between
- * steering a subagent and directly delivering a message, with phase evidence.
- */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 type SubagentAnnounceDeliveryDisposition =
   | "delivered"
@@ -12,7 +6,6 @@ type SubagentAnnounceDeliveryDisposition =
   | "retryable"
   | "ambiguous"
   | "permanent_failure";
-/** Stable reasons an announcement delivery can fail without throwing. */
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
@@ -93,7 +86,6 @@ function mapSteerOutcomeToDeliveryResult(
   };
 }
 
-/** Runs the ordered steer/direct announcement delivery strategy. */
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
   requireDirectDelivery?: boolean;
@@ -155,22 +147,17 @@ export async function runSubagentAnnounceDispatch(params: {
     primaryDirect.disposition === "session_queued" ||
     primaryDirect.disposition === "intentional_non_delivery" ||
     primaryDirect.disposition === "ambiguous" ||
-    primaryDirect.disposition === "permanent_failure"
+    primaryDirect.disposition === "permanent_failure" ||
+    params.signal?.aborted
   ) {
-    return withPhases(primaryDirect);
-  }
-
-  if (params.signal?.aborted) {
     return withPhases(primaryDirect);
   }
 
   const fallbackSteerOutcome = await params.steer();
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered || fallbackSteer.terminal) {
-    return withPhases(fallbackSteer);
-  }
-
   // Keep the direct failure authoritative; dropped fallback remains in its phase.
-  return withPhases(primaryDirect);
+  return withPhases(
+    fallbackSteer.delivered || fallbackSteer.terminal ? fallbackSteer : primaryDirect,
+  );
 }

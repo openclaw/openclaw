@@ -575,14 +575,6 @@ export async function createGitBackup(params: {
   };
 }
 
-async function resolveGitCommit(repositoryPath: string, ref?: string): Promise<string> {
-  return await requireGit(repositoryPath, [
-    "rev-parse",
-    "--verify",
-    `${ref?.trim() || "HEAD"}^{commit}`,
-  ]);
-}
-
 /** Materialize one database scope from a Git ref into a private temporary directory. */
 async function materializeGitBackupRef(params: {
   repositoryPath: string;
@@ -591,7 +583,11 @@ async function materializeGitBackupRef(params: {
 }): Promise<{ commit: string; path: string } & AsyncDisposable> {
   const repositoryPath = path.resolve(params.repositoryPath);
   await assertGitRepository(repositoryPath);
-  const commit = await resolveGitCommit(repositoryPath, params.ref);
+  const commit = await requireGit(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    `${params.ref?.trim() || "HEAD"}^{commit}`,
+  ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
   const entries = (await requireGit(repositoryPath, ["ls-tree", "-r", "-z", commit, "--", scope]))
     .split("\0")

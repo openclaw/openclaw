@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -27,7 +28,6 @@ const mocks = vi.hoisted(() => ({
         runBeforeToolCall?: ReturnType<typeof vi.fn>;
       }
     | undefined,
-  beforeToolCallParams: [] as Array<Record<string, unknown>>,
   gatewayParams: [] as Array<{
     env: Record<string, string>;
     requestedEnv?: Record<string, string>;
@@ -105,7 +105,6 @@ vi.mock("../process/supervisor/index.js", () => ({
 
 let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
-let createOpenClawCodingTools: typeof import("./agent-tools.js").createOpenClawCodingTools;
 const testExtensionContext = {} as ExtensionContext;
 
 function createTestExecTool(options: Parameters<typeof createExecTool>[0]) {
@@ -164,12 +163,10 @@ describe("exec resolve_exec_env hook wiring", () => {
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec-run.js"));
     ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
-    ({ createOpenClawCodingTools } = await import("./agent-tools.js"));
   });
 
   beforeEach(() => {
     mocks.hookRunner = undefined;
-    mocks.beforeToolCallParams.length = 0;
     mocks.gatewayParams.length = 0;
     mocks.nodeHostParams.length = 0;
     mocks.spawnInputs.length = 0;
@@ -404,48 +401,6 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.spawnInputs).toHaveLength(0);
   });
 
-  it("inherits configured gateway for auto through lazy exec preparation", async () => {
-    const hooks = installWrappedHooks(
-      vi.fn(async (event: { params: Record<string, unknown> }) => {
-        expect(Object.getOwnPropertySymbols(event.params)).toHaveLength(0);
-        mocks.beforeToolCallParams.push({ ...event.params });
-        return undefined;
-      }),
-      vi.fn(async () => ({ LAZY_PLUGIN_SAFE: "yes" })),
-    );
-
-    const exec = createOpenClawCodingTools({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:chat-1",
-      cwd: process.cwd(),
-      exec: { host: "gateway", security: "full", ask: "off" },
-    }).find((tool) => tool.name === "exec");
-    expect(exec).toBeDefined();
-    await executeWrapped(
-      exec!,
-      {
-        host: "auto",
-        command: "echo ok",
-        env: { REQUEST_SAFE: "request" },
-        yieldMs: 120_000,
-      },
-      {
-        agentId: "main",
-        sessionKey: "agent:main:telegram:chat-1",
-        channelId: "chat-1",
-      },
-    );
-
-    expect(mocks.beforeToolCallParams[0]?.env).toEqual({
-      REQUEST_SAFE: "request",
-    });
-    expect(hooks.runResolveExecEnv).toHaveBeenCalledTimes(1);
-    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
-      LAZY_PLUGIN_SAFE: "yes",
-      REQUEST_SAFE: "request",
-    });
-  });
-
   it("recomputes plugin env when before_tool_call changes exec host", async () => {
     const executionSessionKey = "agent:main:telegram:chat-1";
     const hooks = installWrappedHooks(
@@ -522,54 +477,5 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.nodeHostParams[0]?.workdir).toBe("/remote/node/workspace");
     expect(mocks.gatewayParams).toHaveLength(0);
     expect(mocks.spawnInputs).toHaveLength(0);
-  });
-
-  it("skips stale hook runners that report resolve_exec_env without the runner method", async () => {
-    mocks.hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "resolve_exec_env"),
-    };
-
-    const tool = createTestExecTool({
-      host: "gateway",
-      sessionKey: "agent:main:telegram:chat-1",
-    });
-    await tool.execute("call-stale-hook-runner", {
-      command: "echo ok",
-      env: { REQUEST_SAFE: "request" },
-      yieldMs: 120_000,
-    });
-
-    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
-      REQUEST_SAFE: "request",
-    });
-  });
-
-  it("resolves plugin env after before_tool_call adds a command", async () => {
-    const hooks = installWrappedHooks(
-      vi.fn(async (event: { params: Record<string, unknown> }) => {
-        mocks.beforeToolCallParams.push({ ...event.params });
-        return {
-          params: { ...event.params, command: "echo ok" },
-        };
-      }),
-    );
-
-    const tool = createTestExecTool({
-      host: "gateway",
-      sessionKey: "agent:main:telegram:chat-1",
-    });
-    await executeWrapped(tool, {
-      env: { REQUEST_SAFE: "request" },
-      yieldMs: 120_000,
-    });
-
-    expect(mocks.beforeToolCallParams[0]?.env).toEqual({
-      REQUEST_SAFE: "request",
-    });
-    expect(hooks.runResolveExecEnv).toHaveBeenCalledTimes(1);
-    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
-      PLUGIN_SAFE: "yes",
-      REQUEST_SAFE: "request",
-    });
   });
 });

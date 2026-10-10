@@ -1,5 +1,5 @@
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
-import { SkillLibraryError } from "../../skills/library/errors.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -13,12 +13,13 @@ export const STALLED_TURN_GUIDANCE =
   "Keep further tool use to a minimum, do not repeat actions that already ran, and briefly " +
   "say what you could not verify.";
 
-/** A stale watchdog expired this operation before it produced output: the user saw nothing. */
+/** A stale watchdog expired this operation before it delivered output: the user saw nothing. */
 export function isReplyOperationStalledBeforeOutput(
   operation: ReplyOperation | undefined,
 ): boolean {
   return (
     operation?.result?.kind === "failed" &&
+    !operation.sourceReplyDelivered &&
     operation.result.code === "run_stalled" &&
     (operation.staleExpiryReason === "no_activity" ||
       operation.staleExpiryReason === "stuck_recovery")

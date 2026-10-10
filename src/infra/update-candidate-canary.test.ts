@@ -9,6 +9,7 @@ import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as diskSpace from "./disk-space.js";
+import { registerCanaryMigrationPolicyTests } from "./update-candidate-canary-migration.test-support.js";
 import {
   registerCanaryProgressWorkerTests,
   registerCanaryUncertainReceiptTests,
@@ -20,6 +21,7 @@ import {
   createCanarySnapshotResult,
   FakeChild,
   renderSteps,
+  canaryOutcomeStep,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
@@ -144,6 +146,7 @@ afterEach(() => {
 
 describe("update candidate canary", () => {
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
+  registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
   it("records a typed capacity refusal before notifying the snapshot failure", async () => {
     const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
       targetPath,
@@ -156,7 +159,7 @@ describe("update candidate canary", () => {
       const env = { TMPDIR: "/synthetic/tmp" };
       const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env, onStep });
       expect(result).toMatchObject({ status: "error", phase: "snapshot" });
-      const failed = result.steps.at(-1);
+      const failed = canaryOutcomeStep(result.steps);
       expect(failed).toMatchObject({
         name: "candidate-state-snapshot",
         exitCode: 1,
@@ -176,66 +179,52 @@ describe("update candidate canary", () => {
     }
   });
 
-  it("keeps snapshot and validation source selection inside the candidate", async () => {
-    stubHealthyGateway();
-    const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
-    mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
-      createCanarySnapshotResult(options.input, databasePath, warnings),
-    );
-    const servingRoot = path.join(root, "installed");
-    const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), env });
-    expect(result.status).toBe("ok");
-    expect(result.steps[0]?.warnings).toEqual(warnings);
-    expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
-      process.execPath,
-      path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
-    ]);
-    expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
-    for (const call of mocks.spawn.mock.calls) {
-      expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    }
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
-  });
-
-  it("classifies a deadline before teardown when SIGTERM closes the child with zero", async () => {
-    let now = 2_000_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    stubHealthyGateway();
-    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
-      const child = new FakeChild(nextPid++);
-      children.set(child.pid, child);
-      childEnv = options.env;
-      queueMicrotask(() => {
-        child.stderr.write(
-          formatCliFailureLines({
-            title: "The CLI command failed.",
-            error: new Error("Health unavailable\nDistinct connection detail"),
-            env: {},
-          }).join("\n") + "\n",
-        );
-      });
-      now += 899;
-      return child;
-    });
-    try {
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
-      expect(result).toMatchObject({ status: "error", phase: "doctor" });
-      expect(result.logTail.join("\n")).toContain("checks phase timed out");
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
-      expect(result.steps.at(-1)?.stderrTail).toContain("checks phase timed out");
-      const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(detail).toContain("Distinct connection detail");
-      expect(detail).toContain("checks phase timed out");
-      const report = renderUpdateRunReport(
-        updateRunReportInputFromResult({ ...result, mode: "git", root }),
+  it.each(
+    [
+      { runtime: "node", runtimeArgs: [] },
+      { runtime: "bun", runtimeArgs: ["--no-install"] },
+    ].filter(
+      ({ runtime }) =>
+        process.platform !== "win32" || runtime === (process.versions.bun ? "bun" : "node"),
+    ),
+  )(
+    "keeps $runtime snapshot and validation source selection inside the candidate",
+    async ({ runtime, runtimeArgs }) => {
+      stubHealthyGateway();
+      const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
+        createCanarySnapshotResult(options.input, databasePath, warnings),
       );
-      expect(report.markdown).toContain("checks phase timed out");
-    } finally {
-      clock.mockRestore();
-    }
-  });
+      const servingRoot = path.join(root, "installed");
+      const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
+      const nodeRunner = process.platform === "win32" ? process.execPath : path.join(root, runtime);
+      if (process.platform !== "win32") {
+        // The snapshot watchdog also launches this runtime for a real builtin-only I/O probe.
+        await fs.symlink(process.execPath, nodeRunner);
+      }
+      const result = await validateUpdateCandidateCanary({
+        ...canaryStateOptions(3000),
+        env,
+        nodeRunner,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.steps[0]?.warnings).toEqual(warnings);
+      expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
+        nodeRunner,
+        ...runtimeArgs,
+        path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
+      ]);
+      expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
+      for (const call of mocks.spawn.mock.calls) {
+        expect(call[0]).toBe(nodeRunner);
+        expect(call[1].slice(0, runtimeArgs.length)).toEqual(runtimeArgs);
+        expect(call[1].includes("--no-install")).toBe(runtime === "bun");
+        expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      }
+      expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
+    },
+  );
 
   it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
     databasePath = path.join(root, "snapshot-budget.sqlite");
@@ -272,12 +261,13 @@ describe("update candidate canary", () => {
   registerCanaryProgressWorkerTests(() => root, mocks, admission);
 
   it.each([
-    [0, undefined, "error"],
-    [2 * 1024 ** 3, undefined, "ok"],
-    [2 * 1024 ** 3, 30 * 60_000, "error"],
+    [0, undefined, 31 * 60_000, "error"],
+    [400 * 1024 ** 2, undefined, 400_000, "ok"],
+    [2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
+    [2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
   ] as const)(
     "derives validation time from %i state bytes while honoring an explicit %s ms deadline",
-    async (sqliteBytes, timeoutMs, expectedStatus) => {
+    async (sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
@@ -296,7 +286,7 @@ describe("update candidate canary", () => {
           const child = new FakeChild(nextPid++);
           children.set(child.pid, child);
           childEnv = options.env;
-          doctorElapsed = 31 * 60_000;
+          doctorElapsed = elapsedMs;
           queueMicrotask(() => child.emit("close", 0));
           return child;
         },
@@ -463,7 +453,9 @@ describe("update candidate canary", () => {
       expect(result.status).toBe(proceeds ? "ok" : "error");
       expect(result.phase).toBe(proceeds ? "readiness" : "plugins");
       if (failureMessage) {
-        expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(failureMessage);
+        expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
+          failureMessage,
+        );
       }
       expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("gateway"))).toBe(proceeds);
       if (proceeds) {
@@ -516,42 +508,6 @@ describe("update candidate canary", () => {
       }
     }
   });
-  it.each([undefined, "unknown-owned-v2"])(
-    "keeps unsupported checkpoint capability out of admission (%s)",
-    async (candidateMutation) => {
-      runtimeContract = {
-        state: 2,
-        agent: 3,
-        executorDelegation: "pid-start-v1",
-        candidateMutation,
-      };
-      stubHealthyGateway();
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
-      expect(result.status).toBe("ok");
-      expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
-      expect(result).not.toHaveProperty("checkpointContinuation");
-    },
-  );
-  it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
-    await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
-    stubHealthyGateway();
-    const onStep = vi.fn();
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep });
-    expect(result).toMatchObject({ status: "ok", phase: "runtime" });
-    expect(result.candidateSchemaVersions).toBeUndefined();
-    expect(result).not.toHaveProperty("checkpointContinuation");
-    expect(result.steps).toEqual([
-      expect.objectContaining({
-        name: "candidate-recovery",
-        exitCode: null,
-        stdoutTail: "This version uses the current updater to finish installation",
-      }),
-    ]);
-    expect(onStep).toHaveBeenCalledWith(result.steps[0]);
-    expect(mocks.snapshot).not.toHaveBeenCalled();
-    expect(mocks.spawn).not.toHaveBeenCalled();
-  });
-
   it("rehearses private state, observes readiness, and joins child close after tree signals", async () => {
     runtimeContract = {
       state: 2,
@@ -614,10 +570,26 @@ describe("update candidate canary", () => {
       "candidate-plugins",
       "candidate-recovery",
       "candidate-gateway-startup",
+      "candidate-state-cleanup",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
-    expect(completed.at(-1)?.argv.filter((arg) => arg === "--update-canary")).toHaveLength(2);
-    expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
+    // Copy, startup and cleanup are timed receipts for the update report.
+    for (const name of [
+      "candidate-state-snapshot",
+      "candidate-gateway-startup",
+      "candidate-state-cleanup",
+    ]) {
+      expect(result.steps.find((step) => step.name === name)).toMatchObject({
+        exitCode: 0,
+        durationMs: expect.any(Number),
+      });
+    }
+    expect(completed.at(-2)?.argv.filter((arg) => arg === "--update-canary")).toHaveLength(2);
+    expect(
+      completed
+        .slice(0, -1)
+        .map((step) => step.argv.filter((arg) => arg !== "--no-install").slice(1, 3)),
+    ).toEqual([
       [],
       ["doctor", "--fix"],
       ["doctor", "--lint"],
@@ -645,6 +617,7 @@ describe("update candidate canary", () => {
       expect(childEnv[key]).toBeUndefined();
     }
     expect(mocks.spawn.mock.calls.find(([, args]) => args.includes("--check"))?.[1]).toEqual([
+      ...(process.versions.bun ? ["--no-install"] : []),
       path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"),
       "--check",
     ]);
@@ -728,8 +701,12 @@ describe("update candidate canary", () => {
           child.stderr.write("openclaw-update-canary-progress: cli.main.gateway-run-bootstrap\n");
         } else {
           child.stderr.write(
-            formatCliFailureLines({ title: "The CLI command failed.", error, env: {} }).join("\n") +
-              "\n",
+            formatCliFailureLines({
+              title: "The CLI command failed.",
+              error,
+              argv: args,
+              env: options.env,
+            }).join("\n") + "\n",
           );
         }
         if (["lint", "startup", "config"].includes(scenario)) {
@@ -744,7 +721,7 @@ describe("update candidate canary", () => {
     const env = { API_TOKEN: "synthetic-secret" };
     const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), env });
     expect(result).toMatchObject({ status: "error", phase });
-    const failed = result.steps.at(-1)!;
+    const failed = canaryOutcomeStep(result.steps)!;
     if (scenario === "startup-tail") {
       expect.soft(failed.stderrTail).toContain("Unable to resolve health API");
     }
@@ -825,11 +802,11 @@ describe("update candidate canary", () => {
         expect(renderSteps(result.steps)).toContain("incompatible plugin");
       }
       if (failure === "readiness") {
-        expect(result.steps.at(-1)).toMatchObject({
+        expect(canaryOutcomeStep(result.steps)).toMatchObject({
           exitCode: 1,
           failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
         });
-        expect(result.steps.at(-1)?.advisory).toBeUndefined();
+        expect(canaryOutcomeStep(result.steps)?.advisory).toBeUndefined();
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);
@@ -877,7 +854,7 @@ describe("update candidate canary", () => {
     runtimeContract = null;
     const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
-    expect(result.steps.at(-1)).toMatchObject({
+    expect(canaryOutcomeStep(result.steps)).toMatchObject({
       name: "candidate-recovery",
       exitCode: 1,
     });
@@ -941,7 +918,7 @@ describe("update candidate canary", () => {
       receipt.resolve();
       const result = await pending;
       expect(result.status).toBe("error");
-      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+      expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
         "cancelled during step recording",
       );
       expect(mocks.spawn).toHaveBeenCalledTimes(expectedChildren);
@@ -999,8 +976,8 @@ describe("update candidate canary", () => {
     for (const line of expected) {
       expect(result.logTail).toContain(line);
       expect(result.logTail).toContain(`${line} final`);
-      expect(result.steps.at(-1)?.stderrTail).toContain(`${line}\n`);
-      expect(result.steps.at(-1)?.stderrTail).toContain(`${line} final`);
+      expect(canaryOutcomeStep(result.steps)?.stderrTail).toContain(`${line}\n`);
+      expect(canaryOutcomeStep(result.steps)?.stderrTail).toContain(`${line} final`);
     }
   });
 
@@ -1018,6 +995,34 @@ describe("update candidate canary", () => {
     expect(result.status).toBe("error");
     expect(result.logTail.join("\n")).not.toContain("synthetic-sensitive-suffix");
     expect(result.logTail).toContain("following-safe-line");
-    expect(result.steps.at(-1)?.stderrTail).toContain("following-safe-line");
+    expect(canaryOutcomeStep(result.steps)?.stderrTail).toContain("following-safe-line");
+  });
+
+  it("records the rehearsal Doctor's traced sections without logging the trace", async () => {
+    stubHealthyGateway();
+    const spawnDefault = mocks.spawn.getMockImplementation()!;
+    const traceEnv: Record<string, string | undefined> = {};
+    mocks.spawn.mockImplementation(
+      (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        const child = spawnDefault(command, args, options) as FakeChild;
+        const key = args.includes("--fix") ? "doctor" : args.includes("gateway") ? "gateway" : "";
+        traceEnv[key] = options.env.OPENCLAW_GATEWAY_STARTUP_TRACE;
+        if (args.includes("--fix")) {
+          child.stderr.write(
+            "[gateway] startup trace: doctor.database-preflight 1200.0ms total=1300.0ms start=100.0ms\n" +
+              "[gateway] startup trace: doctor.contributions 3400.0ms total=4800.0ms start=1400.0ms\n",
+          );
+        }
+        return child;
+      },
+    );
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
+    expect(result.status).toBe("ok");
+    expect(result.steps.find((step) => step.name === "candidate-doctor")?.diagnostics).toEqual([
+      "Doctor sections: database-preflight 1.2 s, contributions 3.4 s",
+    ]);
+    expect(result.logTail.join("\n")).not.toContain("startup trace");
+    expect(traceEnv.doctor).toBe("1");
+    expect(traceEnv.gateway).toBeUndefined();
   });
 });

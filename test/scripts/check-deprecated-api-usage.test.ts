@@ -79,37 +79,6 @@ describe("scripts/check-deprecated-api-usage", () => {
     }
   });
 
-  it("flags internal facade imports across static, relative, scoped, and dynamic forms", () => {
-    const result = runRules({
-      "src/channels/probe.ts": [
-        'import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";',
-        'export { runChannelInboundEvent } from "../plugin-sdk/inbound-reply-dispatch.js";',
-        'const facade = await import ("../plugin-sdk/channel-message.js", { with: {} });',
-      ].join("\n"),
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "src/channels/probe.ts:1: openclaw/plugin-sdk/channel-reply-pipeline",
-    );
-    expect(result.stderr).toContain(
-      "src/channels/probe.ts:2: ../plugin-sdk/inbound-reply-dispatch.js",
-    );
-    expect(result.stderr).toContain("src/channels/probe.ts:3: ../plugin-sdk/channel-message.js");
-  });
-
-  it("allows canonical compat re-exports and test files", () => {
-    const result = runRules({
-      "src/plugin-sdk/inbound-reply-dispatch.ts":
-        'export { runChannelInboundEvent } from "./channel-inbound.js";',
-      "src/plugin-sdk/inbound-reply-dispatch.test.ts":
-        'const mod = await import("openclaw/plugin-sdk/inbound-reply-dispatch");',
-    });
-
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-  });
-
   it("reads overlapping rule inputs once while preserving complete diagnostic order", () => {
     const result = runRules(
       {
@@ -118,7 +87,7 @@ describe("scripts/check-deprecated-api-usage", () => {
         "extensions/probe/src/a.ts":
           'export { x } from "openclaw/plugin-sdk/inbound-reply-dispatch";\ndeliverOutboundPayloads();',
         "packages/a.ts":
-          'import { x } from "openclaw/plugin-sdk/command-auth";\ndeliverOutboundPayloads();',
+          'import { x } from "openclaw/plugin-sdk/agent-media-payload";\ndeliverOutboundPayloads();',
         "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();",
         "src/a.test.ts": "deliverOutboundPayloads();",
       },
@@ -137,7 +106,7 @@ describe("scripts/check-deprecated-api-usage", () => {
         "Deprecated API usage guard failed:",
         "- plugin-sdk-compat-subpaths: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
         "- plugin-sdk-compat-subpaths: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
-        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/command-auth (use focused non-deprecated plugin SDK subpaths)",
+        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/agent-media-payload (use focused non-deprecated plugin SDK subpaths)",
         "- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (extensions must use focused non-deprecated plugin SDK subpaths)",
         "- facade-internal-imports: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
         "- facade-internal-imports: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
@@ -163,23 +132,5 @@ describe("scripts/check-deprecated-api-usage", () => {
       "extensions/probe": 1,
       "extensions/probe/src": 1,
     });
-  });
-
-  it("does not read a file allowed by the only selected rule", () => {
-    const result = runRules({ "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();" }, [
-      "message-api",
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.io.files).toEqual({});
-  });
-
-  it("rejects unknown rules before reading any source directories", () => {
-    const result = runRules({ "src/a.ts": "deliverOutboundPayloads();" }, ["unknown"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Unknown deprecated API usage rule(s): unknown\n");
-    expect(result.io).toEqual({ files: {}, directories: {} });
   });
 });

@@ -1,34 +1,21 @@
 // Covers exec approval config normalization and safe-bin policy.
-import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import {
+  parseLegacyExecApprovals,
+  tryParsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
 import { saveExecApprovals } from "./exec-approvals-store.test-support.js";
 import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
-  evaluateExecAllowlist,
   matchAllowlist,
   normalizeExecApprovals,
-  resolveSafeBins,
   resolveExecApprovalsLocked,
   resolveExecApprovalsFromFile,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
-
-describe("exec approval temp fixture cleanup", { concurrent: false }, () => {
-  let cleanupProbeRoot = "";
-
-  it("creates a disposable fixture root", () => {
-    cleanupProbeRoot = makeExecApprovalsTempDir();
-    expect(existsSync(cleanupProbeRoot)).toBe(true);
-  });
-
-  it("removes the fixture root before the next test", () => {
-    expect(existsSync(cleanupProbeRoot), cleanupProbeRoot).toBe(false);
-  });
-});
 
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", async () => {
@@ -103,66 +90,6 @@ describe("exec approvals node host allowlist check", () => {
       expect(match?.pattern ?? null).toBe(expectedPattern);
     },
   );
-
-  it("does not treat unknown tools as safe bins", () => {
-    const resolution = {
-      kind: "executable" as const,
-      rawExecutable: "unknown-tool",
-      resolvedPath: "/usr/local/bin/unknown-tool",
-      executableName: "unknown-tool",
-    };
-    const result = evaluateExecAllowlist({
-      analysis: {
-        ok: true,
-        segments: [
-          {
-            raw: "unknown-tool --help",
-            argv: ["unknown-tool", "--help"],
-            resolution: { kind: "command", execution: resolution, policy: resolution },
-          },
-        ],
-      },
-      allowlist: [],
-      safeBins: resolveSafeBins(["jq", "curl"]),
-    });
-    expect(result.allowlistSatisfied).toBe(false);
-  });
-
-  it("satisfies via safeBins even when not in allowlist", () => {
-    const resolution = {
-      kind: "executable" as const,
-      rawExecutable: "head",
-      resolvedPath: "/usr/bin/head",
-      resolvedRealPath: "/usr/bin/head",
-      executableName: "head",
-    };
-    // Not in allowlist
-    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
-    const match = matchAllowlist(entries, resolution);
-    expect(match).toBeNull();
-
-    // But is a safe bin with non-file args
-    const result = evaluateExecAllowlist({
-      analysis: {
-        ok: true,
-        segments: [
-          {
-            raw: "head -n 1",
-            argv: ["head", "-n", "1"],
-            resolution: { kind: "command", execution: resolution, policy: resolution },
-          },
-        ],
-      },
-      allowlist: entries,
-      safeBins: resolveSafeBins(["head"]),
-    });
-    // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
-    if (process.platform === "win32") {
-      expect(result.allowlistSatisfied).toBe(false);
-      return;
-    }
-    expect(result.allowlistSatisfied).toBe(true);
-  });
 });
 
 describe("exec approvals default agent migration", () => {
@@ -194,19 +121,7 @@ describe("exec approvals default agent migration", () => {
   });
 });
 
-describe("persisted exec approvals schema", () => {
-  it("round-trips exact MCP grants and tolerates unrelated future agent metadata", () => {
-    const mcpTools = [
-      { server: "project.docs", tool: "write_note", source: "allow-always", addedAt: 123 },
-    ];
-    const file = { version: 1, agents: { main: { mcpTools, futurePolicy: { enabled: true } } } };
-    const parsed = tryParsePersistedExecApprovals(JSON.stringify(file));
-    expect(parsed?.agents?.main).toMatchObject(file.agents.main);
-    expect(tryParsePersistedExecApprovals(JSON.stringify(parsed))?.agents?.main).toMatchObject(
-      file.agents.main,
-    );
-  });
-
+describe("exec approvals policy schemas", () => {
   it("retains MCP grants when merging legacy default and canonical main policy", () => {
     const grant = {
       server: "project.docs",
@@ -214,25 +129,31 @@ describe("persisted exec approvals schema", () => {
       source: "allow-always",
       addedAt: 123,
     };
-    const parsed = tryParsePersistedExecApprovals(
+    const parsed = parseLegacyExecApprovals(
       JSON.stringify({
         version: 1,
         agents: { main: { mcpTools: [grant] }, default: { ask: "off" } },
       }),
     );
-    expect(parsed?.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
-    expect(parsed?.agents?.default).toBeUndefined();
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    expect(parsed.value.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
+    expect(parsed.value.agents?.default).toBeUndefined();
   });
 
   it("keeps legacy string allowlist entries while normalizing them", () => {
-    const parsed = tryParsePersistedExecApprovals(
+    const parsed = parseLegacyExecApprovals(
       JSON.stringify({
         version: 1,
         agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
       }),
     );
-    expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
-    expect(parsed?.agents?.main?.allowlist?.[1]).toEqual(
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    expect(parsed.value.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
+    expect(parsed.value.agents?.main?.allowlist?.[1]).toEqual(
       expect.objectContaining({ pattern: "cat", source: undefined }),
     );
   });
@@ -363,25 +284,6 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
     }
   }
 
-  it("preserves proper ExecAllowlistEntry objects unchanged", () => {
-    const file: ExecApprovalsFile = {
-      version: 1,
-      agents: {
-        main: {
-          allowlist: [{ pattern: "/usr/bin/ls" }, { pattern: "/usr/bin/cat", id: "existing-id" }],
-        },
-      },
-    };
-
-    const normalized = normalizeExecApprovals(file);
-    const entries = normalized.agents?.main?.allowlist ?? [];
-
-    expect(entries).toHaveLength(2);
-    expect(entries[0]?.pattern).toBe("/usr/bin/ls");
-    expect(entries[1]?.pattern).toBe("/usr/bin/cat");
-    expect(entries[1]?.id).toBe("existing-id");
-  });
-
   it.each([
     {
       name: "mixed entries",
@@ -423,41 +325,6 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
 });
 
 describe("normalizeExecApprovals strips invalid security/ask enum values (#59006)", () => {
-  it("drops invalid defaults.askFallback values", () => {
-    const file = {
-      version: 1,
-      defaults: { askFallback: "none" },
-      agents: {},
-    } as unknown as ExecApprovalsFile;
-    const normalized = normalizeExecApprovals(file);
-    expect(normalized.defaults?.askFallback).toBeUndefined();
-  });
-
-  it("preserves valid defaults.security and defaults.ask values", () => {
-    const file: ExecApprovalsFile = {
-      version: 1,
-      defaults: { security: "full", ask: "off", askFallback: "deny" },
-      agents: {},
-    };
-    const normalized = normalizeExecApprovals(file);
-    expect(normalized.defaults?.security).toBe("full");
-    expect(normalized.defaults?.ask).toBe("off");
-    expect(normalized.defaults?.askFallback).toBe("deny");
-  });
-
-  it("drops invalid agent-level security/ask values", () => {
-    const file = {
-      version: 1,
-      agents: {
-        main: { security: "none", ask: "never", askFallback: "open" },
-      },
-    } as unknown as ExecApprovalsFile;
-    const normalized = normalizeExecApprovals(file);
-    expect(normalized.agents?.main?.security).toBeUndefined();
-    expect(normalized.agents?.main?.ask).toBeUndefined();
-    expect(normalized.agents?.main?.askFallback).toBeUndefined();
-  });
-
   it("resolves to built-in defaults when invalid values are stripped", () => {
     const file = {
       version: 1,

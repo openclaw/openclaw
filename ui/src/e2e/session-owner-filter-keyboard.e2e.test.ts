@@ -51,7 +51,12 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await waitForSessionRosterHydration(page);
-      const trigger = page.getByRole("button", { name: "Filter & sort" });
+      // Keyboard owner selection is an All-scope control; keep the initial Mine default.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
+      const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.locator(".sidebar-session-sort-menu");
@@ -125,7 +130,7 @@ suite.define(() => {
         if (name === "compact") {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
         }
-        await page.getByRole("button", { name: "Filter & sort" }).click();
+        await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
         await openSidebarMenu(page);
         const menu = page.locator(".sidebar-session-sort-menu");
         const menuBounds = await menu.locator(".sidebar-session-filter-panel").boundingBox();
@@ -180,7 +185,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rtl-owners"));
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await openSidebarMenu(page);
       const menu = page.locator(".sidebar-session-sort-menu");
       const owners = menu.locator("#sidebar-sessions-owner");

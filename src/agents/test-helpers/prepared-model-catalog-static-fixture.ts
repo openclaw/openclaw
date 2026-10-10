@@ -1,9 +1,9 @@
-import path from "node:path";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-catalog-owner.js";
 import { createCatalogFixture } from "../prepared-model-catalog-worker.test-support.js";
 import { startSerializedSnapshotBuildBatch } from "../prepared-model-runtime.build.js";
 import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
+import { addCredentialOnlyProviderFixture } from "./prepared-model-catalog-credential-only.test-support.js";
 import { markPluginMetadataSnapshotProvided } from "./prepared-model-catalog-worker-fixture.js";
 
 export function createStaticCatalogSnapshotFixture(params: {
@@ -20,17 +20,22 @@ export function createStaticCatalogSnapshotFixture(params: {
       codexNativeOwner?: boolean;
       builtPluginVersion?: string;
       asyncSyntheticAuth?: boolean;
+      credentialOnlySyntheticAuth?: boolean;
       prepareInboundPluginRegistry?: boolean;
       readOnly?: boolean;
-      metadataWorkspace?: "gateway" | "none" | "activation";
+      metadataWorkspace?: "none" | "activation";
       provideMetadataToWorker?: boolean;
+      reportCodexClientVersion?: boolean;
     },
   ) {
-    const fixture = createCatalogFixture(makeTempDir, spinMs, envOverride, {
+    const fixture = await createCatalogFixture(makeTempDir, spinMs, envOverride, {
       ...options,
       receiptBroadcastName: params.receiptBroadcastName?.(),
     });
-    const { agentDir, workspaceDir, config, env, root } = fixture;
+    const { agentDir, workspaceDir, env } = fixture;
+    const config = options?.credentialOnlySyntheticAuth
+      ? addCredentialOnlyProviderFixture(fixture)
+      : fixture.config;
     const input = {
       agentId: "main",
       agentDir,
@@ -55,9 +60,6 @@ export function createStaticCatalogSnapshotFixture(params: {
               ? { ...config, plugins: { ...config.plugins, entries: {} } }
               : config,
           env,
-          ...(options.metadataWorkspace === "gateway"
-            ? { workspaceDir: path.join(root, "gateway-workspace") }
-            : {}),
         })
       : undefined;
     const providedMetadataSnapshot =
@@ -86,6 +88,7 @@ export function createStaticCatalogSnapshotFixture(params: {
     retireAfterTest(releaseGeneration);
     return {
       ...fixture,
+      config,
       pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
       snapshot: build.snapshot,
       isCurrent,

@@ -1,10 +1,10 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  buildOpenAICompatibleLiveModels,
   createUpstreamProviderCatalog,
-  fetchLiveProviderModelIds,
   listProviderCatalogSnapshotEntries,
-  type LiveModelCatalogFetchGuard,
+  projectProviderCatalogSnapshotRows,
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeGoModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -45,16 +45,47 @@ const OPENCODE_GO_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
     ];
   }),
 );
+const OPENCODE_GO_PROVIDER_ROUTE = {
+  api: "openai-completions",
+  baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+} as const;
+
+// The account listing owns which Go models exist. Upstream metadata enriches the
+// ids it knows and its lifecycle hides deprecated ones; ids it does not know yet
+// keep the listing's default OpenAI-compatible route.
+function projectOpencodeGoListedRows(
+  rows: readonly unknown[],
+  snapshot: ProviderCatalogSnapshot,
+): OpencodeGoModelDefinition[] {
+  const unknown = buildOpenAICompatibleLiveModels(rows, {
+    ...OPENCODE_GO_PROVIDER_ROUTE,
+    models: [],
+  })
+    .filter((model) => !snapshot.has(model.id.toLowerCase()))
+    .map((model) => {
+      const listed = normalizeModelCompat({
+        ...model,
+        ...OPENCODE_GO_PROVIDER_ROUTE,
+        provider: PROVIDER_ID,
+        input: model.input.includes("image") ? ["text", "image"] : ["text"],
+      });
+      // SAFETY: Normalization keeps the assigned Go route and text/image input.
+      return listed as OpencodeGoModelDefinition;
+    });
+  return [...projectProviderCatalogSnapshotRows(rows, snapshot), ...unknown];
+}
 const opencodeGoCatalog = createUpstreamProviderCatalog({
   providerId: PROVIDER_ID,
   seed: OPENCODE_GO_SEED_CATALOG,
-  providerConfig: { api: "openai-completions", baseUrl: OPENCODE_GO_OPENAI_BASE_URL },
+  providerConfig: OPENCODE_GO_PROVIDER_ROUTE,
+  projectRows: projectOpencodeGoListedRows,
   metadataEndpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
   modelsEndpoint: OPENCODE_GO_MODELS_ENDPOINT,
   anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
   timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
   ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
   auditContext: "opencode-go-model-discovery",
+  starterModelAuditContext: "opencode-go-onboarding-model-discovery",
   isStaticEntryActive: (entry) => !entry?.status,
   decorateModel: (model) =>
     model.api === "anthropic-messages" && model.id.startsWith("qwen")
@@ -62,28 +93,11 @@ const opencodeGoCatalog = createUpstreamProviderCatalog({
       : model,
 });
 
-export const { buildStaticProvider: buildStaticOpencodeGoProviderConfig } = opencodeGoCatalog;
-export const buildOpencodeGoLiveProviderConfig =
-  opencodeGoCatalog.buildLiveProvider.bind(opencodeGoCatalog);
-
-export async function resolveOpencodeGoStarterModel(params: {
-  apiKey: string;
-  preferredModelRef: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  const liveModelIds = await fetchLiveProviderModelIds({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
-    discoveryApiKey: params.apiKey,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
-    auditContext: "opencode-go-onboarding-model-discovery",
-  });
-  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
-  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
-}
+export const {
+  buildStaticProvider: buildStaticOpencodeGoProviderConfig,
+  buildLiveProvider: buildOpencodeGoLiveProviderConfig,
+  resolveStarterModel: resolveOpencodeGoStarterModel,
+} = opencodeGoCatalog;
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
   return listProviderCatalogSnapshotEntries(opencodeGoCatalog.getSnapshot());

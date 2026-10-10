@@ -51,14 +51,10 @@ type DiagnosticsTimelineEvent = {
   signal?: string | null;
 };
 
-type DiagnosticsTimelineSpanOptions = {
-  phase?: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  omitErrorMessage?: boolean;
-};
+type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
+  Pick<DiagnosticsTimelineEvent, "phase" | "parentSpanId" | "attributes"> & {
+    omitErrorMessage?: boolean;
+  };
 
 type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
@@ -66,13 +62,10 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-type ActiveDiagnosticsTimelineSpan = {
-  name: string;
-  phase?: string;
-  spanId: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-};
+type ActiveDiagnosticsTimelineSpan = Pick<
+  DiagnosticsTimelineEvent,
+  "name" | "phase" | "parentSpanId" | "attributes"
+> & { spanId: string };
 
 type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
   config?: OpenClawConfig;
@@ -211,27 +204,25 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
     ...(event.runId ? { runId: event.runId } : {}),
     ...(event.envName ? { envName: event.envName } : {}),
     ...(typeof event.pid === "number" ? { pid: event.pid } : {}),
-    ...(event.phase ? { phase: event.phase } : {}),
-    ...(event.spanId ? { spanId: event.spanId } : {}),
-    ...(event.parentSpanId ? { parentSpanId: event.parentSpanId } : {}),
-    ...(typeof event.durationMs === "number"
-      ? { durationMs: normalizeNumber(event.durationMs) }
-      : {}),
-    ...(event.errorName ? { errorName: event.errorName } : {}),
-    ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
-    ...(typeof event.p50Ms === "number" ? { p50Ms: normalizeNumber(event.p50Ms) } : {}),
-    ...(typeof event.p95Ms === "number" ? { p95Ms: normalizeNumber(event.p95Ms) } : {}),
-    ...(typeof event.p99Ms === "number" ? { p99Ms: normalizeNumber(event.p99Ms) } : {}),
-    ...(typeof event.maxMs === "number" ? { maxMs: normalizeNumber(event.maxMs) } : {}),
-    ...(event.activeSpanName ? { activeSpanName: event.activeSpanName } : {}),
-    ...(event.provider ? { provider: event.provider } : {}),
-    ...(event.operation ? { operation: event.operation } : {}),
-    ...(typeof event.ok === "boolean" ? { ok: event.ok } : {}),
-    ...(typeof event.status === "number" ? { status: normalizeNumber(event.status) } : {}),
-    ...(event.command ? { command: event.command } : {}),
-    ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-    ...(event.signal !== undefined ? { signal: event.signal } : {}),
-    ...(attributes ? { attributes } : {}),
+    phase: event.phase || undefined,
+    spanId: event.spanId || undefined,
+    parentSpanId: event.parentSpanId || undefined,
+    durationMs: normalizeNumber(event.durationMs),
+    errorName: event.errorName || undefined,
+    errorMessage: event.errorMessage || undefined,
+    p50Ms: normalizeNumber(event.p50Ms),
+    p95Ms: normalizeNumber(event.p95Ms),
+    p99Ms: normalizeNumber(event.p99Ms),
+    maxMs: normalizeNumber(event.maxMs),
+    activeSpanName: event.activeSpanName || undefined,
+    provider: event.provider || undefined,
+    operation: event.operation || undefined,
+    ok: typeof event.ok === "boolean" ? event.ok : undefined,
+    status: normalizeNumber(event.status),
+    command: event.command || undefined,
+    exitCode: event.exitCode,
+    signal: event.signal,
+    attributes,
   };
   return `${JSON.stringify(normalized)}\n`;
 }
@@ -261,30 +252,15 @@ export function emitCompletedDiagnosticsTimelineSpan(
   if (!isDiagnosticsTimelineEnabled(options)) {
     return;
   }
-  const spanId = randomUUID();
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name,
-      phase: options.phase,
-      spanId,
-      parentSpanId: options.parentSpanId,
-      attributes: options.attributes,
-    },
-    options,
-  );
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.end",
-      name,
-      phase: options.phase,
-      spanId,
-      parentSpanId: options.parentSpanId,
-      durationMs,
-      attributes: options.attributes,
-    },
-    options,
-  );
+  const span = {
+    name,
+    phase: options.phase,
+    spanId: randomUUID(),
+    parentSpanId: options.parentSpanId,
+    attributes: options.attributes,
+  };
+  emitDiagnosticsTimelineEvent({ type: "span.start", ...span }, options);
+  emitDiagnosticsTimelineEvent({ type: "span.end", ...span, durationMs }, options);
 }
 
 /** Returns the currently active span so callers can preserve parentage across memoized work. */
@@ -314,17 +290,7 @@ function startDiagnosticsTimelineSpan(
     ...(options.attributes ? { attributes: options.attributes } : {}),
     ...(options.omitErrorMessage ? { omitErrorMessage: true } : {}),
   };
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
-      attributes: span.attributes,
-    },
-    { config: span.config, env: span.env },
-  );
+  emitDiagnosticsTimelineEvent({ type: "span.start", ...span }, span);
   return span;
 }
 
@@ -348,12 +314,8 @@ function emitFinishedDiagnosticsTimelineSpan(
   emitDiagnosticsTimelineEvent(
     {
       type: failure ? "span.error" : "span.end",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
+      ...span,
       durationMs: performance.now() - span.startedAt,
-      attributes: span.attributes,
       ...(failure
         ? {
             errorName: failure.error instanceof Error ? failure.error.name : typeof failure.error,
@@ -366,7 +328,7 @@ function emitFinishedDiagnosticsTimelineSpan(
           }
         : {}),
     },
-    { config: span.config, env: span.env },
+    span,
   );
 }
 

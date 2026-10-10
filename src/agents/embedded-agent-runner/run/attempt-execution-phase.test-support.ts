@@ -2,6 +2,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
   abortable: vi.fn(),
@@ -118,7 +119,7 @@ export async function createFixture(
     anthropicPayloadLogger: {},
     boundary: { orphanRepair: { removeLeaf: true } },
     cacheTrace: {},
-    contextGuards: { recordCacheTouch: vi.fn() },
+    contextGuards: { checkMidTurnPrecheck: vi.fn(), recordCacheTouch: vi.fn() },
     isOpenAIResponsesApi: true,
     sessionManager,
     settleTracker: { abortActiveSession, trackPromptSettlePromise },
@@ -150,7 +151,10 @@ export async function createFixture(
       bundleTools: {},
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
-      toolBase: { skillInstructionDeliveryCache, nestedToolActivities: new Map() },
+      toolBase: {
+        skillInstructionDeliveryCache,
+        nestedToolActivityState: createAttemptNestedToolActivityState(),
+      },
       toolCatalog: {
         toolSearchRunPlan: {
           capabilityToolNames: new Set(["read"]),

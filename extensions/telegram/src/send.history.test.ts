@@ -32,6 +32,7 @@ import {
   sendLocationTelegram,
   sendMessageTelegram,
   sendPollTelegram,
+  sendTypingTelegram,
 } from "./send.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
@@ -177,6 +178,21 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     expect(fixture.requests).toHaveLength(1);
   });
 
+  it.each([
+    { name: "username target", to: "@fixture:topic:0", messageThreadId: undefined },
+    { name: "numeric thread option", to: "-100123", messageThreadId: 0 },
+  ])("rejects zero in $name before Telegram requests", async ({ to, messageThreadId }) => {
+    fixture.responseFor = (method) =>
+      method === "getChat"
+        ? { id: -100123, type: "supergroup" }
+        : providerMessage(-100123, "Must not send");
+    const opts = { cfg, api: fixture.bot.api, messageThreadId };
+    const error = /topic ID must be a positive safe integer/;
+    await expect(sendMessageTelegram(to, "Must not send", opts)).rejects.toThrow(error);
+    await expect(sendTypingTelegram(to, opts)).rejects.toThrow(error);
+    expect(fixture.requests).toHaveLength(0);
+  });
+
   it("records General-topic acceptance without inventing a private-chat General topic", async () => {
     fixture.responseFor = () => providerMessage(-100123, "Reply in General");
     await sendMessageTelegram("-100123:topic:1", "Reply in General", { cfg, api: fixture.bot.api });
@@ -191,6 +207,11 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
         1,
       ),
     ).toBe(true);
+    await sendTypingTelegram("-100123:topic:1", { cfg, api: fixture.bot.api });
+    expect(fixture.requests[1]).toEqual({
+      method: "sendChatAction",
+      fields: { chat_id: "-100123", action: "typing", message_thread_id: 1 },
+    });
     fixture.responseFor = () => providerMessage(123, "Private topic");
     await expect(
       sendMessageTelegram("123:topic:1", "Private topic", { cfg, api: fixture.bot.api }),

@@ -7,39 +7,16 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveMachineModelIdentifier } from "./machine-model.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
-export type SystemPresence = {
-  connectionId?: string;
-  host?: string;
-  clientId?: string;
-  ip?: string;
-  version?: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  timeZone?: string;
-  lastInputSeconds?: number;
-  mode?: string;
-  reason?: string;
-  deviceId?: string;
-  roles?: string[];
-  scopes?: string[];
-  instanceId?: string;
+export type SystemPresence = SchemaContract<Omit<PresenceEntry, "tags" | "text" | "user">> & {
   user?: PresenceEntry["user"];
-  watchedSessions?: string[];
-  /** Server-owned timing for the person's current continuous live interval. */
-  onlineSince?: number;
-  lastActivityAt?: number;
-  /** Latest accepted OpenClaw interaction on this connection only. */
-  connectionLastActivityAt?: number;
   text: string;
-  /** Heartbeat freshness, independent of person activity and online duration. */
-  ts: number;
 };
 
 type StoredPresence = {
@@ -51,7 +28,7 @@ type StoredPresence = {
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, StoredPresence>();
-const TTL_MS = 5 * 60 * 1000; // 5 minutes
+const TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
 const uptimeOrigin = os.uptime() * 1000 - performance.now();
@@ -114,13 +91,13 @@ function initSelfPresence() {
   setPresence(SELF_KEY, selfEntry);
 }
 
-function touchSelfPresence() {
-  const existing = entries.get(SELF_KEY)?.presence;
-  if (existing) {
-    setPresence(SELF_KEY, { ...existing, ts: Date.now() });
-  } else {
-    initSelfPresence();
+function touchStoredPresence(key: string | symbol): boolean {
+  const existing = entries.get(key)?.presence;
+  if (!existing) {
+    return false;
   }
+  setPresence(key, { ...existing, ts: Date.now() });
+  return true;
 }
 
 initSelfPresence();
@@ -266,16 +243,13 @@ export function touchPresence(key: string): boolean {
   if (!normalizedKey) {
     return false;
   }
-  const existing = entries.get(normalizedKey)?.presence;
-  if (!existing) {
-    return false;
-  }
-  setPresence(normalizedKey, { ...existing, ts: Date.now() });
-  return true;
+  return touchStoredPresence(normalizedKey);
 }
 
 export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
-  touchSelfPresence();
+  if (!touchStoredPresence(SELF_KEY)) {
+    initSelfPresence();
+  }
   const now = freshnessNow();
   for (const [key, entry] of entries) {
     if (key !== SELF_KEY && now - entry.freshness > TTL_MS) {

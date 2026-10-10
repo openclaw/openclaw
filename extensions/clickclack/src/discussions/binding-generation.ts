@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 type DiscussionBindingGeneration = {
   accountId?: string;
@@ -33,9 +31,8 @@ const GENERATION_STORE_OPTIONS = {
 } as const;
 
 type GenerationStore = {
-  store: PluginStateKeyedStore<DiscussionBindingGeneration>;
-  native?: PluginStateSyncKeyedStore<DiscussionBindingGeneration>;
-  tail: Promise<void>;
+  store: PluginStateKeyedStore<DiscussionBindingGeneration, 2>;
+  withLock: ReturnType<typeof createAsyncLock>;
 };
 const storesByRuntime = new WeakMap<PluginRuntime, GenerationStore>();
 
@@ -46,31 +43,15 @@ function withGenerationStore<T>(
   let owner = storesByRuntime.get(runtime);
   if (!owner) {
     const store =
-      runtime.state.openKeyedStore<DiscussionBindingGeneration>(GENERATION_STORE_OPTIONS);
+      runtime.state.openKeyedStoreV2<DiscussionBindingGeneration>(GENERATION_STORE_OPTIONS);
     owner = {
       store,
-      // The declared 2026.9.4 host floor predates comparison methods. Select its
-      // uninterrupted native path before execution, never after a worker failure.
-      // Remove it when the minimum host guarantees both comparison methods.
-      ...(!store.observe || !store.compareAndApply
-        ? {
-            native:
-              runtime.state.openSyncKeyedStore<DiscussionBindingGeneration>(
-                GENERATION_STORE_OPTIONS,
-              ),
-          }
-        : {}),
-      tail: Promise.resolve(),
+      withLock: createAsyncLock(),
     };
     storesByRuntime.set(runtime, owner);
   }
   const currentOwner = owner;
-  const current = owner.tail.then(() => run(currentOwner));
-  owner.tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  return current;
+  return currentOwner.withLock(() => run(currentOwner));
 }
 
 function mutateGeneration<T>(
@@ -81,23 +62,8 @@ function mutateGeneration<T>(
     result: T;
   },
 ): Promise<T> {
-  return withGenerationStore(runtime, async ({ store, native }) => {
-    if (native) {
-      const current = native.lookup(sessionKey);
-      const next = decide(current);
-      if (next.value !== current) {
-        if (next.value) {
-          native.register(sessionKey, next.value);
-        } else {
-          native.delete(sessionKey);
-        }
-      }
-      return next.result;
-    }
+  return withGenerationStore(runtime, async ({ store }) => {
     const { observe, compareAndApply } = store;
-    if (!observe || !compareAndApply) {
-      throw new Error("ClickClack generation comparison capabilities changed");
-    }
     let observed = await observe(sessionKey);
     for (;;) {
       const next = decide(observed.value);

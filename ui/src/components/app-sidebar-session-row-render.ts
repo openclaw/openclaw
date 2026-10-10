@@ -45,6 +45,7 @@ import type { SessionOrganizerController } from "./session-organizer-controller.
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import { sessionRunVisibility } from "./session-run-visibility.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
@@ -88,6 +89,7 @@ export interface SessionListHost {
     SessionOrganizerController,
     | "draggingSidebarSection"
     | "draggingSessionKey"
+    | "isDraggingChildSession"
     | "finishSessionDrag"
     | "finishSidebarSectionDrag"
     | "handleSessionListDragLeave"
@@ -104,6 +106,7 @@ export interface SessionListHost {
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
+    | "isPersonalSessionPin"
     | "reorderSidebarSection"
   >;
   readonly sidebarMenus: Pick<
@@ -117,7 +120,7 @@ export interface SessionListHost {
     | "sessionMenu"
     | "sessionSortMenuPosition"
     | "toggleCatalogViewMenu"
-    | "toggleSessionSortMenu"
+    | "togglePositionedMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionOwnerFilterActive: boolean;
@@ -169,11 +172,12 @@ export function visibleSessionChildren(params: {
 }
 
 /** Compose independently owned session state and context indicators. */
-function renderSidebarSessionIndicators(
+export function renderSidebarSessionIndicators(
   host: SessionListHost,
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
   icon?: TemplateResult,
+  headerSummary?: Parameters<typeof renderTeamSessionSlots>,
 ) {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
@@ -225,6 +229,14 @@ function renderSidebarSessionIndicators(
     settings: gateway?.connection,
     password: gateway?.connection.password,
   });
+  const runVisibility = sessionRunVisibility();
+  const teamSummary: Parameters<typeof renderTeamSessionSlots> = headerSummary ?? [
+    [session],
+    !childrenExpanded,
+    session.childSessionKeys.length,
+    0,
+    runVisibility,
+  ];
   const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
     session,
     leadingOwner,
@@ -233,6 +245,7 @@ function renderSidebarSessionIndicators(
     channelAvatarAuth,
     team,
     icon,
+    runVisibility,
   );
   const stateDescription = describeSessionState(session);
   const snoozed =
@@ -283,6 +296,7 @@ function renderSidebarSessionIndicators(
     originIndicators,
     childrenExpanded,
     content: html` <span class="sidebar-recent-session__details-endcap">
+      ${headerSummary && (leadingIndicator !== nothing || session.visibility === "draft") ? persistentIndicator : nothing}
       <openclaw-viewer-facepile
         .presencePayload=${host.sessionData.presencePayload}
         .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
@@ -312,12 +326,7 @@ function renderSidebarSessionIndicators(
             ? ownAttention.requests.some((request) => request.kind === "approval")
             : !team && ownAttention.kind === "approval",
       })}
-      ${team ? trail : nothing}
-      ${
-        team
-          ? renderTeamSessionSlots([session], !childrenExpanded, session.childSessionKeys.length)
-          : nothing
-      }
+      ${team ? trail : nothing} ${team ? renderTeamSessionSlots(...teamSummary) : nothing}
       ${!team && stateDescription ? html`<span class="sr-only" id=${stateId} aria-hidden="true">${stateDescription}</span>` : nothing}
       ${team ? nothing : trail}
     </span>`,
@@ -332,12 +341,8 @@ export function renderRecentSession(params: {
   icon?: TemplateResult;
 }) {
   const { host, session, display, listItem = true, icon } = params;
-  const pinAccess = host.readSessionMutationAccess({
-    method: "sessions.patch",
-    params: { key: session.key, pinned: !session.pinned },
-    sessionScope: true,
-    session,
-  });
+  const personallyPinned = host.sessionOrganizer.isPersonalSessionPin(session.key);
+  const pinAccess = { allowed: true, reason: "" };
   const archiveAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, archived: !session.archived },
@@ -385,7 +390,7 @@ export function renderRecentSession(params: {
         host.sidebarMenus.openSessionMenu(session, x, y, trigger);
       },
     );
-  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
+  const pinLabel = t(personallyPinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const archiveLabel = t(
     session.archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession",
   );
@@ -405,7 +410,7 @@ export function renderRecentSession(params: {
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
-    session.pinned ? "session-row-host--pinned" : "",
+    personallyPinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.visibility === "draft" ? "session-row-host--draft" : "",
     session.visibility === "draft"
@@ -429,7 +434,7 @@ export function renderRecentSession(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const rowDraggable = groupWriteAccess.allowed;
   const marqueeLabelTemplate = renderHoverMarquee(
     html`${team ? nothing : indicators.originIndicators}${label}`,
     "sidebar-recent-session__name",

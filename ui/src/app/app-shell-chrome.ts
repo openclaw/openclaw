@@ -32,11 +32,15 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import {
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
+import {
   readDebugOverlayMode,
   shouldCloseDebugOverlay,
   type DebugOverlayElement,
   type DebugOverlayMode,
-} from "../pages/debug/debug-overlay-frame.ts";
+} from "../pages/debug/debug-overlay-state.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
@@ -63,6 +67,7 @@ import {
 } from "./native-web-chrome.ts";
 import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
+  NAVIGATION_RAIL_WIDTH,
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   moveToastToNavDrawer,
@@ -124,6 +129,9 @@ export class ShellChromeOwner {
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
+    for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
+      host.addEventListener(type, () => host.requestUpdate(), options);
+    }
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
       signal: this.listeners.signal,
@@ -255,8 +263,11 @@ export class ShellChromeOwner {
     if (!shell || !context) {
       return;
     }
+    const railWidth = shell.classList.contains("shell--navigation-rail")
+      ? NAVIGATION_RAIL_WIDTH
+      : 0;
     const navWidth = Math.round(
-      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
+      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth - railWidth)),
     );
     context.navigation.update({ navWidth });
   };
@@ -624,7 +635,15 @@ export class ShellChromeOwner {
     this.requestLazyElement(host.execApprovalElement, descriptor);
   };
 
-  private shellEventElementTag(eventType: LazyShellEvent["eventType"]): string {
+  readonly restorePendingLazyAction = (): void => {
+    const event = this.pendingLazyAction;
+    if (
+      !event ||
+      this.host.lazyCustomElements.visibleState ||
+      this.commandPaletteLoading.waitingForComposition
+    ) {
+      return;
+    }
     const host = this.host;
     const elements: Record<LazyShellEvent["eventType"], string> = {
       [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement.tagName,
@@ -638,19 +657,7 @@ export class ShellChromeOwner {
       [HOME_PANEL_TOGGLE_EVENT]: "openclaw-assistant-panel",
       [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement.tagName,
     };
-    return elements[eventType];
-  }
-
-  readonly restorePendingLazyAction = (): void => {
-    const event = this.pendingLazyAction;
-    if (
-      !event ||
-      this.host.lazyCustomElements.visibleState ||
-      this.commandPaletteLoading.waitingForComposition
-    ) {
-      return;
-    }
-    const tagName = this.shellEventElementTag(event.eventType);
+    const tagName = elements[event.eventType];
     if (customElements.get(tagName) && !this.host.querySelector(tagName)) {
       // Loaded but render-gated (e.g. the shell is still booting): nothing can
       // consume the dispatch yet, and re-dispatching re-arms a request/update

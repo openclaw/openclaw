@@ -18,7 +18,7 @@ export function registerStorageCommand(program: Command): void {
 
   storage
     .command("list")
-    .description("List storage locations and probe their availability")
+    .description("List storage locations and check their availability")
     .option("--json", "Output JSON", false)
     .action(async (opts: { json?: boolean }, command: Command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -29,29 +29,25 @@ export function registerStorageCommand(program: Command): void {
       });
     });
 
-  storage
-    .command("init <name>")
-    .description("Initialize a new location or verify its existing marker and encryption key")
-    .option("--json", "Output JSON", false)
-    .action(async (name: string, opts: { json?: boolean }, command: Command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { storageInitCommand } = await import("../../commands/storage.js");
-        await storageInitCommand(defaultRuntime, name, {
-          json: (inheritOptionFromParent<boolean>(command, "json") ?? opts.json) === true,
-        });
-      });
-    });
-
-  storage
-    .command("test <name>")
-    .description("Write, read, verify, and delete a temporary probe object")
-    .option("--json", "Output JSON", false)
-    .action(async (name: string, opts: { json?: boolean }, command: Command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { storageTestCommand } = await import("../../commands/storage.js");
-        await storageTestCommand(defaultRuntime, name, {
-          json: (inheritOptionFromParent<boolean>(command, "json") ?? opts.json) === true,
-        });
-      });
-    });
+  for (const [operation, description, handler] of [
+    [
+      "init",
+      "Initialize a new location or verify its existing marker and encryption key",
+      "storageInitCommand",
+    ],
+    ["test", "Write, read, verify, and delete a temporary check object", "storageTestCommand"],
+  ] as const) {
+    storage
+      .command(`${operation} <name>`)
+      .description(description)
+      .option("--json", "Output JSON", false)
+      .action((name: string, opts: { json?: boolean }, command: Command) =>
+        runCommandWithRuntime(defaultRuntime, async () => {
+          const commands = await import("../../commands/storage.js");
+          await commands[handler](defaultRuntime, name, {
+            json: (inheritOptionFromParent<boolean>(command, "json") ?? opts.json) === true,
+          });
+        }),
+      );
+  }
 }
