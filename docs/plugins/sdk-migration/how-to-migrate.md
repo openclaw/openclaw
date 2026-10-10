@@ -67,6 +67,21 @@ to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
 through wrapper and setup adapters while keeping existing synchronous signatures
 for older hosts.
 
+## Await Gateway approval publication
+
+Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
+subscriber eligibility before publishing. If an older host supplies only
+`publishRequested`, select that synchronous callback before dispatch; never retry
+a failed async publication through the old callback.
+
+`publishRequested(kind, request)` retains its synchronous numeric result for
+synchronous subscribers. It is deprecated and **removed in the next Plugin SDK
+major**. If any subscriber requires asynchronous eligibility, the old method
+throws a migration error before sending the request to any subscriber. Use the
+async method for bundled native approval runtimes, whose route selection can
+prepare account state in workers. Legacy publisher objects need not implement
+the optional async companion.
+
 ## Workspace mutation guards
 
 Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
