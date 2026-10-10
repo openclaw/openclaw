@@ -146,6 +146,8 @@ export function createFollowupRunner(
       });
       deliveryPending ||= delivery.kind === "pending";
     };
+    // Admitted turns must not reuse a controller sealed by the predecessor dispatch.
+    let activeTyping = defaults.typing;
     const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
       .map((correlation) => correlation.begin())
       .filter((end) => typeof end === "function");
@@ -186,9 +188,11 @@ export function createFollowupRunner(
       operation = turn.operation;
       const initialGoalId = turn.session.current()?.goal?.id;
       retainReplyOperationUntilComplete(operation);
+      const turnTyping = defaults.typing.createSuccessor?.() ?? defaults.typing;
+      activeTyping = turnTyping;
       const execution = await executeFollowupTurn({
         turn,
-        defaults,
+        defaults: turnTyping === defaults.typing ? defaults : { ...defaults, typing: turnTyping },
         onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
         onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
       });
@@ -418,8 +422,8 @@ export function createFollowupRunner(
         clearAgentRunContext(admittedTurn.runId);
       }
       operation?.complete();
-      defaults.typing.markRunComplete();
-      defaults.typing.markDispatchIdle();
+      activeTyping.markRunComplete();
+      activeTyping.markDispatchIdle();
     }
     if (disposition.kind === "deferred") {
       throw new FollowupRunDeferredError(
