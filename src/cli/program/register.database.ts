@@ -80,7 +80,7 @@ async function runDatabaseOwnership(
 export function registerDatabaseCommand(program: Command): void {
   const database = program
     .command("database")
-    .description("Inspect database schema compatibility and shared-state write ownership")
+    .description("Inspect database compatibility, migration preservation, and write ownership")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
 
   database
@@ -97,6 +97,45 @@ export function registerDatabaseCommand(program: Command): void {
     .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
     .option("--json", "emit machine-readable JSON", false)
     .action(runDatabasePreflight);
+
+  database
+    .command("verify-preservation")
+    .description(
+      "Compare retained recovery captures without changing state or authorizing activation",
+    )
+    .argument("<original-manifest>", "sealed original recovery manifest")
+    .argument("<candidate-manifest>", "sealed capture after migration")
+    .requiredOption(
+      "--original-sha256 <digest>",
+      "original manifest digest recorded before migration",
+    )
+    .requiredOption("--candidate-sha256 <digest>", "candidate manifest digest")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (originalPath, candidatePath, options) => {
+      try {
+        const ref = (manifestPath: string, manifestSha256: string) => ({
+          manifestPath: path.resolve(manifestPath),
+          directory: path.dirname(path.resolve(manifestPath)),
+          manifestSha256,
+        });
+        const { inspectDoctorMigrationPreservation } =
+          await import("../../commands/doctor-migration-preservation.js");
+        const result = await inspectDoctorMigrationPreservation({
+          original: ref(originalPath, options.originalSha256),
+          candidate: ref(candidatePath, options.candidateSha256),
+        });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Migration preservation: ${result.status}; ${result.databases} databases, ${result.files} files. Inspection only.\n${result.warnings.join("\n")}\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
 
   const ownership = database.command("ownership").description("Inspect or claim write ownership");
   ownership

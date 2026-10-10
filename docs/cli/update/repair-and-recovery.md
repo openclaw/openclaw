@@ -176,6 +176,43 @@ ownership. Required migration backups still apply.
 Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
+#### Inspect migration preservation
+
+When both the original and post-migration state have sealed recovery captures,
+compare them without opening live databases:
+
+```bash
+openclaw database verify-preservation /path/to/original/manifest.json /path/to/candidate/manifest.json \
+  --original-sha256 <recorded-original-manifest-sha256> \
+  --candidate-sha256 <candidate-manifest-sha256> --json
+```
+
+Use the original digest recorded before migration. The command verifies each
+capture's manifest and payload hashes, then derives versioned semantic witnesses
+from the original inventory. A fresh capture cannot replace that original
+reference. Retained captures must remain at their recorded locations.
+
+The first projection supports agent schemas 24 and 25, the current shared-state
+schema, and unchanged declared plugin SQLite stores. The 24-to-25 transition
+allows the migration owner's validation queue, canonical receipt, and schema
+metadata changes; session generations, retained transcript bytes, snapshots, and
+plugin rows must survive. Retained schema objects, row identities, SQLite
+application IDs, and file modes are included. Other transitions fail as unsupported.
+Shared registry version and observation fields may refresh only for those exact
+agent stores after their content and target schema have been verified; registration
+identity and unrelated rows remain exact.
+Recorded file symlinks are resolved from the sealed inventory. The existing
+capture format does not retain external parent-directory alias mappings;
+inspection refuses those bindings rather than guessing from today's filesystem.
+Protected files remain byte-exact. Unchanged missing resources and classified history gaps
+produce `preserved-with-warnings`; changed or unreadable evidence exits nonzero.
+
+This is an explicit cold inspection, with at most 4096 resources and 512 tables
+per database. It streams all retained rows and may take time on large captures.
+It creates no new backup or witness store and does not authorize migration,
+rollback, startup, or activation. Updates retain their existing safety gates;
+automatic migration acceptance is a separate integration.
+
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory
