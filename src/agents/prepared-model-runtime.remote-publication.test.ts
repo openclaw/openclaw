@@ -34,10 +34,13 @@ import { markPluginRegistryActive, quiescePluginRegistry } from "../plugins/regi
 import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import * as runtimePluginLoadPlan from "./harness/runtime-plugin-load-plan.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
+import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  acquirePublishedPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   applyRemoteModelCatalogUpdate,
   beginPreparedModelRuntimePluginDrain,
@@ -214,6 +217,132 @@ it("delivers the first reply when catalog adoption retires its captured dispatch
     await dispatcher.waitForIdle();
   }
   expect(deliver.mock.calls.map(([payload]) => payload.text)).toEqual(["first reply completed"]);
+});
+
+it("re-admits an uncovered selection on the configured generation after a catalog publication", async () => {
+  await setup();
+  const input = fixture.agentInput("default", config);
+  // Admission retains the configured generation before the downloaded catalog commits.
+  await using parent = scopePreparedModelRuntimeLease(
+    await acquirePublishedPreparedModelRuntime(input),
+  );
+  expect(parent.pluginGeneration.remoteCatalog?.generatedAt).toBe(200);
+  expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+  await using configured = await acquirePublishedPreparedModelRuntime(input);
+  expect(configured.pluginGeneration.remoteCatalog?.generatedAt).toBe(300);
+  // Provider-owner plugins activated per selection are absent from the admitted registry.
+  const ownersSpy = vi
+    .spyOn(runtimePluginLoadPlan, "resolveAgentRuntimePluginSelectionOwners")
+    .mockReturnValue({ pluginIds: ["openai"], forceActivatedPluginIds: ["openai"] });
+  try {
+    // The configured owner's own key, as cron and Gateway chat admission resolve it.
+    await using lease = await parent.run(() =>
+      acquireAgentRunPreparedModelRuntime(
+        {
+          ...input,
+          workspaceDir: parent.snapshot.workspaceDir,
+          runtimePluginSelections: [
+            { provider: "custom", modelId: "remote-200", agentId: "default" },
+          ],
+        },
+        { catalogMode: "static", pluginGeneration: parent.pluginGeneration },
+      ),
+    );
+    expect(lease.pluginGeneration).toBe(configured.pluginGeneration);
+  } finally {
+    ownersSpy.mockRestore();
+  }
+  // Historic work never replaced the published owner for newly admitted work.
+  await using next = await acquirePublishedPreparedModelRuntime(input);
+  expect(next.pluginGeneration).toBe(configured.pluginGeneration);
+});
+
+it("rejects re-admission when the run is aborted while its selection resolves", async () => {
+  await setup();
+  const input = fixture.agentInput("default", config);
+  await using parent = scopePreparedModelRuntimeLease(
+    await acquirePublishedPreparedModelRuntime(input),
+  );
+  expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+  const controller = new AbortController();
+  // Revocation lands inside acquisition, after the superseded generation was inspected.
+  const ownersSpy = vi
+    .spyOn(runtimePluginLoadPlan, "resolveAgentRuntimePluginSelectionOwners")
+    .mockImplementation(() => {
+      controller.abort(new Error("run revoked"));
+      return { pluginIds: ["openai"], forceActivatedPluginIds: ["openai"] };
+    });
+  try {
+    await expect(
+      parent.run(() =>
+        acquireAgentRunPreparedModelRuntime(
+          {
+            ...input,
+            workspaceDir: parent.snapshot.workspaceDir,
+            runtimePluginSelections: [
+              { provider: "custom", modelId: "remote-200", agentId: "default" },
+            ],
+          },
+          {
+            catalogMode: "static",
+            pluginGeneration: parent.pluginGeneration,
+            abortSignal: controller.signal,
+          },
+        ),
+      ),
+    ).rejects.toThrow("Prepared model runtime lease admission aborted");
+    expect(ownersSpy).toHaveBeenCalled();
+  } finally {
+    ownersSpy.mockRestore();
+  }
+});
+
+it("keeps derived parents confined to their selections after a catalog publication", async () => {
+  await setup();
+  const input = fixture.agentInput("default", config);
+  await using configured = await acquirePublishedPreparedModelRuntime(input);
+  const selected = {
+    ...input,
+    workspaceDir: configured.snapshot.workspaceDir,
+    runtimePluginSelections: [{ provider: "custom", modelId: "selected", runtime: "first" }],
+  };
+  // Each selection resolves its own harness owner; the parent registry holds only "first".
+  const ownersSpy = vi
+    .spyOn(runtimePluginLoadPlan, "resolveAgentRuntimePluginSelectionOwners")
+    .mockImplementation(({ selections }) => {
+      const pluginIds = selections.map((selection) =>
+        selection.provider === "openai" ? "openai" : "first",
+      );
+      return { pluginIds, forceActivatedPluginIds: pluginIds };
+    });
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(createPluginRecord({ id: "first", status: "loaded" }));
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  try {
+    await using parent = scopePreparedModelRuntimeLease(
+      await acquireAgentRunPreparedModelRuntime(selected, {
+        catalogMode: "static",
+        pluginGeneration: configured.pluginGeneration,
+      }),
+    );
+    expect(parent.pluginGeneration).not.toBe(configured.pluginGeneration);
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    await expect(
+      parent.run(() =>
+        acquireAgentRunPreparedModelRuntime(
+          {
+            ...selected,
+            runtimePluginSelections: [
+              { provider: "openai", modelId: "gpt-5.6-luna", runtime: "openclaw" },
+            ],
+          },
+          { catalogMode: "static", pluginGeneration: parent.pluginGeneration },
+        ),
+      ),
+    ).rejects.toThrow(PreparedModelRuntimePublicationSupersededError);
+  } finally {
+    ownersSpy.mockRestore();
+  }
 });
 
 it("keeps downloaded catalogs pending while plugin work drains", async ({ signal }) => {
