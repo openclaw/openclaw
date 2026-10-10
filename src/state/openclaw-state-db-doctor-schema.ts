@@ -1,8 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX } from "./openclaw-state-db-schema-migration-required.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX_SQL =
   "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)";
 
@@ -64,11 +62,6 @@ export function openDoctorStateSchemaReadAdmission(
   database: DatabaseSync,
 ): (() => void) | undefined {
   invalidateSqliteSchemaFacts(database);
-  const userVersion = readSqliteUserVersion(database);
-  assertSupportedStateSchemaVersion(database, database.location() ?? "shared state", {
-    userVersion,
-    contentVersion: userVersion,
-  });
   if (!hasDanglingSkillWorkshopCollectionReviewIndex(database)) {
     return undefined;
   }

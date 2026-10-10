@@ -312,19 +312,23 @@ export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
     cache_creation_input_tokens?: number;
+    cached_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cache_creation_input_tokens?: number };
   },
   model: Model,
   options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
-  const cacheRead =
-    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWrite =
+  const reportedCacheRead =
+    rawUsage.prompt_tokens_details?.cached_tokens ??
+    rawUsage.prompt_cache_hit_tokens ??
+    rawUsage.cached_tokens;
+  const reportedCacheWrite =
     rawUsage.prompt_tokens_details?.cache_write_tokens ??
     rawUsage.prompt_tokens_details?.cache_creation_input_tokens ??
-    rawUsage.cache_creation_input_tokens ??
-    0;
+    rawUsage.cache_creation_input_tokens;
+  const cacheRead = reportedCacheRead ?? 0;
+  const cacheWrite = reportedCacheWrite ?? 0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
   const reasoningTokens = asFiniteNumber(rawUsage.completion_tokens_details?.reasoning_tokens);
@@ -343,6 +347,12 @@ export function parseOpenAICompletionsUsage(
     output,
     cacheRead,
     cacheWrite,
+    cacheTelemetry: {
+      state:
+        reportedCacheRead !== undefined || reportedCacheWrite !== undefined
+          ? "available"
+          : "unavailable",
+    },
     // Managed transport exposes reasoning telemetry; the shipped package Usage shape does not.
     ...(options?.includeReasoningTokens !== false && reasoningTokens !== undefined
       ? { reasoningTokens }

@@ -304,6 +304,29 @@ function buildRedactedQuery(search: string, syncTokens: Map<string, string>) {
   return result;
 }
 
+const MATRIX_QA_STATE_FAMILIES: Array<[MatrixQaStateFamily, string[], string[]]> = [
+  ["sync-token", ["/sync"], []],
+  ["backup", ["/room_keys/", "/account_data/m.megolm_backup."], ["backup"]],
+  [
+    "key",
+    [
+      "/keys/",
+      "/sendtodevice/",
+      "/account_data/m.cross_signing.",
+      "/account_data/m.secret_storage.",
+    ],
+    [
+      "one_time_key",
+      "device_one_time_keys_count",
+      "device_unused_fallback_key_types",
+      "device_keys",
+      "session_data",
+    ],
+  ],
+  ["device", ["/devices"], ["device_id", "device_lists"]],
+  ["media", ["/media/"], ["content_uri", "mimetype"]],
+];
+
 function resolveStateFamilies(params: {
   requestFields: string[];
   responseFields: string[];
@@ -311,40 +334,13 @@ function resolveStateFamilies(params: {
 }) {
   const fields = [...params.requestFields, ...params.responseFields].join(" ").toLowerCase();
   const route = params.route.toLowerCase();
-  const families = new Set<MatrixQaStateFamily>();
-  if (route.includes("/sync")) {
-    families.add("sync-token");
-  }
-  if (route.includes("/room_keys/") || fields.includes("backup")) {
-    families.add("backup");
-  }
-  if (route.includes("/account_data/m.megolm_backup.")) {
-    families.add("backup");
-  }
-  if (
-    route.includes("/keys/") ||
-    route.includes("/sendtodevice/") ||
-    route.includes("/account_data/m.cross_signing.") ||
-    route.includes("/account_data/m.secret_storage.") ||
-    fields.includes("one_time_key") ||
-    fields.includes("device_one_time_keys_count") ||
-    fields.includes("device_unused_fallback_key_types") ||
-    fields.includes("device_keys") ||
-    fields.includes("session_data")
-  ) {
-    families.add("key");
-  }
-  if (
-    route.includes("/devices") ||
-    fields.includes("device_id") ||
-    fields.includes("device_lists")
-  ) {
-    families.add("device");
-  }
-  if (route.includes("/media/") || fields.includes("content_uri") || fields.includes("mimetype")) {
-    families.add("media");
-  }
-  return [...families].toSorted();
+  return MATRIX_QA_STATE_FAMILIES.filter(
+    ([, routes, markers]) =>
+      routes.some((marker) => route.includes(marker)) ||
+      markers.some((marker) => fields.includes(marker)),
+  )
+    .map(([family]) => family)
+    .toSorted();
 }
 
 function buildExpectation(

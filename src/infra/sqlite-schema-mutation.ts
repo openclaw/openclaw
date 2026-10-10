@@ -52,19 +52,6 @@ function changesSchema(sql: string): boolean {
   return false;
 }
 
-function changesOnlyTemporaryTable(sql: string): boolean {
-  const normalized = normalizeSqlWhitespace(sql);
-  const end = findSqlCharacter(normalized, ";");
-  if (end >= 0 && normalized.slice(end + 1).trim() !== "") {
-    return false;
-  }
-  // An unqualified DROP may resolve to MAIN; only the explicit TEMP namespace is local.
-  return (
-    /^CREATE\s+(?:TEMP|TEMPORARY)\s+TABLE\b/iu.test(normalized) ||
-    /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:temp|"temp"|`temp`|\[temp\])\s*\./iu.test(normalized)
-  );
-}
-
 function createsOnlyTemporaryObject(sql: string): boolean {
   let remaining = normalizeSqlWhitespace(sql);
   const kind = /^\s*CREATE\s+(?:TEMP|TEMPORARY)\s+(TABLE|TRIGGER)\b/iu
@@ -87,6 +74,19 @@ function createsOnlyTemporaryObject(sql: string): boolean {
     }
   }
   return false;
+}
+
+function changesOnlyTemporaryTable(sql: string): boolean {
+  const normalized = normalizeSqlWhitespace(sql);
+  const end = findSqlCharacter(normalized, ";");
+  if (end >= 0 && normalized.slice(end + 1).trim() !== "") {
+    return false;
+  }
+  // An unqualified DROP may resolve to MAIN; only the explicit TEMP namespace is local.
+  return (
+    /^CREATE\s+(?:TEMP|TEMPORARY)\s+TABLE\b/iu.test(normalized) ||
+    /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:temp|"temp"|`temp`|\[temp\])\s*\./iu.test(normalized)
+  );
 }
 
 // A write to another table can change policy through a trigger.

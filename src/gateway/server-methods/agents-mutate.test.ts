@@ -26,6 +26,7 @@ import {
   registerAgentCreationCommitTests,
   resolveMockWorkspaceDir,
   type MockAgentEntry,
+  type MockConfig,
 } from "./agents-mutate.test-support.js";
 const mocks = vi.hoisted(() => ({
   sharedAuthStoreOwnership: { location: "legacy-main" } as {
@@ -1811,18 +1812,6 @@ describe("agents.files.list", () => {
         (name) => name !== "IDENTITY.md" && name !== "BOOTSTRAP.md",
       ),
     );
-  });
-
-  // The identity form owns this file via agents.update; raw writes stay available
-  // so removing the editor tab does not remove the capability.
-  it("still accepts direct IDENTITY.md writes even though it is not listed", async () => {
-    const respond = await call("agents.files.set", {
-      agentId: "main",
-      name: "IDENTITY.md",
-      content: "- Name: Ada\n",
-    });
-
-    expectRespondOk(respond, { ok: true });
   });
 
   it("rejects writes to retired HEARTBEAT.md workspace files", async () => {

@@ -265,9 +265,12 @@ function openAgentDatabaseBackend(
         );
         // The host posts before granting admission; shared revocation remains live after transfer.
         // SAFETY: this private port receives only the host's typed validation receipt.
-        lease.validation = receiveMessageOnPort(port1)?.message as
-          | OpenClawAgentDatabaseValidation
-          | undefined;
+        const preparation = receiveMessageOnPort(port1)?.message as {
+          validation?: OpenClawAgentDatabaseValidation;
+          deferUnverifiedIntegrity: boolean;
+        };
+        lease.validation = preparation.validation;
+        lease.deferUnverifiedIntegrity = preparation.deferUnverifiedIntegrity;
       } catch (error) {
         throw new SqliteWorkerOpenRefusedError(error);
       } finally {

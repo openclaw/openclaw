@@ -42,8 +42,10 @@ Interactive `doctor` first checks shared schema compatibility and can offer a
 source update. If the update does not take over, Doctor checks all database
 schemas before asking to pause the matching managed Gateway while you review repairs. Accepting takes maintenance custody, keeps individual repair
 prompts, and restores the service's prior state after database handles close.
-Declining ends the repair flow without changing the service or state; use
-`openclaw doctor --lint` for read-only diagnosis. Externally supervised or
+Declining skips repairs and continues the same invocation with read-only
+`--lint` checks, without changing the service or persisted state or asking for
+repair approvals. The report exits `1` if it finds warnings or errors, otherwise
+`0`. Existing `--deep` and `--allow-exec` selections still apply. Externally supervised or
 unmatched Gateways remain subject to their existing maintenance ownership checks.
 
 When ordinary `doctor` asks **Apply recommended config repairs now?**, it checks
@@ -124,6 +126,15 @@ conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
 Update-time Doctor runs startup-required repairs before optional inspections.
+When the installed updater supports post-restart inspections, Doctor moves
+lint-backed, inspection-only checks out of the stopped Gateway window. The
+updater runs them after restart and saves their findings in the
+`post-activation doctor inspections` result step. Findings or an incomplete
+inspection remain advisory and do not fail an otherwise successful update.
+Repairs, migrations, readiness gates, and checks without equivalent lint
+coverage keep their existing ordering. Older installed updaters keep the
+inspections in their original Doctor pass.
+
 On large fleets it can defer auth and model diagnostics, plugin inspection,
 skills and workspace metadata, session-snapshot inspection, and advisory lint to
 reserve time for required repairs and update validation. Each deferred check

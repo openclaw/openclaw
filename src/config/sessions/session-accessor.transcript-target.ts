@@ -68,12 +68,27 @@ export async function resolveSessionTranscriptRuntimeTarget(
   }
   if (incognito) {
     incognito.admissionSignal?.throwIfAborted();
+    const sessionKey = resolveSqliteSessionKey(bound.sessionKey, agentId);
+    if (!sessionKey && !options.keyFormat) {
+      // Marker-only history resolves retained windows without a current entry key.
+      const persistedSessionKey = await incognito.actor.sessions.transcript(
+        { assertCurrent: () => incognito.actor.assertReadable() },
+        { type: "session.keyById.read", input: { sessionId: bound.sessionId } },
+        incognito.admissionSignal,
+      );
+      return {
+        agentId,
+        sessionId: bound.sessionId,
+        sessionKey: persistedSessionKey ?? "",
+        storePath: incognito.actor.path,
+      };
+    }
     return incognito.actor.sessions.transcript(
       { assertCurrent: () => incognito.actor.assertReadable() },
       {
         type: "session.runtimeTarget.read",
         input: {
-          sessionKey: resolveSqliteSessionKey(bound.sessionKey, agentId),
+          sessionKey,
           sessionId: bound.sessionId,
           fence: {},
           ...options,

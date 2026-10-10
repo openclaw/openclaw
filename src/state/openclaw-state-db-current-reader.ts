@@ -40,6 +40,7 @@ import {
   openOpenClawStateReadConnection,
   type OpenClawStateReadConnection,
 } from "./openclaw-state-db-read-connection.js";
+import { admitStateReadSchemaFacts } from "./openclaw-state-db-read-schema.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import {
   executeExistingOpenClawStateRead,
@@ -396,6 +397,9 @@ function runOpenClawStateCurrentReadConnection<T>(
     // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
     closeAdmission = openStateSchemaReadAdmission?.(db);
     const existingSchema = isExistingOpenClawStateSchema(pathname, db);
+    if (openStateSchemaReadAdmission) {
+      admitStateReadSchemaFacts(db, pathname);
+    }
     const admit = () => {
       const current = getAdmittedSqliteSchemaFacts(db);
       const accepted = currentReaderSchemaAdmissions.get(db);

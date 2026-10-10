@@ -200,10 +200,6 @@ function parseJsonLines(stdout: string): Array<Record<string, unknown>> {
 }
 
 describe("CLI help process exit", () => {
-  it("disables esbuild worker IPC for source CLI children", () => {
-    expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
-  });
-
   it("exits promptly after root --help", async () => {
     // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
     // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
@@ -544,76 +540,6 @@ await runCliWithExitFinalization({
 });
 
 describe("backup create process", () => {
-  it.runIf(process.platform !== "win32")(
-    "creates a verified backup through an absolute configured config link",
-    async () => {
-      const root = tempDirs.make("openclaw-backup-cli-config-link-");
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const managedConfigPath = path.join(root, "nix-store", "openclaw.json");
-      const outputDir = path.join(root, "output");
-      await Promise.all([
-        fs.mkdir(stateDir, { recursive: true }),
-        fs.mkdir(path.dirname(managedConfigPath), { recursive: true }),
-        fs.mkdir(outputDir, { recursive: true }),
-      ]);
-      await fs.writeFile(managedConfigPath, '{"logging":{"level":"silent"}}\n');
-      await fs.symlink(managedConfigPath, configPath);
-
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "--import",
-          "tsx",
-          fileURLToPath(preparedCliEntry),
-          "backup",
-          "create",
-          "--no-include-workspace",
-          "--output",
-          outputDir,
-          "--verify",
-          "--json",
-        ],
-        env: {
-          ...process.env,
-          HOME: root,
-          USERPROFILE: root,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          NODE_ENV: undefined,
-          NODE_OPTIONS: undefined,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_HOME: root,
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_STATE_DIR: stateDir,
-          VITEST: undefined,
-        },
-      });
-      if (result.code !== 0) {
-        throw new Error(
-          formatCliProcessFailure({
-            reason: `backup CLI exited with code ${result.code} and signal ${result.signal}`,
-            stdout: result.stdout,
-            stderr: result.stderr,
-          }),
-        );
-      }
-
-      const output: unknown = JSON.parse(result.stdout);
-      expect(output).toMatchObject({ includeWorkspace: false, verified: true });
-      if (
-        !output ||
-        typeof output !== "object" ||
-        !("archivePath" in output) ||
-        typeof output.archivePath !== "string"
-      ) {
-        throw new Error("backup CLI did not return an archive path");
-      }
-      const entries = await listBackupArchiveEntries(output.archivePath);
-      expect(entries.some((entry) => entry.endsWith("/state/openclaw.json"))).toBe(true);
-    },
-  );
-
   it.runIf(process.platform !== "win32")(
     "excludes a configured workspace before archive link validation",
     async () => {

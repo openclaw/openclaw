@@ -2,6 +2,7 @@ import { appendFileSync } from "node:fs";
 import { workerData } from "node:worker_threads";
 const { register } = await import(workerData.sourceLoaderUrl);
 register();
+const { captureMethodCall } = await import("../../../test/helpers/capture-method-call.ts");
 const { requireNodeSqlite, resolveNodeSqliteLocation } = await import("../../infra/node-sqlite.ts");
 const sqlite = requireNodeSqlite();
 const target = workerData.databasePath && resolveNodeSqliteLocation(workerData.databasePath);
@@ -18,10 +19,9 @@ sqlite.DatabaseSync.prototype.close = function () {
 if (workerData.schemaTrace) {
   const paths = new Set(workerData.schemaTrace.databasePaths.map(resolveNodeSqliteLocation));
   const statements = new WeakMap();
-  // oxlint-disable-next-line typescript/unbound-method -- The trace wrapper supplies the intercepted database receiver.
-  const prepare = sqlite.DatabaseSync.prototype.prepare;
+  const prepare = captureMethodCall("prepare")(sqlite.DatabaseSync.prototype);
   sqlite.DatabaseSync.prototype.prepare = function (sql) {
-    const statement = prepare.call(this, sql);
+    const statement = prepare(this, sql);
     if (paths.has(this.location())) {
       statements.set(statement, sql);
     }

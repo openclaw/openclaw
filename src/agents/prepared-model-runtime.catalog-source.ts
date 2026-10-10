@@ -144,5 +144,24 @@ export function prepareRetainedProviderCatalog(
     // account inventory. Reacquire them with this generation before enriching API routes.
     retainedInventory.catalog.nativeHostRows = undefined;
   }
-  return { providerSource, providerSources, retainedInventory };
+  // A rebuild cannot always prove the account behind discovery-only credentials, such as a
+  // native CLI sign-in. Those providers are reacquired instead of disappearing until a refresh.
+  const unretainedProviders = [...(inventory?.providers.keys() ?? [])].filter(
+    (provider) => !retainedProviders.has(provider),
+  );
+  /** Providers a changed-only pass reacquires: changed source or credentials, or dropped rows. */
+  const listChangedProviders = (
+    published: PreparedModelCatalogInventory | undefined,
+    candidates: readonly string[] = [
+      ...Object.keys(facts.credentials),
+      ...unretainedProviders.filter((provider) => !published?.providers.has(provider)),
+    ],
+  ) =>
+    [...new Set(candidates.map(normalizeProvider))].filter(
+      (provider) =>
+        published?.providers.get(provider)?.source !== providerSources.get(provider) ||
+        published?.providers.get(provider)?.credentials !==
+          preparedProviderCatalogCredentials(facts, provider, normalizeProvider),
+    );
+  return { providerSource, retainedInventory, listChangedProviders };
 }

@@ -9,7 +9,7 @@ import {
   sqliteExtendedResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-operation-admission.js";
+import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
@@ -41,6 +41,7 @@ function withDatabaseAdmission<T>(operation: () => T): T {
 }
 const shared = new BigInt64Array(params.shared);
 const renewalProgress = new BigInt64Array(params.renewalProgress);
+const completedRequest = new BigInt64Array(params.completedRequest);
 Atomics.store(shared, state.startupPhase, startupPhase["body-entry"]);
 function observeDurableExpiry(expiresAt: number | undefined) {
   Atomics.store(shared, state.expiresAt, BigInt(expiresAt ?? 0));
@@ -294,6 +295,8 @@ parentPort?.on("message", (request: LeaseHeartbeatParentMessage) => {
       // Preserve the first loss before the existing request rejection can escape.
       recordLoss({ path, outcome });
     }
+    // Parent deadlines can run before delivery of this completed request's reply.
+    Atomics.store(completedRequest, 0, BigInt(request.id));
     parentPort?.postMessage(reply, []);
     if (lost) {
       lose({ path, outcome });

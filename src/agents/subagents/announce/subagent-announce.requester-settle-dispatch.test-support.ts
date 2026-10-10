@@ -8,10 +8,11 @@ import {
   registryRead,
   startTurn,
   readDescendantFacts,
+  loadRequester,
 } from "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import type { RequesterSettleWakeBatchCallbacks } from "./subagent-announce.requester-settle-state.js";
 
-export { deliver, registryRead, startTurn, readDescendantFacts };
+export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
 
 const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 
@@ -25,6 +26,11 @@ export function useRequesterSettleDispatchFixture() {
     resetCommandQueueStateForTest();
     startTurn.mockReset();
     deliver.mockReset();
+    loadRequester.mockReset().mockReturnValue({
+      cfg: {},
+      canonicalKey: REQUESTER_KEY,
+      entry: { sessionId: "requester-session", updatedAt: 1 },
+    });
     readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
     registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
     registryRead.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);

@@ -127,3 +127,26 @@ export function observeSqliteTransactionState(
     owner.transactionCatalogBound = false;
   }
 }
+
+export function finishSqliteReadScope(
+  database: DatabaseSync,
+  owner: SqliteSchemaOwner,
+  wasTransaction: boolean,
+  expiresRead: boolean,
+  succeeded: boolean,
+  openingMutationRevision?: number,
+): void {
+  const inTransaction = database.isTransaction;
+  if (!succeeded && wasTransaction && !inTransaction) {
+    owner.mutationRevision += 1;
+  }
+  owner.transactionOpen = inTransaction;
+  if (!wasTransaction || !inTransaction) {
+    owner.transactionMutationRevision = inTransaction ? openingMutationRevision : undefined;
+  }
+  if (wasTransaction !== inTransaction || expiresRead) {
+    owner.transactionSnapshot = undefined;
+    owner.transactionRead = false;
+    owner.transactionCatalogBound = false;
+  }
+}

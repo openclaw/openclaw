@@ -37,15 +37,9 @@ type CliOptions = {
   verifyApk?: string;
 };
 
-export type AndroidBuildMetadata = {
+type AndroidBuildMetadata = {
   commit: string;
   timestamp: string;
-};
-
-type ResolveAndroidBuildMetadataOptions = {
-  env?: NodeJS.ProcessEnv;
-  now?: () => Date;
-  readGitCommit?: () => string;
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -93,15 +87,13 @@ function readRepositoryCommit(): string {
   }
 }
 
-export function resolveAndroidBuildMetadata(
-  options: ResolveAndroidBuildMetadataOptions = {},
-): AndroidBuildMetadata {
-  const env = options.env ?? process.env;
+function resolveAndroidBuildMetadata(): AndroidBuildMetadata {
+  const env = process.env;
   const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   let repositoryCommit: string | undefined;
   if (!explicitCommit) {
     try {
-      repositoryCommit = (options.readGitCommit ?? readRepositoryCommit)().trim() || undefined;
+      repositoryCommit = readRepositoryCommit().trim() || undefined;
     } catch {
       // GitHub's ambient SHA is safe only when there is no readable checkout.
     }
@@ -115,12 +107,12 @@ export function resolveAndroidBuildMetadata(
   const configuredTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
   const timestamp = configuredTimestamp
     ? normalizeIsoUtcTimestamp(configuredTimestamp)
-    : (options.now ?? (() => new Date()))().toISOString();
+    : new Date().toISOString();
 
   return { commit, timestamp };
 }
 
-export function androidBuildMetadataGradleArgs(metadata: AndroidBuildMetadata): string[] {
+function androidBuildMetadataGradleArgs(metadata: AndroidBuildMetadata): string[] {
   return [
     `-PopenclawBuildCommit=${metadata.commit}`,
     `-PopenclawBuildTimestamp=${metadata.timestamp}`,

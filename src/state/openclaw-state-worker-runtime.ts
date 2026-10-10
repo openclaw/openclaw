@@ -1,6 +1,7 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { executeSandboxRegistryCommand } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import { captureWorkspaceStateReceipt } from "../agents/workspace-state-publication.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -12,10 +13,6 @@ import {
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
-import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
@@ -27,6 +24,7 @@ import {
   writeSecretStoreEntriesInDatabase,
   rollbackSecretStoreEntryWriteInDatabase,
   deleteSecretStoreEntryInDatabase,
+  updateSecretStoreAllowedHostsInDatabase,
 } from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -110,13 +108,6 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "database.generationMatches") {
-    // Unavailable inspection retains the known failure; only a stable mismatch expires it.
-    return sameSqliteFileGeneration(
-      command.input.generation,
-      readStableSqliteFileGeneration(context.databasePath),
-    );
-  }
   if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
@@ -177,13 +168,17 @@ export function executeSharedStateCommand(
     return importSandboxRegistryRow(command.input, writeOptions);
   }
   if (command.type === "workspace.replaceAttestation") {
-    return runOpenClawStateWriteTransaction((writer) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
-      return result;
-    }, writeOptions);
+    return runOpenClawStateWriteTransaction(
+      (writer) =>
+        captureWorkspaceStateReceipt(writer.db, () => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
+          return result;
+        }),
+      writeOptions,
+    );
   }
   if (
     command.type === "workspace.snapshotAndRegister" ||
@@ -214,6 +209,12 @@ export function executeSharedStateCommand(
     return command.type === "secrets.rollback"
       ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
       : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
+  }
+  if (command.type === "secrets.allowedHosts") {
+    return updateSecretStoreAllowedHostsInDatabase(
+      { ...command.input, database: writeOptions },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
