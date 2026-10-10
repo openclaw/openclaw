@@ -66,7 +66,10 @@ function registerTokens(tokens: UserGitHubTokenPair): void {
 }
 
 /** Display fallback to a tombstone is never credential ownership. */
-export function resolvePersonalGitHubOwner(profile: string, db: DatabaseSync): string | undefined {
+export function resolvePersonalGitHubOwnerInDatabase(
+  profile: string,
+  db: DatabaseSync,
+): string | undefined {
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
@@ -75,7 +78,7 @@ export function resolvePersonalGitHubOwner(profile: string, db: DatabaseSync): s
 }
 
 function requireOwner(db: DatabaseSync, owner: string): void {
-  if (resolvePersonalGitHubOwner(owner, db) !== owner) {
+  if (resolvePersonalGitHubOwnerInDatabase(owner, db) !== owner) {
     throw new Error("Personal GitHub owner changed; reconnect and try again.");
   }
 }
@@ -97,7 +100,7 @@ export function readCanonicalUserGitHubConnectionInDatabase(
   db: DatabaseSync,
   profile: string,
 ): { owner: string; connection: UserGitHubConnection | undefined } | undefined {
-  const owner = resolvePersonalGitHubOwner(profile, db);
+  const owner = resolvePersonalGitHubOwnerInDatabase(profile, db);
   return owner ? { owner, connection: readConnection(db, owner) } : undefined;
 }
 

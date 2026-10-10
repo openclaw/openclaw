@@ -248,7 +248,7 @@ export async function preparePersonalGitHubActionV2(
 }
 
 /** Authority stays in this direct connection closure; a profile or request id alone grants nothing. */
-export function preparePersonalGitHubAction(
+function preparePersonalGitHubAction(
   options: Request,
   scope: "operator.read" | "operator.write" = "operator.read",
   signal?: AbortSignal,
