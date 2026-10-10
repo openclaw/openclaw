@@ -1,23 +1,37 @@
-import { createHash } from "node:crypto";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  createPluginStateObservation,
+  pluginStateComparisonScope,
+  validatePluginStateComparison,
+} from "./plugin-state-observation.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   createPluginStateError,
   deleteExpiredPluginStateEntries,
-  deletePluginStateEntry,
-  parseStoredJson,
+  getPluginStateKysely,
+  resolvePluginStateExpiresAtMs,
   selectPluginStateEntry,
   type PluginStateDatabase,
   type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
 import { updatePluginStateEntry } from "./plugin-state-store.mutations.js";
-import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
+import {
+  enforcePostRegisterLimits,
+  type PluginStateRegisterEntryParams,
+} from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
   PluginStateObservation,
-  PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 
+export { validatePluginStateComparison } from "./plugin-state-observation.js";
+
 type Key = { pluginId: string; namespace: string; key: string };
-export type PluginStatePreparedComparison = Key & { comparison: string } & (
+export type PluginStatePreparedComparison = Key & {
+  comparison: string;
+  /** The Gateway's receipt-maintained snapshot; SQL still compares the exact stored image. */
+  current?: { row: PluginStateReadRow | undefined };
+} & (
     | { operation: "update"; action: "set"; valueJson: string; ttlMs?: number }
     | { operation: "update" | "delete"; action: "keep" }
     | { operation: "delete"; action: "delete" }
@@ -27,58 +41,22 @@ export type PluginStateComparisonLimits = Pick<
   "maxEntries" | "overflowPolicy"
 >;
 
-const COMPARISON_PATTERN = /^1:([a-f0-9]{64}):([a-f0-9]{64}|-)$/u;
-
-export function validatePluginStateComparison(
-  value: string,
-  operation: PluginStateStoreOperation,
-): string {
-  const match = typeof value === "string" ? COMPARISON_PATTERN.exec(value) : null;
-  const scope = match?.[1];
-  if (!scope) {
-    throw createPluginStateError({
-      code: "PLUGIN_STATE_INVALID_INPUT",
-      operation,
-      message: "Plugin state comparison must be an observation returned by this store.",
-    });
-  }
-  return scope;
-}
-
-function digest(value: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function comparisonScope(storeIdentity: string, key: Key): string {
-  return digest([storeIdentity, key.pluginId, key.namespace, key.key]);
-}
-
-function observation(
-  store: PluginStateDatabase,
-  scope: string,
-  row: PluginStateReadRow | undefined,
-  operation: PluginStateStoreOperation,
-): PluginStateObservation<unknown> {
-  // Preserve the stored JSON image; caller reserialization can change legacy whitespace/key order.
-  const image = row ? digest([row.value_json, row.created_at, row.expires_at]) : "-";
-  return {
-    value: row ? parseStoredJson(row.value_json, operation, store.path) : undefined,
-    comparison: `1:${scope}:${image}`,
-  };
-}
-
 /** Called after canonical writable admission, with the native owner's recorded database identity. */
 export function observePluginStateEntry(
   store: PluginStateDatabase,
   params: Key,
   storeIdentity: string,
-): PluginStateObservation<unknown> {
-  return observation(
-    store,
-    comparisonScope(storeIdentity, params),
-    selectPluginStateEntry(store.db, { ...params, now: Date.now() }),
-    "lookup",
-  );
+): PluginStateObservation<unknown> & { row?: PluginStateReadRow } {
+  const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
+  return {
+    ...createPluginStateObservation(
+      store.path,
+      pluginStateComparisonScope(storeIdentity, params),
+      row,
+      "lookup",
+    ),
+    row,
+  };
 }
 
 function validateComparisonScope(
@@ -88,7 +66,7 @@ function validateComparisonScope(
 ): string {
   const operation = params.operation === "update" ? "register" : "delete";
   const expected = validatePluginStateComparison(params.comparison, operation);
-  const scope = comparisonScope(storeIdentity, params);
+  const scope = pluginStateComparisonScope(storeIdentity, params);
   if (expected !== scope) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",
@@ -105,20 +83,71 @@ function applyComparedEntry(
   params: PluginStatePreparedComparison & PluginStateComparisonLimits,
   now: number,
   row: PluginStateReadRow | undefined,
-): { status: "applied" | "unchanged" } {
-  if (params.operation === "delete") {
-    return {
-      status:
-        params.action === "delete" && row && deletePluginStateEntry(store.db, params) > 0
-          ? "applied"
-          : "unchanged",
-    };
-  }
-  deleteExpiredPluginStateEntries(store.db, now, params);
+): { status: "applied" | "unchanged" } | undefined {
   if (params.action === "keep") {
+    if (params.operation === "update") {
+      deleteExpiredPluginStateEntries(store.db, now, params);
+    }
     return { status: "unchanged" };
   }
-  updatePluginStateEntry(store, params, now, row !== undefined);
+  if (!row) {
+    if (params.action === "delete") {
+      return { status: "unchanged" };
+    }
+    deleteExpiredPluginStateEntries(store.db, now, params);
+    updatePluginStateEntry(store, params, now, false);
+    return { status: "applied" };
+  }
+  const kysely = getPluginStateKysely(store.db);
+  // Compare storage bytes and metadata, not caller JSON serialization. A synchronous
+  // writer may have changed the row after the Gateway prepared its cached snapshot.
+  if (params.action === "delete") {
+    const result = executeSqliteQuerySync(
+      store.db,
+      kysely
+        .deleteFrom("plugin_state_entries")
+        .where("plugin_id", "=", params.pluginId)
+        .where("namespace", "=", params.namespace)
+        .where("entry_key", "=", params.key)
+        .where("value_json", "=", row.value_json)
+        .where("created_at", "=", row.created_at)
+        .where("expires_at", row.expires_at === null ? "is" : "=", row.expires_at)
+        .returning(["plugin_id", "namespace", "entry_key"]),
+    );
+    if (result.rows.length === 0) {
+      return undefined;
+    }
+    pluginStatePublication.stageDeletions(store.db, result.rows);
+    return { status: "applied" };
+  }
+  const expiresAt = resolvePluginStateExpiresAtMs({
+    ttlMs: params.ttlMs,
+    namespace: params.namespace,
+    now,
+    operation: "register",
+    path: store.path,
+  });
+  const result = executeSqliteQuerySync(
+    store.db,
+    kysely
+      .updateTable("plugin_state_entries")
+      .set({ value_json: params.valueJson, created_at: now, expires_at: expiresAt })
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", "=", params.key)
+      .where("value_json", "=", row.value_json)
+      .where("created_at", "=", row.created_at)
+      .where("expires_at", row.expires_at === null ? "is" : "=", row.expires_at)
+      .returningAll(),
+  );
+  if (result.rows.length === 0) {
+    return undefined;
+  }
+  for (const current of result.rows) {
+    pluginStatePublication.stagePostimage(store.db, current);
+  }
+  deleteExpiredPluginStateEntries(store.db, now, params);
+  enforcePostRegisterLimits({ ...params, store, now, protectedKey: params.key });
   return { status: "applied" };
 }
 
@@ -130,9 +159,14 @@ export function compareAndApplyPluginStateEntry(
 ): PluginStateCompareResult<unknown> {
   const scope = validateComparisonScope(store, params, storeIdentity);
   const now = Date.now();
-  const row = selectPluginStateEntry(store.db, { ...params, now });
-  const current = observation(
-    store,
+  const cached = params.current?.row;
+  // An absent row still needs insertion/expiry/quota admission inside this transaction.
+  const row =
+    cached && (cached.expires_at === null || cached.expires_at > now)
+      ? cached
+      : selectPluginStateEntry(store.db, { ...params, now });
+  const current = createPluginStateObservation(
+    store.path,
     scope,
     row,
     params.operation === "update" ? "lookup" : "delete",
@@ -140,5 +174,17 @@ export function compareAndApplyPluginStateEntry(
   if (current.comparison !== params.comparison) {
     return { status: "conflict", current };
   }
-  return applyComparedEntry(store, params, now, row);
+  const result = applyComparedEntry(store, params, now, row);
+  if (result) {
+    return result;
+  }
+  return {
+    status: "conflict",
+    current: createPluginStateObservation(
+      store.path,
+      scope,
+      selectPluginStateEntry(store.db, { ...params, now }),
+      params.operation === "update" ? "lookup" : "delete",
+    ),
+  };
 }
