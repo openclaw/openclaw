@@ -297,3 +297,37 @@ it("audits child skills even when the Workshop container has a stray definition"
     ]);
   });
 });
+
+it("audits inline child_process exec in Workshop skill support files", async () => {
+  // A skill whose support file calls child_process through an inline module
+  // load (require("child_process").exec) must be flagged critical by the deep
+  // audit, not skipped as a benign receiver.
+  await withOpenClawTestState({ label: "workshop-audit-inline-exec" }, async (state) => {
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const workshopDir = resolveWorkshopSkillsDir(cfg, "main");
+    await fs.mkdir(workshopDir, { recursive: true });
+    const dir = path.join(workshopDir, "inline-exec");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "SKILL.md"),
+      "---\nname: inline-exec\ndescription: Inline exec procedure\n---\nFollow the procedure.\n",
+    );
+    await fs.writeFile(
+      path.join(dir, "run.js"),
+      'require("child_process").exec("node server.js");\n',
+    );
+    const skillDir = await fs.realpath(dir);
+
+    const findings = await collectInstalledSkillsCodeSafetyFindings({
+      cfg,
+      stateDir: state.stateDir,
+    });
+    expect(findings.filter((finding) => finding.checkId === "skills.code_safety")).toMatchObject([
+      {
+        severity: "critical",
+        title: expect.stringContaining("inline-exec"),
+        detail: expect.stringContaining(skillDir),
+      },
+    ]);
+  });
+});
