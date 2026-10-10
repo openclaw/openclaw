@@ -93,6 +93,17 @@ export const LOCAL_TAG_PATTERN = new RegExp(
 export const UNICODE_SEPARATOR_PATTERN =
   /[\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/u;
 
+/**
+ * Matches a line carrying only blockquote markers and trailing whitespace.
+ *
+ * The run between two `>` markers is spelled once -- a tab plus up to 3 spaces,
+ * or up to 4 spaces -- instead of ending each repetition with `[ \t]?` while
+ * the next begins with ` {0,3}`. That overlap let either side claim a space, so
+ * a line that failed to match admitted many equivalent splits and matching
+ * degraded superlinearly. Spelling the run once forces one split per marker.
+ */
+export const BLOCKQUOTE_ONLY_LINE_PATTERN = /^ {0,3}>(?:(?:\t {0,3}| {0,4})>)*[ \t]*$/u;
+
 export function projectOffset(offsets: number[], offset: number): number {
   return offsets[Math.max(0, Math.min(offset, offsets.length - 1))] ?? offsets.at(-1) ?? 0;
 }

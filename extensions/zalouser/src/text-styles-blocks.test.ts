@@ -192,6 +192,18 @@ describe("parseZalouserTextStyles blocks", () => {
     });
   });
 
+  it("classifies a long blockquote-marker line in linear time", () => {
+    // The blockquote-only check ended each repetition with `[ \t]?` while the
+    // next began with ` {0,3}`, so either side could claim a space and a line
+    // that failed to match degraded superlinearly through this entry point,
+    // which formats outgoing message text. Keep the marker count modest so a
+    // reintroduced ambiguity still finishes and reports instead of hanging.
+    const input = `${"> ".repeat(28)}x\nquoted`;
+    const startedAt = performance.now();
+    expect(parseZalouserTextStyles(input).text).toContain("x");
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+  });
+
   it("keeps blockquote padding structural before headings", () => {
     expect(parseZalouserTextStyles(">   # Title")).toEqual({
       text: "Title",

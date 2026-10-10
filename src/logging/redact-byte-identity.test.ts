@@ -14,6 +14,9 @@ import {
 // Recorded outputs from the pre-fix implementation (git HEAD before the boundary-leak fix)
 // over a deterministic corpus. Whole-text matching must keep every text under the old
 // 32,768-character slicing threshold byte-identical through each entry point.
+// One sample (index 221) was re-recorded when query-parameter name matching started
+// collapsing spelling variants: a name ending in `_secret` is now recognized, so that
+// sample's value is masked rather than passed through.
 type Fixture = {
   samples: string[];
   outputs: [string, string, string, string][];

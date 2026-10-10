@@ -1,6 +1,10 @@
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { isEscaped, protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
-import type { MarkdownIRWithBlockMetadata, TokenRegistry } from "./text-styles-shared.js";
+import {
+  BLOCKQUOTE_ONLY_LINE_PATTERN,
+  type MarkdownIRWithBlockMetadata,
+  type TokenRegistry,
+} from "./text-styles-shared.js";
 import {
   sourceBlockquotePrefixLength,
   sourceContainerProjection,
@@ -17,7 +21,7 @@ export function restoreLeadingBlankLines(
     if (lineIndex === sourceLines.length - 1) {
       break;
     }
-    if (/^[ \t]*$/u.test(line) || /^(?: {0,3}>[ \t]?)+[ \t]*$/u.test(line)) {
+    if (/^[ \t]*$/u.test(line) || BLOCKQUOTE_ONLY_LINE_PATTERN.test(line)) {
       sourceLeading += 1;
     } else {
       break;
@@ -221,7 +225,7 @@ export function protectInlineSyntaxOutsideCode(
         line,
         registry,
         taskBrackets.get(lineIndex),
-        structuralPaddingLines.has(lineIndex) || /^(?: {0,3}>[ \t]?)+[ \t]*$/u.test(rawLine),
+        structuralPaddingLines.has(lineIndex) || BLOCKQUOTE_ONLY_LINE_PATTERN.test(rawLine),
       );
       line = protectResidualBlockPadding(
         line,

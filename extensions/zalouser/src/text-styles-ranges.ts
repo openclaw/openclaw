@@ -1,4 +1,5 @@
 import {
+  BLOCKQUOTE_ONLY_LINE_PATTERN,
   projectOffset,
   type MarkdownIRWithBlockMetadata,
   type StructuralStyle,
@@ -352,7 +353,7 @@ export function restoreTrailingNewlines(
         lastContentLine < (block.sourceEndLine ?? 0),
     ) &&
     (/^[ \t]*$/u.test(sourceLines[lastContentLine] ?? "") ||
-      /^(?: {0,3}>[ \t]?)+[ \t]*$/u.test(sourceLines[lastContentLine] ?? ""))
+      BLOCKQUOTE_ONLY_LINE_PATTERN.test(sourceLines[lastContentLine] ?? ""))
   ) {
     lastContentLine -= 1;
   }

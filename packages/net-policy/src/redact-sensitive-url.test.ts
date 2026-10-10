@@ -35,6 +35,14 @@ describe("redactSensitiveUrl", () => {
     );
   });
 
+  it("keeps redacting scoped token params whose hex suffix mixes digits and uppercase", () => {
+    expect(
+      redactSensitiveUrl(
+        "https://example.com/?token_0123456789ABCDEF=synthetic-secret&mms_token_ABCDEF0123456789=b&page=2",
+      ),
+    ).toBe("https://example.com/?token_0123456789ABCDEF=***&mms_token_ABCDEF0123456789=***&page=2");
+  });
+
   it("redacts encoded and invisible-spliced sensitive query param names", () => {
     expect(
       redactSensitiveUrl("https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
@@ -220,6 +228,70 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("sigmoid")).toBe(false);
     expect(isSensitiveUrlQueryParamName("token_count")).toBe(false);
     expect(isSensitiveUrlQueryParamName("x-request-id")).toBe(false);
+  });
+
+  // Only the snake_case spelling was recognized, so the camelCase spelling that
+  // most JSON/JS APIs actually emit carried its credential into logs.
+  it.each([
+    "accessToken",
+    "AccessToken",
+    "accesstoken",
+    "access.token",
+    "refreshToken",
+    "idToken",
+    "authToken",
+    "clientSecret",
+    "clientsecret",
+    "appSecret",
+    "privateKey",
+    "apiKey",
+    "APIKey",
+    "hookToken",
+    "sessionToken",
+    "userPassword",
+    "secretKey",
+    "webhookSecret",
+    "urlSignature",
+    "bearerToken",
+    "token[]",
+    "token[0]",
+    "apiKey[]",
+  ])("matches credential spelling variant %s", (name) => {
+    expect(isSensitiveUrlQueryParamName(name)).toBe(true);
+  });
+
+  // Logging and URL diagnostics call this synchronously on names no one has
+  // bounded, so every normalization step has to stay linear. Both shapes below
+  // forced a quadratic suffix rescan while the name was being canonicalized.
+  it.each([
+    ["unclosed subscripts", `${"[".repeat(40_000)}token`],
+    ["uppercase run", "A".repeat(40_000)],
+  ])("classifies a long %s name in linear time", (_name, paramName) => {
+    const startedAt = performance.now();
+    isSensitiveUrlQueryParamName(paramName);
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
+  // Collapsing spellings must not swallow the identifiers and counters a
+  // gateway needs to keep readable in its logs.
+  it.each([
+    "maxTokens",
+    "tokenCount",
+    "promptTokens",
+    "tokenizer",
+    "sortKey",
+    "cacheKey",
+    "partitionKey",
+    "sessionName",
+    "sessionId",
+    "userId",
+    "clientId",
+    "redirectUri",
+    "responseType",
+    "grantType",
+    "topK",
+  ])("does not match non-credential name %s", (name) => {
+    expect(isSensitiveUrlQueryParamName(name)).toBe(false);
   });
 });
 

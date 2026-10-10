@@ -39,6 +39,24 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "x_access_token",
   "x_auth_token",
 ]);
+// Accept the run-together spelling of every name above (`accesstoken` for
+// `access_token`) so a missing separator cannot defeat recognition.
+const SENSITIVE_URL_QUERY_PARAM_NAMES_WITHOUT_SEPARATORS = new Set(
+  Array.from(SENSITIVE_URL_QUERY_PARAM_NAMES, (name) => name.replaceAll("_", "")),
+);
+// Words that mark a credential wherever they appear as a whole `_`-separated
+// segment (`webhookSecret`, `url_signature`). Deliberately excludes `token` and
+// `key`, which also appear in non-secret names such as `token_count`.
+const SENSITIVE_URL_QUERY_PARAM_SEGMENT_WORDS = new Set([
+  "secret",
+  "password",
+  "passwd",
+  "credential",
+  "credentials",
+  "signature",
+  "jwt",
+  "bearer",
+]);
 // Align with FORM_BODY_KEY_SEPARATOR_RE: category-Lo Hangul fillers can splice sensitive names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 // Proxy and per-resource bearer URLs may prefix a token key or suffix it with a random hex id.
@@ -59,8 +77,78 @@ function redactSensitiveUrlPath(value: string): string {
   return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
 }
 
+/**
+ * Drops array and index subscripts, which address the same parameter:
+ * `token[]`, `token[0]`.
+ *
+ * A forward scan rather than `/\[[^\]]*\]/g`: query names are unbounded here,
+ * and that expression rescans the remaining suffix at every `[` it cannot
+ * close, which is quadratic on input like `"[".repeat(n)`. Removing each `[`
+ * through the first following `]` matches what the expression accepted, and the
+ * cursor only moves forward.
+ */
+function stripUrlQueryParamSubscripts(name: string): string {
+  if (!name.includes("[")) {
+    return name;
+  }
+  let stripped = "";
+  let index = 0;
+  for (;;) {
+    const open = name.indexOf("[", index);
+    if (open < 0) {
+      return stripped + name.slice(index);
+    }
+    const close = name.indexOf("]", open + 1);
+    if (close < 0) {
+      return stripped + name.slice(index);
+    }
+    stripped += name.slice(index, open);
+    index = close + 1;
+  }
+}
+
+/**
+ * Collapses spelling variants of one parameter name onto a single canonical
+ * `_`-separated form, so `accessToken`, `access-token`, `access.token` and
+ * `access_token[]` all compare equal to `access_token`. Without this the
+ * snake_case name was redacted while the camelCase spelling that most JSON and
+ * JS APIs actually use leaked the credential.
+ *
+ * Every step is linear in the name's length: logging and URL diagnostics call
+ * this synchronously on names no one has bounded.
+ */
+function canonicalizeUrlQueryParamName(name: string): string {
+  return (
+    normalizeLowercaseStringOrEmpty(
+      stripUrlQueryParamSubscripts(name)
+        // camelCase and PascalCase word starts: `accessToken`, `oauth2Token`.
+        .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1_$2")
+        // Trailing word after an acronym run: `APIKey` -> `API_Key`. The leading
+        // uppercase is a fixed-width lookbehind, not `\p{Lu}+`, so a long
+        // uppercase name has no run to backtrack through.
+        .replace(/(?<=\p{Lu})(\p{Lu}\p{Ll})/gu, "_$1"),
+    )
+      .replace(/[-.]/gu, "_")
+      // Collapse before trimming so the trim never sees a run to backtrack over.
+      .replace(/_+/gu, "_")
+      .replace(/^_+|_+$/gu, "")
+  );
+}
+
+/**
+ * The pre-canonicalization spelling: lowercased with `-` mapped to `_`.
+ * Recognition also runs on this form so that splitting camelCase can never
+ * make a name that used to be redacted stop matching. Splitting a digit from an
+ * uppercase letter turns `token_0123456789ABCDEF` into `token_0123456789_abcdef`,
+ * which the scoped-token suffix no longer accepts.
+ */
+function legacyUrlQueryParamName(name: string): string {
+  return normalizeLowercaseStringOrEmpty(name).replaceAll("-", "_");
+}
+
 function normalizeUrlQueryParamName(name: string): {
   value: string;
+  legacyValue: string;
   unresolvedEncoding: boolean;
 } {
   let current = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
@@ -73,14 +161,16 @@ function normalizeUrlQueryParamName(name: string): {
     }
     if (decoded === current) {
       return {
-        value: normalizeLowercaseStringOrEmpty(current).replaceAll("-", "_"),
+        value: canonicalizeUrlQueryParamName(current),
+        legacyValue: legacyUrlQueryParamName(current),
         unresolvedEncoding: false,
       };
     }
     current = decoded;
   }
   return {
-    value: normalizeLowercaseStringOrEmpty(current).replaceAll("-", "_"),
+    value: canonicalizeUrlQueryParamName(current),
+    legacyValue: legacyUrlQueryParamName(current),
     unresolvedEncoding: current.includes("%"),
   };
 }
@@ -107,10 +197,18 @@ function looksLikeNestedUrlValue(value: string): boolean {
 /** True for auth-like URL query parameter names that should be redacted. */
 export function isSensitiveUrlQueryParamName(name: string): boolean {
   const normalized = normalizeUrlQueryParamName(name);
+  if (normalized.unresolvedEncoding) {
+    return true;
+  }
+  const canonical = normalized.value;
+  const legacy = normalized.legacyValue;
   return (
-    normalized.unresolvedEncoding ||
-    SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized.value) ||
-    SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE.test(normalized.value)
+    SENSITIVE_URL_QUERY_PARAM_NAMES.has(legacy) ||
+    SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE.test(legacy) ||
+    SENSITIVE_URL_QUERY_PARAM_NAMES.has(canonical) ||
+    SENSITIVE_URL_QUERY_PARAM_NAMES_WITHOUT_SEPARATORS.has(canonical.replaceAll("_", "")) ||
+    SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE.test(canonical) ||
+    canonical.split("_").some((segment) => SENSITIVE_URL_QUERY_PARAM_SEGMENT_WORDS.has(segment))
   );
 }
 

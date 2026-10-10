@@ -465,4 +465,18 @@ describe("formatCliCommand", () => {
       }),
     ).toBe(`${prefix} --container demo ${command}`);
   });
+
+  it("classifies repeated global flags in linear time", () => {
+    // Root-update detection used to join a flag to its value with `[=\s]+`, so
+    // the value matcher could swallow the separator before the next ` --flag`
+    // and consume that chunk instead. Repeated chunks then admitted many
+    // equivalent splits and classification degraded superlinearly. Keep a
+    // wall-clock bound so the ambiguity cannot come back unnoticed.
+    const command = `openclaw\t--profile=i${"\t--profile==".repeat(40)}`;
+    const startedAt = performance.now();
+    expect(formatCliCommand(command, { OPENCLAW_CONTAINER_HINT: "demo" })).toBe(
+      command.replace("openclaw", "openclaw --container demo"),
+    );
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+  });
 });
