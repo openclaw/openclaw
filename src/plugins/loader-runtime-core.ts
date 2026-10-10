@@ -320,9 +320,10 @@ export function loadOpenClawPluginsCore(
       manifestRegistry.plugins.map((record) => [record.source, record]),
     );
     // Manifest selection owns duplicate precedence; runtime consumes only its winners.
-    const orderedCandidates = discovery.candidates.filter((candidate) =>
-      manifestBySource.has(candidate.source),
-    );
+    const orderedCandidates = discovery.candidates.flatMap((candidate) => {
+      const manifest = manifestBySource.get(candidate.source);
+      return manifest ? [{ candidate, manifest }] : [];
+    });
     const loaderCacheIdentity = Object.freeze({
       requestKey: context.cacheKey,
       resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
@@ -359,10 +360,8 @@ export function loadOpenClawPluginsCore(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
-    for (const candidate of orderedCandidates) {
-      const manifest = manifestBySource.get(candidate.source);
+    for (const { candidate, manifest } of orderedCandidates) {
       if (
-        !manifest ||
         inputs.has(manifest.id) ||
         !matchesScopedPluginOrDreamingSidecar({
           onlyPluginIdSet,
@@ -485,9 +484,8 @@ export function loadOpenClawPluginsCore(
       string,
       (typeof manifestRegistry.plugins)[number]
     >();
-    for (const candidate of orderedCandidates) {
-      const record = manifestBySource.get(candidate.source);
-      if (record && !selectedMiddlewareOwnerManifests.has(record.id)) {
+    for (const { manifest: record } of orderedCandidates) {
+      if (!selectedMiddlewareOwnerManifests.has(record.id)) {
         selectedMiddlewareOwnerManifests.set(record.id, record);
       }
     }
@@ -525,11 +523,7 @@ export function loadOpenClawPluginsCore(
       pluginLoadAttemptCount: 0,
     };
     const pluginLoadStartMs = performance.now();
-    for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestBySource.get(candidate.source);
-      if (!manifestRecord) {
-        continue;
-      }
+    for (const { candidate, manifest: manifestRecord } of orderedCandidates) {
       const previous = retained.get(manifestRecord.id);
       if (previous && !state.seenIds.has(manifestRecord.id)) {
         registry.plugins.push(previous);
@@ -589,10 +583,9 @@ export function loadOpenClawPluginsCore(
         logger,
         env: context.env,
         installOwnerByPluginId: new Map(
-          orderedCandidates.flatMap((candidate) => {
-            const pluginId = manifestBySource.get(candidate.source)?.id;
+          orderedCandidates.flatMap(({ candidate, manifest }) => {
             const installOwner = resolvePluginCandidateInstallOwner(candidate);
-            return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
+            return manifest.id && installOwner ? [[manifest.id, installOwner] as const] : [];
           }),
         ),
       });

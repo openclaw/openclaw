@@ -90,7 +90,7 @@ async function recordFailureAlertOutcome(
   cycle: FailureAlertCycle,
   outcome: CronFailureNotificationDelivery,
 ): Promise<FailureAlertRecordResult> {
-  let ownsCycle = false;
+  let ownsCycle: boolean | undefined;
   try {
     return await locked(state, async () => {
       if (state.stopped || state.lifecycleGeneration !== cycle.lifecycleGeneration) {
@@ -121,11 +121,10 @@ async function recordFailureAlertOutcome(
             throw new Error("Cron failure-alert owner retired");
           }
         },
-        prepare(facts) {
-          ownsCycle = facts.ownsCycle;
-          return { value: {}, assertCurrent() {} };
-        },
+        // A replacement alert may race dispatch; the worker checks its persisted cycle.
+        snapshot: {},
         publish(committed) {
+          ownsCycle = committed.job !== undefined;
           if (committed.job) {
             noteCronJobsStoreCommit(storeKey);
             applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });
@@ -140,7 +139,7 @@ async function recordFailureAlertOutcome(
       { jobId: cycle.jobId, err: formatErrorMessage(err) },
       "cron: failed to record failure-alert outcome",
     );
-    return ownsCycle ? "persistence-failed" : "stale";
+    return ownsCycle === false ? "stale" : "persistence-failed";
   }
 }
 

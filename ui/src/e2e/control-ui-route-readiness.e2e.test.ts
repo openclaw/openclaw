@@ -50,7 +50,15 @@ suite.define(() => {
               ? {
                   presenceUsers: [{ self: true, id: "history-profile", name: "Fixture user" }],
                   featureMethods: [...defaultControlUiFeatureMethods, "system.info"],
-                  methodResponses: { "system.info": { platform: "darwin" } },
+                  methodResponses: {
+                    "config.get": { config: {}, hash: "history-profile-config" },
+                    "system.info": { platform: "darwin" },
+                    // The saved involving-me filter belongs to All, not the default Mine view.
+                    "users.prefs.get": {
+                      status: "ok",
+                      entries: { "ui.navigationScope": "all" },
+                    },
+                  },
                 }
               : {}),
             sessions: [

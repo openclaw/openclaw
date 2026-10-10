@@ -66,6 +66,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.matrix.password`
 - `channels.mattermost.accounts.*.botToken`
 - `channels.mattermost.botToken`
+- `channels.msteams.accounts.*.appPassword`
 - `channels.msteams.appPassword`
 - `channels.nextcloud-talk.accounts.*.apiPassword`
 - `channels.nextcloud-talk.accounts.*.botSecret`

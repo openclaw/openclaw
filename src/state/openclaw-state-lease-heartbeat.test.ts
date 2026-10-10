@@ -6,7 +6,12 @@ import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import {
+  readSqliteDatabaseWriteRevision,
+  trackSqliteDatabaseAdmissionWorker,
+} from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
@@ -354,8 +359,10 @@ it("keeps deferred activation pending until renewal commits after contention", a
     `,
     );
     const driverUrl = pathToFileURL(driver);
+    const databaseAdmission = createSqliteDatabaseAdmissionRelay(() => {});
     const worker = new Worker(driverUrl, {
       workerData: {
+        databaseAdmissionPort: databaseAdmission.port,
         path: database.path,
         expectedIdentity: readDatabasePathIdentitySync(database.path).key,
         identity,
@@ -365,10 +372,14 @@ it("keeps deferred activation pending until renewal commits after contention", a
         deferActivation: true,
         shared: shared.buffer,
         renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+        completedRequest: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
       } satisfies LeaseHeartbeatWorkerData,
+      transferList: [databaseAdmission.port],
       execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
       env: {},
     });
+    trackSqliteDatabaseAdmissionWorker(worker);
+    worker.once("exit", () => databaseAdmission.finish());
     const prepared = createDeferredCore();
     const processed = createDeferredCore();
     const ready = createDeferredCore();
@@ -404,12 +415,17 @@ it("keeps deferred activation pending until renewal commits after contention", a
     const writer = new DatabaseSync(database.path);
     try {
       await prepared.promise;
+      const beforeRenewal = readSqliteDatabaseWriteRevision(database.db);
+      expect(beforeRenewal).toBeTypeOf("number");
       writer.exec("BEGIN IMMEDIATE");
       worker.postMessage({ startup: "activate" }, []);
       await processed.promise;
       expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.starting);
       writer.exec("ROLLBACK");
       await ready.promise;
+      const afterRenewal = readSqliteDatabaseWriteRevision(database.db);
+      expect(afterRenewal).toBeTypeOf("number");
+      expect(afterRenewal).not.toBe(beforeRenewal);
       expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.ready);
       const row = database.db
         .prepare("SELECT expires_at FROM state_leases WHERE scope = ? AND lease_key = ?")

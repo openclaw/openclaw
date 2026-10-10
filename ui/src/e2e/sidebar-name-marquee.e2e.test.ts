@@ -4,6 +4,7 @@ import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { createSidebarFooterProofSuite } from "./sidebar-footer-proof.test-support.ts";
 
 const suite = createSidebarFooterProofSuite("Sidebar identity name overflow");
@@ -77,10 +78,17 @@ async function openNames(page: Page, name: string, workspace = false) {
   });
   await page.goto(`${suite.server.baseUrl}chat`);
   const sidebar = page.locator("openclaw-app-sidebar");
-  const labels = [
-    sidebar.locator(".sidebar-identity-card__name"),
-    sidebar.locator(".sidebar-agent-card__name-text"),
-  ];
+  // The rail account control is icon-only; only the middle-column identity owns visible text.
+  const account = sidebar.locator(".sidebar-identity-card");
+  await expect.poll(() => account.getAttribute("aria-label")).toContain(name);
+  await expect.poll(() => sidebar.locator(".sidebar-identity-card__name").textContent()).toBe(name);
+  expect(
+    await sidebar.locator(".sidebar-identity-card__text").evaluate((element) => ({
+      width: element.getBoundingClientRect().width,
+      clipPath: getComputedStyle(element).clipPath,
+    })),
+  ).toEqual({ width: 1, clipPath: "inset(50%)" });
+  const labels = [sidebar.locator(".sidebar-agent-card__name-text")];
   for (const label of labels) {
     await expect.poll(() => label.textContent()).toBe(name);
   }
@@ -227,16 +235,21 @@ suite.define(() => {
     );
   });
 
-  it("uses the existing account-menu tap to reveal an overflowing name on touch", async () => {
+  it("uses the icon-only account control to reveal the full profile name on touch", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, hasTouch: true, reducedMotion: "no-preference" },
       async ({ page }) => {
-        const [label] = await openNames(page, longName);
-        const button = label!.locator("xpath=ancestor::button[1]");
-        expect((await readName(label!)).animating).toBe(false);
+        await openNames(page, longName);
+        const button = page.locator(".sidebar-identity-card");
+        const bounds = await button.boundingBox();
         await button.tap();
         await expect.poll(() => button.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(async () => (await readName(label!)).animating).toBe(true);
+        const name = page.locator(".sidebar-identity-menu__name");
+        await name.waitFor();
+        expect(await name.textContent()).toBe(longName);
+        expect(await tooltipTitleText(name)).toBe(longName);
+        expect(await button.getAttribute("aria-label")).toContain(longName);
+        expect(await button.boundingBox()).toEqual(bounds);
         await page.keyboard.press("Escape");
         await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
       },

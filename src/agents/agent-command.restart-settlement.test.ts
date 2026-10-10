@@ -23,6 +23,7 @@ import * as modelSelection from "./command/model-selection.js";
 import { markSessionCompletedAfterRecoveryCheckpoint } from "./main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-recovery/main-session-restart-recovery-store.js";
+import { createAgentRunDirectAbortError } from "./run-termination.js";
 
 const {
   loadSessionEntry,
@@ -38,6 +39,84 @@ let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifec
 beforeAll(async () => {
   ({ persistGatewaySessionLifecycleEvent } = await import("../gateway/session-lifecycle-state.js"));
 });
+
+it.each(["visible", "internal", "coordination"] as const)(
+  "declares the %s command admission and accepts its interruption only once",
+  async (visibility) => {
+    const sessionKey = "agent:main:admitted-stop";
+    const sessionId = "admitted-stop-session";
+    const runId = "admitted-stop-command";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(target, { sessionId, updatedAt: 100 });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const reason = createAgentRunDirectAbortError();
+    using _ = vi
+      .spyOn(modelSelection, "resolveEmbeddedModelSelection")
+      .mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await resume.promise;
+        expect(params.opts.abortSignal?.reason).toBe(reason);
+        params.opts.abortSignal?.throwIfAborted();
+        throw new Error("command did not observe Stop");
+      });
+    const command = agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Stop before provider selection",
+        allowModelOverride: false,
+        ...(visibility === "internal" ? { sessionEffects: "internal" as const } : {}),
+        ...(visibility === "coordination"
+          ? {
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: "sessions_send",
+                sourceRole: "subagent" as const,
+              },
+            }
+          : {}),
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    void command.catch(() => {});
+    const interruptionTarget = { scope: target.storePath, identities: [sessionKey, sessionId] };
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        command,
+        "command did not reach model selection",
+      );
+      const captured = sessionAdmission.captureSessionWorkRunInterruptions({
+        ...interruptionTarget,
+        accept: () => true,
+      });
+      expect(captured.map(({ run }) => run)).toEqual([
+        {
+          runId,
+          sessionKey,
+          sessionId,
+          agentId: "main",
+          controlUiVisible: visibility === "visible",
+        },
+      ]);
+      expect(captured[0]!.interrupt(reason)).toBe(true);
+      const second = sessionAdmission.startSessionWorkAdmissionInterruption({
+        ...interruptionTarget,
+        reason: new Error("later Stop"),
+      });
+      expect([...second.interruptedRunIds]).toEqual([]);
+      resume.resolve();
+      await expect(command).rejects.toBe(reason);
+      await second.released;
+      expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await command.catch(() => {});
+    }
+  },
+);
 
 it.each([
   "stopped",
