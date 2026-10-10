@@ -84,24 +84,20 @@ export type UserGitHubConnected = z.infer<typeof connected>;
 export type UserGitHubDevice = z.infer<typeof device>;
 export type UserGitHubTokenPair = z.infer<typeof tokenPair>;
 
-const connectionAuthoritySchema = z.strictObject({
-  generation: z.string().uuid(),
-  selection: z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("disconnected") }),
-    connected.omit({ refreshToken: true, refresh: true }).extend({ refreshing: z.boolean() }),
-  ]),
-});
+export type UserGitHubConnectionAuthority = {
+  generation: string;
+  selection:
+    | { kind: "disconnected" }
+    | (Omit<UserGitHubConnected, "refreshToken" | "refresh"> & { refreshing: boolean });
+};
 const connectionCommitSchema = z.strictObject({
   kind: z.literal("user-github-connection"),
-  changes: z.array(
-    z.strictObject({ owner: z.string(), connection: connectionAuthoritySchema.nullable() }),
-  ),
+  changedOwners: z.array(z.string()),
   retiredProfileIds: z.array(z.string()),
 });
-export type UserGitHubConnectionAuthority = z.infer<typeof connectionAuthoritySchema>;
 export type UserGitHubConnectionCommit = z.infer<typeof connectionCommitSchema>;
 
-/** The connection owner defines the same credential-free projection for snapshots and commits. */
+/** Source snapshots carry only the connection facts needed for publication authority. */
 export function projectUserGitHubConnectionAuthority(
   connection: UserGitHubConnection | undefined,
 ): UserGitHubConnectionAuthority | null {

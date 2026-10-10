@@ -133,11 +133,11 @@ function mutate<T>(
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const receipt: UserGitHubConnectionCommit = {
         kind: "user-github-connection",
-        changes: [],
+        changedOwners: [],
         retiredProfileIds: [],
       };
       const result = operation(db, (publication) => {
-        receipt.changes.push(...publication.changes);
+        receipt.changedOwners.push(...publication.changedOwners);
         receipt.retiredProfileIds.push(...publication.retiredProfileIds);
       });
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
