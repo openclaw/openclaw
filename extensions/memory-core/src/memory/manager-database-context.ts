@@ -522,7 +522,7 @@ export class MemoryIndexDatabase {
         state: () => this.publicationState(),
         execute: (command) => this.executePublication(command, assertCurrent),
         run: (operation) => this.runPublication(operation, assertCurrent),
-        retry: (run, prepare) => this.retryPublication(run, prepare),
+        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
         prepare,
         assertPublished: this.isShadow ? assertCurrent : undefined,
       }),
