@@ -3232,6 +3232,15 @@ prepared pending-result facts only before the first admission wait. Later waits
 refresh them, and the claim transaction still checks live ownership. No schema,
 stored bytes, permission, durability, retention, or update behavior changes.
 
+The placement authority owner retains up to 256 exact local-session projections,
+including absent placements, and one maintenance preservation inventory. Committed
+claim and release receipts replace the local projection before returning to callers;
+other placement and workspace writes invalidate it. Non-local placement changes
+invalidate the preservation inventory, while ordinary local claims leave it current.
+Pending or uncertain writes and database retirement retain the existing authority
+checks. Remote environment projections remain direct reads through their own owner.
+Eviction only requires another worker read; it does not change durable ownership.
+
 Session observer admission, publication, terminal synthesis, and companion snapshots
 read through the existing Gateway session worker lookup. Each observation captures
 its configured and physical sources before queueing and fetches fresh rows at later

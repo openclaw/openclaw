@@ -20,6 +20,7 @@ import {
   hasPendingPublication,
   retainSessionPlacementRead,
 } from "./placement-read-authority.js";
+import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
 import {
   isCurrentPlacementTurnClaim,
   sameWorkerSessionTurnClaim,
@@ -76,6 +77,8 @@ function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.claims.clear();
   owner.observations.clear();
   owner.placementReaders.clear();
+  owner.projections.clear();
+  owner.preservation = undefined;
 }
 
 const owners = resolveGlobalSingleton(
@@ -107,6 +110,7 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
     published: new Map(),
     tools: new Map(),
     workspaceResults: new Map(),
+    projections: new Map(),
   };
   owners.set(identity.key, owner);
   return owner;
@@ -157,6 +161,15 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     return;
   }
   applyPlacementReadPublication(owner, change, sequence);
+  if (affectsPlacementObservation(change)) {
+    owner.preservation = undefined;
+  }
+  if (change.kind !== "tools") {
+    owner.projections.delete(change.sessionId);
+    if (change.kind === "claim" && change.projection && !change.indeterminate) {
+      retainProjection(owner, change.sessionId, change.projection);
+    }
+  }
   const tools = owner.tools.get(change.sessionId);
   if (change.kind === "tools") {
     if (sequence > (tools?.sequence ?? -1)) {
@@ -310,10 +323,72 @@ export async function preparePlacementAuthorityRead<T>(
   }));
 }
 
+function retainProjection(
+  owner: PlacementAuthorityOwner,
+  sessionId: string,
+  projection: WorkerSessionPlacementReadResult,
+) {
+  owner.projections.delete(sessionId);
+  const placement = projection.projection.placements.get(sessionId);
+  // Environment lifecycle has its own owner. Keep its changing facts on direct reads.
+  if (
+    (placement && placement.state !== "local") ||
+    projection.projection.environments.size ||
+    projection.projection.moves.size ||
+    projection.projection.pendingResults.size ||
+    projection.projection.workspaceRecoveryPendingSessionIds.size
+  ) {
+    return;
+  }
+  owner.projections.set(sessionId, structuredClone(projection));
+  // Cold sessions can always rehydrate; residency is independent of durable ownership.
+  if (owner.projections.size > 256) {
+    owner.projections.delete(owner.projections.keys().next().value!);
+  }
+}
+
+/** The authority owner retains exact reads until one of its writers publishes a change. */
+export async function readPlacementProjection(
+  pathname: string,
+  sessionId: string,
+  read: () => Promise<WorkerSessionPlacementReadResult>,
+): Promise<WorkerSessionPlacementReadResult> {
+  const prepared = await preparePlacementRead(
+    pathname,
+    sessionId,
+    async (owner) => {
+      return owner.projections.get(sessionId) ?? (await read());
+    },
+    (value, { owner, authority }) => {
+      retainProjection(owner, sessionId, value);
+      return { value: structuredClone(value), release: authority.release };
+    },
+  );
+  prepared.release();
+  return prepared.value;
+}
+
+export async function preparePlacementPreservationRead(
+  pathname: string,
+  read: () => Promise<WorkerSessionPlacementRecord[]>,
+) {
+  return await preparePlacementRead(
+    pathname,
+    undefined,
+    async (owner) => {
+      return owner.preservation ?? (await read());
+    },
+    (value, { owner, authority }) => {
+      owner.preservation = freezeJsonSnapshot(value);
+      return { placements: structuredClone(value), ...authority };
+    },
+  );
+}
+
 async function preparePlacementRead<T, Result>(
   pathname: string,
   sessionId: string | undefined,
-  read: () => Promise<T>,
+  read: (owner: PlacementAuthorityOwner) => Promise<T>,
   consume: (value: T, captured: ReturnType<typeof capturePlacementObservation>) => Result,
 ): Promise<Result> {
   const captured = capturePlacementObservation(pathname, sessionId);
@@ -337,7 +412,7 @@ async function preparePlacementRead<T, Result>(
         assertReading();
       }
       observation.revoked = false;
-      const value = await read();
+      const value = await read(owner);
       assertReading();
       if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
         return consume(value, captured);
@@ -401,6 +476,7 @@ export function stagePlacementTurnClaimWorkerPublication(
   workspaceResult?: WorkspaceResultPostimage,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
   workspacePlacement?: WorkerSessionPlacementRecord,
+  projection?: WorkerSessionPlacementReadResult,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
@@ -408,6 +484,7 @@ export function stagePlacementTurnClaimWorkerPublication(
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),
+    projection,
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
   });
 }
