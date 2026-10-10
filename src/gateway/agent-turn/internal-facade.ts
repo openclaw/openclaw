@@ -228,14 +228,18 @@ export function createInternalAgentTurnFacade(
               entry?.assertOpen();
               options.assertContextCurrent?.();
               dispatchOptions.assertAdmissionCurrent?.();
-              entry?.release();
               const principal = captureAgentTurnPrincipal(options.client);
-              const preflight = prepareAgentRequestPreflight({
+              const preflight = await prepareAgentRequestPreflight({
                 request,
                 context,
                 client: principal,
                 io,
               });
+              throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
+              entry?.assertOpen();
+              options.assertContextCurrent?.();
+              dispatchOptions.assertAdmissionCurrent?.();
+              entry?.release();
               if (!preflight) {
                 return;
               }

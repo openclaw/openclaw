@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
@@ -11,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   setupSessionCreateTestHarness,
@@ -33,6 +35,29 @@ async function closeIncognitoSessionDatabases() {
     await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
   }
 }
+
+test("sessions.create publishes an explicitly selected actor session before its response", async () => {
+  await createSessionStoreDir();
+  const actor = await openIncognitoTestActor(process.env, { assertCurrent() {} });
+  try {
+    const created = await withIncognitoSessionActor(actor, () =>
+      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+        agentId: "main",
+        incognito: true,
+      }),
+    );
+    expect(created.ok).toBe(true);
+    const key = requireNonEmptyString(created.payload?.key, "actor incognito session key");
+    const stored = await actor.sessions.read({ assertCurrent() {} }, { sessionKey: key });
+    expect(stored.entry).toMatchObject({
+      sessionId: created.payload?.sessionId,
+      incognito: true,
+    });
+    expect(listOpenIncognitoAgentDatabases()).toEqual([]);
+  } finally {
+    await actor.close();
+  }
+});
 
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
   const { storePath } = await createSessionStoreDir();

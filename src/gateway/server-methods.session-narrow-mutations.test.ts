@@ -1,8 +1,16 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -18,7 +26,7 @@ import { sessionMessagingHandlers } from "./server-methods/sessions-messaging.js
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { resolveSessionSharingTarget } from "./session-sharing.js";
-import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -38,6 +46,91 @@ function ownedEntry(client: ReturnType<typeof roleClient>, sessionId: string) {
 }
 
 describe("invocation-owned session mutations", () => {
+  it("forwards send and steer from the captured actor and refuses that actor after close", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: "main",
+        env: state.env,
+        authority: { assertCurrent() {} },
+      });
+      assert(actor);
+      const sessionKey = "agent:main:dashboard:incognito-messaging";
+      await actor.sessions.create(
+        { assertCurrent() {} },
+        {
+          sessionKey,
+          entry: { sessionId: "captured-messaging", updatedAt: 1, incognito: true },
+        },
+      );
+      const cfg = { agents: { entries: { main: {} } } };
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const client = sharingPolicyClient({ scopes: ["operator.admin"] });
+      const dispatch = vi
+        .spyOn(chat, "handleDirectExternalChatSend")
+        .mockImplementation(async (options) => {
+          readGatewayRequestMutationAuthority(options).assertCurrent();
+          options.sessionMutationAuthorization?.assertCurrent();
+          expect(options.params).toMatchObject({
+            sessionKey,
+            agentId: "main",
+            message: "Captured source message",
+            idempotencyKey: expect.stringMatching(/^actor-/),
+          });
+          options.respond(true, { status: "queued" });
+        });
+      const request = (method: "sessions.send" | "sessions.steer", respond = vi.fn()) => ({
+        req: {
+          type: "req" as const,
+          id: method,
+          method,
+          params: {
+            key: `  ${sessionKey}  `,
+            message: "Captured source message",
+            idempotencyKey: `actor-${method}`,
+          },
+        },
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionMessagingHandlers,
+      });
+      const sql = observeHostDataSql();
+      try {
+        for (const method of ["sessions.send", "sessions.steer"] as const) {
+          const respond = vi.fn();
+          await withIncognitoSessionActor(actor, () =>
+            handleGatewayRequest(request(method, respond)),
+          );
+          expect(respond).toHaveBeenCalledOnce();
+          expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([true, { status: "queued" }]);
+          expect(dispatch.mock.calls.at(-1)?.[0].params).toMatchObject(
+            method === "sessions.steer" ? { queueMode: "interrupt" } : { sessionKey },
+          );
+        }
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+        await actor.close();
+      }
+      dispatch.mockClear();
+      const stoppedSql = observeHostDataSql();
+      try {
+        for (const method of ["sessions.send", "sessions.steer"] as const) {
+          await expect(
+            withIncognitoSessionBinding({ actor }, () => handleGatewayRequest(request(method))),
+          ).rejects.toThrow("Incognito session ended");
+        }
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(stoppedSql.queries).toEqual([]);
+      } finally {
+        stoppedSql.restore();
+      }
+    });
+  });
+
   it.each([
     { owner: "connection", broad: false, rebind: true },
     { owner: "device", broad: true, rebind: false },

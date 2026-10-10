@@ -89,6 +89,10 @@ type Reads = {
     output: SessionTranscriptProjectionSelectionResults[Key];
   };
 } & {
+  "active-path-relation": {
+    input: { entryId: string | null };
+    output: { relation: "exact" | "ancestor" | "off-path"; activeLeafEntryId: string | null };
+  };
   "harness-completion-source": {
     input: { claim: HarnessCompletionRecovery };
     output: HarnessCompletionSourceSnapshot;

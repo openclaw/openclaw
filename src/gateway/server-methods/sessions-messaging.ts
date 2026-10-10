@@ -12,10 +12,12 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { terminateAcceptedCollectorRun } from "../../agents/subagents/spawn/subagent-spawn-cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
+import { withGatewaySessionEntry } from "../session-utils-store.js";
 import {
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
@@ -123,10 +125,20 @@ async function handleSessionSend(
     return;
   }
   const requestedAgentId = requestedAgent.agentId;
-  const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const source = captureIncognitoSessionSource({ agentId: requestedAgentId, sessionKey: key });
+  const loaded = source
+    ? await withGatewaySessionEntry(
+        key,
+        { agentId: requestedAgentId },
+        (session) => session,
+        cfg,
+        requestAuthority.assertPreparationCurrent,
+      )
+    : loadSessionEntry(key, { agentId: requestedAgentId });
+  requestAuthority.assertPreparationCurrent();
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  const requestAuthority = readGatewayRequestMutationAuthority(options);
   const sessionAuthorization = options.sessionMutationAuthorization;
   const deletedAgent = prepareDeletedAgentSessionCheck({
     cfg,

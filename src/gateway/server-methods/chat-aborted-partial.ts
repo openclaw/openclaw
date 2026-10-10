@@ -1,6 +1,11 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionActor,
+} from "../../config/sessions/session-incognito-binding.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -68,12 +73,28 @@ export function captureAbortedPartial(params: {
 }) {
   const { runId, abortOrigin } = params;
   try {
+    const source = captureIncognitoSessionSource({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      ...(params.session?.ok ? { storePath: params.session.value.storePath } : {}),
+    });
     const session = params.session ?? {
       ok: true,
-      value: loadSessionEntry(
-        params.sessionKey,
-        params.agentId ? { agentId: params.agentId } : undefined,
-      ),
+      value: source
+        ? {
+            cfg: getRuntimeConfig(),
+            storePath: "kind" in source ? source.path : source.actor.path,
+            canonicalKey: params.sessionKey,
+            agentId: "kind" in source ? source.agentId : source.actor.agentId,
+            entry:
+              "kind" in source
+                ? undefined
+                : source.actor.sessions.readSharing(params.sessionKey)?.entry,
+          }
+        : loadSessionEntry(
+            params.sessionKey,
+            params.agentId ? { agentId: params.agentId } : undefined,
+          ),
     };
     if (!session.ok) {
       throw session.error;
@@ -97,6 +118,7 @@ export function captureAbortedPartial(params: {
       abortOrigin,
       ok: true,
       settlement,
+      incognitoActor: source && !("kind" in source) ? source.actor : undefined,
       value: {
         sessionKey: canonicalKey,
         sessionId: params.sessionId,
@@ -134,39 +156,44 @@ export function deferAbortedPartialPersistence(
   }
   try {
     snapshot.settlement.deferred = snapshot.settlement.producer.handoff((producerCompleted) =>
-      context.trackExecution(async () => {
-        const producerError = await producerCompleted;
-        if (isCliPartialOutputRejected(producerError)) {
-          return;
-        }
-        let warning: string | undefined;
-        try {
-          const { persistAbortedPartial } = await import("./chat-transcript-persistence.js");
-          warning = await persistAbortedPartial({ context, snapshot, producerSettled: true });
-        } catch (error) {
-          context.logGateway.warn(
-            `chat.abort deferred transcript append failed: ${formatErrorMessage(error)}`,
-          );
-          warning = ABORTED_PARTIAL_PERSISTENCE_WARNING;
-        }
-        if (warning) {
-          try {
-            broadcastChatError({
-              terminalEntry: undefined,
-              context,
-              runId: snapshot.runId,
-              sessionKey: snapshot.value.sessionKey,
-              agentId: snapshot.value.agentId,
-              errorMessage: warning,
-              stopReason: "aborted-partial-persistence-failed",
-            });
-          } catch (error) {
-            // Delivery failure cannot retain a finished producer's successor fence.
-            context.logGateway.warn(
-              `chat.abort persistence warning delivery failed: ${formatErrorMessage(error)}`,
-            );
+      context.trackExecution(() => {
+        const settle = async () => {
+          const producerError = await producerCompleted;
+          if (isCliPartialOutputRejected(producerError)) {
+            return;
           }
-        }
+          let warning: string | undefined;
+          try {
+            const { persistAbortedPartial } = await import("./chat-transcript-persistence.js");
+            warning = await persistAbortedPartial({ context, snapshot, producerSettled: true });
+          } catch (error) {
+            context.logGateway.warn(
+              `chat.abort deferred transcript append failed: ${formatErrorMessage(error)}`,
+            );
+            warning = ABORTED_PARTIAL_PERSISTENCE_WARNING;
+          }
+          if (warning) {
+            try {
+              broadcastChatError({
+                terminalEntry: undefined,
+                context,
+                runId: snapshot.runId,
+                sessionKey: snapshot.value.sessionKey,
+                agentId: snapshot.value.agentId,
+                errorMessage: warning,
+                stopReason: "aborted-partial-persistence-failed",
+              });
+            } catch (error) {
+              // Delivery failure cannot retain a finished producer's successor fence.
+              context.logGateway.warn(
+                `chat.abort persistence warning delivery failed: ${formatErrorMessage(error)}`,
+              );
+            }
+          }
+        };
+        return snapshot.incognitoActor
+          ? withIncognitoSessionActor(snapshot.incognitoActor, settle)
+          : settle();
       }),
     );
   } catch (error) {

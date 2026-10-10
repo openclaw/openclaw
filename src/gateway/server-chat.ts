@@ -23,6 +23,7 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,6 +34,7 @@ import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-u
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
+import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
@@ -1077,7 +1079,13 @@ export function createAgentEventHandler({
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel ?? event.verboseLevel);
     const registeredAt = runContext?.registeredAt ?? event.registeredAt;
     try {
-      const { cfg, entry } = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, clone: false });
+      const source = captureIncognitoSessionSource({ agentId, sessionKey });
+      const { cfg, entry } = source
+        ? {
+            cfg: getRuntimeConfig(),
+            entry: "kind" in source ? undefined : source.actor.sessions.readSteering(sessionKey),
+          }
+        : loadGatewaySessionEntryReadOnly(sessionKey, { agentId, clone: false });
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1092,7 +1100,8 @@ export function createAgentEventHandler({
       }
       const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
       return defaultVerbose ?? "off";
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       return runVerbose ?? "off";
     }
   };

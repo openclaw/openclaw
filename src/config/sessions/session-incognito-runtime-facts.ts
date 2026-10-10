@@ -5,7 +5,10 @@ import type { InternalSessionEntry } from "./types.js";
 /** Finite runtime facts derived from the worker's authoritative row before publication. */
 export function projectIncognitoSessionRuntimeFacts(
   entry: InternalSessionEntry | undefined,
-): Pick<IncognitoSessionFacts, "delivery" | "media" | "modelSelection" | "policy" | "steering"> {
+): Pick<
+  IncognitoSessionFacts,
+  "delivery" | "media" | "inheritance" | "modelSelection" | "policy" | "steering"
+> {
   return {
     delivery: entry
       ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
@@ -27,6 +30,26 @@ export function projectIncognitoSessionRuntimeFacts(
           spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
           pendingWorktree: entry.pendingWorktree,
           pendingProjectGitUrl: entry.pendingProjectGitUrl,
+        }
+      : undefined,
+    inheritance: entry
+      ? {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          groupId: entry.groupId,
+          groupChannel: entry.groupChannel,
+          space: entry.space,
+          communication: entry.communication,
+          contextWindow: entry.contextWindow,
+          thinkingLevel: entry.thinkingLevel,
+          fastMode: entry.fastMode,
+          toolOverrides: entry.toolOverrides,
+          verboseLevel: entry.verboseLevel,
+          traceLevel: entry.traceLevel,
+          reasoningLevel: entry.reasoningLevel,
+          elevatedLevel: entry.elevatedLevel,
+          authProfileOverrideSource: entry.authProfileOverrideSource,
+          authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
         }
       : undefined,
     modelSelection: entry
@@ -119,6 +142,9 @@ export function projectIncognitoSessionRuntimeFacts(
           status: entry.status,
           restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
           restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+          restartRecoveryDeliveryRequestFingerprint:
+            entry.restartRecoveryDeliveryRequestFingerprint,
+          verboseLevel: entry.verboseLevel,
           restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
           restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
           restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,

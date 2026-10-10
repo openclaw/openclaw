@@ -15,6 +15,7 @@ import {
   applySessionEntryTargetOperation,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -349,13 +350,17 @@ export async function persistAbortedPartial(params: {
   if (!snapshot.ok) {
     throw snapshot.error;
   }
-  const appended = await appendInjectedAssistantMessageToTranscript({
-    ...snapshot.value,
-    abortMeta: {
-      ...snapshot.value.abortMeta,
-      ...(params.producerSettled ? { producerSettled: true } : {}),
-    },
-  });
+  const append = () =>
+    appendInjectedAssistantMessageToTranscript({
+      ...snapshot.value,
+      abortMeta: {
+        ...snapshot.value.abortMeta,
+        ...(params.producerSettled ? { producerSettled: true } : {}),
+      },
+    });
+  const appended = snapshot.incognitoActor
+    ? await withIncognitoSessionActor(snapshot.incognitoActor, append)
+    : await append();
   if (appended.skipped || appended.ok) {
     return undefined;
   }

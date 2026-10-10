@@ -5,8 +5,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { assertSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import type { PreparedSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -187,6 +191,73 @@ it.each(["rewrite", "revocation"] as const)(
     ).toBe(reason === "rewrite" ? "winner" : undefined);
   },
 );
+
+it("rejects a parent policy change queued before the creation transaction", async () => {
+  const parent = target("queued-parent");
+  const child = target("queued-child");
+  await withIncognitoSessionActor(actor, () =>
+    upsertSessionEntryCore(parent, {
+      sessionId: "queued-parent",
+      communication: { receive: "always" },
+    }),
+  );
+  let parentChange: Promise<unknown> | undefined;
+  let released = false;
+  const source = Object.assign(() => actor.assertCurrent(), {
+    async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
+      const observed = await actor.sessions.read(authority, { sessionKey: parent.sessionKey });
+      return {
+        assertCurrent: () => actor.assertCurrent(),
+        checks: [
+          {
+            predicate: {
+              source: {
+                agentId: actor.agentId,
+                path: actor.path,
+                databaseIdentity: actor.identity.incarnation,
+              },
+              sessionKey: parent.sessionKey,
+              fields: ["communication"],
+              expected: observed.entry,
+            },
+            refuse() {
+              throw new Error("Parent policy changed before child creation");
+            },
+          },
+        ],
+        release() {
+          released = true;
+        },
+      };
+    },
+  });
+  await expect(
+    withIncognitoSessionActor(actor, () =>
+      createSessionEntryWithTranscript(
+        child,
+        () => ({ ok: true, entry: { sessionId: "queued-child", updatedAt: 1 } }),
+        {
+          commitGuard: source,
+          onPhase(phase) {
+            if (phase === "commit") {
+              parentChange = patchSessionEntryCore(parent, () => ({
+                communication: { receive: "never" },
+              }));
+            }
+          },
+        },
+      ),
+    ),
+  ).rejects.toThrow("Parent policy changed before child creation");
+  await parentChange;
+  expect(released).toBe(true);
+  expect(
+    (await actor.sessions.read(authority, { sessionKey: child.sessionKey })).entry,
+  ).toBeUndefined();
+  expect(
+    (await actor.sessions.read(authority, { sessionKey: parent.sessionKey })).entry?.communication,
+  ).toEqual({ receive: "never" });
+});
 
 it("settles accepted creation after admission cancellation without cancelling its persistence", async () => {
   const scope = target("accepted");

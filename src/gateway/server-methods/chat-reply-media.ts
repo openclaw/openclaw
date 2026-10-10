@@ -14,6 +14,7 @@ import {
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
@@ -29,6 +30,7 @@ import {
   captureChannelReadAuthority,
   withChannelReadAuthority,
 } from "../../shared/channel-read-authority.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
@@ -130,7 +132,31 @@ export function captureWebchatReplyMediaScope(
   workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
   assertCurrent: () => void;
 } {
-  const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
+  const source = captureIncognitoSessionSource({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    env: params.sessionLoadOptions?.env,
+  });
+  const claim =
+    source && !("kind" in source)
+      ? source.actor.sessions.captureCurrent(params.sessionKey)
+      : undefined;
+  const readEntry = () => {
+    if (!source) {
+      return loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
+    }
+    source.admissionSignal?.throwIfAborted();
+    if ("kind" in source) {
+      source.assertCurrent();
+      throw new IncognitoSessionMissingError();
+    }
+    claim?.assertCurrent();
+    const entry = source.actor.sessions.readMedia(params.sessionKey);
+    if (!entry) {
+      throw new IncognitoSessionMissingError();
+    }
+    return entry;
+  };
   const readPlacement = (entry: SessionEntry | undefined) =>
     entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
       ? resolveSessionWorkerPlacementContext()

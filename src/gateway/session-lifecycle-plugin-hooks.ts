@@ -3,6 +3,7 @@ import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -46,7 +47,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   nextSessionId?: string;
   nextSessionKey?: string;
   endedTranscript?: SessionEndTranscriptSource;
-}): void {
+}): Promise<void> | undefined {
   if (!params.sessionId) {
     return;
   }
@@ -59,24 +60,35 @@ export function emitGatewaySessionEndPluginHook(params: {
   if (!shouldEmitAutoReset && !shouldEmitPluginHook) {
     return;
   }
+  const incognito =
+    params.endedTranscript &&
+    captureIncognitoSessionSource({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
   const archiveCandidates = new Set(
-    resolveSessionTranscriptCandidates(
-      params.sessionId,
-      params.storePath,
-      params.sessionFile,
-      params.agentId,
-    ).map((candidate) => path.resolve(candidate)),
+    incognito
+      ? []
+      : resolveSessionTranscriptCandidates(
+          params.sessionId,
+          params.storePath,
+          params.sessionFile,
+          params.agentId,
+        ).map((candidate) => path.resolve(candidate)),
   );
   const endedArchive = params.archivedTranscripts?.find((archive) =>
     archiveCandidates.has(path.resolve(archive.sourcePath)),
   );
-  const transcript = resolveStableSessionEndTranscript({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
-    archivedTranscripts: endedArchive ? [endedArchive] : params.archivedTranscripts,
-  });
+  const transcript = incognito
+    ? {}
+    : resolveStableSessionEndTranscript({
+        sessionId: params.sessionId,
+        storePath: params.storePath,
+        sessionFile: params.sessionFile,
+        agentId: params.agentId,
+        archivedTranscripts: endedArchive ? [endedArchive] : params.archivedTranscripts,
+      });
   const hookParams = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -113,7 +125,7 @@ export function emitGatewaySessionEndPluginHook(params: {
         ? { available: false as const, reason: "no-stable-cutoff" as const }
         : { available: false as const, reason: "unsupported-source" as const });
   const payload = buildSessionEndHookPayload({ ...hookParams, endedTranscript });
-  void runWithGatewayDetachedWorkContinuation(async () => {
+  return runWithGatewayDetachedWorkContinuation(async () => {
     await hookRunner.runSessionEnd(payload.event, payload.context);
   }, "hooks:session-end").catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);

@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -28,7 +27,8 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
@@ -46,6 +46,7 @@ import {
   captureAbortedPartial,
   deferAbortedPartialPersistence,
   withAbortedPartialPersistenceWarning,
+  type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -183,11 +184,16 @@ export async function handleChatAbortRequestWithLifecycle(
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
 
-  const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
+  const abortSession: ChatAbortSessionSnapshot = await (async () => {
     try {
       return {
         ok: true,
-        value: loadSessionEntry(canonicalAbortSessionKey, { agentId: abortAgentId }),
+        value: await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: abortCfg,
+          key: canonicalAbortSessionKey,
+          agentId: abortAgentId,
+          assertActive: assertCurrent,
+        }),
       };
     } catch (error) {
       return { ok: false, error };

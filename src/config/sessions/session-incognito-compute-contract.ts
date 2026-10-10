@@ -1,3 +1,7 @@
+import type {
+  ReadRecentSessionMessagesOptions,
+  ReadRecentSessionMessagesResult,
+} from "../../gateway/session-transcript-read.types.js";
 import type { UsageCostWorkerHostEffects } from "../../infra/session-cost-usage-worker.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { RegisteredAgentWorkerOperations } from "../../state/openclaw-agent-execution-operations.js";
@@ -55,6 +59,10 @@ type SessionComputeOperations = {
   };
 } & {
   "session.compute.status": { input: IncognitoComputeTarget; output: boolean };
+  "session.compute.endedTail": {
+    input: IncognitoComputeTarget & { options: ReadRecentSessionMessagesOptions };
+    output: ReadRecentSessionMessagesResult;
+  };
   "session.compute.source.open": {
     input: IncognitoComputeTarget & {
       sourceId: string;

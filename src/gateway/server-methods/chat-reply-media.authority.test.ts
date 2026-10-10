@@ -1,22 +1,33 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   captureWebchatReplyMediaScope,
   prepareWebchatReplyMediaForDisplay,
 } from "./chat-reply-media.js";
+import { createChatSendReplyFinalizationAuthority } from "./chat-send-delivery-authority.js";
 
 const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -162,4 +173,195 @@ it("preserves already-produced text after its turn is aborted", async () => {
     inputs: [{ kind: "raw", payload: { text: "Completed before cancellation." } }],
   });
   expect(assistantContent).toEqual([{ type: "text", text: "Completed before cancellation." }]);
+});
+
+it("retains the selected actor through media preparation and refuses a changed permission", async () => {
+  const actor = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    env: state.env,
+    authority: { assertCurrent() {} },
+  });
+  assert(actor);
+  const sessionKey = "agent:main:dashboard:incognito-media-authority";
+  const workspace = state.workspaceDir;
+  await fs.mkdir(workspace, { recursive: true });
+  const audioSource = path.join(workspace, "retained.mp3");
+  await fs.writeFile(audioSource, AUDIO_BYTES);
+  await actor.sessions.create(
+    { assertCurrent() {} },
+    {
+      sessionKey,
+      entry: {
+        sessionId: "retained-media",
+        updatedAt: 1,
+        incognito: true,
+        permissionMode: "full",
+        sessionRoot: workspace,
+      },
+    },
+  );
+  const opened = createDeferred();
+  const release = createDeferred();
+  const nativeOpen = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await nativeOpen(...args);
+    if (String(args[0]) === audioSource) {
+      opened.resolve();
+      await release.promise;
+    }
+    return handle;
+  });
+  const sql = observeHostDataSql();
+  try {
+    await withIncognitoSessionActor(actor, async () => {
+      const scope = captureWebchatReplyMediaScope({
+        cfg: { agents: { entries: { main: { workspace } } } },
+        agentId: "main",
+        sessionKey,
+        sessionLoadOptions: { agentId: "main", env: state.env },
+      });
+      const prepared = prepareWebchatReplyMediaForDisplay({
+        scope,
+        inputs: [{ kind: "raw", payload: { mediaUrls: [audioSource], trustedLocalMedia: true } }],
+      });
+      const settled = prepared.catch(() => undefined);
+      try {
+        await opened.promise;
+        await patchSessionEntryCore(
+          { agentId: "main", env: state.env, storePath: actor.path, sessionKey },
+          () => ({ permissionMode: "workspace" }),
+        );
+      } finally {
+        release.resolve();
+        await settled;
+      }
+      await expect(prepared).rejects.toThrow("Session media access changed");
+    });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    release.resolve();
+    sql.restore();
+    await actor.close();
+  }
+});
+
+it("keeps explicit actor absence out of native media discovery", () => {
+  const sql = observeHostDataSql();
+  try {
+    expect(() =>
+      withIncognitoSessionBinding(
+        {
+          kind: "absent",
+          agentId: "main",
+          env: state.env,
+          authority: { assertCurrent() {} },
+        },
+        () =>
+          captureWebchatReplyMediaScope({
+            cfg: {},
+            agentId: "main",
+            sessionKey: "agent:main:dashboard:incognito-missing-media",
+            sessionLoadOptions: { agentId: "main", env: state.env },
+          }),
+      ),
+    ).toThrow("No incognito session owner");
+    expect(sql.queries).toEqual([]);
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+});
+
+it("revokes untagged text finalization when its captured session rotates or actor closes", async () => {
+  const actor = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    env: state.env,
+    authority: { assertCurrent() {} },
+  });
+  assert(actor);
+  const sessionKey = "agent:main:dashboard:incognito-text-finalization";
+  await actor.sessions.create(
+    { assertCurrent() {} },
+    {
+      sessionKey,
+      entry: {
+        sessionId: "text-finalization",
+        lifecycleRevision: "initial",
+        updatedAt: 1,
+        incognito: true,
+      },
+    },
+  );
+  const sql = observeHostDataSql();
+  try {
+    const capture = () =>
+      withIncognitoSessionBinding({ actor }, () =>
+        createChatSendReplyFinalizationAuthority(
+          {
+            accountId: undefined,
+            context: createDirectChatContext(),
+            terminalEntry: undefined,
+            emitFirstAssistantServerTiming() {},
+            session: {
+              agentId: "main",
+              backingSessionId: "text-finalization",
+              cfg: {},
+              clientRunId: "text-finalization-run",
+              sessionKey,
+              sessionLoadOptions: { agentId: "main", env: state.env },
+            },
+          },
+          [{ text: "Already prepared text" }],
+        ),
+      );
+    const original = capture();
+    expect(original.deliveryAuthorized()).toBe(true);
+    await withIncognitoSessionActor(actor, () =>
+      patchSessionEntryCore(
+        { agentId: "main", env: state.env, storePath: actor.path, sessionKey },
+        () => ({ lifecycleRevision: "rotated" }),
+      ),
+    );
+    expect(original.deliveryAuthorized).toThrow("generation is no longer current");
+    const current = capture();
+    expect(current.deliveryAuthorized()).toBe(true);
+    await actor.close();
+    expect(current.deliveryAuthorized).toThrow("Incognito session ended");
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+    await actor.close();
+  }
+});
+
+it("keeps unbound private media scope on the native owner without acquiring an actor", async () => {
+  const sessionKey = "agent:main:dashboard:incognito-native-media";
+  await replaceSessionEntry(
+    {
+      sessionKey,
+      agentId: "main",
+      env: state.env,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    },
+    {
+      sessionId: "native-private-media",
+      updatedAt: 1,
+      incognito: true,
+      permissionMode: "workspace",
+      sessionRoot: state.workspaceDir,
+    },
+  );
+  expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
+  const scope = captureWebchatReplyMediaScope({
+    cfg: {},
+    agentId: "main",
+    sessionKey,
+    sessionLoadOptions: { agentId: "main", env: state.env },
+  });
+  expect(scope.sessionEntry?.sessionId).toBe("native-private-media");
+  expect(scope.workspace.workspaceDir).toBe(state.workspaceDir);
+  expect(() => scope.assertCurrent()).not.toThrow();
+  expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
 });

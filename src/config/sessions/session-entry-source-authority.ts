@@ -29,9 +29,26 @@ type SessionEntrySourceMetadata = NonNullable<
   NonNullable<IncognitoSessionFacts["sharing"]>["entry"]
 > &
   NonNullable<IncognitoSessionFacts["media"]> &
-  NonNullable<IncognitoSessionFacts["modelSelection"]>;
+  NonNullable<IncognitoSessionFacts["modelSelection"]> &
+  NonNullable<IncognitoSessionFacts["policy"]> &
+  NonNullable<IncognitoSessionFacts["inheritance"]>;
 
 const metadataFields: ReadonlySet<string> = new Set([
+  "groupId",
+  "groupChannel",
+  "space",
+  "communication",
+  "contextWindow",
+  "thinkingLevel",
+  "fastMode",
+  "verboseLevel",
+  "traceLevel",
+  "reasoningLevel",
+  "elevatedLevel",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+  "skillLibrarySelections",
+  "execHost",
   "sessionId",
   "previousSessionId",
   "updatedAt",
@@ -131,6 +148,8 @@ export function captureSessionEntryMetadataRead(scope: {
         subagentRecovery: sharing.subagentRecovery,
         ...sessions.readMedia(scope.sessionKey),
         ...sessions.readModelSelection(scope.sessionKey),
+        ...sessions.readPolicy(scope.sessionKey),
+        ...sessions.readInheritance(scope.sessionKey),
       };
     },
   };

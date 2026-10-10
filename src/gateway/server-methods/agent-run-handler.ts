@@ -58,15 +58,21 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   }
   const request = params as AgentRunRequest;
   const principal = captureAgentTurnPrincipal(client);
-  const preflight = prepareAgentRequestPreflight({ request, context, client: principal, io });
-  if (!preflight) {
-    return;
-  }
-  const onRunObserved = resolveAgentTurnRunObserver({
-    principal,
-    registerToolEventRecipient: context.registerToolEventRecipient,
-  });
   try {
+    const preflight = await prepareAgentRequestPreflight({
+      request,
+      context,
+      client: principal,
+      io,
+    });
+    runtimeAuthority.commitGuard?.();
+    if (!preflight) {
+      return;
+    }
+    const onRunObserved = resolveAgentTurnRunObserver({
+      principal,
+      registerToolEventRecipient: context.registerToolEventRecipient,
+    });
     await createAgentTurnService({ context, isWebchatConnect }).startTurn({
       assertAdmissionCurrent: runtimeAuthority.commitGuard,
       assertInputCommitAllowed: assertUploadAllowed,

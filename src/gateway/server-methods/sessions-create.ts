@@ -7,9 +7,16 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
@@ -108,6 +115,30 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = structuredClone(params);
+    const incognitoSource =
+      p.incognito || isIncognitoSessionKey(p.key) || isIncognitoSessionKey(p.parentSessionKey)
+        ? captureIncognitoSessionSource()
+        : undefined;
+    const sourceFinished = createDeferredCore();
+    const sourceSettlement =
+      incognitoSource && !("kind" in incognitoSource)
+        ? incognitoSource.actor.sessions.withSharedState(() => sourceFinished.promise)
+        : undefined;
+    void sourceSettlement?.catch(() => {});
+    await using _sourceLifetime = {
+      async [Symbol.asyncDispose]() {
+        sourceFinished.resolve();
+        await sourceSettlement;
+      },
+    };
+    const assertSourceCurrent = () => {
+      incognitoSource?.admissionSignal?.throwIfAborted();
+      if (incognitoSource && "kind" in incognitoSource) {
+        incognitoSource.assertCurrent();
+      } else {
+        incognitoSource?.actor.assertReadable();
+      }
+    };
     const requiredWorker = prepareRequiredWorkerSessionCreate(p, context.getRuntimeConfig());
     if (requiredWorker.error) {
       respond(false, undefined, requiredWorker.error);
@@ -174,6 +205,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     // Account selection is connection-bound until committed. Placement then consumes
     // that committed session under its retained request and session authority.
     const commitGuard = () => {
+      assertSourceCurrent();
       assertSessionCreateCurrent();
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
@@ -333,7 +365,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
     const existingTargetEntry = explicitlyRequestedKey
-      ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
+      ? incognitoSource
+        ? await readSessionEntryReadOnlyInWorker(
+            { agentId: titleAgentId, sessionKey: explicitlyRequestedKey },
+            commitGuard,
+          )
+        : loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
       : undefined;
     const workspaceReuseError = requiredWorkerWorkspaceReuseError(
       automaticEmptyWorkspace,
@@ -406,6 +443,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       if (
         !targetKey &&
         parentSessionKey &&
+        !isIncognitoSessionKey(parentSessionKey) &&
         p.emitCommandHooks === true &&
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"

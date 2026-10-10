@@ -1,10 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   type SessionEntry,
 } from "../../config/sessions.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -172,23 +177,51 @@ export async function resolveBareSessionResetResult(params: {
   });
 }
 
-export function loadBareSessionResetDeliverySession(params: {
-  sessionKey: string;
-  agentId?: string;
-}): {
-  cfg: OpenClawConfig;
-  entry?: SessionEntry;
-  agentId: string;
-} {
+export async function withBareSessionResetDeliverySession<T>(
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    assertCurrent?: () => void;
+  },
+  consume: (
+    session: {
+      cfg: OpenClawConfig;
+      entry?: SessionEntry;
+      agentId: string;
+    },
+    assertCurrent: () => void,
+  ) => Promise<T>,
+): Promise<T> {
+  const binding = captureIncognitoSessionSource(params);
+  if (binding) {
+    const cfg = getRuntimeConfig();
+    return withIncognitoSessionEntry(
+      binding,
+      params.sessionKey,
+      () => params.assertCurrent?.(),
+      (entry, assertCurrent) =>
+        consume(
+          {
+            cfg,
+            entry,
+            agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
+          },
+          assertCurrent,
+        ),
+    );
+  }
   const loaded = loadSessionEntry(params.sessionKey, {
     clone: false,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  return {
-    cfg: loaded.cfg,
-    entry: loaded.entry,
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
-  };
+  return consume(
+    {
+      cfg: loaded.cfg,
+      entry: loaded.entry,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
+    },
+    () => params.assertCurrent?.(),
+  );
 }
 
 export function resolveSessionRuntimeCwd(params: {

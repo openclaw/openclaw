@@ -10,7 +10,7 @@ import {
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,6 +30,7 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
+import { prepareAgentRelatedSessionSource } from "../agent-turn/agent-session-source.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
 import {
   normalizeTrustedGroupMetadata,
@@ -39,6 +40,8 @@ import {
 } from "./agent-subagent-registration.js";
 
 export type AgentSessionPatchBuild = {
+  parentSource?: SessionSourceAssertion;
+  releaseParent?: () => Promise<void>;
   patch: Partial<SessionEntry>;
   spawnedBy: string | undefined;
   groupId: string | undefined;
@@ -64,7 +67,7 @@ type AgentSessionReuseInput = {
   requestedSessionId?: string;
   isSystemGatewayRun: boolean;
   visibleRequest: boolean;
-  failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
+  failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean | Promise<boolean>;
 };
 
 /** Re-evaluate the entry from each read; callers retain admission and concurrent-rotation fencing. */
@@ -113,7 +116,7 @@ export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) 
   const canReuseSession =
     Boolean(params.freshEntry?.sessionId) &&
     ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
-    !params.failedSessionTranscriptMissing(params.freshEntry) &&
+    !(await params.failedSessionTranscriptMissing(params.freshEntry)) &&
     !terminalMainTranscriptNewerThanRegistry;
   const usableRequestedSessionId =
     params.requestedSessionId && (!params.freshEntry?.sessionId || canReuseSession)
@@ -159,25 +162,22 @@ export async function buildAgentSessionPatch(
     : undefined;
   const storedGroup = normalizeTrustedGroupMetadata(params.freshEntry);
   let inheritedGroup: TrustedGroupMetadata | undefined;
+  let parent: Awaited<ReturnType<typeof prepareAgentRelatedSessionSource>>;
   if (
     freshSpawnedBy &&
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
-    try {
-      const parentEntry = resolveSessionEntryAccessTarget({
-        cfg: params.cfg,
-        sessionKey: freshSpawnedBy,
-      }).entry;
-      inheritedGroup = normalizeTrustedGroupMetadata({
-        groupId: parentEntry?.groupId,
-        groupChannel: parentEntry?.groupChannel,
-        groupSpace: parentEntry?.space,
-      });
-    } catch (error) {
-      if ((error as { code?: unknown })?.code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
-        throw error;
-      }
-    }
+    parent = await prepareAgentRelatedSessionSource({
+      cfg: params.cfg,
+      sessionKey: freshSpawnedBy,
+      fields: ["sessionId", "lifecycleRevision", "groupId", "groupChannel", "space"],
+    });
+    const parentEntry = parent?.entry;
+    inheritedGroup = normalizeTrustedGroupMetadata({
+      groupId: parentEntry?.groupId,
+      groupChannel: parentEntry?.groupChannel,
+      groupSpace: parentEntry?.space,
+    });
   }
   const trustedGroup = resolveTrustedGroupMetadata({
     sessionKey: params.canonicalSessionKey,
@@ -300,6 +300,8 @@ export async function buildAgentSessionPatch(
     clearAllCliSessions(patch);
   }
   return {
+    parentSource: parent?.source,
+    releaseParent: parent?.release,
     patch,
     spawnedBy: freshSpawnedBy,
     ...nextGroup,

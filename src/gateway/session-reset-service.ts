@@ -531,7 +531,7 @@ export async function performGatewaySessionReset(params: {
   assertAuthorizedInstance?: () => void;
   /** Optional caller-observed session ID that must still be current at lifecycle admission. */
   expectedSessionId?: string;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
+  onCommitted?: (commit: { key: string; sessionId?: string }) => void;
 }): Promise<
   | {
       ok: true;
@@ -1008,6 +1008,7 @@ async function performPreparedGatewaySessionReset({
         if (!deleted.ok) {
           return deleted;
         }
+        params.onCommitted?.({ key: target.canonicalKey });
         await handleSessionStateSessionDeleted(target.canonicalKey, agentId);
         const worktreePreserved = await removeSessionWorktree({
           id: normalizeOptionalString(entry.worktree?.id),

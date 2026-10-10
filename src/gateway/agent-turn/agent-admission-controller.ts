@@ -24,10 +24,12 @@ import {
   setAbortedAgentDedupeEntries,
 } from "./agent-dedupe.js";
 import { resolveAgentSessionWorkStartError } from "./agent-handler-helpers.js";
+import type { AgentSessionSource } from "./agent-session-source.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
   assertAdmissionCurrent?: () => void;
+  sessionSource?: AgentSessionSource;
   runId: string;
   lifecycleGeneration: string;
   agentDedupeKeys: string[];
@@ -127,17 +129,21 @@ export function createAgentAdmissionController(params: {
       return undefined;
     }
     const admissionAgent = admissionAgentId();
-    let latestEntry = loadSessionEntry(resolvedSessionKey, {
-      agentId: admissionAgent,
-      clone: false,
-      projection: "list",
-    }).entry;
+    let latestEntry = params.sessionSource
+      ? params.sessionSource.readCurrent(resolvedSessionKey, admissionAgent)
+      : loadSessionEntry(resolvedSessionKey, {
+          agentId: admissionAgent,
+          clone: false,
+          projection: "list",
+        }).entry;
     if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
-      latestEntry = loadSessionEntry(requestedSessionKey, {
-        agentId: admissionAgent,
-        clone: false,
-        projection: "list",
-      }).entry;
+      latestEntry = params.sessionSource
+        ? params.sessionSource.readCurrent(requestedSessionKey, admissionAgent)
+        : loadSessionEntry(requestedSessionKey, {
+            agentId: admissionAgent,
+            clone: false,
+            projection: "list",
+          }).entry;
     }
     assertExpectedExistingSession({
       constraint: params.expectedSession,

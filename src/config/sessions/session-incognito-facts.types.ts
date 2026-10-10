@@ -10,6 +10,8 @@ export type IncognitoSessionFacts = {
   identity: Readonly<SqliteWorkerEphemeralTarget>;
   sessionKey: string;
   revision: number;
+  /** Undefined while projection is unavailable; null is a known empty active path. */
+  activeLeafEntryId?: string | null;
   sharing: CommittedSessionSharingFacts | undefined;
   capability?: SessionEntryCurrentFacts;
   chatMetadataRevision?: string;
@@ -32,6 +34,25 @@ export type IncognitoSessionFacts = {
     | "worktree"
     | "pluginOwnerId"
   > & { worktreeId?: string };
+  inheritance?: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "lifecycleRevision"
+    | "groupId"
+    | "groupChannel"
+    | "space"
+    | "communication"
+    | "contextWindow"
+    | "thinkingLevel"
+    | "fastMode"
+    | "toolOverrides"
+    | "verboseLevel"
+    | "traceLevel"
+    | "reasoningLevel"
+    | "elevatedLevel"
+    | "authProfileOverrideSource"
+    | "authProfileOverrideCompactionCount"
+  >;
   modelSelection?: Pick<
     SessionEntry,
     | "modelOverride"
@@ -79,6 +100,8 @@ export type IncognitoSessionFacts = {
     | "status"
     | "restartRecoveryDeliveryRunId"
     | "restartRecoveryDeliverySourceRunId"
+    | "restartRecoveryDeliveryRequestFingerprint"
+    | "verboseLevel"
     | "restartRecoveryDeliveryReceiptState"
     | "restartRecoveryDeliveryToolCallId"
     | "restartRecoveryTerminalRunIds"

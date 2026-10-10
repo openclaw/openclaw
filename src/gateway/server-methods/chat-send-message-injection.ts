@@ -28,12 +28,17 @@ import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionActor,
+} from "../../config/sessions/session-incognito-binding.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { ChatImageContent } from "../chat-attachments.js";
@@ -70,12 +75,27 @@ export function createChatSendMessageInjectionStarter(params: {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
+  const source = captureIncognitoSessionSource({ agentId, sessionKey, storePath });
+  const claim =
+    source && !("kind" in source) && sessionKey
+      ? source.actor.sessions.captureCurrent(sessionKey)
+      : undefined;
   const assertCurrent = () => {
+    source?.admissionSignal?.throwIfAborted();
+    if (source && "kind" in source) {
+      source.assertCurrent();
+    } else {
+      claim?.assertCurrent();
+    }
     params.abortSignal.throwIfAborted();
     params.assertCurrent?.();
     params.operatorAuthority?.assertCurrent();
   };
-  return async (): Promise<ReplyMessageInjectionAttempt | undefined> => {
+  const start = async (): Promise<ReplyMessageInjectionAttempt | undefined> => {
+    if (source && "kind" in source) {
+      source.assertCurrent();
+      return undefined;
+    }
     const target = params.target;
     if (!target || isInternalTextSlashCommandTurn) {
       return undefined;
@@ -95,16 +115,20 @@ export function createChatSendMessageInjectionStarter(params: {
       assertCurrent();
       // Preparation can outlive terminal delivery. Recheck before the backend
       // takes this input; an unreadable receipt cannot authorize steering.
-      let fenceEntry = entry;
+      let fenceEntry: SessionEntry | undefined = entry;
       if (sessionKey) {
         try {
-          fenceEntry =
-            loadSessionEntry({
-              sessionKey,
-              storePath,
-              readConsistency: "latest",
-            }) ?? entry;
+          fenceEntry = source
+            ? "kind" in source
+              ? undefined
+              : source.actor.sessions.readSteering(sessionKey)
+            : (loadSessionEntry({
+                sessionKey,
+                storePath,
+                readConsistency: "latest",
+              }) ?? entry);
         } catch (error: unknown) {
+          rethrowIncognitoSessionError(error);
           params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
             reason: "session-entry-unavailable",
             runId: clientRunId,
@@ -114,6 +138,9 @@ export function createChatSendMessageInjectionStarter(params: {
           });
           return false;
         }
+      }
+      if (source && !fenceEntry) {
+        return false;
       }
       // Terminal run ids are accumulated session history; compare the fence
       // against the active source-turn identity (carried on the injection target
@@ -248,6 +275,10 @@ export function createChatSendMessageInjectionStarter(params: {
     );
     return admissionRefused ? undefined : attempt;
   };
+  return () =>
+    source && !("kind" in source)
+      ? withIncognitoSessionActor(source.actor, start, source.admissionSignal)
+      : start();
 }
 
 type PreAckMessageInjectionResult =

@@ -18,6 +18,7 @@ import {
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -407,7 +408,7 @@ export async function persistAgentSessionPhase(params: {
             maintenanceConfig: params.maintenanceConfig,
             workerGuard: {
               source: composeSessionSourceAssertion(
-                [params.assertAdmissionCurrent],
+                [params.assertAdmissionCurrent, params.initialPatchBuild.parentSource],
                 (assertSource) => {
                   assertSource();
                   if (createdNewEntry) {
@@ -495,7 +496,12 @@ export async function persistAgentSessionPhase(params: {
   ) {
     const previousSessionId = rotatedSessionId ? params.entry?.sessionId : undefined;
     if (previousSessionId) {
-      emitGatewaySessionEndPluginHook({
+      const incognito = captureIncognitoSessionSource({
+        agentId: params.sessionAgentId,
+        sessionKey: params.canonicalSessionKey,
+        storePath: params.storePath,
+      });
+      const ended = emitGatewaySessionEndPluginHook({
         cfg: params.cfg,
         sessionKey: params.canonicalSessionKey,
         sessionId: previousSessionId,
@@ -517,6 +523,10 @@ export async function persistAgentSessionPhase(params: {
           storePath: params.storePath,
         }),
       });
+      if (incognito) {
+        await ended;
+        params.assertAdmissionCurrent?.();
+      }
     }
     emitGatewaySessionStartPluginHook({
       cfg: params.cfg,

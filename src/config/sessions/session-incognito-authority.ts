@@ -100,6 +100,10 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return current(sessionKey)?.entryReadRevision;
         },
+        readActiveLeaf(this: void, sessionKey: string) {
+          assertReadable();
+          return current(sessionKey)?.activeLeafEntryId;
+        },
         readDelivery(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.delivery);
@@ -107,6 +111,10 @@ export function createIncognitoSessionClaims(owner: {
         readMedia(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.media);
+        },
+        readInheritance(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.inheritance);
         },
         readModelSelection(this: void, sessionKey: string) {
           assertReadable();

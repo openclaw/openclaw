@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeInheritedToolAllowlist,
@@ -12,13 +13,28 @@ import {
   type SessionOwnerAssignment,
 } from "../config/sessions/session-entry-provenance.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { invalidSessionRequest } from "./session-request-error.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
@@ -66,37 +82,214 @@ export async function prepareSessionCreateParent(input: {
   agentId?: string;
   assertCurrent?: () => void;
 }) {
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: input.params.cfg,
-    key: input.key,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    assertActive: input.assertCurrent,
-  });
-  if (input.params.creation?.via === "spawn") {
-    await waitForSessionParticipantRecording({
-      agentId: target.agentId,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    });
+  const ambient = isIncognitoSessionKey(input.key) ? captureIncognitoSessionSource() : undefined;
+  let source = ambient;
+  let retained: Awaited<ReturnType<typeof captureOpenClawAgentDatabaseExecution>>;
+  let finishSource: (() => void) | undefined;
+  let sourceSettlement: Promise<void> | undefined;
+  let handedOff = false;
+  let assertParentCurrent: SessionSourceAssertion | undefined;
+  const assertAmbientCurrent = () => {
+    ambient?.admissionSignal?.throwIfAborted();
+    if (ambient && "kind" in ambient) {
+      ambient.assertCurrent();
+    } else {
+      ambient?.actor.assertReadable();
+    }
+  };
+  const assertSourceCurrent = () => {
+    assertAmbientCurrent();
+    if (source && "kind" in source) {
+      source.assertCurrent();
+    } else {
+      source?.actor.assertReadable();
+    }
+    assertParentCurrent?.();
+  };
+  const assertCurrent = () => {
     input.assertCurrent?.();
+    assertSourceCurrent();
+  };
+  const release = async () => {
+    finishSource?.();
+    try {
+      await sourceSettlement;
+    } finally {
+      await retained?.release();
+    }
+  };
+  try {
+    const agentId = input.agentId ?? resolveAgentIdFromSessionKey(input.key);
+    if (ambient && agentId !== ("kind" in ambient ? ambient.agentId : ambient.actor.agentId)) {
+      const env =
+        "kind" in ambient
+          ? ambient.env
+          : { OPENCLAW_STATE_DIR: path.resolve(ambient.actor.path, "../../../..") };
+      // Cross-agent inheritance may borrow an existing parent, never create one on a miss.
+      const selected = captureOpenClawAgentDatabaseExecution
+        .listIncognito(env)
+        .find((actor) => actor.agentId === agentId);
+      if (!selected) {
+        return invalidSessionRequest(`unknown parent session: ${input.key}`);
+      }
+      retained = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId,
+        env,
+        // The borrow's authority cannot depend on the source it is creating.
+        // Current request and exact parent predicates run at every consuming boundary.
+        authority: { assertCurrent: assertAmbientCurrent },
+        existingOnly: true,
+        signal: ambient.admissionSignal,
+      });
+      selected.assertCurrent();
+      if (!retained || retained.identity.incarnation !== selected.identity.incarnation) {
+        throw new Error("Parent session actor changed during creation preparation");
+      }
+      source = { actor: retained, admissionSignal: ambient.admissionSignal };
+    }
+    if (source && !("kind" in source)) {
+      const finished = createDeferredCore();
+      finishSource = finished.resolve;
+      sourceSettlement = source.actor.sessions.withSharedState(() => finished.promise);
+      void sourceSettlement.catch(() => {});
+    }
+    const run = <T>(operation: () => T): T =>
+      source
+        ? withIncognitoSessionBinding(
+            "kind" in source
+              ? { ...source, authority: { assertCurrent: source.assertCurrent } }
+              : source,
+            operation,
+          )
+        : operation();
+    const target = await run(() =>
+      resolveGatewaySessionStoreTargetInWorker({
+        cfg: input.params.cfg,
+        key: input.key,
+        ...(input.agentId ? { agentId: input.agentId } : {}),
+        assertActive: assertCurrent,
+      }),
+    );
+    if (source && !("kind" in source)) {
+      assertParentCurrent = source.actor.sessions.captureCurrent(target.canonicalKey).assertCurrent;
+    }
+    if (input.params.creation?.via === "spawn") {
+      await waitForSessionParticipantRecording({
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      });
+      assertCurrent();
+    }
+    const readCurrent = async () => {
+      const parent = source
+        ? await run(() =>
+            loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: input.params.cfg,
+              key: target.canonicalKey,
+              agentId: target.agentId,
+              assertActive: assertCurrent,
+            }),
+          )
+        : loadGatewaySessionEntryReadOnly(input.key, { agentId: input.agentId });
+      assertCurrent();
+      return parent.entry;
+    };
+    const entry = await readCurrent();
+    if (!entry?.sessionId) {
+      return invalidSessionRequest(`unknown parent session: ${input.key}`);
+    }
+    const ownershipError = resolvePluginSessionOwnershipError({
+      action: input.params.fork === true ? "fork" : "link",
+      entry,
+      key: target.canonicalKey,
+      pluginOwnerId: input.params.authorizedPluginId,
+    });
+    if (ownershipError) {
+      return { ok: false as const, error: ownershipError };
+    }
+    if (isModelSelectionLocked(entry)) {
+      return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+    }
+    if (source && !("kind" in source)) {
+      const assertGenerationCurrent = assertParentCurrent;
+      assertParentCurrent = run(() =>
+        captureSessionEntrySourceAssertion({
+          scope: {
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+          },
+          expected: entry,
+          fields: [
+            "sessionId",
+            "lifecycleRevision",
+            "pluginOwnerId",
+            "modelSelectionLocked",
+            "createdActor",
+            "owner",
+            "sandbox",
+            "skillLibrarySelections",
+            "communication",
+            "providerOverride",
+            "modelOverride",
+            "modelOverrideSource",
+            "modelOverrideRouteResolution",
+            "modelOverrideFallbackOriginProvider",
+            "modelOverrideFallbackOriginModel",
+            "agentRuntimeOverride",
+            "authProfileOverride",
+            "authProfileOverrideSource",
+            "authProfileOverrideCompactionCount",
+            "contextWindow",
+            "thinkingLevel",
+            "fastMode",
+            "toolOverrides",
+            "verboseLevel",
+            "traceLevel",
+            "reasoningLevel",
+            "elevatedLevel",
+            "worktree",
+            "repositoryWorkspaceId",
+            "execHost",
+            "execNode",
+            "pendingWorktree",
+            "pendingProjectGitUrl",
+            "spawnedCwd",
+            "spawnedWorkspaceDir",
+            "sessionRoot",
+            "projectId",
+          ],
+          assertCurrent: () => assertGenerationCurrent?.(),
+          refuse() {
+            throw new Error("Parent session changed before child creation; retry.");
+          },
+        }),
+      );
+    }
+    handedOff = true;
+    return {
+      ok: true as const,
+      entry,
+      canonicalKey: target.canonicalKey,
+      target,
+      // A child worker can validate a parent row only within its own actor.
+      assertCurrent:
+        source === ambient
+          ? composeSessionSourceAssertion([assertParentCurrent], (assertParent) => {
+              assertAmbientCurrent();
+              assertParent();
+            })
+          : assertSourceCurrent,
+      readCurrent,
+      release,
+    };
+  } finally {
+    if (!handedOff) {
+      await release();
+    }
   }
-  const parent = loadGatewaySessionEntryReadOnly(input.key, { agentId: input.agentId });
-  if (!parent.entry?.sessionId) {
-    return invalidSessionRequest(`unknown parent session: ${input.key}`);
-  }
-  const ownershipError = resolvePluginSessionOwnershipError({
-    action: input.params.fork === true ? "fork" : "link",
-    entry: parent.entry,
-    key: parent.canonicalKey,
-    pluginOwnerId: input.params.authorizedPluginId,
-  });
-  if (ownershipError) {
-    return { ok: false as const, error: ownershipError };
-  }
-  if (isModelSelectionLocked(parent.entry)) {
-    return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-  }
-  return { ok: true as const, entry: parent.entry, canonicalKey: parent.canonicalKey, target };
 }
 
 function resolveResidentProfileId(profileId: string): string | undefined {

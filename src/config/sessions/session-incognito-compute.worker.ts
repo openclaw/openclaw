@@ -1,3 +1,4 @@
+import { selectSessionTranscriptProjection } from "../../gateway/session-transcript-read-kernel.js";
 import {
   readSessionCostUsageRefreshLockInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
@@ -16,6 +17,7 @@ import {
 } from "./legacy-sqlite-marker.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
+import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import {
   isIncognitoStoreComputeCommand,
@@ -27,6 +29,7 @@ import {
 } from "./session-incognito-compute-contract.js";
 import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import type { TranscriptProjectionRebuildOperations } from "./session-transcript-projection-publication.worker.js";
 import { deletePreparedSessionTranscriptProjectionChunkInTransaction } from "./session-transcript-projection-rebuild.js";
 import {
@@ -274,6 +277,21 @@ export function createIncognitoComputeWorker(
         }
         const value = withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.compute.endedTail": {
+              const snapshot = readCurrentProjectionSnapshot(
+                database,
+                { ...options, sessionKey: input.sessionKey, sessionId: input.sessionId },
+                (projection) =>
+                  selectSessionTranscriptProjection(projection, {
+                    kind: "recent",
+                    options: command.input.options,
+                  }),
+              );
+              if (snapshot.kind === "unavailable") {
+                throw new SessionTranscriptProjectionUnavailableError(input.sessionId);
+              }
+              return snapshot.value;
+            }
             case "session.compute.status":
               return sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId);
             case "session.compute.source.open": {

@@ -13,6 +13,7 @@ import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
 } from "../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -32,6 +33,7 @@ import {
   prepareGatewaySessionStoreTargetReadOnly,
   prepareGatewaySessionStoreTargetReadPlan,
   resolveGatewaySessionStoreTargetWithStore,
+  withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreRead } from "./session-utils-store-read.js";
 import {
@@ -88,6 +90,24 @@ async function prepareGatewaySessionStoreReadInWorker(
   });
   // Ephemeral databases belong to the process and cannot be opened by a worker.
   if (isIncognitoSessionKey(canonicalKey)) {
+    const source = captureIncognitoSessionSource({
+      agentId,
+      env: params.env,
+      sessionKey: canonicalKey,
+    });
+    if (source) {
+      return {
+        target: await withGatewaySessionStoreTarget(
+          { ...params, key: canonicalKey, agentId },
+          (target, _membership, assertCurrent) => {
+            assertCurrent();
+            params.assertActive?.();
+            onSelected?.(target);
+            return target;
+          },
+        ),
+      };
+    }
     return {
       target: resolveGatewaySessionStoreTargetWithStore({
         ...params,

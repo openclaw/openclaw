@@ -21,6 +21,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-transcript-reconcile.js";
+import { createClosedSessionTranscriptSource } from "../gateway/session-end-transcript-reader.js";
 import { isSessionCostUsageRefreshRunning } from "../infra/session-cost-usage-cache.sqlite.js";
 import { createIncognitoUsageCostAdapter } from "../infra/session-cost-usage-incognito.js";
 import { resolveUsageCostPricingFingerprint } from "../infra/session-cost-usage-pricing-context.js";
@@ -521,6 +522,48 @@ it("reads explicit retained usage windows and preserves their discovery", async 
     });
   });
 });
+
+it.each(["reset", "deleted"] as const)(
+  "reads an ended hook's rotated window and revokes it on %s",
+  async (reason) =>
+    withIncognitoSessionActor(actor, async () => {
+      const previous = await create(`ended-hook-${reason}`);
+      await append(previous, "retained hook message");
+      const current = await branch(previous);
+      await append(current, "current message must not leak");
+      const source = createClosedSessionTranscriptSource({
+        ...previous,
+        agentId: actor.agentId,
+        storePath: actor.path,
+      });
+      assert(source.available);
+      await expect(source.readTail({ maxMessages: 1, maxBytes: 4_096 })).resolves.toMatchObject({
+        messages: [{ content: [{ type: "text", text: "retained hook message" }] }],
+        totalMessages: 1,
+        truncated: false,
+      });
+      const { entry } = await actor.sessions.read(authority, { sessionKey: current.sessionKey });
+      assert(entry);
+      await actor.sessions.lifecycle(authority, {
+        type: "session.lifecycle.delete",
+        input: {
+          target: { sessionKey: current.sessionKey, entry },
+          reason,
+          admissionIdentities: [],
+        },
+      });
+      await expect(source.readTail({ maxMessages: 1, maxBytes: 4_096 })).rejects.toThrow(
+        "Incognito compute session generation is no longer current",
+      );
+      expect(
+        createClosedSessionTranscriptSource({
+          ...previous,
+          agentId: actor.agentId,
+          storePath: actor.path,
+        }),
+      ).toEqual({ available: false, reason: "incognito-deleted" });
+    }),
+);
 
 it("cancels a queued usage callback independently of its retained compute scope", async ({
   signal,

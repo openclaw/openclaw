@@ -837,8 +837,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
-  /** Synchronous caller-authority guard checked by the storage owner before commits. */
-  commitGuard?: () => void;
+  /** Caller authority and exact source predicates checked by the storage owner before commits. */
+  commitGuard?: SessionSourceAssertion;
   /** Retain source authority around each final writer, after asynchronous preparation. */
   withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
   /** Non-throwing notification after the entry's outer COMMIT, before publication or cleanup. */

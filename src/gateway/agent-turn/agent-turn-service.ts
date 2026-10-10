@@ -7,7 +7,10 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  releaseSessionSourceAuthorities,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -33,6 +36,7 @@ import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
+import { captureAgentSessionSource } from "./agent-session-source.js";
 import { prepareAgentWaitForTurn } from "./agent-wait.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
@@ -104,7 +108,9 @@ export function createAgentTurnService(
       context,
       io,
     });
+    const sessionSource = captureAgentSessionSource();
     const routing = await prepareAgentRequestRouting({
+      sessionSource,
       ...preflight,
       context,
       respond,
@@ -116,8 +122,12 @@ export function createAgentTurnService(
         assertAdmissionCurrent,
         assertInputCommitAllowed,
       ]),
+    }).catch(async (error: unknown) => {
+      await sessionSource.release();
+      throw error;
     });
     if (!routing) {
+      await sessionSource.release();
       return;
     }
     const {
@@ -132,11 +142,13 @@ export function createAgentTurnService(
       assertAdmissionCurrent,
       () => dedupeLifecycle.assertReservationCurrent(),
       assertInputCommitAllowed,
+      sessionSource.assertCurrent,
     ]);
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
     let preparedOffloadedRefs: OffloadedRef[] = [];
+    const parentSources: Array<{ releaseParent?: () => Promise<void> }> = [];
     let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
     let releaseGatewayAdmission = () => {};
     let respondToAdmissionOutcome = () => false;
@@ -191,12 +203,14 @@ export function createAgentTurnService(
       let cfgForAgent: OpenClawConfig | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let resolvedSessionAgentId: string | undefined;
+      let lifecycleStorePath: string | undefined;
       let isNewSession = false;
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
+        sessionSource,
         assertAdmissionCurrent,
         runId,
         lifecycleGeneration,
@@ -270,6 +284,7 @@ export function createAgentTurnService(
           preAttachmentSession,
           respond,
           assertCurrent: assertRequestCurrent,
+          sessionSource,
         });
         assertRequestCurrent();
         if (!preparedSession) {
@@ -288,6 +303,7 @@ export function createAgentTurnService(
           touchInteraction,
         } = preparedSession;
         cfgForAgent = cfgLocal;
+        lifecycleStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
@@ -321,8 +337,8 @@ export function createAgentTurnService(
           threadId: recipientThreadId,
         });
         const explicitSessionKey = normalizeOptionalString(request.sessionKey);
-        const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
-          buildAgentSessionPatch({
+        const buildSessionPatch = async (freshEntry: SessionEntry | undefined) => {
+          const built = await buildAgentSessionPatch({
             ...preparedSession,
             freshEntry,
             initialEntry: entry,
@@ -341,6 +357,9 @@ export function createAgentTurnService(
             requestedSessionId,
             fallbackSessionId: sessionId,
           });
+          parentSources.push(built);
+          return built;
+        };
         const patchBuild = await buildSessionPatch(entry);
         assertRequestCurrent();
         isNewSession = patchBuild.isNewSession;
@@ -467,6 +486,8 @@ export function createAgentTurnService(
       const runParams = {
         ...runFacts,
         cfgForAgent,
+        sessionSource,
+        lifecycleStorePath,
         sessionEntry,
         resolvedSessionKey,
         requestedSessionKey,
@@ -541,7 +562,7 @@ export function createAgentTurnService(
             effectiveBootstrapContextRunKind,
             skipAgentInitialSessionTouch,
             releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
-          }),
+          }).finally(() => sessionSource.release()),
         )
         .catch((error: unknown) => {
           preparedDispatch.releaseCallerAuthority?.();
@@ -575,8 +596,18 @@ export function createAgentTurnService(
           }
         }
       } finally {
-        await discardPreparedInboundMedia(preparedOffloadedRefs);
-        dedupeLifecycle.clearUnaccepted();
+        try {
+          await releaseSessionSourceAuthorities([
+            ...(!gatewayAdmissionTransferred ? [sessionSource] : []),
+            ...parentSources.map((source) => ({ release: source.releaseParent })),
+          ]);
+        } finally {
+          try {
+            await discardPreparedInboundMedia(preparedOffloadedRefs);
+          } finally {
+            dedupeLifecycle.clearUnaccepted();
+          }
+        }
       }
     }
   };

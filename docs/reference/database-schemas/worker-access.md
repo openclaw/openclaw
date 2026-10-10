@@ -1210,6 +1210,30 @@ claim publication. Process-held incognito and released synchronous SDK freshness
 keep their existing owners. Schemas, retention, durability, and update behavior
 are unchanged.
 
+### Gateway agent and chat admission sources (P09, inactive)
+
+Public and internal agent ingress can retain an explicitly supplied incognito
+actor through preflight, ID routing, admission, recording, and execution
+settlement. Preparation reads use that actor's worker; synchronous callbacks
+consume bounded published facts and exact source predicates. Parent inheritance
+retains the original parent actor and its shared-state lifetime across awaits.
+Configured-role checks, approval identity, and request deduplication keep their
+existing owners.
+
+Chat send, steer, expected-leaf stop, metadata preparation, media delivery,
+transcript injection, partial saves, and same-process recovery carry the captured
+source. Accepted persistence settles before release even when admission is
+cancelled. Historical ended hooks may read the retained window after ordinary
+rotation; reset or deletion makes that window unavailable. Reset acknowledges a
+committed deletion before fallible cleanup.
+
+This composition remains inactive in production. Ordinary unbound incognito
+requests use the native owner and allocate no actor. Explicit actor absence and
+a retained ended actor never fall back to durable discovery. P12 owns production
+selection and native-path removal; P09 retires no T1 sites. There is no schema,
+retention, permission, configuration, or update-format change. The incognito
+backend continues to use the shared session owner rather than a parallel API.
+
 ### Incognito worker ownership (P1, inactive)
 
 The accepted incognito migration extends the canonical agent execution owner

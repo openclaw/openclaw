@@ -14,6 +14,12 @@ import {
   withIncognitoSessionBinding,
   type IncognitoSessionBinding,
 } from "./session-incognito-binding.js";
+import {
+  acceptSessionSourceValidation,
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+} from "./session-source-authority.js";
 
 /** Retain the selected actor through preparation, acknowledged publication, and bookkeeping. */
 export function createIncognitoSessionEntryWithTranscript<TError>(
@@ -81,46 +87,76 @@ export function createIncognitoSessionEntryWithTranscript<TError>(
           owner: options.resolveOwnerAssignment?.(),
         });
         const commit = async (assertSourceCurrent?: () => void) => {
-          const assertHeld = () => {
-            assertCurrent();
-            assertSourceCurrent?.();
-          };
-          assertHeld();
-          held?.assertCurrent();
-          options.onPhase?.("commit");
-          const entry = await actor.sessions.entry(
-            { assertCurrent: assertHeld, entryCreation: operation },
-            {
-              type: "session.entry.creation.commit",
-              input,
-            },
-            undefined,
-            (committed) => {
-              try {
-                options.onLifecycleCommitted?.(structuredClone(committed));
-              } finally {
-                publishIncognitoSessionEntry(actor, sessionKey, prepared.targetEntry, committed);
-              }
-            },
+          const source = await prepareSessionSourceAuthority(
+            composeSessionSourceAssertion([options.commitGuard, assertSourceCurrent]),
           );
-          if (options.afterCommitted) {
-            let active = true;
-            try {
-              await options.afterCommitted(entry, {
-                env: scope.env,
-                assertCurrent() {
-                  if (!active) {
-                    throw new Error("Session commit owner is no longer current");
-                  }
-                  assertHeld();
-                },
-              });
-              assertHeld();
-            } finally {
-              active = false;
+          const failures: unknown[] = [];
+          try {
+            if (
+              source.nativeSource ||
+              source.checks.some(
+                ({ predicate }) =>
+                  predicate.source.agentId !== actor.agentId ||
+                  predicate.source.path !== actor.path ||
+                  predicate.source.databaseIdentity !== actor.identity.incarnation ||
+                  predicate.source.databaseBirthtime !== undefined,
+              )
+            ) {
+              throw new Error(
+                "Incognito entry creation requires source authority prepared for the same actor",
+              );
             }
+            const assertHeld = () => {
+              assertCurrent();
+              source.assertCurrent();
+            };
+            assertHeld();
+            held?.assertCurrent();
+            options.onPhase?.("commit");
+            const entry = await actor.sessions.entry(
+              { assertCurrent: assertHeld, entryCreation: operation },
+              {
+                type: "session.entry.creation.commit",
+                input: { ...input, sources: source.checks.map(({ predicate }) => predicate) },
+              },
+              undefined,
+              (committed) => {
+                try {
+                  options.onLifecycleCommitted?.(structuredClone(committed));
+                } finally {
+                  publishIncognitoSessionEntry(actor, sessionKey, prepared.targetEntry, committed);
+                }
+              },
+              undefined,
+              (_refusedSource, validation) => {
+                acceptSessionSourceValidation(source, validation);
+                assertHeld();
+              },
+            );
+            if (options.afterCommitted) {
+              let active = true;
+              try {
+                await options.afterCommitted(entry, {
+                  env: scope.env,
+                  assertCurrent() {
+                    if (!active) {
+                      throw new Error("Session commit owner is no longer current");
+                    }
+                    assertHeld();
+                  },
+                });
+                assertHeld();
+              } finally {
+                active = false;
+              }
+            }
+            return { ok: true as const, entry, sessionFile: sessionKey };
+          } catch (error) {
+            failures.push(error);
+            throw error;
+          } finally {
+            await releaseSessionSourceAuthorities([source], failures);
           }
-          return { ok: true as const, entry, sessionFile: sessionKey };
         };
         return options.withCommit
           ? options.withCommit((assertSourceCurrent) =>

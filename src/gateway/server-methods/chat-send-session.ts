@@ -30,6 +30,7 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -221,10 +222,14 @@ async function loadChatSendSessionContext(params: {
   const assertRoutingCurrent = captureSessionMutationRouting(runtimeConfig);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
   const sessionLoadStartedAtMs = performance.now();
+  const incognitoSource = captureIncognitoSessionSource({
+    agentId: requestedAgentId,
+    sessionKey: sessionLoadKey,
+  });
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",
     () =>
-      request.stopCommand
+      request.stopCommand && !incognitoSource
         ? loadSessionEntry(sessionLoadKey, sessionLoadOptions, runtimeConfig)
         : withGatewaySessionEntry(
             sessionLoadKey,

@@ -48,6 +48,7 @@ import {
   shouldSuppressAgentPromptPersistence,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
+import type { AgentSessionSource } from "./agent-session-source.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -132,6 +133,8 @@ export function recordAgentRunUserTurnParticipant(
 }
 
 export async function prepareAgentRunUserTurn(params: {
+  sessionSource?: AgentSessionSource;
+  lifecycleStorePath?: string;
   assertCurrent: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
@@ -282,12 +285,19 @@ export async function prepareAgentRunUserTurn(params: {
         trackInputCompletion: params.privateCompletion,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: () => {
+        target: async () => {
           params.assertCurrent();
-          const loaded = loadSessionEntry(params.resolvedSessionKey!, {
-            agentId: params.activeSessionAgentId,
-            clone: false,
-          });
+          const loaded = params.sessionSource
+            ? await params.sessionSource.read({
+                cfg: params.cfgForAgent ?? params.cfg,
+                key: params.resolvedSessionKey!,
+                agentId: params.activeSessionAgentId,
+              })
+            : loadSessionEntry(params.resolvedSessionKey!, {
+                agentId: params.activeSessionAgentId,
+                clone: false,
+              });
+          params.assertCurrent();
           const latestEntry = loaded.entry;
           const loadedSessionId = latestEntry?.sessionId?.trim();
           // Session creation is persisted before this phase. No matching entry

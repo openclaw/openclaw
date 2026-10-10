@@ -4,6 +4,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type {
   PluginHookEndedTranscriptReadOptions,
   PluginHookEndedTranscriptReadResult,
@@ -53,6 +54,50 @@ function finalizeEndedTranscriptRead(
 export function createClosedSessionTranscriptSource(
   scope: SessionTranscriptReadScope,
 ): SessionEndTranscriptSource {
+  const binding = captureIncognitoSessionSource(scope);
+  if (binding) {
+    if ("kind" in binding || !scope.sessionKey) {
+      return { available: false, reason: "incognito-deleted" };
+    }
+    const { actor, admissionSignal } = binding;
+    const current = actor.sessions.readSharing(scope.sessionKey)?.entry;
+    if (!current) {
+      return { available: false, reason: "incognito-deleted" };
+    }
+    const target = {
+      sessionKey: scope.sessionKey,
+      sessionId: scope.sessionId,
+      lifecycleRevision: current.lifecycleRevision,
+      historical: current.sessionId !== scope.sessionId,
+    };
+    const authority = {
+      assertCurrent() {
+        admissionSignal?.throwIfAborted();
+        actor.assertReadable();
+      },
+    };
+    return {
+      available: true,
+      async readTail(input) {
+        const options = normalizeEndedTranscriptOptions(input);
+        return actor.sessions.withCompute(
+          authority,
+          target,
+          async (compute) => {
+            const page = await compute.execute({
+              type: "session.compute.endedTail",
+              input: {
+                ...target,
+                options: { ...options, maxLines: options.maxMessages * 20 + 20 },
+              },
+            });
+            return finalizeEndedTranscriptRead(page.messages, page.totalMessages, options);
+          },
+          admissionSignal,
+        );
+      },
+    };
+  }
   return {
     available: true,
     async readTail(input) {

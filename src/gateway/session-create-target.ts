@@ -4,7 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/runs.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  withSessionEntriesFromStoresInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { sessionEntryCommitGuardOptions } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -95,7 +99,20 @@ export async function readSessionCreateTarget(
     return { ok: true, value: currentTargetEntry };
   };
   assertCurrent();
-  // Process-held incognito stores retain their native owner until its complete cutover.
+  const scope = {
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+    storePath: target.storePath,
+  };
+  if (captureIncognitoSessionSource(scope)) {
+    return withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return validate(read.value);
+    });
+  }
+  // Unbound incognito stores retain their native owner until activation.
   if (isIncognitoSessionKey(target.canonicalKey)) {
     return validate(
       loadGatewaySessionEntryReadOnly(target.canonicalKey, { agentId: target.agentId }).entry,

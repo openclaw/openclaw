@@ -14,6 +14,7 @@ import {
   projectAssistantDisplayContent,
   retainAssistantModelContent,
 } from "../../shared/assistant-display-content.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -202,6 +203,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       message: projectAssistantDisplayContent(appended.message as Record<string, unknown>),
     };
   } catch (err) {
+    rethrowIncognitoSessionError(err);
     return { ok: false, error: formatErrorMessage(err) };
   }
 }

@@ -1,6 +1,9 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
   FailoverError,
@@ -10,8 +13,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureAbortedPartial, deferAbortedPartialPersistence } from "./chat-aborted-partial.js";
 
@@ -101,6 +106,87 @@ it.each([
     } finally {
       producer.resolve(undefined);
       await settlement;
+    }
+  });
+});
+
+it("retains the actor for a deferred partial after its abort request scope returns", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const actor = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      env: state.env,
+      authority: { assertCurrent() {} },
+    });
+    assert(actor);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-abort-partial",
+      sessionId: "incognito-abort-session",
+      storePath: actor.path,
+    };
+    await actor.sessions.create(
+      { assertCurrent() {} },
+      {
+        sessionKey: scope.sessionKey,
+        entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
+      },
+    );
+    const producer = createDeferred<unknown>();
+    const request = new AbortController();
+    let settlement: Promise<void> | undefined;
+    const warn = vi.fn();
+    const sql = observeHostDataSql();
+    try {
+      await withIncognitoSessionActor(
+        actor,
+        async () => {
+          const snapshot = captureAbortedPartial({
+            ...scope,
+            runId: "retained-partial",
+            text: "Retained after the abort request returned",
+            abortOrigin: "rpc",
+            resolveTerminalProducer: () => ({
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              handoff: (settle) => {
+                settlement = settle(producer.promise);
+                return true;
+              },
+            }),
+          });
+          expect(snapshot.ok).toBe(true);
+          deferAbortedPartialPersistence(snapshot, {
+            trackExecution: trackAsyncWork,
+            logGateway: { ...createSubsystemLogger("test/abort-partial"), warn },
+            broadcast: vi.fn(),
+            nodeSendToSession: vi.fn(),
+            agentRunSeq: new Map(),
+            getRuntimeConfig: () => ({}),
+          });
+        },
+        request.signal,
+      );
+      expect(settlement).toBeDefined();
+      request.abort();
+      producer.resolve(undefined);
+      await settlement;
+      const events = await withIncognitoSessionActor(actor, () => loadTranscriptEvents(scope));
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "Retained after the abort request returned" }],
+          }),
+        }),
+      );
+      expect(warn).not.toHaveBeenCalled();
+      expect(sql.queries).toEqual([]);
+    } finally {
+      producer.resolve(undefined);
+      await settlement;
+      sql.restore();
+      await actor.close();
     }
   });
 });

@@ -14,6 +14,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "./session-accessor.sqlite-active-events-read.js";
 import {
+  readActivePathEntryRelationFromProjection,
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptVisibleMessageDeltaCore,
@@ -214,6 +215,19 @@ export function createIncognitoHistoryWorker(
           }
         });
         return { facts, missingSources: [...missingSources] };
+      });
+      return;
+    }
+    if (command.type === "session.history.active-path-relation") {
+      prepared = prepareHistoryRead(command.type, () => {
+        const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, (projection) => ({
+          relation: readActivePathEntryRelationFromProjection(projection, command.input.entryId),
+          activeLeafEntryId: projection.state.leafEventId,
+        }));
+        if (snapshot.kind === "unavailable") {
+          throw new SessionTranscriptProjectionUnavailableError(sessionId);
+        }
+        return snapshot.value;
       });
       return;
     }

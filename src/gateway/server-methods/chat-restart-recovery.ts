@@ -26,6 +26,7 @@ import type {
 import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProjectedAgentRunProgressState } from "../../infra/agent-run-registry.js";
@@ -157,7 +158,7 @@ export function resolveDurableChatClaim(params: {
   clientRunId: string;
   entry?: SessionEntry;
   persistedSessionKey: string;
-  reloadEntry: () => SessionEntry | undefined;
+  reloadEntry: () => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   storePath: string;
   recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
@@ -197,7 +198,7 @@ export function resolveDurableChatClaim(params: {
     } catch (error) {
       params.warn(String(error));
     }
-    const current = params.reloadEntry();
+    const current = await params.reloadEntry();
     if (
       isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
       current.abortedLastRun === true
@@ -356,7 +357,7 @@ export function resolveRestartSafeChatAdmission(params: {
       storePath: params.storePath,
     };
     let freshness: ReturnType<typeof resolvePreparedSessionEntryResetFreshness>;
-    if (isIncognitoSessionKey(params.sessionKey)) {
+    if (isIncognitoSessionKey(params.sessionKey) && !captureIncognitoSessionSource(params)) {
       // Process-held incognito freshness retains its existing native owner.
       freshness = resolveSessionEntryResetFreshness(freshnessScope);
     } else {

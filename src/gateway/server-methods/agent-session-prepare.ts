@@ -14,6 +14,8 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionHistoryBinding } from "../../config/sessions/session-incognito-binding.js";
+import { readIncognitoSessionHistory } from "../../config/sessions/session-incognito-history-read.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -28,6 +30,7 @@ import {
   resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
+import type { AgentSessionSource } from "../agent-turn/agent-session-source.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
@@ -36,6 +39,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type PrepareAgentSessionParams = {
   cfg: OpenClawConfig;
+  sessionSource?: AgentSessionSource;
   requestedSessionKey: string;
   requestedSessionId?: string;
   expectedExistingSessionId?: string;
@@ -62,6 +66,15 @@ export async function prepareAgentSession(params: PrepareAgentSessionParams) {
     return undefined;
   }
   const requestedAgentId = requestedSessionAgent.agentId;
+  if (params.sessionSource?.bound) {
+    const selected = await params.sessionSource.read({
+      cfg: params.cfg,
+      key: params.requestedSessionKey,
+      agentId: requestedAgentId,
+    });
+    params.assertCurrent?.();
+    return prepareAdmittedAgentSession(params, selected, requestedAgentId);
+  }
   const selected = loadSessionEntry(params.requestedSessionKey, {
     agentId: requestedAgentId,
     clone: false,
@@ -225,9 +238,27 @@ async function prepareAdmittedAgentSession(
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
   const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
-  const failedSessionTranscriptMissing = (candidateEntry: SessionEntry | undefined): boolean => {
+  const failedSessionTranscriptMissing = async (
+    candidateEntry: SessionEntry | undefined,
+  ): Promise<boolean> => {
     if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
       return false;
+    }
+    const scope = {
+      agentId: canonicalSessionAgentId,
+      sessionId: candidateEntry.sessionId,
+      sessionKey: canonicalKey,
+      storePath,
+      sessionEntry: candidateEntry,
+    };
+    const binding = captureIncognitoSessionHistoryBinding(scope);
+    if (binding) {
+      const result = await readIncognitoSessionHistory(binding, scope, (target) => ({
+        type: "session.history.message-presence",
+        input: target,
+      }));
+      params.assertCurrent?.();
+      return !result;
     }
     try {
       return !hasSessionTranscriptEventsSync({

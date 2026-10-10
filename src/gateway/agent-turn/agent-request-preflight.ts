@@ -16,6 +16,7 @@ import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swa
 import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -34,12 +35,16 @@ import { resolveExpectedExistingSessionConstraint } from "../server-methods/agen
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
+import { prepareAgentRelatedSessionSource } from "./agent-session-source.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
-export type AgentRequestPreflight = NonNullable<ReturnType<typeof prepareAgentRequestPreflight>>;
+export type AgentRequestPreflight = NonNullable<
+  Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
+>;
 
-export function prepareAgentRequestPreflight(params: {
+export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
@@ -82,13 +87,22 @@ export function prepareAgentRequestPreflight(params: {
   // freshly restarted gateway whose in-memory registry has not reloaded yet.
   const persistedCollectorSession =
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
-      ? loadSessionEntry({
-          ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
-          storePath: resolveSessionStorePathCore(cfg.session?.store, {
-            agentId: selectedAgentId,
-          }),
-          sessionKey: requestSessionKey,
-        })?.swarmCollector === true
+      ? (captureIncognitoSessionSource({ sessionKey: requestSessionKey, agentId: selectedAgentId })
+          ? (
+              await loadGatewaySessionEntryReadOnlyInWorker({
+                cfg,
+                key: requestSessionKey,
+                agentId: selectedAgentId,
+              })
+            ).entry
+          : loadSessionEntry({
+              sessionKey: requestSessionKey,
+              agentId: selectedAgentId,
+              storePath: resolveSessionStorePathCore(cfg.session?.store, {
+                agentId: selectedAgentId,
+              }),
+            })
+        )?.swarmCollector === true
       : false;
   if (
     collectorSession ||
@@ -195,43 +209,68 @@ export function prepareAgentRequestPreflight(params: {
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
-    const sourceTarget =
-      sourceSessionKey && sourceAgentId
-        ? resolveGatewaySessionStoreTargetWithStore({
+    const hasBoundSource = Boolean(
+      sourceSessionKey && sourceAgentId && captureIncognitoSessionSource(),
+    );
+    const source =
+      sourceSessionKey && sourceAgentId && hasBoundSource
+        ? await prepareAgentRelatedSessionSource({
             cfg,
-            key: sourceSessionKey,
-            agentId: sourceAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
-            projection: "full",
+            sessionKey: sourceSessionKey,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "spawnedBy",
+              "parentSessionKey",
+              "spawnDepth",
+            ],
           })
         : undefined;
-    const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
-    let sourceIsSubagent = Boolean(
-      sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
-    );
-    if (
-      !sourceIsSubagent &&
-      sourceTarget &&
-      sourceEntry &&
-      (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
-    ) {
-      sourceIsSubagent = isSubagentSessionFromEntry(
-        sourceTarget.canonicalKey,
-        sourceEntry,
-        readAcpSessionMetaForEntry({
-          sessionKey: sourceTarget.canonicalKey,
-          agentId: sourceTarget.agentId,
-          cfg,
-          entry: sourceEntry,
-        }),
+    try {
+      const sourceTarget = hasBoundSource
+        ? undefined
+        : sourceSessionKey && sourceAgentId
+          ? resolveGatewaySessionStoreTargetWithStore({
+              cfg,
+              key: sourceSessionKey,
+              agentId: sourceAgentId,
+              readOnly: true,
+              exactRead: true,
+              clone: false,
+              projection: "full",
+            })
+          : undefined;
+      const sourceEntry =
+        source?.entry ?? (sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined);
+      const sourceKey = sourceTarget?.canonicalKey ?? sourceSessionKey;
+      let sourceIsSubagent = Boolean(
+        sourceKey && isSubagentSessionFromEntry(sourceKey, sourceEntry),
       );
-    }
-    if (sourceIsSubagent) {
-      inputProvenance.sourceRole = "subagent";
-    } else {
-      delete inputProvenance.sourceRole;
+      if (
+        !sourceIsSubagent &&
+        sourceKey &&
+        sourceEntry &&
+        (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
+      ) {
+        sourceIsSubagent = isSubagentSessionFromEntry(
+          sourceKey,
+          sourceEntry,
+          readAcpSessionMetaForEntry({
+            sessionKey: sourceKey,
+            agentId: sourceTarget?.agentId ?? sourceAgentId,
+            cfg,
+            entry: sourceEntry,
+          }),
+        );
+      }
+      if (sourceIsSubagent) {
+        inputProvenance.sourceRole = "subagent";
+      } else {
+        delete inputProvenance.sourceRole;
+      }
+      source?.source();
+    } finally {
+      await source?.release();
     }
   }
   const isRestartRecoveryResumeRun =

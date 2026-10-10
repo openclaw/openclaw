@@ -28,6 +28,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
+import * as sessionStateEvents from "../sessions/session-state-events.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -35,6 +36,7 @@ import {
   expectResetAcpState,
   resolvedAcpMeta,
 } from "./server.sessions.reset-cleanup.test-support.js";
+import { performGatewaySessionReset } from "./session-reset-service.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -96,46 +98,77 @@ function installAcpRuntimeBackendWithFreshSession() {
   return prepareFreshSession;
 }
 
-test("sessions.reset retires a bound actor session without native session SQL", async () => {
-  await createSessionStoreDir();
-  const authority = { assertCurrent() {} };
-  const actor = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    authority,
-  });
-  if (!actor) {
-    throw new Error("Expected an incognito actor");
-  }
-  const sessionKey = "agent:main:dashboard:incognito-reset-source";
-  try {
-    await actor.sessions.create(authority, {
-      sessionKey,
-      entry: {
-        sessionId: "reset-source",
-        lifecycleRevision: "reset-source-lifecycle",
-        updatedAt: 1,
-        incognito: true,
-      },
+test.each(["success", "cleanup-failure"])(
+  "sessions.reset preserves its bound deletion receipt on %s without native session SQL",
+  async (outcome) => {
+    await createSessionStoreDir();
+    const authority = { assertCurrent() {} };
+    const actor = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      authority,
     });
-    const result = await withIncognitoSessionActor(actor, async () => {
-      const sql = observeHostDataSql();
-      try {
-        const reset = await directSessionReq<{ deleted: boolean }>("sessions.reset", {
-          key: sessionKey,
-        });
-        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
-        return reset;
-      } finally {
-        sql.restore();
+    if (!actor) {
+      throw new Error("Expected an incognito actor");
+    }
+    const sessionKey = "agent:main:dashboard:incognito-reset-source";
+    try {
+      await actor.sessions.create(authority, {
+        sessionKey,
+        entry: {
+          sessionId: "reset-source",
+          lifecycleRevision: "reset-source-lifecycle",
+          updatedAt: 1,
+          incognito: true,
+        },
+      });
+      const result = await withIncognitoSessionActor(actor, async () => {
+        const sql = observeHostDataSql();
+        try {
+          const committed = vi.fn();
+          let reset;
+          if (outcome === "cleanup-failure") {
+            const failure = new Error("reset cleanup failed");
+            const cleanup = vi
+              .spyOn(sessionStateEvents, "handleSessionStateSessionDeleted")
+              .mockImplementationOnce(async () => {
+                expect(committed).toHaveBeenCalledExactlyOnceWith({ key: sessionKey });
+                throw failure;
+              });
+            try {
+              await expect(
+                performGatewaySessionReset({
+                  key: sessionKey,
+                  reason: "reset",
+                  commandSource: "test",
+                  workerPlacementContext: {},
+                  onCommitted: committed,
+                }),
+              ).rejects.toBe(failure);
+              expect(committed).toHaveBeenCalledExactlyOnceWith({ key: sessionKey });
+            } finally {
+              cleanup.mockRestore();
+            }
+          } else {
+            reset = await directSessionReq<{ deleted: boolean }>("sessions.reset", {
+              key: sessionKey,
+            });
+          }
+          expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+          return reset;
+        } finally {
+          sql.restore();
+        }
+      });
+      if (outcome === "success") {
+        expect(result).toMatchObject({ ok: true, payload: { deleted: true } });
       }
-    });
-    expect(result).toMatchObject({ ok: true, payload: { deleted: true } });
-    expect((await actor.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
-  } finally {
-    await actor.close();
-  }
-});
+      expect((await actor.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
+    } finally {
+      await actor.close();
+    }
+  },
+);
 
 test("sessions.reset aborts active runs and clears queues", async () => {
   const { storePath } = await seedWaitingActiveMainSession();

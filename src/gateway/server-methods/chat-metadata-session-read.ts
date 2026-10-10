@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -55,6 +56,61 @@ export async function prepareChatMetadataSessionRead(params: {
   };
   const options = { agentId: params.agentId, projection: [] };
   try {
+    const source = captureIncognitoSessionSource(params);
+    if (source) {
+      const actor = "kind" in source ? undefined : source.actor;
+      let finish: (() => void) | undefined;
+      const held = actor?.sessions.withSharedState(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      releases.push(() => {
+        finish?.();
+        void held?.catch(() => undefined);
+      });
+      const selected = await withGatewaySessionEntry(
+        params.sessionKey,
+        { agentId: params.agentId, projection: "list" },
+        (session) => session,
+        params.cfg,
+        assertRefreshable,
+      );
+      const revision = actor?.sessions.readChatMetadataRevision(selected.canonicalKey);
+      const assertActorCurrent = () => {
+        assertRefreshable();
+        source.admissionSignal?.throwIfAborted();
+        if ("kind" in source) source.assertCurrent();
+        else source.actor.assertReadable();
+        const current = actor?.sessions.readSharing(selected.canonicalKey)?.entry;
+        if (
+          (selected.entry && current
+            ? hasSessionReadAccessChanged(selected.entry, current)
+            : selected.entry !== current) ||
+          actor?.sessions.readChatMetadataRevision(selected.canonicalKey) !== revision
+        ) {
+          throw changed();
+        }
+      };
+      assertActorCurrent();
+      return {
+        selected,
+        isCurrent: () => {
+          assertActorCurrent();
+          return true;
+        },
+        assertCurrent: assertActorCurrent,
+        beforeRequest: assertActorCurrent,
+        release,
+        async withCurrent<T>(consume: () => T): Promise<Awaited<T>> {
+          assertActorCurrent();
+          const result = await consume();
+          assertActorCurrent();
+          return result;
+        },
+      };
+    }
     if (isIncognitoSessionKey(resolveSessionStoreIdentity(params).canonicalKey)) {
       const selected = retainGatewaySessionEntryReadOnly(
         params.sessionKey,

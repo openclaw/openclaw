@@ -12,15 +12,18 @@ import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-hea
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { IncognitoEntryCreationOperations } from "./session-incognito-entry-creation-contract.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import type { SessionEntry } from "./types.js";
 
 export function createIncognitoEntryCreationWorker(
   database: OpenClawAgentDatabase,
+  incarnation: string,
   env: NodeJS.ProcessEnv,
   admit: (
     stage: "transaction" | "commit",
     keys: readonly string[],
-    entry: { value?: SessionEntry },
+    entry: { guarded: boolean; value?: SessionEntry; sourceValidation?: SessionSourceValidation },
   ) => void,
 ) {
   return {
@@ -48,7 +51,15 @@ export function createIncognitoEntryCreationWorker(
           ) {
             throw new SqliteSessionMutationConflictError("session.entry.create-with-transcript");
           }
-          admit("transaction", keys, {});
+          const sourceValidation = readSessionSourceValidation(
+            database,
+            input.sources,
+            incarnation,
+          );
+          admit("transaction", keys, { guarded: true, sourceValidation });
+          if (sourceValidation.refusedSource) {
+            throw new Error("Session source refusal was not rejected");
+          }
           assertSessionCreationLabelAvailable(database, sessionKey, input.label);
           const scope = {
             agentId: database.agentId,
@@ -72,7 +83,7 @@ export function createIncognitoEntryCreationWorker(
           if (input.owner && !replaceSessionOwnerInTransaction(database, sessionKey, input.owner)) {
             throw new Error(`Session owner assignment lost its target: ${sessionKey}`);
           }
-          admit("commit", keys, { value: entry });
+          admit("commit", keys, { guarded: true, value: entry, sourceValidation });
           return entry;
         },
         { agentId: database.agentId, path: database.path, env },

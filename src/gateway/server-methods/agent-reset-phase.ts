@@ -8,6 +8,7 @@ import {
   type ErrorShape,
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -21,7 +22,7 @@ import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   buildBareSessionResetResponse,
-  loadBareSessionResetDeliverySession,
+  withBareSessionResetDeliverySession,
   resolveBareSessionResetResult,
 } from "./agent-session-reset.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -176,44 +177,60 @@ export async function runAgentResetPhase(params: {
   }
 
   try {
-    const deliverySession =
-      params.request.deliver === true
-        ? loadBareSessionResetDeliverySession({
-            sessionKey: resetResult.key,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          })
-        : undefined;
-    const resetAckResult = await resolveBareSessionResetResult({
-      cfg: deliverySession?.cfg ?? params.cfg,
-      context: params.context,
-      reason: resetReason,
-      sessionId: resetSessionId,
-      sessionKey: resetResult.key,
-      agentId: deliverySession?.agentId ?? params.agentId,
-      sessionEntry: deliverySession?.entry,
-      request: params.sessionKeyFromTo ? { ...params.request, to: undefined } : params.request,
-      runId: params.runId,
-      assertCurrent: () => {
-        params.assertAdmissionCurrent?.();
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    const acknowledge = async (
+      deliverySession?: {
+        cfg: OpenClawConfig;
+        agentId: string;
+        entry?: SessionEntry;
       },
-    });
-    params.assertAdmissionCurrent?.();
-    const responsePayload = buildBareSessionResetResponse({
-      runId: params.runId,
-      result: resetAckResult,
-    });
-    setGatewayDedupeEntries({
-      dedupe: params.context.dedupe,
-      keys: params.agentDedupeKeys,
-      entry: { ts: Date.now(), ok: true, payload: responsePayload },
-    });
-    params.respond(true, responsePayload, undefined, { runId: params.runId });
-    emitSessionsChanged(params.context, {
-      sessionKey: resetResult.key,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      reason: resetReason,
-    });
+      assertDeliveryCurrent?: () => void,
+    ) => {
+      const resetAckResult = await resolveBareSessionResetResult({
+        cfg: deliverySession?.cfg ?? params.cfg,
+        context: params.context,
+        reason: resetReason,
+        sessionId: resetSessionId,
+        sessionKey: resetResult.key,
+        agentId: deliverySession?.agentId ?? params.agentId,
+        sessionEntry: deliverySession?.entry,
+        request: params.sessionKeyFromTo ? { ...params.request, to: undefined } : params.request,
+        runId: params.runId,
+        assertCurrent: () => {
+          params.assertAdmissionCurrent?.();
+          assertDeliveryCurrent?.();
+          assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        },
+      });
+      params.assertAdmissionCurrent?.();
+      assertDeliveryCurrent?.();
+      const responsePayload = buildBareSessionResetResponse({
+        runId: params.runId,
+        result: resetAckResult,
+      });
+      setGatewayDedupeEntries({
+        dedupe: params.context.dedupe,
+        keys: params.agentDedupeKeys,
+        entry: { ts: Date.now(), ok: true, payload: responsePayload },
+      });
+      params.respond(true, responsePayload, undefined, { runId: params.runId });
+      emitSessionsChanged(params.context, {
+        sessionKey: resetResult.key,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        reason: resetReason,
+      });
+    };
+    if (params.request.deliver === true) {
+      await withBareSessionResetDeliverySession(
+        {
+          sessionKey: resetResult.key,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          assertCurrent: params.assertAdmissionCurrent,
+        },
+        acknowledge,
+      );
+    } else {
+      await acknowledge();
+    }
     return { ...next, stop: true, accepted: true };
   } catch (err) {
     const error = errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err));

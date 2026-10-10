@@ -1,11 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveSessionLifecycleTimestampsWithHeader } from "../config/sessions/lifecycle-timestamps.js";
 import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
@@ -224,11 +225,35 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
     assertCurrent: () => void,
   ) => T;
 }): T | Promise<T> {
-  const binding = captureIncognitoSessionBinding({
+  const binding = captureIncognitoSessionSource({
     agentId: params.identity.agentId,
     sessionKey: params.identity.canonicalKey,
     env: params.env,
   });
+  if (binding && "kind" in binding) {
+    const assertCurrent = () => {
+      binding.admissionSignal?.throwIfAborted();
+      binding.assertCurrent();
+    };
+    assertCurrent();
+    const result = params.consume(
+      {
+        agentId: binding.agentId,
+        canonicalKey: params.identity.canonicalKey,
+        storePath: binding.path,
+        storeKeys: [params.identity.canonicalKey],
+        store: {},
+      },
+      new Map(),
+      assertCurrent,
+    );
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => undefined);
+      throw new Error("Session entry consumers must remain synchronous");
+    }
+    assertCurrent();
+    return result;
+  }
   if (binding) {
     const { actor, admissionSignal } = binding;
     const sessionKey = params.identity.canonicalKey;
@@ -236,6 +261,21 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
     return actor.sessions
       .withSharedState(async () => {
         const read = await actor.sessions.read(authority, { sessionKey });
+        const header =
+          read.entry && read.entry.sessionStartedAt === undefined
+            ? (
+                await actor.sessions.history(authority, {
+                  type: "session.history.anchors",
+                  input: {
+                    sessionKey,
+                    sessionId: read.entry.sessionId,
+                    lifecycleRevision: read.entry.lifecycleRevision,
+                    entryIds: [],
+                    includeHeader: true,
+                  },
+                })
+              ).header
+            : undefined;
         const members = params.includeMembership
           ? (
               await actor.sessions.sideData(authority, {
@@ -262,6 +302,10 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
               storePath: actor.path,
               storeKeys: [sessionKey],
               store: read.entry ? { [sessionKey]: read.entry } : {},
+              lifecycleTimestamps: resolveSessionLifecycleTimestampsWithHeader({
+                entry: read.entry,
+                readHeader: () => header,
+              }),
               readSource: { agentId: actor.agentId, path: actor.path },
               capturedReadSource: {
                 agentId: actor.agentId,

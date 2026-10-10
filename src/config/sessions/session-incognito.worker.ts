@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chatMetadataSessionFields } from "../../gateway/server-methods/chat-metadata-contract.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
@@ -92,6 +93,7 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
+import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { applySessionTurn, prepareSessionTurn } from "./session-turn.worker.js";
 
@@ -106,6 +108,12 @@ export function createIncognitoSessionWorker(
   const history = createIncognitoHistoryWorker(database, env);
   const read = (sessionKey: string): IncognitoSessionSnapshot => {
     const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
+    const projection = entry
+      ? executeSqliteQueryTakeFirstSync(
+          database.db,
+          selectSessionTranscriptIndexStatus(database.db, entry.sessionId),
+        )
+      : undefined;
     return {
       entry,
       facts: [
@@ -113,6 +121,10 @@ export function createIncognitoSessionWorker(
           identity,
           sessionKey,
           revision: sessionRevisions.get(sessionKey) ?? 0,
+          activeLeafEntryId:
+            entry && !projection?.needs_reconcile
+              ? (projection?.activeLeafEntryId ?? null)
+              : undefined,
           completionSources: history.completionFacts(sessionKey),
           capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
           entryReadRevision: entry ? sessionEntryReadRevision(entry) : undefined,
@@ -258,7 +270,12 @@ export function createIncognitoSessionWorker(
     (stage, keys, receipt) =>
       receipt ? entryAdmission(stage, keys, { guarded: true, ...receipt }) : admit(stage, keys),
   );
-  const entryCreation = createIncognitoEntryCreationWorker(database, env, entryAdmission);
+  const entryCreation = createIncognitoEntryCreationWorker(
+    database,
+    identity.incarnation,
+    env,
+    entryAdmission,
+  );
   const entryPatch = createIncognitoEntryPatchWorker(
     database,
     identity.incarnation,

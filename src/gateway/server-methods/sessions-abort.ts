@@ -20,6 +20,7 @@ import {
   isConfiguredSessionStoreAgentId,
   resolveExistingAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -43,7 +44,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
@@ -162,6 +163,13 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
     const authority = readGatewayRequestMutationAuthority(options);
     const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const assertAbortCurrent = composeSessionSourceAssertion([
+      authority.assertCurrent,
+      sessionMutationAuthorization?.assertCurrent,
+      requester.sessionAuthority?.assertCurrent,
+      () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
+    ]);
     const narrow =
       authority.sessionScope === "operator.sessions.write" ||
       requester.sessionAuthority !== undefined;
@@ -262,7 +270,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       return;
     }
     const targetAgentId = requestedGlobalAgent.agentId;
-    const configuredTarget = isConfiguredSessionStoreAgentId(cfg, targetAgentId);
+    const source = captureIncognitoSessionSource({ agentId: targetAgentId, sessionKey: key });
+    const configuredTarget = Boolean(source) || isConfiguredSessionStoreAgentId(cfg, targetAgentId);
     const existingTargets = configuredTarget
       ? []
       : resolveExistingAgentSessionStoreTargetsSync(cfg, targetAgentId);
@@ -298,7 +307,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     // neither config nor persistence owns it; that edge is the only one that could create state.
     const loadedSession =
       configuredTarget || existingTargets.length > 0
-        ? loadSessionEntry(key, { agentId: targetAgentId })
+        ? await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg,
+            key,
+            agentId: targetAgentId,
+            assertActive: assertAbortCurrent,
+          })
         : undefined;
     const canonicalKey =
       loadedSession?.canonicalKey ??
@@ -358,14 +372,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       defaultAgentId: stableTargetOwner,
     });
     const abortSessionKey = canonicalKey === "global" ? "global" : resolvedAbortSessionKey;
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const lifecycleRevision = sessionEntry?.lifecycleRevision;
-    const assertAbortCurrent = composeSessionSourceAssertion([
-      authority.assertCurrent,
-      sessionMutationAuthorization?.assertCurrent,
-      requester.sessionAuthority?.assertCurrent,
-      () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
-    ]);
     const queueKeys = [key, ...(requestedKeyAliases ?? []), canonicalKey, sessionEntry?.sessionId];
     const clearCapturedFollowups =
       narrow && clearQueued && !requestedRunId && requiredSessionId

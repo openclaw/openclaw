@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
   appendTranscriptMessage,
@@ -13,6 +14,8 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -21,6 +24,7 @@ import {
   type SessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
@@ -41,8 +45,10 @@ import { managedImageRecordOperations } from "./managed-image-record-store.kerne
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
 
-async function createSourceReplyFixture(state: OpenClawTestState) {
-  const sessionKey = "agent:main:webchat:dm:partial-promotion";
+async function createSourceReplyFixture(
+  state: OpenClawTestState,
+  sessionKey = "agent:main:webchat:dm:partial-promotion",
+) {
   const sessionId = "partial-promotion-session";
   const scope = {
     agentId: "main",
@@ -242,6 +248,62 @@ async function createPartialPromotion(fixture: Fixture) {
 }
 
 describe("internal source reply persistence", () => {
+  it("validates actor replay ownership before promoting its retained media", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "source-reply-actor-replay-" },
+      async (state) => {
+        const actor = await openIncognitoTestActor(state.env, { assertCurrent() {} });
+        try {
+          await withIncognitoSessionActor(actor, async () => {
+            const fixture = await createSourceReplyFixture(
+              state,
+              "agent:main:dashboard:incognito-partial-promotion",
+            );
+            const entered = createDeferredCore();
+            const release = createDeferredCore();
+            let replay: Promise<void> | undefined;
+            let restoreRead: (() => void) | undefined;
+            try {
+              await createPartialPromotion(fixture);
+              const beforeRecords = await fixture.records();
+              const read = sessionReads.withSessionEntryReadOnlyInWorker;
+              let held = false;
+              const readSpy = vi
+                .spyOn(sessionReads, "withSessionEntryReadOnlyInWorker")
+                .mockImplementation(async <T>(...args: Parameters<typeof read<T>>) => {
+                  if (!held && args[0].sessionKey === fixture.scope.sessionKey) {
+                    held = true;
+                    entered.resolve();
+                    await release.promise;
+                  }
+                  return read<T>(...args);
+                });
+              restoreRead = () => readSpy.mockRestore();
+              replay = fixture.persist({ runId: "retry-run" });
+              await awaitGateBeforeSettlement(entered.promise, replay, "actor replay validation");
+              await replaceSessionEntry(fixture.scope, {
+                ...fixture.entry,
+                activeWriterRunId: "replacement-writer",
+              });
+              release.resolve();
+              await expect(replay).rejects.toThrow("no longer owns the active transcript");
+              expect(await fixture.records()).toEqual(beforeRecords);
+              expect(fixture.updates).toEqual([]);
+              await expectOriginalBytes(fixture);
+            } finally {
+              release.resolve();
+              await replay?.catch(() => {});
+              restoreRead?.();
+              await fixture.dispose();
+            }
+          });
+        } finally {
+          await actor.close();
+        }
+      },
+    );
+  });
+
   it.each(["partial-promotion", "owned-drain", "canonical-key", "text-only"] as const)(
     "completes exact replay and refreshes history after %s",
     async (mode) => {

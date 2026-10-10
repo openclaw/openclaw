@@ -3,6 +3,11 @@ import {
   isReplyPayloadSessionWriterDeliveryAuthorized,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { captureWebchatReplyMediaScope } from "./chat-reply-media.js";
@@ -28,12 +33,55 @@ export function createChatSendReplyFinalizationAuthority(
   onUnauthorized?: () => void,
 ) {
   const { cfg, sessionKey, agentId, sessionLoadOptions } = params.session;
-  const deliveryAuthorized = () =>
-    (!params.isCurrent || params.isCurrent()) &&
-    payloads.every((payload) => {
+  const sessionSource = captureIncognitoSessionSource({
+    agentId,
+    sessionKey,
+    env: sessionLoadOptions?.env,
+  });
+  const sessionClaim =
+    sessionSource && !("kind" in sessionSource)
+      ? sessionSource.actor.sessions.captureCurrent(sessionKey)
+      : undefined;
+  const sources = payloads.map((payload) => {
+    const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+    return (
+      authority &&
+      captureIncognitoSessionSource({
+        ...authority,
+        agentId: authority.agentId ?? agentId,
+        env: sessionLoadOptions?.env,
+      })
+    );
+  });
+  const deliveryAuthorized = () => {
+    if (params.isCurrent && !params.isCurrent()) {
+      return false;
+    }
+    if (sessionSource) {
+      sessionSource.admissionSignal?.throwIfAborted();
+      if ("kind" in sessionSource) {
+        sessionSource.assertCurrent();
+        return false;
+      }
+      sessionSource.actor.assertReadable();
+      sessionClaim?.assertCurrent();
+    }
+    return payloads.every((payload, index) => {
       const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
       if (!authority) {
         return true;
+      }
+      const source = sources[index];
+      if (source) {
+        source.admissionSignal?.throwIfAborted();
+        if ("kind" in source) {
+          source.assertCurrent();
+          return false;
+        }
+        return isReplyPayloadSessionWriterDeliveryAuthorized(
+          payload,
+          source.actor.sessions.readSteering(authority.sessionKey),
+        );
       }
       const current = loadSessionEntry(authority.sessionKey, {
         ...sessionLoadOptions,
@@ -41,6 +89,7 @@ export function createChatSendReplyFinalizationAuthority(
       }).entry;
       return isReplyPayloadSessionWriterDeliveryAuthorized(payload, current);
     });
+  };
   return {
     deliveryAuthorized,
     authorizeDelivery: (stage: string) => {
@@ -53,19 +102,26 @@ export function createChatSendReplyFinalizationAuthority(
       onUnauthorized?.();
       return false;
     },
-    captureMediaScope: () =>
-      captureWebchatReplyMediaScope({
-        cfg,
-        sessionKey,
-        agentId,
-        sessionLoadOptions,
-        requesterContext: params.requesterContext,
-        accountId: params.accountId,
-        assertCurrent: () => {
-          if (!deliveryAuthorized()) {
-            throw new Error("Chat media delivery is no longer authorized.");
-          }
-        },
-      }),
+    captureMediaScope: () => {
+      if (sessionSource && "kind" in sessionSource) {
+        sessionSource.assertCurrent();
+        throw new IncognitoSessionMissingError();
+      }
+      const capture = () =>
+        captureWebchatReplyMediaScope({
+          cfg,
+          sessionKey,
+          agentId,
+          sessionLoadOptions,
+          requesterContext: params.requesterContext,
+          accountId: params.accountId,
+          assertCurrent: () => {
+            if (!deliveryAuthorized()) {
+              throw new Error("Chat media delivery is no longer authorized.");
+            }
+          },
+        });
+      return sessionSource ? withIncognitoSessionBinding(sessionSource, capture) : capture();
+    },
   };
 }
