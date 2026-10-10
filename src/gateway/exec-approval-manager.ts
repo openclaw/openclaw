@@ -160,7 +160,7 @@ export class ExecApprovalManager<
     });
   }
 
-  private scheduleAuthorityClosure(recordId: string): void {
+  protected override scheduleAuthorityClosure(recordId: string): void {
     void this.forceDenyIfRuntimeAuthorityClosed(recordId)
       .then((closed) => {
         if (closed?.outcome === "denied" && closed.liveRecord) {
@@ -697,23 +697,6 @@ export class ExecApprovalManager<
     }
     this.scheduleAuthorityClosure(record.id);
     return false;
-  }
-
-  /** Observes a registered decision; Gateway closure rejects the wait, not the approval. */
-  awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
-    this.assertNotRetired();
-    this.scheduleAuthorityClosure(recordId);
-    const snapshot = this.getLocalSnapshot(recordId);
-    if (!snapshot) {
-      return null;
-    }
-    if (snapshot.resolvedAtMs === undefined && snapshot.expiresAtMs <= Date.now()) {
-      void this.expireDue(recordId).catch((error: unknown) => {
-        this.reportError(error, { approvalId: recordId, operation: "expire" });
-      });
-    }
-    const entry = this.pending.get(recordId);
-    return entry ? this.observeEntry(entry, entry.promise) : null;
   }
 
   /** Projects an allowed decision only while its exact runtime authority is live. */

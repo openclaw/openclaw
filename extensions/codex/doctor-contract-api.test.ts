@@ -1,14 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -21,6 +14,7 @@ import {
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
+import { createDoctorContext } from "./doctor-contract-api.test-support.js";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -30,36 +24,6 @@ import {
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding.js";
 import { legacyCodexConversationBindingId } from "./src/conversation-binding-data.js";
-
-function createDoctorContext(
-  env: NodeJS.ProcessEnv,
-  afterRegister?: () => Promise<void>,
-  beforeCompare?: (key: string) => Promise<void>,
-): PluginDoctorStateMigrationContext {
-  return {
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      const store = createPluginStateKeyedStoreV2ForTests<T>(
-        "codex",
-        { ...options, env: options.env ?? env },
-        { assertCurrent() {} },
-      );
-      return afterRegister || beforeCompare
-        ? {
-            ...store,
-            async registerIfAbsent(...args: Parameters<typeof store.registerIfAbsent>) {
-              const registered = await store.registerIfAbsent(...args);
-              await afterRegister?.();
-              return registered;
-            },
-            async compareAndApply(...args: Parameters<typeof store.compareAndApply>) {
-              await beforeCompare?.(args[0]);
-              return await store.compareAndApply(...args);
-            },
-          }
-        : store;
-    },
-  };
-}
 
 function openBindingStore(env: NodeJS.ProcessEnv) {
   return createDoctorContext(env).openPluginStateKeyedStore<StoredCodexAppServerBinding>({

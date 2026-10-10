@@ -342,3 +342,23 @@ export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyConte
     pluginAppIds: parsedPluginAppIds,
   };
 }
+
+export function storedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (identity.kind === "session") {
+    return { sessionId: identity.sessionId };
+  }
+  return current?.sessionId ? { sessionId: current.sessionId } : {};
+}
+
+export function preservedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (current?.sessionId) {
+    return { sessionId: current.sessionId };
+  }
+  return storedSessionGeneration(identity, current);
+}
