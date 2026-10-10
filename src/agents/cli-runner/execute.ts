@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { parse as parseSemver } from "semver";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -294,6 +295,8 @@ export async function executePreparedCliRun(
   const executeAttempt = async (): Promise<CliOutput> => {
     assertCurrent();
     await context.preparedBackend.beforeExecution?.();
+    assertCurrent();
+    await prepareRuntimeAuthProfileExecution(params, assertCurrent);
     assertCurrent();
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =

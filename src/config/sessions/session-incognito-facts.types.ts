@@ -1,5 +1,6 @@
 import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-contract.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { IncognitoSessionAuthProfileFacts } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
@@ -12,6 +13,7 @@ export type IncognitoSessionFacts = {
   revision: number;
   sharing: CommittedSessionSharingFacts | undefined;
   capability?: SessionEntryCurrentFacts;
+  authProfile?: IncognitoSessionAuthProfileFacts;
   chatMetadataRevision?: string;
   entryReadRevision?: string;
   initializationFingerprint?: string;

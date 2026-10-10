@@ -15,7 +15,17 @@ import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-f
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionEntry } from "./types.js";
 
+export type IncognitoSessionAuthProfileFacts = Pick<
+  SessionEntry,
+  | "sessionId"
+  | "lifecycleRevision"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
+
 type IncognitoSessionSharingFacts = CommittedSessionSharingFacts & {
+  authProfile?: IncognitoSessionAuthProfileFacts;
   capability?: ReturnType<typeof projectSessionEntryCapabilityFacts>;
   steering?: Pick<
     SessionEntry,
@@ -147,10 +157,70 @@ export function readIncognitoSessionSteeringEntry(database: DatabaseSync, sessio
   return current?.steering;
 }
 
+/** Account restrictions use the same committed native owner as sharing, without a SQL read. */
+export function readCommittedIncognitoSessionAuthProfile(
+  database: DatabaseSync,
+  sessionKey: string,
+) {
+  const current = readCommittedIncognitoSessionSharing(database, sessionKey);
+  if (current && !current.authProfile) {
+    throw new Error("Incognito session account projection is unavailable");
+  }
+  return current?.authProfile;
+}
+
+export function projectIncognitoSessionAuthProfile(
+  entry: SessionEntry,
+): IncognitoSessionAuthProfileFacts {
+  return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+/** Sharing-neutral account writes still publish their producer-supplied postimage. */
+function publishIncognitoSessionAuthProfileChange(
+  database: SessionEntryCacheDatabase,
+  update: { sessionKey: string; entry: SessionEntry },
+): void {
+  const state = incognitoSharingState(database.db);
+  let current = state.entries.get(update.sessionKey);
+  for (const staged of state.pending.get(update.sessionKey)?.values() ?? []) {
+    current = staged;
+  }
+  const authProfile = projectIncognitoSessionAuthProfile(update.entry);
+  const next = current ? { ...current, authProfile } : null;
+  publishTrackedCacheUpdate(
+    database,
+    () => {
+      const committed = state.entries.get(update.sessionKey);
+      commitIncognitoSessionSharingFacts(
+        database.db,
+        update.sessionKey,
+        committed ? { ...committed, authProfile } : null,
+      );
+    },
+    () => stageIncognitoSharingPublication(database.db, update.sessionKey, { facts: next }),
+  );
+}
+
 export function publishIncognitoSessionEntryChange(
   database: SessionEntryCacheDatabase & { path: string },
   update: { sessionKey: string; entry?: SessionEntry },
+  sharingUnchanged = false,
 ): void {
+  if (sharingUnchanged) {
+    if (update.entry) {
+      publishIncognitoSessionAuthProfileChange(database, {
+        sessionKey: update.sessionKey,
+        entry: update.entry,
+      });
+    }
+    return;
+  }
   let current: IncognitoSessionSharingFacts | null | undefined;
   try {
     const entry =
@@ -158,6 +228,7 @@ export function publishIncognitoSessionEntryChange(
     current = entry
       ? {
           entry: projectSessionSharingEntry(entry),
+          authProfile: projectIncognitoSessionAuthProfile(entry),
           capability: projectSessionEntryCapabilityFacts(entry),
           steering: {
             sessionId: entry.sessionId,

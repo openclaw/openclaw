@@ -576,6 +576,7 @@ async function resolveSessionAuthProfileOverride(params: {
 type SessionAuthSelection = {
   profileId: string;
   source: "auto" | "user";
+  configuredPrimaryProvider?: string;
   routeRequirement: ProviderModelRouteAuthRequirement | undefined;
 };
 
@@ -586,6 +587,7 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
+  configuredProfileIsDefault?: boolean;
   harnessRuntime?: string;
   agentDir: string;
   reader?: SessionEntryCohortReader;
@@ -672,6 +674,11 @@ export async function resolveSessionAuthSelection(params: {
   return {
     profileId,
     source: rotatedPinnedProfileId || configuredProfileId ? "user" : "auto",
+    ...(!rotatedPinnedProfileId &&
+    (!params.configuredProfileId || params.configuredProfileIsDefault === true) &&
+    configuredProfileId
+      ? { configuredPrimaryProvider: params.provider }
+      : {}),
     routeRequirement: profileAuthRequirement({ cfg, store: authStore, profileId }),
   };
 }

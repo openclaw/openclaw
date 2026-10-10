@@ -575,23 +575,29 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
   });
 
-  it("selects the configured model auth profile separately", async () => {
-    const ref = { provider: "openai", model: "gpt-5.6-luna" };
+  it.each(["configured", "payload"])("selects %s model auth profile", async (source) => {
+    const { provider, model } = { provider: "openai", model: "gpt-5.6-luna" };
+    const ref = { provider, model };
     const modelRef = "openai/gpt-5.6-luna@openai:test-profile";
-    resolveConfiguredModelRefMock.mockReturnValue(ref);
-    runWithModelFallbackMock.mockResolvedValueOnce(
-      makeSuccessfulRunResult(ref.provider, ref.model),
-    );
+    if (source === "payload") {
+      resolveAllowedModelRefMock.mockReturnValueOnce({ ref });
+    } else {
+      resolveConfiguredModelRefMock.mockReturnValue(ref);
+    }
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult(provider, model));
     await runCronIsolatedAgentTurn(
       makePersistParams({
         cfg: {
           auth: { profiles: { "openai:test-profile": { provider: "openai", mode: "token" } } },
-          agents: { defaults: { model: { primary: modelRef } } },
+          ...(source === "configured"
+            ? { agents: { defaults: { model: { primary: modelRef } } } }
+            : {}),
         },
         job: makeJob({
           payload: {
             kind: "agentTurn",
             message: "run daily digest",
+            ...(source === "payload" ? { model: modelRef } : {}),
           },
         }),
       }),
@@ -601,6 +607,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
         provider: "openai",
         modelId: "gpt-5.6-luna",
         configuredProfileId: "openai:test-profile",
+        configuredProfileIsDefault: source === "configured",
       }),
     );
   });

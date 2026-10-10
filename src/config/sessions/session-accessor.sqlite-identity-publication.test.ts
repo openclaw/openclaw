@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import {
@@ -9,6 +9,7 @@ import {
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabaseByPath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -34,7 +35,11 @@ import {
 } from "./session-accessor.sqlite-incognito-sharing.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
-import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
+import {
+  captureSessionEntryCurrentRead,
+  bindRuntimeAuthProfileExecution,
+  prepareRuntimeAuthProfileExecution,
+} from "./session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -443,5 +448,98 @@ it("uses incognito transaction postimages for currency and steering while delive
     } finally {
       generation.release();
     }
+  });
+});
+
+it("keeps native account restrictions current without SQL and retains the original handle", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env });
+    const options = { agentId, path: storePath, env: state.env };
+    const scope = {
+      agentId,
+      storePath,
+      env: state.env,
+      sessionKey: "agent:main:subagent:incognito-account",
+    };
+    const original = {
+      sessionId: "native-account-session",
+      lifecycleRevision: "11111111-1111-4111-8111-111111111111",
+      updatedAt: 1,
+      incognito: true,
+    } satisfies InternalSessionEntry;
+    const database = openOpenClawAgentDatabase(options);
+    runOpenClawAgentWriteTransaction(
+      (writer) => writeSessionEntry(writer, scope.sessionKey, original),
+      options,
+    );
+    const target = { ...scope, sessionId: original.sessionId };
+    const execution = bindRuntimeAuthProfileExecution(
+      { sessionId: original.sessionId },
+      target,
+      original,
+    );
+    const reads = vi.spyOn(database.db, "prepare");
+    try {
+      await prepareRuntimeAuthProfileExecution(execution, () => {});
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
+    const pinned = {
+      ...original,
+      authProfileOverride: "anthropic:native-account-fixture",
+      authProfileOverrideSource: "user-link" as const,
+      updatedAt: 2,
+    };
+    runOpenClawAgentWriteTransaction((writer) => {
+      addSessionMember(scope, { identityId: "member", addedBy: "operator" });
+      writeSessionEntry(writer, scope.sessionKey, pinned);
+    }, options);
+    expect(
+      readCommittedIncognitoSessionSharing(database.db, scope.sessionKey)?.membership.has("member"),
+    ).toBe(true);
+    const pinnedReads = vi.spyOn(database.db, "prepare");
+    try {
+      await expect(prepareRuntimeAuthProfileExecution(execution, () => {})).rejects.toThrow(
+        /account pin/,
+      );
+      expect(pinnedReads).not.toHaveBeenCalled();
+    } finally {
+      pinnedReads.mockRestore();
+    }
+    const current = bindRuntimeAuthProfileExecution(
+      { sessionId: original.sessionId, authProfileId: pinned.authProfileOverride },
+      target,
+      pinned,
+      pinned.authProfileOverride,
+    );
+    const rollback = new Error("rollback native account intent");
+    expect(() =>
+      runOpenClawAgentWriteTransaction((writer) => {
+        writeSessionEntry(writer, scope.sessionKey, {
+          ...pinned,
+          authProfileOverride: "anthropic:uncommitted-fixture",
+        });
+        throw rollback;
+      }, options),
+    ).toThrow(rollback);
+    await prepareRuntimeAuthProfileExecution(current, () => {});
+    // Capture before the first check: identical row labels must not adopt a new native owner.
+    const retained = bindRuntimeAuthProfileExecution(
+      { sessionId: original.sessionId, authProfileId: pinned.authProfileOverride },
+      target,
+      pinned,
+      pinned.authProfileOverride,
+    );
+    expect(closeOpenClawAgentDatabaseByPath(storePath, agentId)).toBe(true);
+    openOpenClawAgentDatabase(options);
+    runOpenClawAgentWriteTransaction(
+      (writer) => writeSessionEntry(writer, scope.sessionKey, pinned),
+      options,
+    );
+    await expect(prepareRuntimeAuthProfileExecution(retained, () => {})).rejects.toThrow(
+      /incognito owner changed/,
+    );
   });
 });

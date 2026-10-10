@@ -1,11 +1,11 @@
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendToolPermissionResult,
   CliBackendUserInputQuestion,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function createClaudeCliUserInputAuthorizer(context: CliBackendExecuteContext) {
+export function createClaudeCliUserInputAuthorizer(context: CliBackendExecuteContextV2) {
   const requests = new Map<string, Promise<CliBackendToolPermissionResult>>();
   return {
     authorize(params: {
@@ -27,7 +27,7 @@ export function createClaudeCliUserInputAuthorizer(context: CliBackendExecuteCon
 }
 
 async function runClaudeUserInput(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   params: {
     input: Record<string, unknown>;
     signal: AbortSignal;

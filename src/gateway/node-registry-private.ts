@@ -20,6 +20,7 @@ import {
 } from "../infra/node-runner-inventory.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
+import { prepareNodeInvokeDispatch } from "./node-invoke-dispatch.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import type { NodePairingLeaseResolution } from "./node-registry-pairing.js";
@@ -163,23 +164,20 @@ async function invokeNodeRegistryCore(
   if (!node) {
     return { ok: false, error: { code: "NOT_CONNECTED", message: "node not connected" } };
   }
-  if (node.client.invalidated === true) {
+  const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
+  if (
+    node.client.invalidated === true ||
+    (expectedPairingGeneration && node.pairingGeneration !== expectedPairingGeneration)
+  ) {
     return {
       ok: false,
       error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
     };
   }
-  const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
   if (state.context.hasCurrentPairingStateResolver && !expectedPairingGeneration) {
     return {
       ok: false,
       error: { code: "PAIRING_CHANGED", message: "node pairing generation unavailable" },
-    };
-  }
-  if (expectedPairingGeneration && node.pairingGeneration !== expectedPairingGeneration) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
     };
   }
   if (params.expectedConnId && node.connId !== params.expectedConnId) {
@@ -258,6 +256,21 @@ async function invokeNodeRegistryCore(
     params: invokeParams,
     turnSource,
   });
+  if (params.prepareDispatch) {
+    const prepared = await prepareNodeInvokeDispatch({
+      prepare: params.prepareDispatch,
+      node,
+      currentNode: () => state.context.getNode(params.nodeId),
+      signal: params.signal,
+      deadlineAtMs,
+      expectedPairingGeneration,
+    });
+    const completion = prepared.ok ? prepared.complete() : prepared;
+    if (!completion.ok) {
+      return completion.result;
+    }
+    node = completion.node;
+  }
   // Serialization can consume the budget or close caller-owned authority.
   // Revalidate both before arming pending state and handing off to transport.
   if (params.signal?.aborted) {

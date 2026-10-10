@@ -1,10 +1,6 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import {
-  cliBackendAcceptsAuthProfileForwarding,
-  resolveCliExecutionAuthProfileId,
-} from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
@@ -35,6 +31,7 @@ import { needsThinkHydration } from "../../agents/thinking-runtime.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
+import { replaceRuntimeAuthProfileSelection } from "../../config/sessions/auth-profile-override-provenance.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
@@ -54,7 +51,11 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
-import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
+import {
+  createCronCandidateExecutionResolver,
+  prepareCronCandidateAuthSelection,
+  prepareCronCliCandidateAuth,
+} from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
   getCliSessionBinding,
@@ -326,6 +327,10 @@ function createCronPromptExecutor(
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
+        const readCandidateAuthProfile = prepareCronCandidateAuthSelection(
+          params,
+          providerOverride,
+        );
         const {
           sessionRuntimeOverride,
           executionProvider,
@@ -452,11 +457,6 @@ function createCronPromptExecutor(
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
         if (cliExecution) {
-          const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
-            provider: executionProvider,
-            config: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-          });
           // Keep CLI work visible to recovery until execution and settlement finish.
           const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
             runId,
@@ -480,27 +480,19 @@ function createCronPromptExecutor(
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-                const authProfileId = allowCliAuthProfileForwarding
-                  ? resolveCliExecutionAuthProfileId({
-                      cliExecutionProvider: executionProvider,
-                      authProfileProvider: providerOverride,
-                      config: params.cfgWithAgentDefaults,
-                      agentDir: params.agentDir,
-                      sessionBinding: cliSessionBinding,
-                      selected: params.liveSelection.authProfileId
-                        ? {
-                            authProfileId: params.liveSelection.authProfileId,
-                            authProfileIdSource:
-                              params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
-                          }
-                        : undefined,
-                    })
-                  : undefined;
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
                     : undefined;
                 const candidateResult = await runCliAgent({
+                  ...prepareCronCliCandidateAuth({
+                    params,
+                    sessionTarget,
+                    executionProvider,
+                    provider: providerOverride,
+                    binding: cliSessionBinding,
+                    selected: readCandidateAuthProfile().cli,
+                  }),
                   ...buildCommonRunParams(),
                   diagnosticOwner,
                   sessionEntry: params.cronSession.sessionEntry,
@@ -516,7 +508,6 @@ function createCronPromptExecutor(
                     "image",
                   ),
                   provider: executionProvider,
-                  authProfileId,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
@@ -606,10 +597,7 @@ function createCronPromptExecutor(
           ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
+          ...readCandidateAuthProfile().embedded,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,
@@ -731,10 +719,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
       params.liveSelection.provider = err.provider;
       params.liveSelection.model = err.model;
       params.liveSelection.agentRuntimeOverride = err.agentRuntimeOverride;
-      params.liveSelection.authProfileId = err.authProfileId;
-      params.liveSelection.authProfileIdSource = err.authProfileId
-        ? err.authProfileIdSource
-        : undefined;
+      replaceRuntimeAuthProfileSelection(params.liveSelection, err);
       syncCronSessionLiveSelection({
         entry: params.cronSession.sessionEntry,
         liveSelection: params.liveSelection,

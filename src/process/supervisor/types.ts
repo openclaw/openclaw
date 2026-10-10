@@ -61,6 +61,8 @@ export type SpawnSecretInput = {
 };
 
 export type ProcessAdapterConstruction = {
+  /** Refresh awaited launch facts after adapter preparation; synchronous effects stay fenced. */
+  prepareSpawn?: () => Promise<void>;
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
@@ -110,6 +112,8 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  /** Finite async launch admission after scope waits; synchronous hooks still guard native effects. */
+  prepareSpawn?: () => Promise<void>;
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";

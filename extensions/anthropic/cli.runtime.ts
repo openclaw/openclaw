@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
@@ -51,7 +51,7 @@ function readReplayedTaskId(
 }
 
 type ClaudeCliTurn = {
-  context: CliBackendExecuteContext;
+  context: CliBackendExecuteContextV2;
   controller: AbortController;
   userInput: ReturnType<typeof createClaudeCliUserInputAuthorizer>;
   events: PassThrough;
@@ -377,7 +377,7 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
 }
 
 export async function* executeClaudeCli(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   secretInput?: ClaudeCliSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
   context.assertCurrent?.();
@@ -421,6 +421,8 @@ export async function* executeClaudeCli(
     capability?.activate(session.handle);
     if (!session.transport) {
       const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
+      await context.prepareExecutionAdmission();
+      context.assertCurrent?.();
       session.transport = createClaudeCliTransport({
         context,
         args,
@@ -468,6 +470,7 @@ export async function* executeClaudeCli(
       });
       await session.transport.initialize();
     }
+    await context.prepareExecutionAdmission();
     context.assertCurrent?.();
     if (session.closed || session.currentTurn !== turn) {
       throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");

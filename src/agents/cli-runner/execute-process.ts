@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -348,6 +349,7 @@ export async function executeCliProcess(params: {
           assertProcessCurrent,
         );
         const managedRun = await supervisor.spawn({
+          prepareSpawn: () => prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent),
           assertCurrent: params.assertCurrent,
           runId: runParams.runId,
           scopeKey,

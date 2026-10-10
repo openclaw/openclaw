@@ -2,12 +2,16 @@ import type { Writable } from "node:stream";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
+import { toStringEnv } from "./adapters/env.js";
 import {
   getInheritedNativeProcessOwner,
   getInheritedProcessLineageFds,
 } from "./inherited-process-lineage.js";
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
-import { supportsNodeWorkerProcessOwner } from "./service-child-protocol.js";
+import {
+  supportsNodeWorkerProcessOwner,
+  type ServiceChildStart,
+} from "./service-child-protocol.js";
 import { reserveStdioEntry } from "./service-child-stdio.js";
 import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
 
@@ -93,21 +97,22 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
       ? []
       : getInheritedProcessLineageFds().map((fd) => reserveStdioEntry(stdio, fd));
     reserveStdioEntry(stdio, "ipc");
+    const ownership = params.ownedWorker
+      ? {
+          ownedWorker: true as const,
+          cleanupBinding: params.cleanupBinding,
+          parentLineageFds: [lineageFd!, ...parentLineageFds],
+        }
+      : useLinuxSubreaper
+        ? { parentLineageFds: [lineageFd!, ...parentLineageFds] }
+        : { lineageFd, parentLineageFds };
     return {
       useWindowsJobAnchor,
       useLinuxSubreaper,
       nativeProcessOwner: useLinuxSubreaper ? nativeProcessOwner : undefined,
       controlFd,
       lineageFd,
-      ownership: params.ownedWorker
-        ? {
-            ownedWorker: true as const,
-            cleanupBinding: params.cleanupBinding,
-            parentLineageFds: [lineageFd!, ...parentLineageFds],
-          }
-        : useLinuxSubreaper
-          ? { parentLineageFds: [lineageFd!, ...parentLineageFds] }
-          : { lineageFd, parentLineageFds },
+      ownership,
       spawn: {
         workerUrl: useLinuxSubreaper
           ? new URL(nativeProcessOwner!)
@@ -121,6 +126,25 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
           params.ownedWorker === true ||
           parentLineageFds.length > 0,
         stdio,
+      },
+      createStartMessage(generation: string, acknowledgeClosing: boolean): ServiceChildStart {
+        return {
+          type: params.initiateSpawn ? "prepare" : "start",
+          generation,
+          command: params.command,
+          args: params.args,
+          argv0: params.argv0,
+          cwd: params.cwd,
+          env: params.env ? toStringEnv(params.env) : undefined,
+          stdinMode: params.stdinMode,
+          secretFd: params.secretInput?.fd,
+          controlFd,
+          ...ownership,
+          treeOwnership: useLinuxSubreaper ? "linux-subreaper" : undefined,
+          nativeProcessOwner: useLinuxSubreaper ? nativeProcessOwner : undefined,
+          ...(acknowledgeClosing ? { acknowledgeClosing: true as const } : {}),
+          windowsShellCommand: params.windowsShellCommand,
+        };
       },
       ...deliveryOwner,
     };

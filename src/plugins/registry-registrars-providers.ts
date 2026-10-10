@@ -177,6 +177,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     if (backend.prepareExecution) {
       getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }
+    if (backend.prepareExecutionV2) {
+      getPluginInstance(record)?.admitFactory(backend.prepareExecutionV2);
+    }
     registry.cliBackends.push(
       createRegistration(record, {
         builtWithOpenClawVersion: record.builtWithOpenClawVersion,

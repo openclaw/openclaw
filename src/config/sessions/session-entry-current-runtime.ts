@@ -4,8 +4,16 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { readIncognitoSessionEntryCurrent } from "./session-accessor.sqlite-incognito-sharing.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import { resolveCollapsedSessionAuthPinSource } from "./auth-profile-override-provenance.js";
+import {
+  readIncognitoSessionEntryCurrent,
+  readCommittedIncognitoSessionAuthProfile,
+  type IncognitoSessionAuthProfileFacts,
+} from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import type {
@@ -20,11 +28,14 @@ import {
 import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import type { SessionEntry } from "./types.js";
 
 function captureIncognitoSessionEntryCurrentRead(
   binding: IncognitoSessionBinding,
   sessionKey: string,
-): Exclude<CapturedSessionEntryCurrentRead, { kind: "file" }> {
+): Exclude<CapturedSessionEntryCurrentRead, { kind: "file" }> & {
+  readAuthProfileCurrent(): IncognitoSessionAuthProfileFacts | undefined;
+} {
   const { actor, admissionSignal } = binding;
   const claim = actor.sessions.captureCurrent(sessionKey);
   const assertSourceCurrent = () => {
@@ -39,13 +50,20 @@ function captureIncognitoSessionEntryCurrentRead(
       assertSourceCurrent();
       return actor.sessions.readSharing(sessionKey)?.entry;
     },
+    readAuthProfileCurrent() {
+      assertSourceCurrent();
+      return actor.sessions.readAuthProfile(sessionKey);
+    },
   };
 }
 
 /** Process-held currency consumes its original writer's published facts, never a native query. */
-export function captureNativeSessionEntryCurrentRead(
-  scope: SessionEntryReadScope,
-): Exclude<CapturedSessionEntryCurrentRead, { kind: "file" }> {
+export function captureNativeSessionEntryCurrentRead(scope: SessionEntryReadScope): Exclude<
+  CapturedSessionEntryCurrentRead,
+  { kind: "file" }
+> & {
+  readAuthProfileCurrent(): IncognitoSessionAuthProfileFacts | undefined;
+} {
   const sessionKey = scope.sessionKey;
   const agentId = scope.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
   assertCanonicalSessionKeyWrite(sessionKey, agentId);
@@ -75,6 +93,12 @@ export function captureNativeSessionEntryCurrentRead(
     readCurrent() {
       assertSourceCurrent();
       return database ? readIncognitoSessionEntryCurrent(database.db, sessionKey) : undefined;
+    },
+    readAuthProfileCurrent() {
+      assertSourceCurrent();
+      return database
+        ? readCommittedIncognitoSessionAuthProfile(database.db, sessionKey)
+        : undefined;
     },
   };
 }
@@ -164,4 +188,123 @@ export function captureSessionEntryCurrentRead(
       return entry;
     },
   };
+}
+
+const runtimeAuthProfileExecution = Symbol("runtimeAuthProfileExecution");
+
+type RuntimeAuthProfileExecution = {
+  sessionId?: string;
+  authProfileId?: string;
+  [runtimeAuthProfileExecution]?: {
+    target: SessionEntryReadScope & { sessionId: string };
+    nativeRead?: ReturnType<typeof captureNativeSessionEntryCurrentRead>;
+    lifecycleRevision: SessionEntry["lifecycleRevision"];
+    pin: string | undefined;
+    selectedProfileId: string | undefined;
+    readMode: "read-only" | "writable";
+  };
+};
+
+function sessionAccountPin(
+  entry:
+    | Pick<
+        SessionEntry,
+        "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+      >
+    | undefined,
+): string | undefined {
+  return resolveCollapsedSessionAuthPinSource(entry) === "user"
+    ? entry?.authProfileOverride?.trim() || undefined
+    : undefined;
+}
+
+/** Retain the admitted account intent through runtime-only parameter spreads. */
+export function bindRuntimeAuthProfileExecution<T extends RuntimeAuthProfileExecution>(
+  params: T,
+  target: (SessionEntryReadScope & { sessionId: string }) | undefined,
+  entry:
+    | (Pick<
+        SessionEntry,
+        "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+      > &
+        Pick<SessionEntry, "lifecycleRevision">)
+    | undefined,
+  selectedProfileId?: string,
+  readMode: "read-only" | "writable" = "read-only",
+): T {
+  delete params[runtimeAuthProfileExecution];
+  if (!target) {
+    return params;
+  }
+  const agentId = target.agentId ?? parseAgentSessionKey(target.sessionKey)?.agentId;
+  const nativeRead =
+    (target.storePath && agentId && getOpenIncognitoAgentDatabase(agentId, target.storePath)) ||
+    isIncognitoSessionKey(target.sessionKey) ||
+    (target.storePath &&
+      agentId &&
+      isIncognitoOpenClawAgentSqlitePath(target.storePath, {
+        agentId,
+        env: target.env,
+      }))
+      ? captureNativeSessionEntryCurrentRead(target)
+      : undefined;
+  return Object.assign(params, {
+    [runtimeAuthProfileExecution]: {
+      target: { ...target },
+      nativeRead,
+      lifecycleRevision: entry?.lifecycleRevision,
+      pin: sessionAccountPin(entry),
+      selectedProfileId: selectedProfileId?.trim(),
+      readMode,
+    },
+  });
+}
+
+/** Credential use and dispatch consume the current row after their own preparation waits. */
+export async function prepareRuntimeAuthProfileExecution(
+  params: RuntimeAuthProfileExecution,
+  assertCurrent: () => void,
+): Promise<void> {
+  const binding = params[runtimeAuthProfileExecution];
+  if (!binding) {
+    return;
+  }
+  assertCurrent();
+  const { readSessionEntryInWorker, withSessionEntryReadOnlyInWorker } =
+    await import("./session-entry-read-runtime.js");
+  assertCurrent();
+  const target = {
+    ...binding.target,
+    readConsistency: "latest" as const,
+    hydrateSkillPromptRefs: false,
+  };
+  const entry = binding.nativeRead
+    ? binding.nativeRead.readAuthProfileCurrent()
+    : binding.readMode === "read-only"
+      ? await withSessionEntryReadOnlyInWorker(target, assertCurrent, async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value;
+        })
+      : await readSessionEntryInWorker(target, assertCurrent);
+  assertCurrent();
+  const pin = sessionAccountPin(entry);
+  if (
+    !entry ||
+    entry.sessionId !== binding.target.sessionId ||
+    entry.lifecycleRevision !== binding.lifecycleRevision
+  ) {
+    const { createAgentRunSupersededAbortError } = await import("../../agents/run-termination.js");
+    assertCurrent();
+    throw createAgentRunSupersededAbortError();
+  }
+  if (
+    pin !== binding.pin &&
+    (!pin || (pin !== params.authProfileId?.trim() && pin !== binding.selectedProfileId))
+  ) {
+    throw new Error(
+      "Session account pin changed during preparation; retry with the current account.",
+    );
+  }
 }

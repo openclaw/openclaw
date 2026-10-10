@@ -1,11 +1,15 @@
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { describe, expect, it, vi } from "vitest";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 function createContext(
-  requestUserInput: CliBackendExecuteContext["requestUserInput"],
-): CliBackendExecuteContext {
-  return {
+  requestUserInput: CliBackendExecuteContextV2["requestUserInput"],
+): CliBackendExecuteContextV2 {
+  const context: CliBackendExecuteContextV2 = {
+    async prepareExecutionAdmission() {
+      this.assertCurrent?.();
+      this.abortSignal?.throwIfAborted();
+    },
     command: "/usr/local/bin/claude",
     args: [],
     cwd: "/tmp",
@@ -21,6 +25,7 @@ function createContext(
     })),
     requestUserInput,
   };
+  return context;
 }
 
 const validOptions = [

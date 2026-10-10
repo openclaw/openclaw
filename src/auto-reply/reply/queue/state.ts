@@ -3,6 +3,7 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
+import { bindConfiguredModelAuthProfileScope } from "../../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
@@ -197,6 +198,7 @@ export function clearRemovedQueuedAuthProfiles(params: {
     // so a later model switch cannot restore the deleted account from its snapshot.
     run.config = params.rewriteConfig(run.config);
     if (run.authProfileId && removed.has(run.authProfileId)) {
+      bindConfiguredModelAuthProfileScope(run);
       delete run.authProfileId;
       delete run.authProfileIdSource;
     }
@@ -263,6 +265,13 @@ export function refreshQueuedFollowupSession(params: {
       }
     }
     if (shouldRewriteSelection) {
+      if (
+        shouldRewriteModelSelection ||
+        Object.hasOwn(params, "nextAuthProfileId") ||
+        Object.hasOwn(params, "nextAuthProfileIdSource")
+      ) {
+        bindConfiguredModelAuthProfileScope(run);
+      }
       if (typeof params.nextProvider === "string") {
         run.provider = params.nextProvider;
       }

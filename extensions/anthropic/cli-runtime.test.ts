@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
@@ -46,8 +46,8 @@ afterEach(async () => {
 
 async function createContext(
   scenario = "normal",
-  overrides: Partial<CliBackendExecuteContext> = {},
-): Promise<CliBackendExecuteContext> {
+  overrides: Partial<CliBackendExecuteContextV2> = {},
+): Promise<CliBackendExecuteContextV2> {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-protocol-")));
   roots.push(root);
   const fixture = path.join(root, "claude.mjs");
@@ -56,7 +56,11 @@ async function createContext(
     `${fixtureReceiptClientSource(receipts.endpoint)}
 ${CLAUDE_PROTOCOL_FIXTURE}`,
   );
-  return {
+  const context: CliBackendExecuteContextV2 = {
+    async prepareExecutionAdmission() {
+      this.assertCurrent?.();
+      this.abortSignal?.throwIfAborted();
+    },
     command: process.execPath,
     args: [fixture],
     cwd: root,
@@ -73,16 +77,17 @@ ${CLAUDE_PROTOCOL_FIXTURE}`,
     liveSession: createLiveSession(),
     timeoutMs: 10_000,
     abortSignal: AbortSignal.timeout(10_000),
-    requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(async () => ({
+    requestToolPermission: vi.fn<CliBackendExecuteContextV2["requestToolPermission"]>(async () => ({
       behavior: "deny",
       message: "Fixture denied.",
     })),
-    requestUserInput: vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
+    requestUserInput: vi.fn<CliBackendExecuteContextV2["requestUserInput"]>(async () => ({
       status: "cancelled",
       message: "No question expected.",
     })),
     ...overrides,
   };
+  return context;
 }
 
 function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
@@ -121,7 +126,7 @@ function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSession
   };
 }
 
-async function collect(context: CliBackendExecuteContext) {
+async function collect(context: CliBackendExecuteContextV2) {
   const records: Record<string, unknown>[] = [];
   for await (const record of executeClaudeCli(context)) {
     records.push(record);
@@ -138,7 +143,7 @@ function resultDetail(records: Record<string, unknown>[]): Record<string, unknow
 }
 
 async function fixtureReadyBeforeSettlement(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   fileName: string,
   operation: PromiseLike<unknown>,
   signal: AbortSignal,
@@ -355,7 +360,7 @@ describe("Claude native stdio boundary", () => {
     "retains host policy's $decision.behavior decision for $scenario (replay: $replayReceipts, type: $taskType)",
     async ({ scenario, decision, replayReceipts, taskType }, { signal }) => {
       const context = await createContext(scenario, {
-        requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+        requestToolPermission: vi.fn<CliBackendExecuteContextV2["requestToolPermission"]>(
           async () => decision,
         ),
       });
@@ -496,13 +501,13 @@ describe("Claude native stdio boundary", () => {
       const context = await createContext("credential-tree");
       const credential = "synthetic-selected-descriptor-value";
       const backend = buildAnthropicCliBackend();
-      const prepared = (await backend.prepareExecution?.({
+      const prepared = (await backend.prepareExecutionV2?.({
         workspaceDir: context.cwd,
         provider: "claude-cli",
         modelId: context.modelId,
         executionMode: "agent",
         authCredential: type === "token" ? { type, token: credential } : { type, key: credential },
-      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
+      } as Parameters<NonNullable<typeof backend.prepareExecutionV2>>[0])) as
         | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
         | undefined;
       if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {
@@ -617,7 +622,7 @@ describe("Claude native stdio boundary", () => {
 
   it("ignores replayed records until the lifecycle acknowledges the current input UUID", async () => {
     const context = await createContext("input-lifecycle", {
-      requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+      requestToolPermission: vi.fn<CliBackendExecuteContextV2["requestToolPermission"]>(
         async ({ toolInput }) => ({
           behavior: "allow",
           updatedInput: toolInput,
@@ -784,7 +789,7 @@ describe("Claude native stdio boundary", () => {
   it("cancels a pending native permission without blocking the protocol reader", async () => {
     let cancelled = false;
     const context = await createContext("cancel-permission", {
-      requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+      requestToolPermission: vi.fn<CliBackendExecuteContextV2["requestToolPermission"]>(
         async ({ toolInput, abortSignal }) => {
           if (toolInput.file_path === "cancel.txt") {
             await new Promise<void>((resolve) => {
@@ -811,7 +816,7 @@ describe("Claude native stdio boundary", () => {
   it("fences background permission decisions after the next turn starts", async () => {
     const approval = createDeferred<CliBackendToolPermissionResult>();
     const context = await createContext("background-bash-late-approval", {
-      requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+      requestToolPermission: vi.fn<CliBackendExecuteContextV2["requestToolPermission"]>(
         async ({ toolCallId }) =>
           toolCallId === "late-tool"
             ? approval.promise

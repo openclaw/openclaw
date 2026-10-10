@@ -1,6 +1,51 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "./types.js";
 
+const configuredModelAuthScope = Symbol("configuredModelAuthScope");
+
+type RuntimeAuthProfileSelection = {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  [configuredModelAuthScope]?: { profileId: string; provider: string };
+};
+
+/** Object spreads retain this runtime fact; JSON serialization does not persist it. */
+export function bindConfiguredModelAuthProfileScope(
+  selection: RuntimeAuthProfileSelection,
+  provider?: string,
+): void {
+  delete selection[configuredModelAuthScope];
+  const profileId = selection.authProfileId?.trim();
+  if (provider && profileId && selection.authProfileIdSource === "user") {
+    selection[configuredModelAuthScope] = { profileId, provider };
+  }
+}
+
+/** A new account intent invalidates configuration provenance even when its values match. */
+export function replaceRuntimeAuthProfileSelection(
+  selection: RuntimeAuthProfileSelection,
+  next: Pick<RuntimeAuthProfileSelection, "authProfileId" | "authProfileIdSource">,
+): void {
+  selection.authProfileId = next.authProfileId;
+  selection.authProfileIdSource = next.authProfileId ? next.authProfileIdSource : undefined;
+  bindConfiguredModelAuthProfileScope(selection);
+}
+
+export function readConfiguredModelAuthProfileProvider(
+  selection: RuntimeAuthProfileSelection | undefined,
+  currentSessionEntry?: AuthProfileOverrideProvenance,
+): string | undefined {
+  if (!selection || resolveCollapsedSessionAuthPinSource(currentSessionEntry) === "user") {
+    return undefined;
+  }
+  const scope = selection[configuredModelAuthScope];
+  return scope &&
+    scope.profileId === selection.authProfileId?.trim() &&
+    selection.authProfileIdSource === "user"
+    ? scope.provider
+    : undefined;
+}
+
 type ProviderLoginSessionEntry = Pick<
   SessionEntry,
   | "sessionId"

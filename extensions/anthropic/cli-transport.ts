@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -13,10 +13,10 @@ const KILL_GRACE_MS = 1_000;
 
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
 export function createClaudeCliTransport(params: {
-  context: CliBackendExecuteContext;
+  context: CliBackendExecuteContextV2;
   args: string[];
   initialize: Record<string, unknown>;
-  currentContext: () => CliBackendExecuteContext | undefined;
+  currentContext: () => CliBackendExecuteContextV2 | undefined;
   secretInput?: ClaudeCliSecretInput;
   onMessage: (message: Record<string, unknown>) => Promise<void>;
   onRequest: (request: Record<string, unknown>, signal: AbortSignal) => Promise<() => unknown>;

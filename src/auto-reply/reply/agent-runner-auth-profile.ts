@@ -3,11 +3,15 @@ import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
 } from "../../agents/provider-auth-aliases.js";
+import { bindConfiguredModelAuthProfileScope } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { FollowupRun } from "./queue.js";
 
 /** Keeps an auth profile only when the current provider shares the primary auth scope. */
 export function resolveRunAuthProfile(
-  run: FollowupRun["run"],
+  run: Pick<
+    FollowupRun["run"],
+    "provider" | "authProfileId" | "authProfileIdSource" | "config" | "workspaceDir"
+  >,
   provider: string,
   params?: { config?: ProviderAuthAliasLookupParams["config"] },
 ): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
@@ -52,6 +56,7 @@ export function resolveFallbackCandidateRun(
     model,
     authProfileId: probe.fallbackAuthProfileId,
   };
+  bindConfiguredModelAuthProfileScope(candidateRun);
   if (probe.fallbackAuthProfileIdSource) {
     candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
   } else {

@@ -11,7 +11,8 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import type {
-  CliBackendExecute,
+  CliBackendExecuteV2,
+  CliBackendPreparedExecutionV2,
   CliBackendExecutionMode,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
@@ -55,7 +56,7 @@ export type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
 export type CliExecutionTarget =
   | { kind: "node"; placement: NodeClaudePlacement }
-  | { kind: "plugin"; execute: CliBackendExecute }
+  | { kind: "plugin"; execute: CliBackendExecuteV2 }
   | { kind: "process" };
 
 type CliSessionRetryParams = {
@@ -192,9 +193,14 @@ export type RunCliAgentParams = {
   AgentRunLifecycle;
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
-export type CliSecretInput = SpawnSecretInput & {
+type CliSecretInput = SpawnSecretInput & {
   /** Process-local non-secret generation used only to invalidate a warm child. */
   fingerprint: string;
+};
+
+export type PreparedCliBackendExecution = CliBackendPreparedExecutionV2 & {
+  isolatedCompletionEnforced?: true;
+  secretInput?: CliSecretInput;
 };
 
 type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {

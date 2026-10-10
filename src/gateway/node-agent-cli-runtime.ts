@@ -12,6 +12,7 @@ import type { NodeInvokeResult } from "./node-registry.js";
 
 export async function invokeNodeClaudeCliRun(params: {
   assertCurrent?: () => void;
+  prepareDispatch?: () => Promise<void>;
   nodeId: string;
   argv: string[];
   stdin: string;
@@ -90,6 +91,7 @@ export async function invokeNodeClaudeCliRun(params: {
     idempotencyKey: randomUUID(),
     onProgress: params.onProgress,
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.prepareDispatch ? { prepareDispatch: params.prepareDispatch } : {}),
     isDispatchAuthorized: () => {
       params.assertCurrent?.();
       return true;

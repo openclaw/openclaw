@@ -276,6 +276,17 @@ and off remain unchanged. The field follows the session, agent, and model fast-m
 settings; backends may map it to their native arguments or ignore it. A spawned
 process keeps that decision for the invocation; it does not receive raw `"auto"`.
 
+For plugin-owned transports, use `prepareExecutionV2(ctx)` and return
+`CliBackendPreparedExecutionV2`. Its `execute` receives
+`CliBackendExecuteContextV2`, including the required host-owned
+`prepareExecutionAdmission()` operation. Await it after preparation or queue
+waits and immediately before starting a process or sending a prompt, then
+reassert `assertCurrent` before the effect. It checks current session account
+restrictions; retained callbacks stop working when their run closes. The host
+prefers V2 preparation when both hooks exist. Legacy `prepareExecution`,
+`CliBackendPreparedExecution`, and `CliBackendExecuteContext` remain
+source-compatible; environment-only bridges can keep the legacy hook.
+
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
 backend owns the installed CLI's protocol or SDK integration. The transport
 receives the exact prepared command, arguments, optional `argv0`, environment,

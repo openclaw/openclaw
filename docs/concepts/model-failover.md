@@ -178,6 +178,8 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 
 Profiles live in the per-agent `openclaw-agent.sqlite` auth profile store.
 
+An account suffix on a configured primary model selects that primary's account. It does not bind a fallback from another provider. CLI fallbacks use their own supported account selection; explicit session and person-linked account pins retain their existing validation.
+
 ## Rotation order
 
 When a provider has multiple profiles, OpenClaw chooses an order like this:

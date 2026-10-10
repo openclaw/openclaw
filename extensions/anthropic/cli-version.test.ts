@@ -211,7 +211,7 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
   const executions = [
     normal.run(),
     simple.run(),
-    fixture.backend.prepareExecution?.({
+    fixture.backend.prepareExecutionV2?.({
       workspaceDir: "/synthetic",
       provider: "claude-cli",
       modelId: model.id,

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -193,8 +194,11 @@ export async function executeNodeClaudeRun(params: {
         return hardTimeoutResult();
       }
       assertCurrent();
+      await prepareRuntimeAuthProfileExecution(params.context.params, assertCurrent);
+      assertCurrent();
       return await params.deps.invokeNodeClaudeCliRun({
         assertCurrent,
+        prepareDispatch: () => prepareRuntimeAuthProfileExecution(contextParams, assertCurrent),
         nodeId: params.nodePlacement.nodeId,
         argv: params.executionArgs,
         stdin: params.stdinPayload,

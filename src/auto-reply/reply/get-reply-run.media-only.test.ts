@@ -2,7 +2,7 @@
 import "./get-reply-run.runtime-mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
@@ -35,12 +35,12 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
-import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
+import { registerReplyAuthAdmissionCases } from "./get-reply-run.auth-admission.test-support.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -64,7 +64,6 @@ import { createModelSelectionStateFixture } from "./model-selection.test-support
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, createReplyOperation } from "./reply-run-registry.js";
-import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import {
@@ -1362,90 +1361,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.replyThreadingOverride).toEqual({ implicitCurrentMessage: "deny" });
   });
 
-  it("validates the configured heartbeat profile before fast dispatch", async () => {
-    const { resolveSessionAuthSelection } =
-      await import("../../agents/auth-profiles/session-override.js");
-    vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(true);
-    const sessionEntry: SessionEntry = {
-      sessionId: "heartbeat-profile-session",
-      updatedAt: 1,
-      authProfileOverride: "openai:subscription",
-      authProfileOverrideSource: "auto",
-    };
-    vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(
-      async ({ configuredProfileId, sessionEntry: selectedSession }) => {
-        if (!configuredProfileId) {
-          return undefined;
-        }
-        if (selectedSession) {
-          selectedSession.authProfileOverride = configuredProfileId;
-        }
-        return { profileId: configuredProfileId, source: "user", routeRequirement: "api-key" };
-      },
-    );
-    const params = {
-      ...baseParams({
-        provider: "openai",
-        model: "gpt-5.5",
-        opts: { isHeartbeat: true },
-        sessionEntry,
-        sessionStore: { "session-key": sessionEntry },
-      }),
-      configuredProfileId: "openai:metered",
-    };
-    await runPreparedReply(params);
-    expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        configuredProfileId: "openai:metered",
-      }),
-    );
-    expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
-      authProfileId: "openai:metered",
-      authProfileIdSource: "user",
-    });
-    expect(sessionEntry.authProfileOverride).toBe("openai:subscription");
-  });
-
-  it.each([false, true])(
-    "rejects invalid heartbeat profiles before dispatch or reply registration (fast: %s)",
-    async (fast) => {
-      const { resolveSessionAuthSelection } =
-        await import("../../agents/auth-profiles/session-override.js");
-      vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(fast);
-      const authEntered = createDeferred();
-      const releaseAuth = createDeferred();
-      vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(async () => {
-        authEntered.resolve();
-        await releaseAuth.promise;
-        throw new Error("Auth profile is not configured for openai.");
-      });
-      const activeBefore = getActiveReplyRunCount();
-      const params = {
-        ...baseParams({ provider: "openai", model: "gpt-5.5", opts: { isHeartbeat: true } }),
-        configuredProfileId: "anthropic:other",
-      };
-      const running = runPreparedReply(params);
-      const rejected = expect(running).rejects.toThrow(
-        "Auth profile is not configured for openai.",
-      );
-      try {
-        await awaitGateBeforeSettlement(
-          authEntered.promise,
-          running,
-          "auth validation was bypassed",
-        );
-        expect(getActiveReplyRunCount()).toBe(activeBefore);
-        expect(runReplyAgent).not.toHaveBeenCalled();
-      } finally {
-        releaseAuth.resolve();
-        await rejected;
-      }
-      expect(runReplyAgent).not.toHaveBeenCalled();
-      expect(getActiveReplyRunCount()).toBe(activeBefore);
-    },
-  );
+  registerReplyAuthAdmissionCases({ requireRunReplyAgentCall });
 
   it("routes a channel-configured interrupt through session-work admission", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");

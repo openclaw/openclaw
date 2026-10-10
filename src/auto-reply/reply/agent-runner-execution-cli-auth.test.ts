@@ -1,10 +1,13 @@
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as agentScope from "../../agents/agent-scope.js";
+import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import * as cliAuth from "../../agents/cli-execution-auth.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
+import { bindConfiguredModelAuthProfileScope } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
@@ -49,6 +52,52 @@ describe("executeAgentTurn: CLI credential selection", () => {
       backend: "claude-cli",
       profiles: [primaryProfile, managedProfile],
       expected: managedProfile,
+    },
+    {
+      name: "uses the fallback CLI account when the configured primary selects an account",
+      selected: primaryProfile,
+      source: "user",
+      configured: true,
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      expected: managedProfile,
+    },
+    {
+      name: "uses the fallback CLI account for an agent-configured primary",
+      selected: primaryProfile,
+      source: "user",
+      configured: true,
+      agentPrimary: true,
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      expected: managedProfile,
+    },
+    {
+      name: "keeps a deliberate account pin that matches the configured primary",
+      selected: primaryProfile,
+      source: "user",
+      configured: true,
+      sessionPin: true,
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      error: 'cannot use auth profile "openai:primary"',
+    },
+    {
+      name: "keeps the configured primary account within its own provider",
+      selected: canonicalProfile,
+      source: "user",
+      configured: true,
+      primary: "anthropic",
+      provider: "anthropic",
+      backend: "claude-cli",
+      profiles: [canonicalProfile, managedProfile],
+      expected: canonicalProfile,
     },
     {
       name: "rejects an incompatible explicit account before CLI execution",
@@ -128,6 +177,37 @@ describe("executeAgentTurn: CLI credential selection", () => {
       filterExternalAuthProfiles: false,
       syncExternalCli: false,
     });
+    if ("configured" in testCase) {
+      const primary = { primary: `${testCase.primary}/${model}@${testCase.selected}` };
+      followupRun.run.config.agents = {
+        ...followupRun.run.config.agents,
+        ...("agentPrimary" in testCase
+          ? { entries: { main: { model: primary } } }
+          : { defaults: { ...followupRun.run.config.agents?.defaults, model: primary } }),
+      };
+      const selection = await resolveSessionAuthSelection({
+        cfg: followupRun.run.config,
+        provider: testCase.primary,
+        modelId: model,
+        agentId: "main",
+        agentDir: followupRun.run.agentDir,
+        isNewSession: true,
+        ...("sessionPin" in testCase
+          ? {
+              sessionEntry: {
+                sessionId: followupRun.run.sessionId,
+                updatedAt: 1,
+                authProfileOverride: testCase.selected,
+                authProfileOverrideSource: "user" as const,
+              },
+            }
+          : {}),
+      });
+      expect(selection).toMatchObject({ profileId: testCase.selected, source: "user" });
+      followupRun.run.authProfileId = selection?.profileId;
+      followupRun.run.authProfileIdSource = selection?.source;
+      bindConfiguredModelAuthProfileScope(followupRun.run, selection?.configuredPrimaryProvider);
+    }
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
         {
@@ -164,13 +244,19 @@ describe("executeAgentTurn: CLI credential selection", () => {
     }));
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const cliAuthSpy = vi.spyOn(cliAuth, "resolveCliExecutionAuthProfileId");
     const result = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-    if ("error" in testCase) {
+    if ("error" in testCase && testCase.error !== undefined) {
       expect(await result).toMatchObject({ kind: "final", payload: { isError: true } });
+      expect(cliAuthSpy.mock.results.find(({ type }) => type === "throw")?.value).toMatchObject({
+        message: expect.stringContaining(testCase.error),
+      });
       expect(state.runCliAgentMock).not.toHaveBeenCalled();
       return;
     }
-    expect((await result).kind).toBe("success");
+    const settled = await result;
+    expect(cliAuthSpy.mock.results.filter(({ type }) => type === "throw")).toEqual([]);
+    expect(settled).toMatchObject({ kind: "success" });
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI credential handoff", {
       provider: testCase.backend,

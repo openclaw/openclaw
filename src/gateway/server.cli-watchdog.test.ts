@@ -11,7 +11,7 @@ import * as cliLiveSessions from "../agents/cli-runner/cli-live-session-registry
 import { executeDeps } from "../agents/cli-runner/execute-deps.js";
 import { cliBackendLog } from "../agents/cli-runner/log.js";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendPrepareExecutionContext,
 } from "../plugins/cli-backend.types.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -239,8 +239,9 @@ async function runWatchdogCase(
         resolveRuntimeCliBackends: () =>
           backends.map((backend) =>
             Object.assign({}, backend, {
-              prepareExecution: async (context: CliBackendPrepareExecutionContext) => {
-                const prepared = await backend.prepareExecution?.(context);
+              prepareExecutionV2: async (context: CliBackendPrepareExecutionContext) => {
+                const prepare = backend.prepareExecutionV2 ?? backend.prepareExecution;
+                const prepared = await prepare?.(context);
                 if (!prepared?.execute) {
                   throw new Error("Registered CLI backend must provide its execution transport.");
                 }
@@ -253,7 +254,7 @@ async function runWatchdogCase(
                     OPENCLAW_TEST_CLI_RECEIPTS: nativeRoot,
                     OPENCLAW_TEST_CLI_RECEIPT_PORT: String(receiptPort),
                   },
-                  async *execute(execution: CliBackendExecuteContext) {
+                  async *execute(execution: CliBackendExecuteContextV2) {
                     execution.abortSignal?.addEventListener(
                       "abort",
                       () => {

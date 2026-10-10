@@ -14,6 +14,8 @@ import { loadSessionEntryForAdmission } from "../config/sessions/session-accesso
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
+  bindRuntimeAuthProfileExecution,
+  prepareRuntimeAuthProfileExecution,
   captureNativeSessionEntryCurrentRead,
   captureSessionEntryCurrentRead,
 } from "../config/sessions/session-entry-current-runtime.js";
@@ -186,6 +188,7 @@ it("grants only its transaction preimage and publishes detached facts before its
     authorize(stage, facts) {
       stages.push(stage);
       expect(actor.sessions.readSharing(sessionKey)).toBeUndefined();
+      expect(actor.sessions.readAuthProfile(sessionKey)).toBeUndefined();
       actor.sessions.captureCurrent(sessionKey).assertCurrent();
       expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
         "Incognito authority callbacks cannot call their actor",
@@ -547,6 +550,7 @@ it("preserves the original 24-hour deadline and refuses claims after actor repla
   expect(() => created.claim.assertCurrent()).toThrow("Incognito session ended");
   expect(() => deadline.source.assertCurrent()).toThrow("Incognito session ended");
   expect(() => original.sessions.readSharing(sessionKey)).toThrow("Incognito session ended");
+  expect(() => original.sessions.readAuthProfile(sessionKey)).toThrow("Incognito session ended");
   expect((await successor.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
   expect(
     (await successor.sessions.read(authority, { sessionKey: siblingKey })).entry,
@@ -653,6 +657,54 @@ it("rechecks a cross-agent completion lineage using committed actor facts inside
     }
   });
 });
+
+it.each(["user", "user-link"] as const)(
+  "revalidates a same-revision actor %s account pin without caller-thread SQL",
+  async (source) => {
+    const sessionKey = key(`account-${source}`);
+    const initial = entry(`account-${source}`);
+    await actor.sessions.create(authority, { sessionKey, entry: initial });
+    await withIncognitoSessionActor(actor, async () => {
+      const sql = observeMainThreadSql();
+      try {
+        const scope = { agentId: "main", sessionKey, storePath: actor.path, env };
+        const bound = bindRuntimeAuthProfileExecution(
+          { sessionId: initial.sessionId, authProfileId: "google:first" },
+          { ...scope, sessionId: initial.sessionId },
+          initial,
+          "google:first",
+        );
+        await expect(
+          prepareRuntimeAuthProfileExecution(bound, authority.assertCurrent),
+        ).resolves.toBeUndefined();
+        await replaceSessionEntry(scope, {
+          ...initial,
+          authProfileOverride: "google:other",
+          authProfileOverrideSource: source,
+        });
+        await expect(
+          prepareRuntimeAuthProfileExecution(bound, authority.assertCurrent),
+        ).rejects.toThrow("Session account pin changed during preparation");
+        const current = captureNativeSessionEntryCurrentRead(scope).readAuthProfileCurrent();
+        expect(current).toEqual({
+          sessionId: initial.sessionId,
+          lifecycleRevision: initial.lifecycleRevision,
+          authProfileOverride: "google:other",
+          authProfileOverrideSource: source,
+          authProfileOverrideCompactionCount: undefined,
+        });
+        assert(current);
+        current.authProfileOverride = "mutated caller snapshot";
+        expect(
+          captureNativeSessionEntryCurrentRead(scope).readAuthProfileCurrent()?.authProfileOverride,
+        ).toBe("google:other");
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+    });
+  },
+);
 
 it("composes entry reads, currency, candidates and admission without caller-thread SQL", async () => {
   expect(

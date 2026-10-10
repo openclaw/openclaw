@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw-fixture/chat-auth-node-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "chat-auth-node-cli": "cli.mjs"
+  },
+  "openclaw": {
+    "extensions": [
+      "./plugin.cjs"
+    ]
+  }
+}

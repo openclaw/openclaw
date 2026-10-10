@@ -1,0 +1,22 @@
+{
+  "id": "chat-cli-account-fixture",
+  "categories": [
+    "models"
+  ],
+  "cliBackends": [
+    "google-gemini-cli",
+    "claude-cli"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "fixtureKey": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "fixtureKey"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -68,12 +68,16 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function contextForChild(source: string): Promise<CliBackendExecuteContext> {
+async function contextForChild(source: string): Promise<CliBackendExecuteContextV2> {
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-stderr-"));
   roots.push(root);
   const command = path.join(root, "claude.mjs");
   await writeFile(command, source);
-  return {
+  const context: CliBackendExecuteContextV2 = {
+    async prepareExecutionAdmission() {
+      this.assertCurrent?.();
+      this.abortSignal?.throwIfAborted();
+    },
     command: process.execPath,
     args: [command],
     cwd: root,
@@ -87,10 +91,11 @@ async function contextForChild(source: string): Promise<CliBackendExecuteContext
     requestToolPermission: async () => ({ behavior: "deny", message: "No tools in this probe." }),
     requestUserInput: async () => ({ status: "cancelled", message: "No input in this probe." }),
   };
+  return context;
 }
 
 async function collect(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   secretInput?: Parameters<typeof executeClaudeCli>[1],
   execute = executeClaudeCli,
 ) {
@@ -120,7 +125,7 @@ function observeChild(
   });
 }
 
-function attachLiveSession(context: CliBackendExecuteContext) {
+function attachLiveSession(context: CliBackendExecuteContextV2) {
   let current: CliBackendLiveSessionHandle | undefined;
   context.liveSession = {
     fingerprint: "synthetic-process-policy",
@@ -498,13 +503,13 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       const backend = buildAnthropicCliBackend();
       const prepare = async () => {
         // The descriptor is a provider-private field, outside the public SDK result type.
-        const prepared = (await backend.prepareExecution?.({
+        const prepared = (await backend.prepareExecutionV2?.({
           workspaceDir: context.cwd,
           provider: "claude-cli",
           modelId: context.modelId,
           executionMode: "agent",
           authCredential: { type: "token", token: credential },
-        } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
+        } as Parameters<NonNullable<typeof backend.prepareExecutionV2>>[0])) as
           | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
           | undefined;
         if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {

@@ -111,6 +111,53 @@ describe("restricted CLI tool preparation", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
+  it.each(["legacy", "v2"] as const)(
+    "privately forwards isolated-completion system prompts via %s preparation",
+    async (version) => {
+      const { dir } = fixture.session;
+      const prepareExecution = vi.fn(async () => ({
+        isolatedCompletionEnforced: true as const,
+        toolAvailabilityEnforced: true as const,
+      }));
+      const backend: CliBackendPlugin & { pluginId: string } = {
+        id: "google-gemini-cli",
+        pluginId: "google",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        ...(version === "v2" ? { prepareExecutionV2: prepareExecution } : { prepareExecution }),
+        config: {
+          command: "gemini",
+          args: ["--prompt", "{prompt}"],
+          output: "jsonl",
+          input: "arg",
+          sessionMode: "existing",
+        },
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [backend],
+      });
+
+      await fixture.prepare({
+        provider: "google-gemini-cli",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        extraSystemPrompt: "Return only valid JSON.",
+        cliToolAvailability: { native: [], openClaw: [] },
+      });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isolatedCompletionCwd: dir,
+          isolatedCompletionModelId: "test-model",
+          isolatedCompletionPrompt: "latest ask",
+          isolatedCompletionSystemPrompt: "Return only valid JSON.",
+        }),
+      );
+    },
+  );
+
   it.each([
     "conversation",
     "sender config",

@@ -27,6 +27,7 @@ import {
   readSessionEntryByIdInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { projectIncognitoSessionAuthProfile } from "./session-accessor.sqlite-incognito-sharing.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -113,6 +114,7 @@ export function createIncognitoSessionWorker(
           revision: sessionRevisions.get(sessionKey) ?? 0,
           completionSources: history.completionFacts(sessionKey),
           capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
+          authProfile: entry ? projectIncognitoSessionAuthProfile(entry) : undefined,
           ...projectIncognitoSessionReadRevisions(entry),
           ...projectIncognitoSessionRuntimeFacts(entry),
           cliHistory:

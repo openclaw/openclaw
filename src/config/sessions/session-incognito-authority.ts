@@ -92,6 +92,14 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return structuredClone(current(sessionKey)?.sharing);
         },
+        readAuthProfile(this: void, sessionKey: string) {
+          assertReadable();
+          const facts = current(sessionKey);
+          if (facts?.sharing?.entry && !facts.authProfile) {
+            throw new Error("Incognito session account projection is unavailable");
+          }
+          return structuredClone(facts?.authProfile);
+        },
         readChatMetadataRevision(this: void, sessionKey: string) {
           assertReadable();
           return current(sessionKey)?.chatMetadataRevision;

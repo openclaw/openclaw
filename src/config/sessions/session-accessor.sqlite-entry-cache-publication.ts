@@ -373,7 +373,7 @@ export function publishSessionSharingEntryChange(
       () => invalidateSessionEntryPublication(database, update.sessionKey),
     );
   }
-  if (incognito && !sharingUnchanged) {
-    publishIncognitoSessionEntryChange(database, update);
+  if (incognito) {
+    publishIncognitoSessionEntryChange(database, update, sharingUnchanged);
   }
 }

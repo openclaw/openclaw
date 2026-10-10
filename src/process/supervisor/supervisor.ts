@@ -231,6 +231,14 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       return settleConstructionResult(startingTerminationReason);
     }
 
+    if (input.prepareSpawn) {
+      await input.prepareSpawn();
+      if (owner.terminationReason) {
+        return settleConstructionResult(owner.terminationReason);
+      }
+      input.assertCurrent?.();
+    }
+
     // Finish fallible argument preparation before affecting a surviving scope or arming cancellation.
     if (input.mode !== "anchored-shell" && input.argv.length === 0) {
       throw new Error("spawn argv cannot be empty");
@@ -380,6 +388,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       overallDeadline.reset();
       outputDeadline.reset();
       const construction = {
+        prepareSpawn: input.prepareSpawn,
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,

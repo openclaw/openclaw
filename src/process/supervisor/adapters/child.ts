@@ -136,6 +136,7 @@ export async function createChildAdapter(
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      prepareSpawn: params.prepareSpawn,
       initiateSpawn: params.initiateSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
@@ -178,6 +179,7 @@ export async function createChildAdapter(
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      prepareSpawn: params.prepareSpawn,
       initiateSpawn: params.initiateSpawn,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
@@ -229,6 +231,7 @@ export async function createChildAdapter(
   let tryWindowsJob = true;
   const spawnChild = () =>
     spawnWithFallback({
+      prepareSpawn: params.prepareSpawn,
       ...(process.platform === "win32"
         ? {
             spawnImpl: (command, args, spawnOptions, initiateSpawn) => {
@@ -242,6 +245,9 @@ export async function createChildAdapter(
                 { ...spawnOptions, signal: params.abortSignal },
                 async (launch) => {
                   await launchGate.promise;
+                  if (params.prepareSpawn) {
+                    await params.prepareSpawn();
+                  }
                   assertCurrent();
                   params.beforeSpawn?.();
                   if (initiateSpawn) {

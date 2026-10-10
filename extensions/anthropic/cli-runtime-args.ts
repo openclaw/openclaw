@@ -1,4 +1,4 @@
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 
 const PROTOCOL_FLAGS = new Set([
   "-p",
@@ -26,7 +26,7 @@ const PROTOCOL_VALUE_FLAGS = new Set([
 const TOOL_FLAGS = new Set(["--tools", "--allowedTools", "--allowed-tools"]);
 
 /** Keep prepared CLI arguments, replacing only transport and admission-owned policy. */
-export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext) {
+export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContextV2) {
   const args: string[] = [];
   const allowedTools: string[] = [];
   let tools: string[] | undefined;

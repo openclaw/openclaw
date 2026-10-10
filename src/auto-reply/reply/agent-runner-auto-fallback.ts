@@ -9,6 +9,7 @@ import {
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  bindConfiguredModelAuthProfileScope,
   resolveCollapsedSessionAuthPinSource,
   resolveSessionAuthProfileOverrideSource,
 } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -80,6 +81,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     delete fallbackRun.modelOverrideSource;
   }
   if (entryRef && authProfileId) {
+    bindConfiguredModelAuthProfileScope(fallbackRun);
     fallbackRun.authProfileId = authProfileId;
     const authProfileIdSource = resolveCollapsedSessionAuthPinSource(params.entry);
     if (authProfileIdSource) {
@@ -88,6 +90,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       delete fallbackRun.authProfileIdSource;
     }
   } else if (entryRef) {
+    bindConfiguredModelAuthProfileScope(fallbackRun);
     delete fallbackRun.authProfileId;
     delete fallbackRun.authProfileIdSource;
   }

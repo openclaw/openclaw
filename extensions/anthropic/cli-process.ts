@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -11,7 +11,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type ClaudeCliSpawnOptions = Pick<
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   "command" | "argv0" | "args" | "cwd" | "env"
 > & {
   signal?: AbortSignal;
@@ -60,7 +60,7 @@ function spawnClaudeCliProcess(
 
 /** Owns process-wide diagnostics and the credentials needed to redact warm turns. */
 export function createClaudeCliProcessOwner(
-  currentContext: () => CliBackendExecuteContext | undefined,
+  currentContext: () => CliBackendExecuteContextV2 | undefined,
   secretInput?: ClaudeCliSecretInput,
 ) {
   const assertCurrent = () => {
