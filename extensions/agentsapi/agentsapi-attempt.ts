@@ -371,12 +371,12 @@ export async function runAgentsApiAttempt(
       const workspaceDirectory = environment.workspace_directory;
       const selfHostedBinding = activeBinding;
       if (!selfHostedBinding) {
-        throw new Error("Agents API self-hosted session is missing its canonical binding");
+        throw new Error("Agents API self-hosted session is missing its saved binding");
       }
       connectEnvironment = async (environmentId) => {
         const currentBinding = activeBinding;
         if (!currentBinding) {
-          throw new Error("Agents API self-hosted session is missing its canonical binding");
+          throw new Error("Agents API self-hosted session is missing its saved binding");
         }
         await ensureAgentsApiEnvironment({
           controller: executorController,

@@ -4,7 +4,7 @@ Official NVIDIA OpenShell sandbox backend for OpenClaw.
 
 This plugin lets OpenClaw use OpenShell-managed local or remote sandboxes with
 SSH command execution. Choose `mirror` mode for a synchronized local workspace
-or `remote` mode for a remote-canonical workspace.
+or `remote` mode for a workspace managed on the remote host.
 
 Mirror operations sharing a workspace run sequentially so concurrent agent
 turns cannot overwrite one another. Outbound attachments resolve against the

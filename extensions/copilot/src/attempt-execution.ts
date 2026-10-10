@@ -383,7 +383,7 @@ export async function runCopilotExecution(context: {
     if (!sdkSessionId) {
       throw createPromptError(
         "transcript_persistence_failed",
-        "[copilot-attempt] canonical transcript persistence requires the Copilot SDK session id",
+        "[copilot-attempt] saved transcript persistence requires the Copilot SDK session id",
       );
     }
     if (deps.onSessionEstablished && !settledToolFinalization) {

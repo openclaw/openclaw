@@ -210,8 +210,8 @@ Policy schema:
   bound. Values must be finite and at least `1`.
 
 Only the `filesystem` and `process` sections are supported. Unknown sections or
-unknown fields are rejected so policy files fail closed when they drift from the
-implemented MXC ProcessContainer surface.
+unknown fields are rejected so policy files cannot enable unsupported
+MXC ProcessContainer options.
 
 When multiple configured policy files exist, OpenClaw layers them
 deterministically in `mxcPolicyPaths` array order:

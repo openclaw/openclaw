@@ -98,7 +98,7 @@ export async function materializePendingSupervisionBranch(
           throw new CodexAppServerUnsafeSubscriptionError(
             kind === "probe"
               ? "Codex model test fork may have materialized without a response"
-              : "Canonical Codex branch may have started without a response",
+              : "Supervised Codex branch may have started without a response",
             { cause: error },
           );
         }
@@ -259,7 +259,7 @@ export async function materializePendingSupervisionBranch(
       threadId: readSupervisionResponseThreadId(rawStartResponse),
       sourceThreadId: pending.sourceThreadId,
       otherThreadId: probeThreadId,
-      role: "canonical branch",
+      role: "supervised branch",
     });
     await trackPendingSupervisionArtifacts([finalThreadId]);
     params.throwIfAborted();
@@ -342,7 +342,7 @@ export async function materializePendingSupervisionBranch(
       } catch (readError) {
         provisionalCleanupSafe = false;
         throw new CodexAppServerUnsafeSubscriptionError(
-          `Canonical Codex branch binding could not be verified: ${finalThreadId}`,
+          `Supervised Codex branch binding could not be verified: ${finalThreadId}`,
           { cause: new AggregateError([error, readError]) },
         );
       }
@@ -361,7 +361,7 @@ export async function materializePendingSupervisionBranch(
         if (!matchesPendingSupervisionState(current, pending)) {
           provisionalCleanupSafe = false;
           throw new CodexAppServerUnsafeSubscriptionError(
-            `Canonical Codex branch binding changed while commit was uncertain: ${finalThreadId}`,
+            `Supervised Codex branch binding changed while commit was uncertain: ${finalThreadId}`,
             { cause: error },
           );
         }
