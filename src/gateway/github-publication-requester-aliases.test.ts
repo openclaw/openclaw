@@ -181,9 +181,13 @@ describe("shared GitHub publication requester alias bindings", () => {
         if (change === "captured alias") {
           await linkCanonicalUserProfileEmail(email, other.id);
           expect(original.requester.signal.aborted).toBe(true);
-          expect(original.requester.assertCurrent).toThrow(original.requester.signal.reason);
+          expect(original.requester.assertCurrent).toThrow(
+            GitHubPublicationRequesterUnavailableError,
+          );
           await linkCanonicalUserProfileEmail(email, f.guestProfile);
-          expect(original.requester.assertCurrent).toThrow(original.requester.signal.reason);
+          expect(original.requester.assertCurrent).toThrow(
+            GitHubPublicationRequesterUnavailableError,
+          );
         } else {
           setDisplayName(f.guestProfile, "Updated publication guest");
           const later = "publication-later-alias@example.test";

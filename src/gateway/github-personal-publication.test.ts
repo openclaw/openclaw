@@ -568,7 +568,8 @@ describe("personal publication authority and recovery", () => {
     "fences %s changes immediately before a worker-backed push",
     async (race) => {
       await persistPublicationTestSession();
-      action = await preparePersonalPublicationFixtureV2({ client, context });
+      const prepared = await preparePersonalPublicationFixtureV2({ client, context });
+      action = prepared;
       const fallback = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
         if (argv.includes("ls-remote")) {
@@ -601,15 +602,22 @@ describe("personal publication authority and recovery", () => {
         }
         return await fallback(argv, options);
       });
-      const pending = coordinator.requestPersonalForSession(request(), action);
+      const result = await coordinator.requestPersonalForSessionV2(request(), prepared);
+      expect(result).toMatchObject({
+        status: "failed",
+        publisher: { source: "personal", ...account },
+      });
       if (race === "session") {
-        await expect(pending).resolves.toMatchObject({ status: "failed", code: "session_changed" });
-      } else {
-        await expect(pending).rejects.toThrow();
+        expect(result).toMatchObject({ code: "session_changed" });
+      } else if (race === "disconnect" || race === "reconnect") {
+        expect(result).toMatchObject({ code: "identity_changed" });
       }
+      expect(result).not.toHaveProperty("effect");
       expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
-      expect(openOpenClawStateDatabase().db.prepare(`SELECT status FROM ${table}`).get()).toEqual({
-        status: race === "session" ? "failed" : "needs_confirmation",
+      expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toMatchObject({
+        status: "failed",
+        last_effect: null,
+        effect_state: null,
       });
     },
   );
@@ -626,31 +634,37 @@ describe("personal publication authority and recovery", () => {
       }
       return result;
     });
-    await expect(coordinator.requestPersonalForSessionV2(request(), prepared)).rejects.toThrow(
-      "identity changed",
-    );
-    const row = openOpenClawStateDatabase().db.prepare(`SELECT request_id FROM ${table}`).get() as {
-      request_id: string;
-    };
-    expect(status(row.request_id).result).toMatchObject({
+    const result = await coordinator.requestPersonalForSessionV2(request(), prepared);
+    expect(result).toMatchObject({
       status: "failed",
       code: "identity_changed",
       publisher: { source: "personal", ...account },
       effect: { kind: "push", status: "observed", headCommit: NEW_HEAD },
     });
+    expect(status(result.requestId).result).toEqual(result);
+    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toMatchObject({
+      status: "failed",
+      error_code: "identity_changed",
+      last_effect: "push",
+      effect_state: "observed",
+      head_commit: NEW_HEAD,
+    });
+    const commandsBeforeConfirmation = [...commands];
     await expect(
       coordinator.confirmPersonalV2(
         {
           sessionKey: SESSION_KEY,
-          requestId: row.request_id,
+          requestId: result.requestId,
           generation,
           account,
-          requestDigest: readPersonalGitHubPublication(owner, { requestId: row.request_id })!
+          requestDigest: readPersonalGitHubPublication(owner, { requestId: result.requestId })!
             .request_digest,
         },
         prepared,
       ),
-    ).rejects.toThrow("identity changed");
+    ).resolves.toEqual(result);
+    expect(commands).toEqual(commandsBeforeConfirmation);
+    expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
     expect(commands.some((argv) => argv.includes("POST"))).toBe(false);
   });
 

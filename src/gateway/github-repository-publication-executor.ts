@@ -17,6 +17,7 @@ import {
   GitHubPublicationWorkspaceChangedError,
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   githubPublicationApiArgs,
   hasGitHubPublicationMessageFooter,
@@ -525,7 +526,8 @@ export async function executeRepositoryGitHubPublication(params: {
   } catch (error) {
     if (
       error instanceof GitHubPublicationRequesterUnavailableError ||
-      error instanceof GatewayOperatorAccessUnavailableError
+      error instanceof GatewayOperatorAccessUnavailableError ||
+      error instanceof GitHubPublicationRecoveryPendingError
     ) {
       throw error;
     }

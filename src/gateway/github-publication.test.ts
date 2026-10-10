@@ -1,10 +1,7 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import {
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -32,6 +29,7 @@ import {
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistClaimPublicationWorkspace,
   persistPublicationTestSession,
   publicationTranscriptMessages,
   root,
@@ -893,10 +891,7 @@ describe("Gateway GitHub publication", () => {
         ownerEpoch: 2,
       },
     });
-    await upsertSessionEntryCore(
-      { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey },
-      { sessionId: REQUEST.sessionId, updatedAt: 1 },
-    );
+    await persistClaimPublicationWorkspace();
     const loadSessionRuntime = async () => {
       const runtime = await import("./session-utils.js");
       return {
