@@ -152,6 +152,7 @@ export function deferAbortedPartialPersistence(
         if (warning) {
           try {
             broadcastChatError({
+              terminalEntry: undefined,
               context,
               runId: snapshot.runId,
               sessionKey: snapshot.value.sessionKey,

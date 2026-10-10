@@ -58,9 +58,7 @@ function normalizeContent(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object",
-  );
+  return content.filter((entry): entry is Record<string, unknown> => readRecord(entry) !== null);
 }
 
 function coerceArgs(value: unknown): unknown {
@@ -82,10 +80,7 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (Array.isArray(item.content)) {
     const parts = item.content.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return [];
-      }
-      const text = (entry as { text?: unknown }).text;
+      const text = readRecord(entry)?.text;
       return typeof text === "string" ? [text] : [];
     });
     if (parts.length > 0) {
@@ -143,22 +138,18 @@ export function resolveToolCardOutcome(
     return isToolCardError(card) ? "failed" : "unknown";
   }
   if (card.activity) {
-    switch (card.activity.status) {
-      case "failed":
-      case "blocked":
-        return card.activity.status;
-      case "completed":
-        return "succeeded";
-      case "running":
-        return runActive === true && card.live === true ? "running" : "unknown";
-      default:
-        return card.activity.phase !== "end" &&
-          runActive === true &&
-          card.live === true &&
-          card.completed !== true
-          ? "running"
-          : "unknown";
+    const { status, phase } = card.activity;
+    if (status === "failed" || status === "blocked") {
+      return status;
     }
+    if (status === "completed") {
+      return "succeeded";
+    }
+    return runActive === true &&
+      card.live === true &&
+      (status === "running" || (phase !== "end" && card.completed !== true))
+      ? "running"
+      : "unknown";
   }
   if (isToolCardError(card)) {
     return "failed";
@@ -304,9 +295,8 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
   if (!isRecord(args)) {
     return undefined;
   }
-  const record = args;
   for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
-    const value = record[key];
+    const value = args[key];
     if (typeof value !== "string") {
       continue;
     }

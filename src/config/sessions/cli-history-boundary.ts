@@ -10,6 +10,11 @@ export type CliHistoryWriter = {
   assertReadable: () => void;
 };
 
+export type CliHistoryWriterFacts = Pick<
+  CliHistoryWriter,
+  "runId" | "authFingerprint" | "lifecycleRevision"
+>;
+
 const cliHistoryWriter = new AsyncLocalStorage<CliHistoryWriter>();
 
 /** The transcript tip moved between CLI history planning and the writer's commit. */

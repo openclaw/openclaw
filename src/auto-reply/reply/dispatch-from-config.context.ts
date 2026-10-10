@@ -193,32 +193,28 @@ export function resolveDispatchResetAdmission(params: {
   }
   const allowRestartTombstoneParentFork =
     mayReplaceRestartTombstoneFromParent && hasParentForkSource;
+  let resetTriggered = false;
   if (
-    params.hasPluginOwnedBinding ||
-    entry?.pluginOwnerId !== undefined ||
-    ctx.InboundAccessAuthorized !== true ||
-    ctx.InboundEventKind === "room_event" ||
-    (nativeCommandTarget !== undefined && nativeCommandTarget !== params.sessionKey) ||
-    actorType !== "human"
+    !params.hasPluginOwnedBinding &&
+    entry?.pluginOwnerId === undefined &&
+    ctx.InboundAccessAuthorized === true &&
+    ctx.InboundEventKind !== "room_event" &&
+    (nativeCommandTarget === undefined || nativeCommandTarget === params.sessionKey) &&
+    actorType === "human"
   ) {
-    return {
-      allowRestartTombstoneParentFork,
-      allowRestartTombstoneReset: false,
-      resetTriggered: false,
-    };
+    const normalizedChatType = normalizeChatType(ctx.ChatType);
+    const isGroup =
+      (normalizedChatType != null && normalizedChatType !== "direct") ||
+      Boolean(resolveGroupSessionKey(ctx));
+    const { resetCommand } = resolveAuthorizedSessionResetCommand({
+      agentId: params.agentId,
+      cfg: params.cfg,
+      commandAuthorized: ctx.CommandAuthorized,
+      ctx,
+      isGroup,
+    });
+    resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
   }
-  const normalizedChatType = normalizeChatType(ctx.ChatType);
-  const isGroup =
-    (normalizedChatType != null && normalizedChatType !== "direct") ||
-    Boolean(resolveGroupSessionKey(ctx));
-  const { resetCommand } = resolveAuthorizedSessionResetCommand({
-    agentId: params.agentId,
-    cfg: params.cfg,
-    commandAuthorized: ctx.CommandAuthorized,
-    ctx,
-    isGroup,
-  });
-  const resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
   return {
     resetTriggered,
     allowRestartTombstoneParentFork,

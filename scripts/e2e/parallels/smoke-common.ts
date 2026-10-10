@@ -6,7 +6,7 @@ import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
 import { parseTcpPort } from "./env-limits.ts";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
-import { run, say, die, shellQuote } from "./host-command.ts";
+import { run, say, die, shellQuote, warn } from "./host-command.ts";
 import {
   resolveHostIp,
   resolveHostPort,
@@ -20,7 +20,15 @@ import {
   packOpenClaw,
 } from "./package-artifact.ts";
 import { ensureValue, parseMode, parseProvider } from "./provider-auth.ts";
-import type { HostServer, Mode, PackageArtifact, Provider, SnapshotInfo } from "./types.ts";
+import type {
+  CommandResult,
+  HostServer,
+  Mode,
+  PackageArtifact,
+  Provider,
+  ProviderAuth,
+  SnapshotInfo,
+} from "./types.ts";
 
 interface SmokeHostOptions {
   hostIp?: string;
@@ -143,17 +151,7 @@ export function parseSmokeCliArgs<TOptions extends SmokeCliOptions>(
   return options;
 }
 
-interface SmokeLaneStatuses {
-  freshAgent: string;
-  freshGateway: string;
-  freshMain: string;
-  freshVersion: string;
-  latestInstalledVersion: string;
-  upgrade: string;
-  upgradeAgent: string;
-  upgradeGateway: string;
-  upgradeVersion: string;
-}
+type SmokeLaneStatuses = typeof smokeDefaultStatus;
 
 export abstract class SmokeRunController<TOptions extends SmokeRunOptions & SmokeHostOptions> {
   protected hostIp = "";
@@ -232,6 +230,54 @@ export abstract class SmokeRunController<TOptions extends SmokeRunOptions & Smok
 
 export function npmRegistryEnv(registry?: string): Record<string, string> {
   return registry ? { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry } : {};
+}
+
+export function posixRefOnboardArgs(
+  auth: ProviderAuth,
+  daemonFlag?: "--install-daemon" | "--skip-health",
+): string[] {
+  return [
+    "/usr/bin/env",
+    `${auth.apiKeyEnv}=${auth.apiKeyValue}`,
+    "openclaw",
+    "onboard",
+    "--non-interactive",
+    "--mode",
+    "local",
+    "--auth-choice",
+    auth.authChoice,
+    ...(auth.tokenProvider ? ["--token-provider", auth.tokenProvider] : []),
+    "--secret-input-mode",
+    "ref",
+    "--gateway-port",
+    "18789",
+    "--gateway-bind",
+    "loopback",
+    ...(daemonFlag ? [daemonFlag] : []),
+    "--skip-skills",
+    ...(daemonFlag ? [] : ["--skip-health"]),
+    "--accept-risk",
+    "--json",
+  ];
+}
+
+export function verifyPosixGateway(guest: {
+  run(args: string[], options: { check: false }): CommandResult;
+}): void {
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    const result = guest.run(
+      ["openclaw", "gateway", "status", "--deep", "--require-rpc", "--timeout", "15000"],
+      { check: false },
+    );
+    if (result.status === 0) {
+      return;
+    }
+    if (attempt < 8) {
+      warn(`gateway-status retry ${attempt}`);
+      run("sleep", ["5"]);
+    }
+  }
+  throw new Error("gateway status did not become RPC-ready");
 }
 
 export function posixAgentTurnScript(input: {

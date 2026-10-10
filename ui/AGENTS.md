@@ -2,6 +2,14 @@
 
 This directory owns Control UI-specific guidance that should not live in the repo root.
 
+## Solid migration
+
+For Lit 3/Web Awesome ports and new Solid 2 components or projections, follow the
+[Control UI Solid playbook](../.agents/skills/control-ui-solid/SKILL.md) and the
+assigned migration work order. It owns conversion, lifecycle, interop, and proof
+guidance. The state-ownership rules below still apply; the browser-floor change
+and removal of Lit-specific guidance belong to the cutover.
+
 ## State Ownership And Async Results
 
 - The Gateway owns shared state that other clients or channels can change.

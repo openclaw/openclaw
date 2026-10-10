@@ -8,6 +8,7 @@ import {
 } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   ServiceDefinitionInspectionError,
   ServiceStartRefusalError,
@@ -24,6 +25,7 @@ import type {
   GatewayServiceReadOptions,
   SystemdServiceReadTarget,
 } from "./service-types.js";
+import { systemdUnitCallArgs } from "./systemd-bus-query.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
 import {
   resolveSystemdEnvironmentFiles,
@@ -136,15 +138,7 @@ async function readSystemdManagerCommand(
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
       const fileState = await query(
-        [
-          "call",
-          destination,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnitFileState",
-          "s",
-          unitName,
-        ],
+        systemdUnitCallArgs(destination, unitName, "GetUnitFileState"),
         ["s"],
       );
       const value = fileState?.[0];
@@ -162,15 +156,11 @@ async function readSystemdManagerCommand(
       return null;
     };
     const loaded = await query(
-      [
-        "call",
+      systemdUnitCallArgs(
         destination,
-        "/org/freedesktop/systemd1",
-        `${manager}.Manager`,
-        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
-        "s",
         unitName,
-      ],
+        opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
+      ),
       ["o"],
     );
     if (!loaded) {
@@ -523,46 +513,48 @@ export async function readSystemdServiceCommandLocation(
       >;
     }
 > {
-  const deadline = performance.now() + 5000;
-  const target =
-    systemdReadTarget ??
-    (await (
-      await import("./systemd-scope.js")
-    ).findInstalledSystemdGatewayScope(env, { requireLoaded: true, timeoutMs: 5000 })) ??
-    undefined;
-  const read = (systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"]) => {
-    const timeoutMs = deadline - performance.now();
-    if (timeoutMs <= 0) {
-      throw new Error("Service location inspection deadline expired.");
+  return await withServiceInspectionBudget(async (inspectionBudget) => {
+    const deadline = inspectionBudget.now() + 5000;
+    const target =
+      systemdReadTarget ??
+      (await (
+        await import("./systemd-scope.js")
+      ).findInstalledSystemdGatewayScope(env, { requireLoaded: true, timeoutMs: 5000 })) ??
+      undefined;
+    const read = (systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"]) => {
+      const timeoutMs = deadline - inspectionBudget.now();
+      if (timeoutMs <= 0) {
+        throw new Error("Service location inspection deadline expired.");
+      }
+      return readSystemdServiceCommand(
+        env,
+        {
+          requireEffective: true,
+          requireLoaded: true,
+          systemdReadTarget: target,
+          systemdReadBinding,
+          timeoutMs,
+        },
+        true,
+      );
+    };
+    let command: Awaited<ReturnType<typeof read>>;
+    if (target?.scope === "system") {
+      command = await read();
+    } else {
+      const [{ withSystemdServiceReadBinding }, { admitSystemdServiceReadBinding }] =
+        await Promise.all([import("./service-operation-lock.js"), import("./systemd-peer.js")]);
+      command = await withSystemdServiceReadBinding(
+        env,
+        () => admitSystemdServiceReadBinding(env, deadline, target?.unitName),
+        read,
+        deadline,
+      );
     }
-    return readSystemdServiceCommand(
-      env,
-      {
-        requireEffective: true,
-        requireLoaded: true,
-        systemdReadTarget: target,
-        systemdReadBinding,
-        timeoutMs,
-      },
-      true,
-    );
-  };
-  let command: Awaited<ReturnType<typeof read>>;
-  if (target?.scope === "system") {
-    command = await read();
-  } else {
-    const [{ withSystemdServiceReadBinding }, { admitSystemdServiceReadBinding }] =
-      await Promise.all([import("./service-operation-lock.js"), import("./systemd-peer.js")]);
-    command = await withSystemdServiceReadBinding(
-      env,
-      () => admitSystemdServiceReadBinding(env, deadline, target?.unitName),
-      read,
-      deadline,
-    );
-  }
-  return command === "not-loaded" || command === null
-    ? { kind: "not-loaded" }
-    : { kind: "command", command };
+    return command === "not-loaded" || command === null
+      ? { kind: "not-loaded" as const }
+      : { kind: "command" as const, command };
+  });
 }
 
 async function readSystemdServiceCommand(

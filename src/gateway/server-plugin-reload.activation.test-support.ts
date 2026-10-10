@@ -320,7 +320,7 @@ export async function verifyIndependentPostCommitActivation(
     expect(starts).toContain("healthy-channel:2");
     expect(resumed).toHaveBeenCalledWith(1);
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expect(fixture.siblingStop).toHaveBeenCalledTimes(boundary === "memory" ? 1 : 0);
     const routes = fixture.registryOwner.registry.httpRoutes;
     expect(routes.some((route) => route.handoff)).toBe(false);
     expect(routes.some((route) => route.path === "/removed-channel")).toBe(false);

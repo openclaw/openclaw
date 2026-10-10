@@ -21,7 +21,7 @@ import {
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
 import type {
-  SessionTranscriptWorkerInput,
+  SessionTranscriptWorkerRequest,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
@@ -42,7 +42,7 @@ serveOwnedWorkerTasks(
     releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
-    const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    const request = input as SessionTranscriptWorkerRequest | UsageCostWorkerInput;
     if (request.kind === "cli-process-history") {
       if (!channel) {
         throw new Error("Process-held history requires its host reader channel");
@@ -295,6 +295,11 @@ serveOwnedWorkerTasks(
         }
         return read.value;
       }
+      if (request.kind === "session-retirement-read") {
+        const { readSessionRetirementInWorker } =
+          await import("./session-retirement-read.worker.js");
+        return { kind: request.kind, result: readSessionRetirementInWorker(request) };
+      }
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
           await import("./session-entry-read.worker.js");
@@ -369,7 +374,7 @@ serveOwnedWorkerTasks(
         return readSessionEntryWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
-        const { readSessionEntryList } = await import("./session-entry-read.worker.js");
+        const { readSessionEntryList } = await import("./session-entry-list.worker.js");
         return {
           kind: "session-entry-list" as const,
           ...readSessionEntryList(request),
@@ -620,6 +625,7 @@ serveOwnedWorkerTasks(
                 : `history.${request.request.kind}`
               : request.kind,
             readRequest,
+            request.validation,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

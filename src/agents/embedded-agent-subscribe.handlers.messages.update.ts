@@ -19,9 +19,10 @@ import {
 import {
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
+  emitPersistentReasoning,
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
-  isAnthropicAssistantMessage,
+  isAssistantTextPhasePending,
   isOpenAiCompletionsAssistantMessage,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
@@ -145,6 +146,10 @@ export function handleMessageUpdate(
         openReasoningStream(ctx);
       }
       emitReasoningEnd(ctx);
+      if (ctx.state.includeReasoning && ctx.state.blockReplyBreak === "text_end") {
+        // Waiting for message_end lets text_end answer blocks overtake completed reasoning.
+        emitPersistentReasoning(ctx, extractAssistantThinking(msg) || thinkingContent);
+      }
     }
     return undefined;
   }
@@ -189,10 +194,9 @@ export function handleMessageUpdate(
     isResponsesApiAssistantMessage(partialAssistant);
   // These transports resolve commentary only at the tool boundary. Withhold
   // early unphased deltas from durable block replies until that decision exists.
-  const isPhasePendingAnthropicText =
-    evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
+  const isPhasePendingText =
+    !deliveryPhase && isAssistantTextPhasePending(partialAssistant, evtType);
   const isCompletionsAssistant = isOpenAiCompletionsAssistantMessage(partialAssistant);
-  const isPhasePendingCompletionsText = !deliveryPhase && isCompletionsAssistant;
   const isReasoningCompletionsText =
     isCompletionsAssistant && partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
   const hasResponsesContentIndex =
@@ -513,7 +517,7 @@ export function handleMessageUpdate(
       (hasVisibleReply || replace) &&
       (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
-    if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
+    if (!isPhasePendingText) {
       const plainAppend =
         evtType === "text_delta" &&
         unchangedBlockAppend &&

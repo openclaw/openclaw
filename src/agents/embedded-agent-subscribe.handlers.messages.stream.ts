@@ -48,13 +48,21 @@ export function isResponsesApiAssistantMessage(message: AgentMessage | undefined
   return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
-export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  return readAssistantMessageApi(message) === "anthropic-messages";
-}
-
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
   const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function isAssistantTextPhasePending(
+  message: AgentMessage | undefined,
+  eventType: string,
+): boolean {
+  const api = readAssistantMessageApi(message);
+  return (
+    api === "ollama" ||
+    isOpenAiCompletionsAssistantMessage(message) ||
+    (api === "anthropic-messages" && eventType !== "text_end")
+  );
 }
 
 export function extractStandaloneMessageToolText(
@@ -199,6 +207,28 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
     log: ctx.log,
     callback: () => ctx.params.onReasoningEnd?.(),
   });
+}
+
+export function emitPersistentReasoning(ctx: EmbeddedAgentSubscribeContext, text: string) {
+  if (
+    !ctx.state.includeReasoning ||
+    !text ||
+    !ctx.params.onBlockReply ||
+    ctx.params.silentExpected ||
+    shouldSuppressDeterministicApprovalOutput(ctx.state) ||
+    hasMessageToolOnlySourceDelivery(ctx) ||
+    text === ctx.state.lastReasoningSent
+  ) {
+    return;
+  }
+  const previous = ctx.state.lastReasoningSent;
+  const pending =
+    previous && text.startsWith(previous) ? text.slice(previous.length).trimStart() : text;
+  ctx.state.lastReasoningSent = text;
+  // Keep reasoning separate from answer/tool payloads, in provider order.
+  if (pending) {
+    ctx.emitBlockReply({ text: pending, isReasoning: true });
+  }
 }
 
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {

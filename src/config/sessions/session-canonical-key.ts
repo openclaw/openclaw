@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
@@ -37,6 +38,7 @@ import {
   getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
   hasOpenClawAgentCanonicalValidation,
+  invalidateOpenClawAgentCanonicalValidation,
   markOpenClawAgentCanonicalValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -108,6 +110,11 @@ const canonicalReadScope = resolveGlobalSingleton<{ current?: CanonicalReadScope
   Symbol.for("openclaw.canonicalSessionReadScope"),
   () => ({}),
 );
+
+function requireCanonicalReadSnapshot(scope: CanonicalReadScope): never {
+  scope.snapshotRequired ??= new Error("Canonical session read requires an admission snapshot");
+  throw scope.snapshotRequired;
+}
 
 /** Only first admission needs a shared snapshot; warm materialized reads keep their existing cost. */
 export function readWithCanonicalSessionAdmission<T>(
@@ -485,15 +492,23 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   database: { agentId: string; db: DatabaseSync; path?: string },
   collectMetadata = false,
 ): ValidatedSessionMetadata | undefined {
-  const incremental = hasCanonicalSessionValidationProjection(database);
+  const readScope = canonicalReadScope.current;
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const pathname = database.path ?? identity?.filename;
   const physicalValidation = pathname
     ? getOpenClawAgentDatabaseValidation({ ...database, path: pathname })
     : undefined;
+  if (
+    physicalValidation &&
+    readScope?.database === database.db &&
+    !database.db.isTransaction &&
+    !readerAdmissions.get(database.db)?.proof
+  ) {
+    requireCanonicalReadSnapshot(readScope);
+  }
+  const incremental = hasCanonicalSessionValidationProjection(database);
   const storedMainKey = readCanonicalSessionMainKey(database);
   const canonicalReady = hasOpenClawAgentCanonicalValidation(database);
-  const readScope = canonicalReadScope.current;
   const continuation = readScope?.database === database.db ? readScope.continuation : undefined;
   if (
     readScope &&
@@ -517,10 +532,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
     return undefined;
   }
   if (readScope?.database === database.db && !database.db.isTransaction) {
-    readScope.snapshotRequired ??= new Error(
-      "Canonical session read requires an admission snapshot",
-    );
-    throw readScope.snapshotRequired;
+    requireCanonicalReadSnapshot(readScope);
   }
   const remember = () =>
     rememberReaderAdmission(database.db, {
@@ -570,8 +582,25 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   return metadata;
 }
 
+/** Offline imports and repairs queue unvalidated rows before releasing their custody. */
+export function markCanonicalSessionValidationPending(
+  database: { agentId: string; db: DatabaseSync },
+  sessionKeys?: readonly string[],
+): void {
+  const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
+  const insert = db.insertInto("session_canonical_validation_pending").columns(["session_key"]);
+  const pending = sessionKeys
+    ? insert.values(sessionKeys.map((session_key) => ({ session_key })))
+    : insert.expression(db.selectFrom("session_nodes").select("session_key").where(sql.lit(true)));
+  executeSqliteQuerySync(
+    database.db,
+    pending.onConflict((conflict) => conflict.column("session_key").doNothing()),
+  );
+  invalidateOpenClawAgentCanonicalValidation(database);
+}
+
 export function setCanonicalSqliteSessionMainKey(
-  database: { db: DatabaseSync },
+  database: { agentId: string; db: DatabaseSync },
   mainKey: string | undefined,
 ): void {
   const canonicalMainKey = normalizeMainKey(mainKey);
@@ -583,6 +612,7 @@ export function setCanonicalSqliteSessionMainKey(
   if (currentMainKey === canonicalMainKey) {
     return;
   }
+  markCanonicalSessionValidationPending(database);
   executeSqliteQuerySync(
     database.db,
     db

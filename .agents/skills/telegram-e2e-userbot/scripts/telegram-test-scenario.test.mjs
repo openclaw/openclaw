@@ -88,6 +88,7 @@ function fixture() {
         dm: args?.dm,
         chat: args?.chat,
         requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+        createForum: args?.createForum,
         ...options,
       }),
   };
@@ -237,6 +238,112 @@ test("scenario provisions a fresh group when the stored group is unusable and re
   assert.equal(acquisitions, 1);
   assert.equal(f.releaseCount(), 1);
   assert.equal(f.credential.testGroup.cleanup.status, "deleted");
+});
+
+test("a run-owned forum receives the scenario's topic sends and is deleted before release", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-owned-forum-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = fixture();
+  const events = [];
+  let forumExists = false;
+  const forum = { ok: true, groupId: "-1002042", forumTopicId: 777 };
+  const command = f.options.runCommandImpl;
+  f.options.runCommandImpl = async (name, args) => {
+    const reply = (value) => ({ status: 0, timedOut: false, stdout: JSON.stringify(value) });
+    if (args.includes("prepare-forum")) {
+      forumExists = true;
+      events.push("forum-created");
+      return reply({ ...forum, status: "ready" });
+    }
+    if (args.includes("cleanup-forum")) {
+      forumExists = false;
+      events.push("forum-deleted");
+      return reply({ ...forum, status: "deleted" });
+    }
+    if (args.includes("resolve-chat")) {
+      assert.equal(args[args.indexOf("--chat") + 1], forum.groupId);
+      return reply({
+        ok: true,
+        chatId: forum.groupId,
+        type: { "@type": "chatTypeSupergroup" },
+        isForum: true,
+      });
+    }
+    assert.equal(args.includes("--require-chat"), false, "the leased default group is not used");
+    assert.equal(args.includes("prepare-group"), false);
+    return await command(name, args);
+  };
+  f.options.fetchImpl = async (url) =>
+    Response.json({
+      ok: true,
+      result: {
+        getMe: { id: 42, username: "sut_bot", can_read_all_group_messages: true },
+        getChat: { id: -1002042, type: "supergroup", is_forum: forumExists },
+        getChatMember: { status: "member" },
+      }[new URL(url).pathname.split("/").at(-1)],
+    });
+  const release = f.credential.release;
+  f.credential.release = async () => {
+    assert.equal(forumExists, false, "forum must be deleted before releasing its credential");
+    events.push("released");
+    await release();
+  };
+  const output = path.join(root, "summary.json");
+  await runTelegramTestScenario({
+    args: {
+      createForum: true,
+      output,
+      scenario: { actions: [{ type: "send", atMs: 0, text: "@{sut} topic turn" }] },
+    },
+    acquireCredential: async () => f.credential,
+    checkCredential: f.check,
+    driveScenario: async (args, _root, credential) => {
+      assert.equal(credential.groupId, forum.groupId);
+      assert.equal(credential.chatTarget.recorderSelector, forum.groupId);
+      assert.equal(args.scenario.actions[0].forumTopicId, forum.forumTopicId);
+      fs.writeFileSync(output, JSON.stringify({ recordingComplete: true }));
+      events.push("delivered");
+    },
+  });
+  assert.deepEqual(events, ["forum-created", "delivered", "forum-deleted", "released"]);
+  const summary = JSON.parse(fs.readFileSync(output, "utf8"));
+  assert.equal(summary.recordingComplete, true);
+  assert.equal(summary.testForum.setup.groupId, forum.groupId);
+  assert.equal(summary.testForum.setup.forumTopicId, forum.forumTopicId);
+  assert.equal(summary.testForum.cleanup.status, "deleted");
+});
+
+test("a failed run still deletes its run-owned forum before release", async () => {
+  const f = fixture();
+  const events = [];
+  const command = f.options.runCommandImpl;
+  f.options.runCommandImpl = async (name, args) => {
+    if (args.includes("prepare-forum")) {
+      events.push("forum-created");
+      return { status: 1, timedOut: false, stderr: "topic creation failed" };
+    }
+    if (args.includes("cleanup-forum")) {
+      events.push("forum-deleted");
+      return {
+        status: 0,
+        timedOut: false,
+        stdout: JSON.stringify({ ok: true, status: "deleted" }),
+      };
+    }
+    return await command(name, args);
+  };
+  await assert.rejects(
+    runTelegramTestScenario({
+      args: { createForum: true, scenario: { actions: [] } },
+      acquireCredential: async () => f.credential,
+      checkCredential: f.check,
+      driveScenario: async () => assert.fail("failed forum setup cannot start the scenario"),
+    }),
+    /prepare-forum failed: topic creation failed/,
+  );
+  assert.deepEqual(events, ["forum-created", "forum-deleted"]);
+  assert.equal(f.releaseCount(), 1);
+  assert.equal(f.credential.testForum.cleanup.status, "deleted");
 });
 
 test("DM reaches its SUT with an unusable group and group privacy enabled", async () => {

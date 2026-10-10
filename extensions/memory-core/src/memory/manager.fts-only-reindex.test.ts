@@ -15,6 +15,7 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -172,7 +173,12 @@ describe("memory manager FTS-only reindex", () => {
         entries: { main: {} },
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: params.purpose });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+      purpose: params.purpose,
+    });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -451,12 +457,13 @@ describe("memory manager FTS-only reindex", () => {
       nowSpy.mockReturnValue(now + 31_000);
       await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
       providerEmbeddingError = new Error("embedding request failed during rebuild");
+      const queryCallsAfterProbe = providerQueryCalls;
       const debug: unknown[] = [];
 
       await expect(
         memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
       ).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
       expect(debug).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -476,7 +483,7 @@ describe("memory manager FTS-only reindex", () => {
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
       nowSpy.mockReturnValue(now + 62_000);
       await fs.writeFile(
@@ -485,13 +492,13 @@ describe("memory manager FTS-only reindex", () => {
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
       providerEmbeddingError = null;
       nowSpy.mockReturnValue(now + 93_000);
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBeGreaterThan(0);
+      expect(providerQueryCalls).toBeGreaterThan(queryCallsAfterProbe);
       const recoveredStatus = memoryManager.status();
       expect(recoveredStatus.custom?.providerState).toEqual({
         mode: "active",

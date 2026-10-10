@@ -664,48 +664,44 @@ export function updateFollowupAdmissionSessionId(operation: ReplyOperation): voi
   }
 }
 
-export function clearReplyRunState(params: {
-  sessionKey: string;
-  sessionId: string;
-  operation: ReplyOperation;
-}): void {
-  if (replyRunState.activeRunsByKey.get(params.sessionKey) !== params.operation) {
+export function clearReplyRunState(operation: ReplyOperation): void {
+  const { key: sessionKey, sessionId } = operation;
+  if (replyRunState.activeRunsByKey.get(sessionKey) !== operation) {
     if (
-      replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey &&
-      replyRunState.activeRunsByKey.get(params.sessionKey)?.sessionId !== params.sessionId
+      replyRunState.activeKeysBySessionId.get(sessionId) === sessionKey &&
+      replyRunState.activeRunsByKey.get(sessionKey)?.sessionId !== sessionId
     ) {
-      replyRunState.activeKeysBySessionId.delete(params.sessionId);
+      replyRunState.activeKeysBySessionId.delete(sessionId);
     }
     return;
   }
-  for (const observation of replyRunState.completionObservationsByKey?.get(params.sessionKey) ??
-    []) {
+  for (const observation of replyRunState.completionObservationsByKey?.get(sessionKey) ?? []) {
     if (
-      !params.operation.result ||
-      params.operation.key !== params.sessionKey ||
-      isReplyOperationAbortedForRestart(params.operation)
+      !operation.result ||
+      operation.key !== sessionKey ||
+      isReplyOperationAbortedForRestart(operation)
     ) {
       observation.sources.clear();
       continue;
     }
-    const source = resolveReplyRunAdmissionSource(params.operation, params.sessionId);
+    const source = resolveReplyRunAdmissionSource(operation, sessionId);
     observation.sources.set(
       source.databaseIdentity,
       mergeReplyRunAdmissionSource(source, observation.sources.get(source.databaseIdentity)),
     );
   }
-  replyRunState.activeRunsByKey.delete(params.sessionKey);
-  replyRunState.sourceTurnByKey.delete(params.sessionKey);
-  if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
-    replyRunState.activeKeysBySessionId.delete(params.sessionId);
+  replyRunState.activeRunsByKey.delete(sessionKey);
+  replyRunState.sourceTurnByKey.delete(sessionKey);
+  if (replyRunState.activeKeysBySessionId.get(sessionId) === sessionKey) {
+    replyRunState.activeKeysBySessionId.delete(sessionId);
   }
-  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
-    if (mappedKey === params.sessionKey) {
-      replyRunState.waitKeysBySessionId.delete(sessionId);
+  for (const [waitingSessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
+    if (mappedKey === sessionKey) {
+      replyRunState.waitKeysBySessionId.delete(waitingSessionId);
     }
   }
   notifyGatewayWorkMetricsChanged();
-  notifyReplyRunEnded(params.sessionKey);
+  notifyReplyRunEnded(sessionKey);
 }
 
 function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {

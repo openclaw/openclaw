@@ -15,7 +15,7 @@ import {
   persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import type { StreamGroupPart } from "./chat-message-stream.ts";
@@ -110,7 +110,9 @@ function coalesceInterSessionUpdates(items: ChatRenderItem[]): ChatRenderItem[] 
   for (const item of items) {
     if (
       item.kind !== "group" ||
-      !isInterSessionGroup(item) ||
+      !isSessionActivityGroup(item) ||
+      // Automation runs stay separate even when they target the same conversation.
+      !isInterSessionMessage(item.messages[0]?.message) ||
       !item.senderSession?.sessionKey ||
       // Reply targets retain the original group's run and prompt attribution.
       item.messages.some(({ message }) => normalizeMessage(message).replyTarget)
@@ -423,10 +425,10 @@ export function expandReplyTargetWork(
     for (const part of parts) {
       if (
         part.kind === "group" &&
-        isInterSessionGroup(part) &&
+        isSessionActivityGroup(part) &&
         part.messages.some((source) => persistedMessageEntryId(source.message) === messageId)
       ) {
-        setExpansionState(expandedToolCards, "inter-session:" + part.key, true);
+        setExpansionState(expandedToolCards, "session-activity:" + part.key, true);
       }
       if (
         part.kind === "work-group" &&

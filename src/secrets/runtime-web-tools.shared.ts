@@ -78,28 +78,28 @@ function inactivePathsForProvider(
         : [];
 }
 
-function pushInactiveProviderCredentialWarnings(params: {
-  selection: RuntimeWebProviderSelectionParams;
-  skipProviderId?: string;
-  details: string;
-}): void {
-  for (const provider of params.selection.providers) {
-    if (provider.id === params.skipProviderId) {
+function pushInactiveProviderCredentialWarnings(
+  selection: RuntimeWebProviderSelectionParams,
+  details: string,
+  skipProviderId?: string,
+): void {
+  for (const provider of selection.providers) {
+    if (provider.id === skipProviderId) {
       continue;
     }
     const value = readConfiguredProviderCredential({
       provider,
-      config: params.selection.sourceConfig,
-      toolConfig: params.selection.toolConfig,
+      config: selection.sourceConfig,
+      toolConfig: selection.toolConfig,
     });
-    if (!coerceSecretRef(value, params.selection.defaults)) {
+    if (!coerceSecretRef(value, selection.defaults)) {
       continue;
     }
-    for (const path of inactivePathsForProvider(provider, params.selection.kind)) {
+    for (const path of inactivePathsForProvider(provider, selection.kind)) {
       pushInactiveSurfaceWarning({
-        context: params.selection.context,
+        context: selection.context,
         path,
-        details: params.details,
+        details,
       });
     }
   }
@@ -177,6 +177,14 @@ export async function resolveRuntimeWebProviderSelection(
 
     for (const provider of candidates) {
       const contractDigest = resolveProviderContractDigest(provider.id);
+      const resolveInput = (value: unknown, path: string) =>
+        params.resolveSecretInput({
+          providerId: provider.id,
+          value,
+          path,
+          envVars: getProviderEnvVars(provider),
+          contractDigest,
+        });
       const isKeyless = provider.requiresCredential === false;
       if (isKeyless && !params.configuredProvider && params.kind === "search") {
         continue;
@@ -188,13 +196,7 @@ export async function resolveRuntimeWebProviderSelection(
         config: params.sourceConfig,
         toolConfig: params.toolConfig,
       });
-      const resolution = await params.resolveSecretInput({
-        providerId: provider.id,
-        value,
-        path,
-        envVars: getProviderEnvVars(provider),
-        contractDigest,
-      });
+      const resolution = await resolveInput(value, path);
       let selectedCandidatePath = path;
       let selectedCandidateResolution = resolution;
 
@@ -202,13 +204,7 @@ export async function resolveRuntimeWebProviderSelection(
         const fallback = provider.getConfiguredCredentialFallback?.(params.sourceConfig);
         if (fallback?.value !== undefined) {
           selectedCandidatePath = fallback.path;
-          selectedCandidateResolution = await params.resolveSecretInput({
-            providerId: provider.id,
-            value: fallback.value,
-            path: fallback.path,
-            envVars: getProviderEnvVars(provider),
-            contractDigest,
-          });
+          selectedCandidateResolution = await resolveInput(fallback.value, fallback.path);
         }
       } else if (resolution.source === "env" && !resolution.secretRefConfigured) {
         const fallback = provider.getConfiguredCredentialFallback?.(params.sourceConfig);
@@ -216,13 +212,7 @@ export async function resolveRuntimeWebProviderSelection(
           fallback?.value !== undefined &&
           coerceSecretRef(fallback.value, params.defaults) !== null
         ) {
-          const fallbackResolution = await params.resolveSecretInput({
-            providerId: provider.id,
-            value: fallback.value,
-            path: fallback.path,
-            envVars: getProviderEnvVars(provider),
-            contractDigest,
-          });
+          const fallbackResolution = await resolveInput(fallback.value, fallback.path);
           if (fallbackResolution.source === "secretRef" && fallbackResolution.value) {
             // Preserve transcript/config bytes for env-selected providers while materializing refs.
             setResolvedCredentialPath({
@@ -383,24 +373,21 @@ export async function resolveRuntimeWebProviderSelection(
   }
 
   if (params.enabled && !params.configuredProvider && params.metadata.selectedProvider) {
-    pushInactiveProviderCredentialWarnings({
-      selection: params,
-      skipProviderId: params.metadata.selectedProvider,
-      details: `${scopePath} auto-detected provider is "${params.metadata.selectedProvider}".`,
-    });
+    pushInactiveProviderCredentialWarnings(
+      params,
+      `${scopePath} auto-detected provider is "${params.metadata.selectedProvider}".`,
+      params.metadata.selectedProvider,
+    );
   } else if (params.toolConfig && !params.enabled) {
-    pushInactiveProviderCredentialWarnings({
-      selection: params,
-      details: `${scopePath} is disabled.`,
-    });
+    pushInactiveProviderCredentialWarnings(params, `${scopePath} is disabled.`);
   }
 
   if (params.enabled && params.toolConfig && params.configuredProvider) {
-    pushInactiveProviderCredentialWarnings({
-      selection: params,
-      skipProviderId: params.configuredProvider,
-      details: `${scopePath}.provider is "${params.configuredProvider}".`,
-    });
+    pushInactiveProviderCredentialWarnings(
+      params,
+      `${scopePath}.provider is "${params.configuredProvider}".`,
+      params.configuredProvider,
+    );
   }
 
   const selectedSecretOwner =

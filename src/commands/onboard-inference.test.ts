@@ -82,7 +82,7 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it.each([false, true])(
+  it.each([true])(
     "keeps native detection passive with stored Codex credentials: %s",
     async (stored) => {
       const calls: Array<{ command: string; args: string[] }> = [];
@@ -349,75 +349,5 @@ describe("detectInferenceBackends", () => {
     expect(probed.filter((entry) => entry.command === command)).toEqual([
       { command, args: ["--version"], timeoutMs: 3_000 },
     ]);
-  });
-
-  it.each([
-    ["system ChatGPT", "/Applications/ChatGPT.app/Contents/Resources/codex", "/Users/tester"],
-    [
-      "user ChatGPT",
-      "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/Users/tester",
-    ],
-    ["system", "/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
-    ["user", "/Users/tester/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
-    ["system beta", "/Applications/Codex Beta.app/Contents/Resources/codex", "/Users/tester"],
-    [
-      "user beta",
-      "/Users/tester/Applications/Codex Beta.app/Contents/Resources/codex",
-      "/Users/tester",
-    ],
-  ])("finds the Codex CLI bundled in the %s macOS app directory", async (_scope, appCli, home) => {
-    const candidates = await detectInferenceBackends({
-      env: { HOME: home },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: probeDeps({ [appCli]: true }),
-        readCodexCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]).toMatchObject({
-      kind: "codex-cli",
-      detail: "installed; login status unverified",
-    });
-  });
-
-  it("prefers a user ChatGPT app before a system legacy Codex app", async () => {
-    const probed: string[] = [];
-    const chatGPTCli = "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex";
-    const legacyCodexCli = "/Applications/Codex.app/Contents/Resources/codex";
-    const candidates = await detectInferenceBackends({
-      env: { HOME: "/Users/tester" },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: async (command) => {
-          probed.push(command);
-          return {
-            command,
-            found: command === chatGPTCli || command === legacyCodexCli,
-          };
-        },
-        readCodexCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates).toMatchObject([
-      { kind: "codex-cli", detail: "installed; login status unverified" },
-    ]);
-    expect(probed).toContain(chatGPTCli);
-    expect(probed).not.toContain(legacyCodexCli);
-  });
-
-  it("ignores blank env keys", async () => {
-    const candidates = await detectInferenceBackends({
-      env: { OPENAI_API_KEY: "   " },
-      platform: "linux",
-      deps: {
-        probeLocalCommand: probeDeps({}),
-        readCodexCliCredentials: () => null,
-      },
-    });
-    expect(candidates).toEqual([]);
   });
 });

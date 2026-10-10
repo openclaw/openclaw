@@ -11,6 +11,7 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
+import { CURRENT_SESSION_VERSION } from "./version.js";
 
 export const historicalId = "cold-history-window";
 export const currentId = "current-window";
@@ -29,26 +30,31 @@ export async function createSessionColdStorageFixture(
   // Callers own explicit cold-storage maintenance; seeding must not arm automatic age cleanup.
   replaceSessionEntrySync(scope, { sessionId: historicalId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
-    { type: "session", id: historicalId },
+    { type: "session", id: historicalId, version: CURRENT_SESSION_VERSION },
     {
       type: "message",
       id: "history-user",
       parentId: null,
-      timestamp: 10,
+      timestamp: "1970-01-01T00:00:00.010Z",
       message: { role: "user", content: [{ type: "text", text: "你好 🦞\n".repeat(12_000) }] },
     },
     {
       type: "message",
       id: "history-assistant",
       parentId: "history-user",
-      timestamp: 11,
+      timestamp: "1970-01-01T00:00:00.011Z",
       message: { role: "assistant", content: [{ type: "text", text: "Preserved response" }] },
     },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
   replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   await replaceTranscriptEvents({ ...scope, sessionId: currentId }, [
-    { type: "session", id: currentId, content: "Keep current history hot" },
+    {
+      type: "session",
+      id: currentId,
+      version: CURRENT_SESSION_VERSION,
+      content: "Keep current history hot",
+    },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
   replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
@@ -73,7 +79,7 @@ export async function createSessionColdStorageFixture(
         .set({
           ...prepareTranscriptPayload(
             database,
-            '{ "type" : "session", "id" : "cold-history-window" }',
+            `{ "type" : "session", "id" : "cold-history-window", "version" : ${CURRENT_SESSION_VERSION} }`,
           ),
           created_at: 7,
         })
@@ -91,8 +97,7 @@ export async function createSessionColdStorageFixture(
   }, options);
 
   const database = () => openOpenClawAgentDatabase(options).db;
-  const snapshot = () => {
-    const db = database();
+  const snapshot = (db = database()) => {
     return {
       events: executeSqliteQuerySync(
         db,

@@ -55,8 +55,6 @@ function createFactory(overrides: FactoryOverrides = {}) {
   return buildEmbeddedExtensionFactories({
     cfg: undefined,
     sessionManager: overrides.sessionManager ?? SessionManager.inMemory(),
-    provider: "openai",
-    modelId: "gpt-5.4",
     model: undefined,
     ...overrides,
   })[0];

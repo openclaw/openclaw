@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   formatMemoryIndexRebuildGuidance,
   MEMORY_CHUNKING_VERSION,
@@ -44,10 +46,6 @@ import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
 import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
-import {
-  markMemoryTargetArchiveFilesDirty,
-  runMemoryTargetedSessionSync,
-} from "./manager-targeted-sync.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
@@ -305,10 +303,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         needsFullReindex || this.sessionsFullRetryDirty || isSearchBootstrap;
       if (indexIdentity.status !== "valid" && !needsFullReindex) {
         this.dirty = true;
-        const sessionsDirty = markMemoryTargetArchiveFilesDirty({
-          sessionsDirtyFiles: this.sessionsDirtyFiles,
-          targetArchiveFiles,
-        });
+        const sessionsDirty = this.markTargetArchiveFilesDirty(targetArchiveFiles);
         if (sessionsDirty) {
           this.sessionsDirty = true;
         }
@@ -316,34 +311,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
       if (!needsFullSessionReindex) {
         if (this.sources.has("sessions") && targetArchiveFiles) {
-          this.sessionsDirty = markMemoryTargetArchiveFilesDirty({
-            sessionsDirtyFiles: this.sessionsDirtyFiles,
-            targetArchiveFiles,
-          });
+          this.sessionsDirty = this.markTargetArchiveFilesDirty(targetArchiveFiles);
         }
-        const targetedSessionSync = await runMemoryTargetedSessionSync({
-          hasSessionSource: this.sources.has("sessions"),
-          targetArchiveFiles,
-          progress: progress ?? undefined,
-          sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-          sessionsReconcileDirty: this.sessionsReconcileDirty,
-          sessionsDirtyFiles: this.sessionsDirtyFiles,
-          syncArchiveFiles: async (targetedParams) => {
-            await this.syncArchiveFiles({
-              ...targetedParams,
-              corpusEntries: targetSessionSync?.corpusEntries,
-            });
-          },
-          activateFallbackProvider: async (reason) => {
-            this.endSyncProviderGeneration();
-            return await this.activateFallbackProvider(reason);
-          },
-        });
-        if (targetedSessionSync.handled) {
-          this.sessionsDirty = targetedSessionSync.sessionsDirty;
-          if (targetedSessionSync.failure) {
-            this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
-          }
+        if (
+          await this.syncTargetedSessions(
+            targetArchiveFiles,
+            targetSessionSync?.corpusEntries,
+            progress,
+          )
+        ) {
           return;
         }
       }
@@ -398,6 +374,55 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         await this.pruneEmbeddingCacheIfNeeded();
       }
     }
+  }
+
+  protected markTargetArchiveFilesDirty(targetArchiveFiles?: Iterable<string> | null): boolean {
+    for (const file of targetArchiveFiles ?? []) {
+      this.sessionsDirtyFiles.add(file);
+    }
+    return this.sessionsDirtyFiles.size > 0;
+  }
+
+  protected async syncTargetedSessions(
+    targetArchiveFiles: Set<string> | null,
+    corpusEntries?: readonly SessionTranscriptCorpusEntry[],
+    progress?: MemorySyncProgressState,
+  ): Promise<boolean> {
+    if (!this.sources.has("sessions") || !targetArchiveFiles) {
+      return false;
+    }
+    const { sessionsDirtyFiles, sessionsFullRetryDirty, sessionsReconcileDirty } = this;
+    let failure: { error: unknown } | undefined;
+    try {
+      await this.syncArchiveFiles({
+        needsFullReindex: false,
+        targetArchiveFiles: Array.from(targetArchiveFiles),
+        progress,
+        corpusEntries,
+      });
+      for (const file of targetArchiveFiles) {
+        sessionsDirtyFiles.delete(file);
+      }
+    } catch (error) {
+      const reason = formatErrorMessage(error);
+      const shouldFallback = isMemoryEmbeddingOperationError(error);
+      if (shouldFallback) {
+        this.endSyncProviderGeneration();
+      }
+      if (!shouldFallback || !(await this.activateFallbackProvider(reason))) {
+        throw error;
+      }
+      for (const file of targetArchiveFiles) {
+        sessionsDirtyFiles.add(file);
+      }
+      failure = { error };
+    }
+    this.sessionsDirty =
+      sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
+    if (failure) {
+      this.syncOutcomes.recordActiveFailure(failure.error);
+    }
+    return true;
   }
 
   protected resolveBatchConfig(): MemoryEmbeddingBatchConfig {
@@ -520,16 +545,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             ftsTokenizer: this.settings.store.fts.tokenizer,
           });
 
-          const shouldSyncMemory = shouldRetryMemoryOnFailure;
-          const shouldSyncSessions = shouldRetrySessionsOnFailure;
-
           await this.executeSourceSync({
-            shouldSyncMemory,
-            shouldSyncSessions,
+            shouldSyncMemory: shouldRetryMemoryOnFailure,
+            shouldSyncSessions: shouldRetrySessionsOnFailure,
             needsFullReindex: true,
             progress,
           });
-          if (!shouldSyncMemory) {
+          if (!shouldRetryMemoryOnFailure) {
             this.clearMemoryRetryState();
           }
           const syncProvider = this.syncProviderGeneration
@@ -551,6 +573,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             chunkTokens: this.settings.chunking.tokens,
             chunkOverlap: this.settings.chunking.overlap,
             chunkingVersion: MEMORY_CHUNKING_VERSION,
+            embeddingInputFormatVersion: resolveEmbeddingInputFormatVersion(
+              syncProvider?.model ?? "",
+            ),
             ftsTokenizer: this.settings.store.fts.tokenizer,
             provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
           };

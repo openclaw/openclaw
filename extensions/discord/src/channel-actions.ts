@@ -31,10 +31,6 @@ const localExecutionActions = new Set<ChannelMessageActionName>([
   "event-create",
 ]);
 
-function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
-  return localExecutionActions.has(action) ? "local" : "gateway";
-}
-
 function resolveDiscordThreadReplyDeliveryAlias(args: Record<string, unknown>): string | undefined {
   if (
     normalizeOptionalString(args.target) ||
@@ -199,7 +195,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
-  resolveExecutionMode: resolveDiscordActionExecutionMode,
+  resolveExecutionMode: ({ action }) => (localExecutionActions.has(action) ? "local" : "gateway"),
   describeMessageTool: describeDiscordMessageTool,
   supportsAction: ({ action }) => action !== "poll",
   messageActionTargetAliases: {

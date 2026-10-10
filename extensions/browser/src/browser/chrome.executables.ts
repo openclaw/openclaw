@@ -45,22 +45,25 @@ const CHROMIUM_BUNDLE_IDS = new Set([
   "company.thebrowser.Browser", // Arc
 ]);
 
+const CHROMIUM_LINUX_NAMES = [
+  "google-chrome",
+  "google-chrome-beta",
+  "google-chrome-unstable",
+  "brave-browser",
+  "microsoft-edge",
+  "microsoft-edge-beta",
+  "microsoft-edge-dev",
+  "microsoft-edge-canary",
+  "chromium",
+  "chromium-browser",
+  "vivaldi",
+  "vivaldi-stable",
+  "opera",
+  "opera-gx",
+  "yandex-browser",
+];
 const CHROMIUM_DESKTOP_IDS = new Set([
-  "google-chrome.desktop",
-  "google-chrome-beta.desktop",
-  "google-chrome-unstable.desktop",
-  "brave-browser.desktop",
-  "microsoft-edge.desktop",
-  "microsoft-edge-beta.desktop",
-  "microsoft-edge-dev.desktop",
-  "microsoft-edge-canary.desktop",
-  "chromium.desktop",
-  "chromium-browser.desktop",
-  "vivaldi.desktop",
-  "vivaldi-stable.desktop",
-  "opera.desktop",
-  "opera-gx.desktop",
-  "yandex-browser.desktop",
+  ...CHROMIUM_LINUX_NAMES.map((name) => `${name}.desktop`),
   "org.chromium.Chromium.desktop",
 ]);
 
@@ -79,26 +82,12 @@ const CHROMIUM_EXE_NAMES = new Set([
   "google chrome canary",
   "brave browser",
   "microsoft edge",
-  "chromium",
   "chrome",
   "brave",
   "msedge",
-  "brave-browser",
-  "google-chrome",
   "google-chrome-stable",
-  "google-chrome-beta",
-  "google-chrome-unstable",
-  "microsoft-edge",
-  "microsoft-edge-beta",
-  "microsoft-edge-dev",
-  "microsoft-edge-canary",
-  "chromium-browser",
-  "vivaldi",
-  "vivaldi-stable",
-  "opera",
   "opera-stable",
-  "opera-gx",
-  "yandex-browser",
+  ...CHROMIUM_LINUX_NAMES,
 ]);
 
 function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {
@@ -339,20 +328,13 @@ function extractExecutableFromExecLine(execLine: string): string | null {
 function splitExecLine(line: string): string[] {
   const tokens: string[] = [];
   let current = "";
-  let inQuotes = false;
   let quoteChar = "";
   for (const ch of line) {
-    if ((ch === '"' || ch === "'") && (!inQuotes || ch === quoteChar)) {
-      if (inQuotes) {
-        inQuotes = false;
-        quoteChar = "";
-      } else {
-        inQuotes = true;
-        quoteChar = ch;
-      }
+    if ((ch === '"' || ch === "'") && (!quoteChar || ch === quoteChar)) {
+      quoteChar = quoteChar ? "" : ch;
       continue;
     }
-    if (!inQuotes && /\s/.test(ch)) {
+    if (!quoteChar && /\s/.test(ch)) {
       if (current) {
         tokens.push(current);
         current = "";

@@ -1,6 +1,7 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
   type OwnedSessionTranscriptWriteContext,
@@ -10,6 +11,7 @@ import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
@@ -17,7 +19,7 @@ type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<
 export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   runAbortController?: AbortController;
   attempt: Pick<
-    EmbeddedRunAttemptParams,
+    EmbeddedRunAttemptInternalParams,
     | "abortSignal"
     | "config"
     | "runId"
@@ -27,6 +29,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "sessionKey"
     | "sessionManager"
     | "sessionTarget"
+    | "preparedSessionTarget"
   > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
   externalAbortController: {
     arm: () => void;
@@ -40,21 +43,26 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }> {
   const { attempt, externalAbortController } = input;
+  const preparedTarget = attempt.preparedSessionTarget;
+  preparedTarget?.assertCurrent();
   const initialWriter = getOwnedSessionTranscriptInitialWriter({
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionManager?.getSessionTarget() ?? attempt.sessionTarget,
   });
-  const sessionTarget = await resolveAgentRunSessionTarget({
-    agentId: attempt.sessionTarget?.agentId,
-    config: attempt.config,
-    missingSessionKey: "resolve-existing",
-    sessionFile: attempt.sessionFile,
-    sessionId: attempt.sessionId,
-    sessionKey: attempt.sessionKey,
-    sessionTarget: attempt.sessionTarget,
-  });
+  const sessionTarget =
+    preparedTarget?.target ??
+    (await resolveAgentRunSessionTarget({
+      agentId: attempt.sessionTarget?.agentId,
+      config: attempt.config,
+      missingSessionKey: "resolve-existing",
+      sessionFile: attempt.sessionFile,
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
+      sessionTarget: attempt.sessionTarget,
+    }));
   await externalAbortController.throwIfFiredAfterPrepCleanup();
+  preparedTarget?.assertCurrent();
   initialWriter?.assertActive();
 
   const fencedSessionTarget = {
@@ -99,16 +107,19 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     sessionTarget: fencedSessionTarget,
     sessionReader: getReplyOperationSessionReader(attempt.replyOperation),
     ...(initialWriter ? { initialWriter } : {}),
-    assertCommitAllowed: () => {
-      attempt.abortSignal?.throwIfAborted();
-      assertAdmittedActive?.();
-      generation?.assertCurrent();
-    },
+    assertCommitAllowed: composeSessionSourceAssertion(
+      [assertAdmittedActive, generation?.assertCurrent],
+      (assertSources) => {
+        attempt.abortSignal?.throwIfAborted();
+        assertSources();
+      },
+    ),
     withTranscriptWrite,
   };
   externalAbortController.arm();
   try {
     await externalAbortController.throwIfFiredAfterPrepCleanup();
+    preparedTarget?.assertCurrent();
   } catch (error) {
     await transcriptLifecycle.dispose();
     throw error;

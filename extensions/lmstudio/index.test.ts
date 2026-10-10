@@ -537,40 +537,84 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("still synthesizes placeholder auth when explicit api-key auth has no key", () => {
-    const provider = registerProvider();
+  it.each(["configured", "empty"])(
+    "synthesizes local auth with %s model inventory",
+    (inventory) => {
+      const provider = registerProvider();
 
-    expect(
-      provider?.resolveSyntheticAuth?.({
-        provider: "lmstudio",
-        config: {},
-        providerConfig: createRemoteProviderConfig({
-          auth: "api-key",
-          headers: { "X-Proxy-Auth": "proxy-token" },
+      expect(
+        provider?.resolveSyntheticAuth?.({
+          provider: "lmstudio",
+          config: {},
+          providerConfig: createRemoteProviderConfig({
+            auth: "api-key",
+            headers: { "X-Proxy-Auth": "proxy-token" },
+            ...(inventory === "empty" ? { models: [] } : {}),
+          }),
         }),
-      }),
-    ).toEqual({
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      source: "models.providers.lmstudio (synthetic local key)",
-      mode: "api-key",
-    });
-  });
+      ).toEqual({
+        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        source: "models.providers.lmstudio (synthetic local key)",
+        mode: "api-key",
+      });
+    },
+  );
 
-  it("does not synthesize placeholder auth when Authorization header is configured", () => {
-    const provider = registerProvider();
+  it.each([
+    undefined,
+    createRemoteProviderConfig({ headers: { Authorization: "Bearer proxy-token" } }),
+    createRemoteProviderConfig({ models: [], headers: { Authorization: "Bearer proxy-token" } }),
+    createRemoteProviderConfig({ models: [], apiKey: "synthetic-test-key" }),
+  ])(
+    "does not synthesize local auth without opt-in or over real credentials: %j",
+    (providerConfig) => {
+      const provider = registerProvider();
 
-    expect(
-      provider?.resolveSyntheticAuth?.({
-        provider: "lmstudio",
-        config: {},
-        providerConfig: createRemoteProviderConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
+      expect(
+        provider?.resolveSyntheticAuth?.({
+          provider: "lmstudio",
+          config: {},
+          providerConfig,
         }),
-      }),
-    ).toBeUndefined();
-  });
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["models", "empty", "unavailable"])(
+    "acquires the live catalog with saved model rows: %s",
+    async (outcome) => {
+      const provider = registerProvider();
+      const configured = createRemoteProviderConfig();
+      const config = { models: { providers: { lmstudio: configured } } };
+      const before = structuredClone(config);
+      const models =
+        outcome === "models"
+          ? [
+              { ...createDiscoveredModel("Live model", 65_536), id: "qwen/qwen3.5-9b" },
+              { ...createDiscoveredModel("New model", 32_768), id: "new-model" },
+            ]
+          : [];
+      if (outcome === "unavailable") {
+        discoverLmstudioModelsMock.mockRejectedValue(new Error("server unavailable"));
+      } else {
+        discoverLmstudioModelsMock.mockResolvedValue(models);
+      }
+
+      const result = await provider.catalog?.run({
+        config,
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      });
+
+      expect(result).toMatchObject(
+        outcome === "unavailable"
+          ? { providers: {}, outcomes: [{ provider: "lmstudio", status: "unavailable" }] }
+          : { provider: { models }, outcomes: [{ provider: "lmstudio", status: "ready" }] },
+      );
+      expect(config).toEqual(before);
+    },
+  );
 
   it("defers stored lmstudio-local profile auth so real credentials can win", () => {
     const provider = registerProvider();
