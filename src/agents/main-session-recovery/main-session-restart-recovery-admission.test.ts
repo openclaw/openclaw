@@ -569,9 +569,9 @@ describe("startup recovery admission", () => {
       const admissionSpy = vi
         .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
         .mockImplementation(
-          async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+          async <T>(run: () => Promise<T>, origin?: string, admissionSignal?: AbortSignal) => {
             try {
-              return await admit(run, origin, signal);
+              return await admit(run, origin, admissionSignal);
             } finally {
               if (origin === "main-session:preparation-recovery" && failedRead) {
                 failedAttempt.resolve();

@@ -504,7 +504,12 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   let run = Promise.resolve().then(async () => {
     await runRecovery();
     // The scan can precede a preparation commit. Recheck its captured candidates once.
-    const pending = [...pendingPreparation.values()].flatMap((stores) => [...stores.values()]);
+    const pending: ExhaustedRestartRecoveryTarget[] = [];
+    for (const stores of pendingPreparation.values()) {
+      for (const target of stores.values()) {
+        pending.push(target);
+      }
+    }
     pendingPreparation.clear();
     for (const target of pending) {
       await recoverPreparation(target);
