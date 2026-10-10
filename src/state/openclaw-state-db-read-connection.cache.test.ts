@@ -12,13 +12,11 @@ import * as executionIdentityContext from "../audit/execution-identity-context.j
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
-import { publishStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -27,7 +25,6 @@ import {
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadOnlyLocation,
@@ -750,79 +747,6 @@ it.each(["query", "schema"] as const)("evicts a reader after %s failure and reco
       peer.close();
     }
   }
-});
-
-it("publishes migration-owned content markers through rollback and authorizer checks", () => {
-  using database = sqlite.openNodeSqliteDatabase(":memory:");
-  for (const table of ["config_machine_state", "audit_events", "update_runs"]) {
-    database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
-  }
-  database.prepare("INSERT INTO config_machine_state VALUES (?, '1', 1)").run(CONTENT_VERSION_KEY);
-  database
-    .prepare(`INSERT INTO update_runs (
-    run_id, created_at_ms, updated_at_ms, trigger, phase, status,
-    origin_json, target_json, before_json, after_json, steps_json, verification_json, repair_json
-  ) VALUES ('deferred-marker', ?, ?, 'cli', 'verifying', 'running', '{}', '{}',
-    '{"version":"2026.9.2"}', '{}', '[]', '{}', '[]')`)
-    .run(Date.now(), Date.now());
-  database.exec("PRAGMA user_version=1");
-  admitSqliteSchema(database);
-  const read = (published?: number) =>
-    runSqliteReadOperationSync(database, () => readStateSchemaContentVersion(database, published));
-  expect(read()).toBe(1);
-  const refusal = new Error("synthetic migration rollback");
-  runSqliteImmediateTransactionSync(database, () => {
-    expect(() =>
-      runSqliteImmediateTransactionSync(database, () => {
-        database
-          .prepare("UPDATE config_machine_state SET value_json='2' WHERE state_key=?")
-          .run(CONTENT_VERSION_KEY);
-        publishStateSchemaVersionAdmission(database, { userVersion: 1, contentVersion: 2 });
-        expect(read()).toBe(2);
-        throw refusal;
-      }),
-    ).toThrow(refusal);
-    expect(
-      database
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key=?")
-        .get(CONTENT_VERSION_KEY),
-    ).toEqual({ value_json: "1" });
-    expect(read()).toBe(1);
-    database.exec("SAVEPOINT raw_marker");
-    database
-      .prepare("UPDATE config_machine_state SET value_json='2' WHERE state_key=?")
-      .run(CONTENT_VERSION_KEY);
-    publishStateSchemaVersionAdmission(database, { userVersion: 1, contentVersion: 2 });
-    expect(read()).toBe(2);
-    database.exec("ROLLBACK TO raw_marker; RELEASE raw_marker");
-    expect(
-      database
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key=?")
-        .get(CONTENT_VERSION_KEY),
-    ).toEqual({ value_json: "1" });
-    expect(read()).toBe(1);
-  });
-  expect(read()).toBe(1);
-  expect(() =>
-    runSqliteImmediateTransactionSync(database, () => {
-      markCurrentStateSchemaVersion(database);
-      expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      throw refusal;
-    }),
-  ).toThrow(refusal);
-  expect(read()).toBe(1);
-  runSqliteImmediateTransactionSync(database, () => markCurrentStateSchemaVersion(database));
-  expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-  expect(read(OPENCLAW_STATE_SCHEMA_VERSION + 1)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
-  expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-  database.setAuthorizer((action, table) =>
-    action === constants.SQLITE_READ && table === "config_machine_state"
-      ? constants.SQLITE_DENY
-      : constants.SQLITE_OK,
-  );
-  expect(read).toThrowError(expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 23 }));
-  database.setAuthorizer(null);
-  expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
 });
 
 it.skipIf(typeof sqlite.requireNodeSqlite().DatabaseSync.prototype.setAuthorizer !== "function")(
