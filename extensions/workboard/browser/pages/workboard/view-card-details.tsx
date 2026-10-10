@@ -24,9 +24,7 @@ import {
   ArchiveCardAction,
   DeleteCardAction,
   EditCardAction,
-  OpenSessionCardAction,
   StartExecutionButton,
-  StopCardAction,
 } from "./view-card-actions.tsx";
 import {
   DependencyDetailList,
@@ -35,6 +33,7 @@ import {
   technicalDetailsData,
 } from "./view-card-detail-records.tsx";
 import { CardDiscardDialog } from "./view-card-modal.tsx";
+import { CardSessionHeading } from "./view-card-session-heading.tsx";
 import {
   formatEventLabel,
   formatLifecycle,
@@ -42,7 +41,6 @@ import {
   workboardErrorMessage,
   workboardMutationContext,
   renderPriorityIcon,
-  renderLifecycleIcon,
   formatStatusLabel,
   formatUpdatedTime,
   type WorkboardProps,
@@ -57,11 +55,9 @@ import {
 import { liveInputValue } from "./view-input-value.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
-import { getSessionStatus, SessionStatusBadge } from "./view-session-status.tsx";
 
 export const workboardCardDetailDrawerId = "workboard-card-detail-drawer";
 const workboardCardDetailTitleId = "workboard-card-detail-title";
-const workboardCardDetailDescriptionId = "workboard-card-detail-description";
 
 const detailDrawerRefs = new WeakMap<WorkboardUiState, { value?: HTMLElement }>();
 const inlineDiscardOpen = new WeakMap<WorkboardUiState, () => void>();
@@ -126,7 +122,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
     void props.revision;
     return props.card;
   };
-  const drawer = { value: undefined as HTMLElement | undefined };
+  const drawer: { value: HTMLElement | undefined } = { value: undefined };
   const drawerOwner = createMemo(() => getWorkboardState(props.host));
   createEffect(drawerOwner, (detailState) => {
     detailDrawerRefs.set(detailState, drawer);
@@ -207,7 +203,6 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
     getWorkboardLifecycle(card(), props.sessions, props.sessionResolution),
   );
   const formatted = createMemo(() => formatLifecycle(lifecycle()));
-  const sessionStatus = createMemo(() => getSessionStatus(card(), lifecycle()));
   const comments = createMemo(() => [...(card().metadata?.comments ?? [])]);
   const automation = () => card().metadata?.automation;
   const boardId = () => workboardCardBoardId(card());
@@ -228,68 +223,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
     ] as const;
   const activeTab = () =>
     tabs().some((tab) => tab.id === state().detailTab) ? state().detailTab : "overview";
-  const sessionStateLabel = () => formatted().label;
   const sessionEmpty = () => lifecycle().state === "unlinked" && !action().linkedSessionKey;
-  const SessionHeading = (heading: { tab: "overview" | "session" }) => (
-    <div class="workboard-detail__execution-main">
-      <div class="workboard-detail__session-row" title={formatted().detail}>
-        {sessionEmpty() || !sessionStatus().visible ? (
-          <span
-            class="workboard-detail__session-state-icon"
-            role="img"
-            aria-label={sessionStateLabel()}
-            title={sessionStateLabel()}
-          >
-            {sessionEmpty() ? icons.bot : renderLifecycleIcon(lifecycle())}
-          </span>
-        ) : undefined}
-        <div class="workboard-detail__session-copy">
-          <span
-            class="workboard-detail__session-name"
-            id={heading.tab === "overview" ? workboardCardDetailDescriptionId : undefined}
-          >
-            {sessionEmpty()
-              ? t("workboard.detailNoSessionYet")
-              : (lifecycle().session?.displayName ??
-                lifecycle().session?.label ??
-                (action().linkedSessionKey ? t("workboard.fieldSession") : formatted().label))}
-          </span>
-          {!sessionEmpty() && sessionStatus().detail ? (
-            <p class="workboard-detail__session-description" textContent={sessionStatus().detail} />
-          ) : undefined}
-          {sessionEmpty() && action().showStartControls && !action().archived ? (
-            <p class="workboard-detail__session-help">
-              {t("workboard.detailStartSessionHelp", {
-                agent: cardAgentLabel(card(), props.agentsList),
-              })}
-            </p>
-          ) : undefined}
-        </div>
-        <SessionStatusBadge presentation={sessionStatus()} />
-      </div>
-      <div class="workboard-detail__actions">
-        {heading.tab === "overview" && action().showStartControls ? (
-          <StartExecutionButton
-            workboard={actionProps}
-            card={card()}
-            engine={null}
-            mode={"autonomous"}
-          />
-        ) : undefined}
-        {heading.tab === "overview" &&
-        action().writable &&
-        action().linkedSessionKey &&
-        action().live ? (
-          <StopCardAction workboard={props} card={card()} busy={action().busy} />
-        ) : undefined}
-        <OpenSessionCardAction
-          workboard={actionProps}
-          session={action().sessionTarget}
-          options={{ quiet: true }}
-        />
-      </div>
-    </div>
-  );
   const visibleAutomationFields = createMemo(() => automationDetailFields(automation()));
   const detailsDialog = (
     <Dialog
@@ -517,7 +451,13 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                       ]}
                       aria-label={t("workboard.fieldSession")}
                     >
-                      <SessionHeading tab="overview" />
+                      <CardSessionHeading
+                        workboard={actionProps}
+                        card={card()}
+                        lifecycle={lifecycle()}
+                        action={action()}
+                        tab="overview"
+                      />
                       {action().showStartControls ? (
                         <details class="workboard-detail__disclosure workboard-detail__engine-options">
                           <summary>
@@ -669,7 +609,13 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                     tabindex="0"
                     hidden={activeTab() !== "session"}
                   >
-                    <SessionHeading tab="session" />
+                    <CardSessionHeading
+                      workboard={actionProps}
+                      card={card()}
+                      lifecycle={lifecycle()}
+                      action={action()}
+                      tab="session"
+                    />
                     {activeTab() === "session" ? (
                       <SessionSummary
                         {...{

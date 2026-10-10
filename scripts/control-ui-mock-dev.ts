@@ -3549,7 +3549,7 @@ async function buildWorkboardStatesAssets() {
             },
             ({ path: specifier, importer }) => {
               if (importer !== cardRenderer) {
-                return;
+                return undefined;
               }
               reached.add(specifier);
               return { path: specifier, namespace: "workboard-state-projections" };
